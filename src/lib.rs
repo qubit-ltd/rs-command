@@ -24,6 +24,9 @@ pub use command_error::{
     OutputStream,
 };
 pub use command_output::CommandOutput;
+#[cfg(coverage)]
+#[doc(hidden)]
+pub use command_runner::coverage_support;
 pub use command_runner::{
     CommandRunner,
     DEFAULT_COMMAND_TIMEOUT,

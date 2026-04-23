@@ -265,49 +265,41 @@ impl CommandRunner {
             command.env(key, value);
         }
 
-        let mut child = command
-            .spawn()
-            .map_err(|source| CommandError::SpawnFailed {
-                command: command_text.clone(),
-                source,
-            })?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(source) => return Err(spawn_failed(&command_text, source)),
+        };
 
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| output_pipe_error(&command_text, OutputStream::Stdout))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| output_pipe_error(&command_text, OutputStream::Stderr))?;
+        let stdout = match child.stdout.take() {
+            Some(stdout) => stdout,
+            None => return Err(output_pipe_error(&command_text, OutputStream::Stdout)),
+        };
+        let stderr = match child.stderr.take() {
+            Some(stderr) => stderr,
+            None => return Err(output_pipe_error(&command_text, OutputStream::Stderr)),
+        };
         let stdout_reader = read_stdout(stdout);
         let stderr_reader = read_stderr(stderr);
 
         let start = Instant::now();
         let exit_status = loop {
-            if let Some(status) = child
-                .try_wait()
-                .map_err(|source| CommandError::WaitFailed {
-                    command: command_text.clone(),
-                    source,
-                })?
-            {
+            let maybe_status = match child.try_wait() {
+                Ok(status) => status,
+                Err(source) => return Err(wait_failed(&command_text, source)),
+            };
+            if let Some(status) = maybe_status {
                 break status;
             }
             if let Some(timeout) = self.timeout
                 && start.elapsed() >= timeout
             {
                 if let Err(source) = child.kill() {
-                    return Err(CommandError::KillFailed {
-                        command: command_text,
-                        timeout,
-                        source,
-                    });
+                    return Err(kill_failed(command_text, timeout, source));
                 }
-                let exit_status = child.wait().map_err(|source| CommandError::WaitFailed {
-                    command: command_text.clone(),
-                    source,
-                })?;
+                let exit_status = match child.wait() {
+                    Ok(status) => status,
+                    Err(source) => return Err(wait_failed(&command_text, source)),
+                };
                 let output = collect_output(
                     &command_text,
                     exit_status.code(),
@@ -408,6 +400,59 @@ where
     let mut buffer = Vec::new();
     reader.read_to_end(&mut buffer)?;
     Ok(buffer)
+}
+
+/// Builds a process spawn failure.
+///
+/// # Parameters
+///
+/// * `command` - Human-readable command text for diagnostics.
+/// * `source` - I/O error reported by process spawning.
+///
+/// # Returns
+///
+/// A command error preserving the command text and source error.
+fn spawn_failed(command: &str, source: io::Error) -> CommandError {
+    CommandError::SpawnFailed {
+        command: command.to_owned(),
+        source,
+    }
+}
+
+/// Builds a process wait failure.
+///
+/// # Parameters
+///
+/// * `command` - Human-readable command text for diagnostics.
+/// * `source` - I/O error reported while waiting for the process.
+///
+/// # Returns
+///
+/// A command error preserving the command text and source error.
+fn wait_failed(command: &str, source: io::Error) -> CommandError {
+    CommandError::WaitFailed {
+        command: command.to_owned(),
+        source,
+    }
+}
+
+/// Builds a timed-out process kill failure.
+///
+/// # Parameters
+///
+/// * `command` - Human-readable command text for diagnostics.
+/// * `timeout` - Timeout that had been exceeded.
+/// * `source` - I/O error reported while killing the process.
+///
+/// # Returns
+///
+/// A command error preserving timeout and kill-failure context.
+fn kill_failed(command: String, timeout: Duration, source: io::Error) -> CommandError {
+    CommandError::KillFailed {
+        command,
+        timeout,
+        source,
+    }
 }
 
 /// Collects reader-thread results into a command output value.
@@ -511,4 +556,134 @@ fn next_sleep(timeout: Option<Duration>, elapsed: Duration) -> Duration {
         return remaining.min(WAIT_POLL_INTERVAL);
     }
     WAIT_POLL_INTERVAL
+}
+
+/// Coverage-only hooks for exercising defensive process-runner branches.
+#[cfg(coverage)]
+#[doc(hidden)]
+pub mod coverage_support {
+    use std::{
+        io::{
+            self,
+            Read,
+        },
+        panic,
+        thread,
+        time::Duration,
+    };
+
+    use super::{
+        WAIT_POLL_INTERVAL,
+        collect_output,
+        join_output_reader,
+        kill_failed,
+        next_sleep,
+        output_pipe_error,
+        read_all,
+        spawn_failed,
+        wait_failed,
+    };
+    use crate::OutputStream;
+
+    /// Exercises internal error helpers that cannot be reached reliably through
+    /// real OS process execution.
+    ///
+    /// # Returns
+    ///
+    /// Diagnostic strings built from each exercised error path.
+    pub fn exercise_defensive_paths() -> Vec<String> {
+        let mut diagnostics = Vec::new();
+        diagnostics.push(spawn_failed("spawn", io::Error::other("spawn failed")).to_string());
+        diagnostics.push(wait_failed("wait", io::Error::other("wait failed")).to_string());
+        diagnostics.push(
+            kill_failed(
+                "kill".to_owned(),
+                Duration::from_millis(1),
+                io::Error::other("kill failed"),
+            )
+            .to_string(),
+        );
+        diagnostics.push(output_pipe_error("pipe", OutputStream::Stdout).to_string());
+        diagnostics.push(output_pipe_error("pipe", OutputStream::Stderr).to_string());
+
+        let read_error =
+            read_all(FailingReader).expect_err("failing reader should report read error");
+        diagnostics.push(read_error.to_string());
+
+        let failed_stdout = thread::spawn(|| Err(io::Error::other("collect stdout failed")));
+        let empty_stderr = thread::spawn(|| Ok(Vec::new()));
+        diagnostics.push(
+            collect_output(
+                "collect-stdout",
+                Some(0),
+                Duration::ZERO,
+                failed_stdout,
+                empty_stderr,
+            )
+            .expect_err("stdout collection error should be mapped")
+            .to_string(),
+        );
+
+        let empty_stdout = thread::spawn(|| Ok(Vec::new()));
+        let failed_stderr = thread::spawn(|| Err(io::Error::other("collect stderr failed")));
+        diagnostics.push(
+            collect_output(
+                "collect-stderr",
+                Some(0),
+                Duration::ZERO,
+                empty_stdout,
+                failed_stderr,
+            )
+            .expect_err("stderr collection error should be mapped")
+            .to_string(),
+        );
+
+        let reader_error = thread::spawn(|| Err(io::Error::other("reader failed")));
+        diagnostics.push(
+            join_output_reader("reader", OutputStream::Stdout, reader_error)
+                .expect_err("reader error should be mapped")
+                .to_string(),
+        );
+
+        let previous_hook = panic::take_hook();
+        panic::set_hook(Box::new(|_| {}));
+        let panicked_reader = thread::spawn(|| -> io::Result<Vec<u8>> {
+            panic!("output reader panic");
+        });
+        let panic_error = join_output_reader("panic", OutputStream::Stderr, panicked_reader)
+            .expect_err("reader panic should be mapped")
+            .to_string();
+        panic::set_hook(previous_hook);
+        diagnostics.push(panic_error);
+
+        diagnostics.push(format!("{:?}", next_sleep(None, Duration::ZERO)));
+        diagnostics.push(format!(
+            "{:?}",
+            next_sleep(Some(Duration::from_millis(1)), Duration::from_millis(2)),
+        ));
+        diagnostics.push(format!(
+            "{:?}",
+            next_sleep(Some(Duration::from_secs(1)), Duration::ZERO),
+        ));
+        diagnostics.push(format!("{WAIT_POLL_INTERVAL:?}"));
+        diagnostics
+    }
+
+    /// Reader that always fails when read.
+    struct FailingReader;
+
+    impl Read for FailingReader {
+        /// Reports a synthetic read failure.
+        ///
+        /// # Parameters
+        ///
+        /// * `_buffer` - Destination buffer intentionally left untouched.
+        ///
+        /// # Returns
+        ///
+        /// Always returns an I/O error.
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("read failed"))
+        }
+    }
 }

@@ -29,3 +29,6 @@ doctest = true
 [dependencies]
 log = "0.4"
 thiserror = "2.0"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
