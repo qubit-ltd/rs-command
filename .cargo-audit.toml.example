@@ -1,0 +1,143 @@
+# Cargo Audit 配置文件示例
+#
+# 此文件用于配置 cargo-audit 的行为
+# 如需使用，请将此文件重命名为 .cargo-audit.toml
+#
+# 文档：https://github.com/rustsec/rustsec/tree/main/cargo-audit
+
+[advisories]
+# 忽略特定的安全公告
+# 格式：RUSTSEC-YYYY-NNNN
+#
+# 警告：仅在以下情况使用：
+# 1. 已评估风险且确认不影响项目
+# 2. 依赖维护者尚未发布修复版本
+# 3. 正在等待上游修复且有临时缓解措施
+#
+# 示例：
+# ignore = [
+#     "RUSTSEC-2020-0071",  # time 0.1.x 的已知问题
+#     "RUSTSEC-2021-0139",  # ansi_term 未维护
+# ]
+ignore = []
+
+# 忽略特定的公告来源
+# 可选值：["github", "gitlab", "osv"]
+# ignore-source = []
+
+[database]
+# Advisory Database 的路径
+# 默认：~/.cargo/advisory-db
+# path = "~/.cargo/advisory-db"
+
+# Git URL for fetching advisory database
+# 默认：https://github.com/RustSec/advisory-db.git
+# url = "https://github.com/RustSec/advisory-db.git"
+
+# 是否在运行前自动更新数据库
+# 默认：true
+# fetch = true
+
+# 即使本地数据库过期也继续检查
+# 默认：false
+# stale = false
+
+[output]
+# 输出格式
+# 可选值：["terminal", "json", "toml"]
+# 默认：terminal
+# format = "terminal"
+
+# 是否显示详细信息
+# 默认：false
+# show-tree = false
+
+# 是否使用颜色
+# 默认：true（支持时）
+# color = true
+
+[target]
+# 检查特定目标平台的依赖
+# 例如：x86_64-unknown-linux-gnu
+# 默认：所有平台
+# arch = "x86_64"
+# os = "linux"
+
+[yanked]
+# 是否检查已被撤回的 crate 版本
+# 默认：true
+enabled = true
+
+# 是否在发现撤回的 crate 时更新到新版本
+# 默认：false
+# update-index = false
+
+[unmaintained]
+# 是否警告未维护的 crate
+# 默认：true
+enabled = true
+
+[unsound]
+# 是否警告有不安全（unsound）代码的 crate
+# 默认：true
+enabled = true
+
+[informational]
+# 是否显示信息性通知（非安全问题）
+# 默认：warn
+# 可选值：["deny", "warn", "allow"]
+# severity = "warn"
+
+# 示例：忽略所有信息性通知
+# severity = "allow"
+
+# 示例：将信息性通知视为错误
+# severity = "deny"
+
+# ============================================
+# 使用示例
+# ============================================
+#
+# 场景 1：忽略已知但无法立即修复的安全问题
+# --------------------------------------------
+# [advisories]
+# ignore = [
+#     "RUSTSEC-2023-0001",  # 已评估，不影响我们的使用场景
+# ]
+#
+# 场景 2：仅检查关键安全问题，忽略警告和信息
+# --------------------------------------------
+# [informational]
+# severity = "allow"
+#
+# [unmaintained]
+# enabled = false
+#
+# 场景 3：开发环境放宽检查，CI 严格检查
+# --------------------------------------------
+# 本地开发：使用 .cargo-audit.toml 放宽检查
+# CI 环境：不使用此文件或使用更严格的配置
+#
+# ============================================
+# 重要提示
+# ============================================
+#
+# 1. 定期审查忽略列表：
+#    - 每月检查是否有新的修复版本
+#    - 评估风险是否仍然可接受
+#    - 更新依赖到修复版本
+#
+# 2. 文档化忽略原因：
+#    - 在 ignore 数组中添加注释说明原因
+#    - 在项目文档中记录风险评估
+#
+# 3. 使用版本控制：
+#    - 将此文件提交到 git（如需团队共享配置）
+#    - 或添加到 .gitignore（如为个人配置）
+#
+# 4. CI/CD 集成：
+#    - 考虑在 CI 中使用更严格的配置
+#    - 定期运行 cargo audit 检查
+#    - 在 CircleCI 中每日自动运行安全审计
+#
+
