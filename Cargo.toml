@@ -27,3 +27,5 @@ name = "qubit_command"
 doctest = true
 
 [dependencies]
+log = "0.4"
+thiserror = "2.0"

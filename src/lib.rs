@@ -13,3 +13,19 @@
 //! # Author
 //!
 //! Haixing Hu
+
+mod command_error;
+mod command_output;
+mod command_runner;
+mod command_spec;
+
+pub use command_error::{
+    CommandError,
+    OutputStream,
+};
+pub use command_output::CommandOutput;
+pub use command_runner::{
+    CommandRunner,
+    DEFAULT_COMMAND_TIMEOUT,
+};
+pub use command_spec::CommandSpec;
