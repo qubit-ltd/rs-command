@@ -16,6 +16,12 @@ set -e
 
 echo "🔍 Starting code coverage testing..."
 
+COVERAGE_THRESHOLDS=(
+    --fail-under-functions 100
+    --fail-under-lines 95
+    --fail-under-regions 95
+)
+
 # Switch to project directory
 cd "$(dirname "$0")"
 
@@ -31,6 +37,7 @@ fi
 # Get current directory absolute path to filter coverage
 CURRENT_CRATE_DIR=$(pwd)
 echo "📁 Coverage will only include files in: $CURRENT_CRATE_DIR"
+echo "🎯 Coverage thresholds: functions 100%, lines 95%, regions 95%"
 
 # Build regex pattern to exclude third-party code and other workspace members
 CURRENT_CRATE_NAME=$(basename "$CURRENT_CRATE_DIR")
@@ -89,6 +96,7 @@ case "$FORMAT_ARG" in
     html)
         echo "📊 Generating HTML format coverage report..."
         cargo llvm-cov --package "$PACKAGE_NAME" --html --open \
+            "${COVERAGE_THRESHOLDS[@]}" \
             --ignore-filename-regex "$EXCLUDE_PATTERN"
         echo "✅ HTML report generated and opened in browser"
         echo "   Report location: target/llvm-cov/html/index.html"
@@ -97,12 +105,14 @@ case "$FORMAT_ARG" in
     text)
         echo "📊 Generating text format coverage report..."
         cargo llvm-cov --package "$PACKAGE_NAME" \
+            "${COVERAGE_THRESHOLDS[@]}" \
             --ignore-filename-regex "$EXCLUDE_PATTERN"
         ;;
 
     lcov)
         echo "📊 Generating LCOV format coverage report..."
         cargo llvm-cov --package "$PACKAGE_NAME" --lcov --output-path target/llvm-cov/lcov.info \
+            "${COVERAGE_THRESHOLDS[@]}" \
             --ignore-filename-regex "$EXCLUDE_PATTERN"
         echo "✅ LCOV report generated"
         echo "   Report location: target/llvm-cov/lcov.info"
@@ -111,6 +121,7 @@ case "$FORMAT_ARG" in
     json)
         echo "📊 Generating JSON format coverage report..."
         cargo llvm-cov --package "$PACKAGE_NAME" --json --output-path target/llvm-cov/coverage.json \
+            "${COVERAGE_THRESHOLDS[@]}" \
             --ignore-filename-regex "$EXCLUDE_PATTERN"
         echo "✅ JSON report generated"
         echo "   Report location: target/llvm-cov/coverage.json"
@@ -119,6 +130,7 @@ case "$FORMAT_ARG" in
     cobertura)
         echo "📊 Generating Cobertura XML format coverage report..."
         cargo llvm-cov --package "$PACKAGE_NAME" --cobertura --output-path target/llvm-cov/cobertura.xml \
+            "${COVERAGE_THRESHOLDS[@]}" \
             --ignore-filename-regex "$EXCLUDE_PATTERN"
         echo "✅ Cobertura report generated"
         echo "   Report location: target/llvm-cov/cobertura.xml"
@@ -130,21 +142,25 @@ case "$FORMAT_ARG" in
         # HTML
         echo "  - Generating HTML report..."
         cargo llvm-cov --package "$PACKAGE_NAME" --html \
+            "${COVERAGE_THRESHOLDS[@]}" \
             --ignore-filename-regex "$EXCLUDE_PATTERN"
 
         # LCOV
         echo "  - Generating LCOV report..."
         cargo llvm-cov --package "$PACKAGE_NAME" --lcov --output-path target/llvm-cov/lcov.info \
+            "${COVERAGE_THRESHOLDS[@]}" \
             --ignore-filename-regex "$EXCLUDE_PATTERN"
 
         # JSON
         echo "  - Generating JSON report..."
         cargo llvm-cov --package "$PACKAGE_NAME" --json --output-path target/llvm-cov/coverage.json \
+            "${COVERAGE_THRESHOLDS[@]}" \
             --ignore-filename-regex "$EXCLUDE_PATTERN"
 
         # Cobertura
         echo "  - Generating Cobertura XML report..."
         cargo llvm-cov --package "$PACKAGE_NAME" --cobertura --output-path target/llvm-cov/cobertura.xml \
+            "${COVERAGE_THRESHOLDS[@]}" \
             --ignore-filename-regex "$EXCLUDE_PATTERN"
 
         echo "✅ All format reports generated"
@@ -169,6 +185,9 @@ case "$FORMAT_ARG" in
         echo "Options:"
         echo "  --clean    Clean old coverage data and build cache before running"
         echo "             By default, cached builds are used to speed up compilation"
+        echo ""
+        echo "Thresholds:"
+        echo "  functions 100%, lines 95%, regions 95%"
         echo ""
         echo "Performance tips:"
         echo "  • First run will be slower (needs to compile all dependencies)"

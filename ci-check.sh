@@ -113,6 +113,11 @@ echo ""
 print_step "5/6 Generating code coverage report..."
 if command -v cargo-llvm-cov &> /dev/null; then
     PACKAGE_NAME=$(grep "^name = " Cargo.toml | head -n 1 | sed 's/name = "\(.*\)"/\1/')
+    COVERAGE_THRESHOLDS=(
+        --fail-under-functions 100
+        --fail-under-lines 95
+        --fail-under-regions 95
+    )
 
     # cargo-llvm-cov needs llvm-profdata AND llvm-cov from llvm-tools-preview on the
     # SAME toolchain Cargo uses in this directory (may differ from `rustup default`).
@@ -159,37 +164,32 @@ if command -v cargo-llvm-cov &> /dev/null; then
             echo "  (llvm-cov:      $LLVM_COV)"
         fi
     else
-    # Generate text format coverage report.
-    # Note: stdout/stderr are captured here. With `set -e`, a failing command
-    # substitution would exit the script before any output is shown — so we
-    # temporarily allow failure, then print the log and exit explicitly.
-    set +e
-    COVERAGE_OUTPUT=$(cargo llvm-cov --package "$PACKAGE_NAME" \
-        --ignore-filename-regex "(\.cargo/registry|\.rustup/)" 2>&1)
-    COVERAGE_EXIT=$?
-    set -e
-    if [ "$COVERAGE_EXIT" -ne 0 ]; then
-        print_error "cargo llvm-cov failed (exit $COVERAGE_EXIT)"
-        echo "$COVERAGE_OUTPUT"
-        exit 1
-    fi
-
-    # Extract coverage percentage
-    COVERAGE_LINE=$(echo "$COVERAGE_OUTPUT" | grep "TOTAL" || echo "")
-
-    if [ -n "$COVERAGE_LINE" ]; then
-        print_success "Coverage report generated"
-        echo "$COVERAGE_LINE"
-
-        # Check if coverage is below threshold (e.g., 90%) — use awk so we
-        # do not depend on `bc` (often missing on minimal/macOS setups).
-        LINE_COVERAGE=$(echo "$COVERAGE_LINE" | awk '{print $10}' | sed 's/%//')
-        if [ -n "$LINE_COVERAGE" ] && awk -v n="$LINE_COVERAGE" 'BEGIN { if (n + 0 < 90) exit 0; exit 1 }'; then
-            print_warning "Code coverage ($LINE_COVERAGE%) is below 90%"
+        # Generate text format coverage report.
+        # Note: stdout/stderr are captured here. With `set -e`, a failing command
+        # substitution would exit the script before any output is shown — so we
+        # temporarily allow failure, then print the log and exit explicitly.
+        set +e
+        COVERAGE_OUTPUT=$(cargo llvm-cov --package "$PACKAGE_NAME" \
+            "${COVERAGE_THRESHOLDS[@]}" \
+            --ignore-filename-regex "(\.cargo/registry|\.rustup/)" 2>&1)
+        COVERAGE_EXIT=$?
+        set -e
+        if [ "$COVERAGE_EXIT" -ne 0 ]; then
+            print_error "cargo llvm-cov failed (exit $COVERAGE_EXIT)"
+            echo "$COVERAGE_OUTPUT"
+            exit 1
         fi
-    else
-        print_warning "Unable to parse coverage data"
-    fi
+
+        # Extract coverage percentage
+        COVERAGE_LINE=$(echo "$COVERAGE_OUTPUT" | grep "TOTAL" || echo "")
+
+        if [ -n "$COVERAGE_LINE" ]; then
+            print_success "Coverage report generated and thresholds passed"
+            echo "$COVERAGE_LINE"
+            echo "Required thresholds: functions 100%, lines 95%, regions 95%"
+        else
+            print_warning "Unable to parse coverage data"
+        fi
     fi
 else
     print_warning "cargo-llvm-cov not installed, skipping coverage check"
@@ -231,4 +231,3 @@ echo ""
 
 # Clean up temporary files
 rm -f /tmp/clippy-output.txt
-
