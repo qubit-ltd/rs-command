@@ -19,16 +19,16 @@ use std::{
 
 /// Structured description of an external command to run.
 ///
-/// `CommandSpec` stores a program and argument vector instead of parsing a
+/// `Command` stores a program and argument vector instead of parsing a
 /// shell-like command line. This avoids quoting ambiguity and accidental shell
-/// injection. Use [`Self::shell`] only when shell parsing is intentionally
-/// required.
+/// injection. Use [`Self::shell`] only when shell parsing, redirection,
+/// expansion, or pipes are intentionally required.
 ///
 /// # Author
 ///
 /// Haixing Hu
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommandSpec {
+pub struct Command {
     /// Program executable name or path.
     program: OsString,
     /// Positional arguments passed to the program.
@@ -39,8 +39,8 @@ pub struct CommandSpec {
     envs: Vec<(OsString, OsString)>,
 }
 
-impl CommandSpec {
-    /// Creates a command specification from a program name or path.
+impl Command {
+    /// Creates a command from a program name or path.
     ///
     /// # Parameters
     ///
@@ -48,7 +48,7 @@ impl CommandSpec {
     ///
     /// # Returns
     ///
-    /// A command specification with no arguments or per-command overrides.
+    /// A command with no arguments or per-command overrides.
     #[inline]
     pub fn new(program: &str) -> Self {
         Self {
@@ -59,7 +59,7 @@ impl CommandSpec {
         }
     }
 
-    /// Creates a command specification executed through the platform shell.
+    /// Creates a command executed through the platform shell.
     ///
     /// On Unix-like platforms this creates `sh -c <command_line>`. On Windows
     /// this creates `cmd /C <command_line>`. Prefer [`Self::new`] with explicit
@@ -71,14 +71,14 @@ impl CommandSpec {
     ///
     /// # Returns
     ///
-    /// A command specification that invokes the platform shell.
+    /// A command that invokes the platform shell.
     #[cfg(not(windows))]
     #[inline]
     pub fn shell(command_line: &str) -> Self {
         Self::new("sh").arg("-c").arg(command_line)
     }
 
-    /// Creates a command specification executed through the platform shell.
+    /// Creates a command executed through the platform shell.
     ///
     /// On Windows this creates `cmd /C <command_line>`. Prefer [`Self::new`]
     /// with explicit arguments when shell parsing is not required.
@@ -89,7 +89,7 @@ impl CommandSpec {
     ///
     /// # Returns
     ///
-    /// A command specification that invokes the platform shell.
+    /// A command that invokes the platform shell.
     #[cfg(windows)]
     #[inline]
     pub fn shell(command_line: &str) -> Self {
@@ -104,7 +104,7 @@ impl CommandSpec {
     ///
     /// # Returns
     ///
-    /// The updated command specification.
+    /// The updated command.
     #[inline]
     pub fn arg(mut self, arg: &str) -> Self {
         self.args.push(OsString::from(arg));
@@ -119,7 +119,7 @@ impl CommandSpec {
     ///
     /// # Returns
     ///
-    /// The updated command specification.
+    /// The updated command.
     #[inline]
     pub fn args(mut self, args: &[&str]) -> Self {
         self.args.extend(args.iter().map(OsString::from));
@@ -135,7 +135,7 @@ impl CommandSpec {
     ///
     /// # Returns
     ///
-    /// The updated command specification.
+    /// The updated command.
     #[inline]
     pub fn working_directory<P>(mut self, working_directory: P) -> Self
     where
@@ -154,7 +154,7 @@ impl CommandSpec {
     ///
     /// # Returns
     ///
-    /// The updated command specification.
+    /// The updated command.
     #[inline]
     pub fn env(mut self, key: &str, value: &str) -> Self {
         self.envs.push((OsString::from(key), OsString::from(value)));

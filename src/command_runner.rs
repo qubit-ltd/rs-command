@@ -18,7 +18,7 @@ use std::{
     process::{
         ChildStderr,
         ChildStdout,
-        Command,
+        Command as ProcessCommand,
         Stdio,
     },
     thread,
@@ -29,9 +29,9 @@ use std::{
 };
 
 use crate::{
+    Command,
     CommandError,
     CommandOutput,
-    CommandSpec,
     OutputStream,
 };
 
@@ -43,9 +43,11 @@ const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Runs external commands and captures their output.
 ///
-/// `CommandRunner` is a process-running utility, not an implementation of a
-/// generic task executor. It runs one [`CommandSpec`] synchronously on the
-/// caller thread and returns captured process output.
+/// `CommandRunner` runs one [`Command`] synchronously on the caller thread and
+/// returns captured process output. The runner always preserves raw output
+/// bytes. Its lossy-output option controls whether [`CommandOutput::stdout`]
+/// and [`CommandOutput::stderr`] reject invalid UTF-8 or return replacement
+/// characters.
 ///
 /// # Author
 ///
@@ -60,6 +62,8 @@ pub struct CommandRunner {
     success_exit_codes: Vec<i32>,
     /// Whether command execution logs are disabled.
     disable_logging: bool,
+    /// Whether captured text accessors should replace invalid UTF-8 bytes.
+    lossy_output: bool,
 }
 
 impl Default for CommandRunner {
@@ -67,8 +71,8 @@ impl Default for CommandRunner {
     ///
     /// # Returns
     ///
-    /// A runner with a 10-second timeout, inherited working directory, and
-    /// success exit code `0`.
+    /// A runner with a 10-second timeout, inherited working directory, success
+    /// exit code `0`, and strict UTF-8 output text accessors.
     #[inline]
     fn default() -> Self {
         Self {
@@ -76,6 +80,7 @@ impl Default for CommandRunner {
             working_directory: None,
             success_exit_codes: vec![0],
             disable_logging: false,
+            lossy_output: false,
         }
     }
 }
@@ -85,8 +90,8 @@ impl CommandRunner {
     ///
     /// # Returns
     ///
-    /// A runner with a 10-second timeout, inherited working directory, and
-    /// success exit code `0`.
+    /// A runner with a 10-second timeout, inherited working directory, success
+    /// exit code `0`, and strict UTF-8 output text accessors.
     #[inline]
     pub fn new() -> Self {
         Self::default()
@@ -182,6 +187,23 @@ impl CommandRunner {
         self
     }
 
+    /// Configures whether output text accessors use lossy UTF-8 conversion.
+    ///
+    /// # Parameters
+    ///
+    /// * `lossy_output` - `true` to replace invalid UTF-8 bytes with the
+    ///   Unicode replacement character when [`CommandOutput::stdout`] or
+    ///   [`CommandOutput::stderr`] is called.
+    ///
+    /// # Returns
+    ///
+    /// The updated command runner.
+    #[inline]
+    pub const fn lossy_output(mut self, lossy_output: bool) -> Self {
+        self.lossy_output = lossy_output;
+        self
+    }
+
     /// Returns the configured timeout.
     ///
     /// # Returns
@@ -223,15 +245,28 @@ impl CommandRunner {
         self.disable_logging
     }
 
+    /// Returns whether output text accessors use lossy UTF-8 conversion.
+    ///
+    /// # Returns
+    ///
+    /// `true` when invalid UTF-8 bytes are replaced before output is returned
+    /// by [`CommandOutput::stdout`] or [`CommandOutput::stderr`].
+    #[inline]
+    pub const fn is_lossy_output_enabled(&self) -> bool {
+        self.lossy_output
+    }
+
     /// Runs a command and captures stdout and stderr.
     ///
     /// This method blocks the caller thread until the child process exits or
-    /// the configured timeout is reached. Captured output is retained as raw
-    /// bytes.
+    /// the configured timeout is reached. Captured output is always retained
+    /// as raw bytes. If lossy output mode is enabled, invalid UTF-8 is replaced
+    /// only for [`CommandOutput::stdout`] and [`CommandOutput::stderr`]; byte
+    /// accessors still return the original process output.
     ///
     /// # Parameters
     ///
-    /// * `spec` - Structured command specification to run.
+    /// * `command` - Structured command to run.
     ///
     /// # Returns
     ///
@@ -242,30 +277,30 @@ impl CommandRunner {
     /// Returns [`CommandError`] if the process cannot be spawned, cannot be
     /// waited on, times out, cannot be killed after timing out, emits output
     /// that cannot be read, or exits with a code not configured as successful.
-    pub fn run(&self, spec: CommandSpec) -> Result<CommandOutput, CommandError> {
-        let command_text = spec.display_command();
+    pub fn run(&self, command: Command) -> Result<CommandOutput, CommandError> {
+        let command_text = command.display_command();
         if !self.disable_logging {
             log::info!("Running command: {command_text}");
         }
 
-        let mut command = Command::new(spec.program());
-        command.args(spec.arguments());
-        command.stdin(Stdio::null());
-        command.stdout(Stdio::piped());
-        command.stderr(Stdio::piped());
+        let mut process_command = ProcessCommand::new(command.program());
+        process_command.args(command.arguments());
+        process_command.stdin(Stdio::null());
+        process_command.stdout(Stdio::piped());
+        process_command.stderr(Stdio::piped());
 
-        if let Some(working_directory) = spec
+        if let Some(working_directory) = command
             .working_directory_override()
             .or(self.working_directory.as_deref())
         {
-            command.current_dir(working_directory);
+            process_command.current_dir(working_directory);
         }
 
-        for (key, value) in spec.environment() {
-            command.env(key, value);
+        for (key, value) in command.environment() {
+            process_command.env(key, value);
         }
 
-        let mut child = match command.spawn() {
+        let mut child = match process_command.spawn() {
             Ok(child) => child,
             Err(source) => return Err(spawn_failed(&command_text, source)),
         };
@@ -304,6 +339,7 @@ impl CommandRunner {
                     &command_text,
                     exit_status.code(),
                     start.elapsed(),
+                    self.lossy_output,
                     stdout_reader,
                     stderr_reader,
                 )?;
@@ -320,6 +356,7 @@ impl CommandRunner {
             &command_text,
             exit_status.code(),
             start.elapsed(),
+            self.lossy_output,
             stdout_reader,
             stderr_reader,
         )?;
@@ -462,6 +499,8 @@ fn kill_failed(command: String, timeout: Duration, source: io::Error) -> Command
 /// * `command` - Human-readable command text for diagnostics.
 /// * `exit_code` - Process exit code, if available.
 /// * `elapsed` - Observed command duration.
+/// * `lossy_output` - Whether output text accessors should replace invalid
+///   UTF-8 bytes.
 /// * `stdout_reader` - Reader thread for stdout.
 /// * `stderr_reader` - Reader thread for stderr.
 ///
@@ -477,12 +516,19 @@ fn collect_output(
     command: &str,
     exit_code: Option<i32>,
     elapsed: Duration,
+    lossy_output: bool,
     stdout_reader: thread::JoinHandle<io::Result<Vec<u8>>>,
     stderr_reader: thread::JoinHandle<io::Result<Vec<u8>>>,
 ) -> Result<CommandOutput, CommandError> {
     let stdout = join_output_reader(command, OutputStream::Stdout, stdout_reader)?;
     let stderr = join_output_reader(command, OutputStream::Stderr, stderr_reader)?;
-    Ok(CommandOutput::new(exit_code, stdout, stderr, elapsed))
+    Ok(CommandOutput::new(
+        exit_code,
+        stdout,
+        stderr,
+        elapsed,
+        lossy_output,
+    ))
 }
 
 /// Joins one output reader and maps failures to command errors.
@@ -617,6 +663,7 @@ pub mod coverage_support {
                 "collect-stdout",
                 Some(0),
                 Duration::ZERO,
+                false,
                 failed_stdout,
                 empty_stderr,
             )
@@ -631,6 +678,7 @@ pub mod coverage_support {
                 "collect-stderr",
                 Some(0),
                 Duration::ZERO,
+                false,
                 empty_stdout,
                 failed_stderr,
             )

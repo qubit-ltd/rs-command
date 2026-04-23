@@ -8,21 +8,20 @@
  ******************************************************************************/
 //! # Qubit Command
 //!
-//! Provides command-line process running utilities for Qubit Rust projects.
+//! Provides command-line process running utilities for Rust.
 //!
 //! # Author
 //!
 //! Haixing Hu
 
+mod command;
 mod command_error;
 mod command_output;
 mod command_runner;
-mod command_spec;
+mod output_stream;
 
-pub use command_error::{
-    CommandError,
-    OutputStream,
-};
+pub use command::Command;
+pub use command_error::CommandError;
 pub use command_output::CommandOutput;
 #[cfg(coverage)]
 #[doc(hidden)]
@@ -31,4 +30,4 @@ pub use command_runner::{
     CommandRunner,
     DEFAULT_COMMAND_TIMEOUT,
 };
-pub use command_spec::CommandSpec;
+pub use output_stream::OutputStream;
