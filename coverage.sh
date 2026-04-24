@@ -91,6 +91,9 @@ else
     echo "ℹ️  Using cached build (use --clean option if you need to clean cache)"
 fi
 
+# cargo-llvm-cov does not create parent directories for --json/--lcov/--cobertura outputs
+mkdir -p target/llvm-cov
+
 # Run tests and generate coverage reports
 case "$FORMAT_ARG" in
     html)
