@@ -487,9 +487,12 @@ fn env_key_eq(left: &OsStr, right: &OsStr) -> bool {
 ///
 /// # Returns
 ///
-/// `true` when both names are equal ignoring ASCII case.
+/// `true` when both names are equal after Unicode uppercase folding.
 #[cfg(windows)]
 fn env_key_eq(left: &OsStr, right: &OsStr) -> bool {
-    left.to_string_lossy()
-        .eq_ignore_ascii_case(&right.to_string_lossy())
+    let left = left.to_string_lossy();
+    let right = right.to_string_lossy();
+    left.chars()
+        .flat_map(char::to_uppercase)
+        .eq(right.chars().flat_map(char::to_uppercase))
 }

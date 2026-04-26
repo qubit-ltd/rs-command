@@ -144,6 +144,20 @@ fn test_command_env_names_are_case_insensitive_on_windows() {
 }
 
 #[test]
+#[cfg(windows)]
+fn test_command_env_names_use_unicode_case_insensitive_comparison_on_windows() {
+    let command = Command::new("env")
+        .env("Straße", "street")
+        .env_remove("STRASSE");
+
+    assert!(command.environment().is_empty());
+    assert_eq!(
+        command.removed_environment()[0].to_string_lossy(),
+        "STRASSE",
+    );
+}
+
+#[test]
 fn test_command_env_clear_clears_prior_environment_changes() {
     let command = Command::new("env")
         .env("QUBIT_COMMAND_TEST", "present")
