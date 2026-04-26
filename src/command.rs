@@ -435,14 +435,14 @@ impl Command {
         self.clear_environment
     }
 
-    /// Returns the configured stdin behavior.
+    /// Consumes the command and returns the configured stdin behavior.
     ///
     /// # Returns
     ///
-    /// Borrowed stdin configuration used by the runner.
+    /// Owned stdin configuration used by the runner.
     #[inline]
-    pub(crate) const fn stdin_configuration(&self) -> &CommandStdin {
-        &self.stdin
+    pub(crate) fn into_stdin_configuration(self) -> CommandStdin {
+        self.stdin
     }
 
     /// Formats this command for diagnostics.

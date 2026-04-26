@@ -461,7 +461,6 @@ impl CommandRunner {
 
         let mut process_command = ProcessCommand::new(command.program());
         process_command.args(command.arguments());
-        let stdin_bytes = configure_stdin(&command_text, &command, &mut process_command)?;
         process_command.stdout(Stdio::piped());
         process_command.stderr(Stdio::piped());
 
@@ -473,6 +472,9 @@ impl CommandRunner {
         }
 
         configure_environment(&command, &mut process_command);
+        let stdin_configuration = command.into_stdin_configuration();
+        let stdin_bytes =
+            configure_stdin(&command_text, stdin_configuration, &mut process_command)?;
 
         let stdout_file = open_output_file(
             &command_text,
@@ -676,7 +678,7 @@ enum OutputCaptureError {
 /// # Parameters
 ///
 /// * `command_text` - Human-readable command text for diagnostics.
-/// * `command` - Command configuration.
+/// * `stdin` - Owned stdin configuration for the command.
 /// * `process_command` - Process command being prepared.
 ///
 /// # Returns
@@ -690,10 +692,10 @@ enum OutputCaptureError {
 /// be opened.
 fn configure_stdin(
     command_text: &str,
-    command: &Command,
+    stdin: CommandStdin,
     process_command: &mut ProcessCommand,
 ) -> Result<Option<Vec<u8>>, CommandError> {
-    match command.stdin_configuration() {
+    match stdin {
         CommandStdin::Null => {
             process_command.stdin(Stdio::null());
             Ok(None)
@@ -704,16 +706,16 @@ fn configure_stdin(
         }
         CommandStdin::Bytes(bytes) => {
             process_command.stdin(Stdio::piped());
-            Ok(Some(bytes.clone()))
+            Ok(Some(bytes))
         }
-        CommandStdin::File(path) => match File::open(path) {
+        CommandStdin::File(path) => match File::open(&path) {
             Ok(file) => {
                 process_command.stdin(Stdio::from(file));
                 Ok(None)
             }
             Err(source) => Err(CommandError::OpenInputFailed {
                 command: command_text.to_owned(),
-                path: path.clone(),
+                path,
                 source,
             }),
         },
@@ -1011,7 +1013,8 @@ fn kill_failed(command: String, timeout: Duration, source: io::Error) -> Command
 ///
 /// # Errors
 ///
-/// Returns [`CommandError`] if stream collection or stdin writing fails.
+/// Returns [`CommandError`] if stream collection or stdin writing fails. All
+/// helper threads are joined before an error is returned.
 fn collect_output(
     command: &str,
     status: ExitStatus,
@@ -1022,26 +1025,35 @@ fn collect_output(
     stdin_writer: StdinWriter,
 ) -> Result<CommandOutput, CommandError> {
     #[cfg(coverage)]
-    if let Some(stream) = coverage_support::forced_collect_output_error(command) {
-        return Err(CommandError::ReadOutputFailed {
+    let forced_error = coverage_support::forced_collect_output_error(command).map(|stream| {
+        CommandError::ReadOutputFailed {
             command: command.to_owned(),
             stream,
             source: io::Error::other("forced output collection failure"),
-        });
-    }
+        }
+    });
+    #[cfg(not(coverage))]
+    let forced_error = None;
 
-    let stdout = join_output_reader(command, OutputStream::Stdout, stdout_reader)?;
-    let stderr = join_output_reader(command, OutputStream::Stderr, stderr_reader)?;
-    join_stdin_writer(command, stdin_writer)?;
-    Ok(CommandOutput::new(
-        status,
-        stdout.bytes,
-        stderr.bytes,
-        stdout.truncated,
-        stderr.truncated,
-        elapsed,
-        lossy_output,
-    ))
+    let stdout_result = join_output_reader(command, OutputStream::Stdout, stdout_reader);
+    let stderr_result = join_output_reader(command, OutputStream::Stderr, stderr_reader);
+    let stdin_result = join_stdin_writer(command, stdin_writer);
+
+    match (stdout_result, stderr_result, stdin_result, forced_error) {
+        (Ok(stdout), Ok(stderr), Ok(()), None) => Ok(CommandOutput::new(
+            status,
+            stdout.bytes,
+            stderr.bytes,
+            stdout.truncated,
+            stderr.truncated,
+            elapsed,
+            lossy_output,
+        )),
+        (Err(error), _, _, _)
+        | (_, Err(error), _, _)
+        | (_, _, Err(error), _)
+        | (_, _, _, Some(error)) => Err(error),
+    }
 }
 
 /// Joins one output reader and maps failures to command errors.
