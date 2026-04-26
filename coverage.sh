@@ -12,14 +12,17 @@
 # Uses cargo-llvm-cov to generate code coverage reports
 #
 
-set -e
+set -euo pipefail
 
 echo "🔍 Starting code coverage testing..."
 
+MIN_FUNCTION_PERCENT=100
+MIN_LINE_PERCENT=98
+MIN_REGION_PERCENT=98
 COVERAGE_THRESHOLDS=(
-    --fail-under-functions 100
-    --fail-under-lines 95
-    --fail-under-regions 95
+    --fail-under-functions "$MIN_FUNCTION_PERCENT"
+    --fail-under-lines "$MIN_LINE_PERCENT"
+    --fail-under-regions "$MIN_REGION_PERCENT"
 )
 
 # Switch to project directory
@@ -37,7 +40,7 @@ fi
 # Get current directory absolute path to filter coverage
 CURRENT_CRATE_DIR=$(pwd)
 echo "📁 Coverage will only include files in: $CURRENT_CRATE_DIR"
-echo "🎯 Coverage thresholds: functions 100%, lines 95%, regions 95%"
+echo "🎯 Coverage thresholds: functions 100%, lines >98%, regions >98% per source file"
 
 # Build regex pattern to exclude third-party code and other workspace members
 CURRENT_CRATE_NAME=$(basename "$CURRENT_CRATE_DIR")
@@ -61,6 +64,43 @@ done
 # Using simple alternation for clarity
 EXCLUDE_PATTERN="(\.cargo/registry|\.rustup/|/($OTHER_CRATES)/)"
 echo "🚫 Excluding: .cargo/registry, .rustup, and other workspace members"
+
+check_json_source_file_thresholds() {
+    local json_path="$1"
+
+    if ! command -v jq > /dev/null; then
+        echo "❌ Error: jq is required to validate per-source JSON coverage thresholds"
+        exit 1
+    fi
+
+    local failures
+    failures=$(jq -r \
+        --arg src_dir "$CURRENT_CRATE_DIR/src/" \
+        --argjson min_functions "$MIN_FUNCTION_PERCENT" \
+        --argjson min_lines "$MIN_LINE_PERCENT" \
+        --argjson min_regions "$MIN_REGION_PERCENT" \
+        '
+        .data[].files[]
+        | select(.filename | startswith($src_dir))
+        | .filename as $file
+        | .summary as $summary
+        | select(
+            ($summary.functions.percent < $min_functions)
+            or ($summary.lines.percent <= $min_lines)
+            or ($summary.regions.percent <= $min_regions)
+        )
+        | "\($file): functions \($summary.functions.percent)% (\($summary.functions.covered)/\($summary.functions.count)), lines \($summary.lines.percent)% (\($summary.lines.covered)/\($summary.lines.count)), regions \($summary.regions.percent)% (\($summary.regions.covered)/\($summary.regions.count))"
+        ' "$json_path")
+
+    if [ -n "$failures" ]; then
+        echo "❌ Per-source coverage thresholds failed:"
+        echo "$failures"
+        echo "   Required: functions 100%, lines >98%, regions >98%"
+        exit 1
+    fi
+
+    echo "✅ Per-source JSON coverage thresholds passed"
+}
 
 # Parse arguments, check if cleanup is needed
 CLEAN_FLAG=""
@@ -126,6 +166,7 @@ case "$FORMAT_ARG" in
         cargo llvm-cov --package "$PACKAGE_NAME" --json --output-path target/llvm-cov/coverage.json \
             "${COVERAGE_THRESHOLDS[@]}" \
             --ignore-filename-regex "$EXCLUDE_PATTERN"
+        check_json_source_file_thresholds target/llvm-cov/coverage.json
         echo "✅ JSON report generated"
         echo "   Report location: target/llvm-cov/coverage.json"
         ;;
@@ -159,6 +200,7 @@ case "$FORMAT_ARG" in
         cargo llvm-cov --package "$PACKAGE_NAME" --json --output-path target/llvm-cov/coverage.json \
             "${COVERAGE_THRESHOLDS[@]}" \
             --ignore-filename-regex "$EXCLUDE_PATTERN"
+        check_json_source_file_thresholds target/llvm-cov/coverage.json
 
         # Cobertura
         echo "  - Generating Cobertura XML report..."
@@ -190,7 +232,7 @@ case "$FORMAT_ARG" in
         echo "             By default, cached builds are used to speed up compilation"
         echo ""
         echo "Thresholds:"
-        echo "  functions 100%, lines 95%, regions 95%"
+        echo "  functions 100%, lines >98%, regions >98% for every source file in src/"
         echo ""
         echo "Performance tips:"
         echo "  • First run will be slower (needs to compile all dependencies)"

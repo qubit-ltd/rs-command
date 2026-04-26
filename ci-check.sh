@@ -12,7 +12,7 @@
 # Run this script before committing code to ensure it passes all CircleCI checks
 #
 
-set -e  # Exit immediately on error
+set -euo pipefail
 
 # Color definitions
 RED='\033[0;31m'
@@ -68,7 +68,11 @@ echo ""
 
 # Check 2: Clippy linting
 print_step "2/6 Running Clippy checks (cargo +nightly clippy)..."
-if cargo +nightly clippy --all-targets --all-features -- -D warnings 2>&1 | tee /tmp/clippy-output.txt | grep -q "warning\|error"; then
+set +e
+cargo +nightly clippy --all-targets --all-features -- -D warnings 2>&1 | tee /tmp/clippy-output.txt
+CLIPPY_EXIT=${PIPESTATUS[0]}
+set -e
+if [ "$CLIPPY_EXIT" -ne 0 ]; then
     print_error "Clippy found issues"
     cat /tmp/clippy-output.txt
     echo ""
@@ -111,91 +115,20 @@ echo ""
 
 # Check 5: Code coverage
 print_step "5/6 Generating code coverage report..."
-if command -v cargo-llvm-cov &> /dev/null; then
-    PACKAGE_NAME=$(grep "^name = " Cargo.toml | head -n 1 | sed 's/name = "\(.*\)"/\1/')
-    COVERAGE_THRESHOLDS=(
-        --fail-under-functions 100
-        --fail-under-lines 95
-        --fail-under-regions 95
-    )
-
-    # cargo-llvm-cov needs llvm-profdata AND llvm-cov from llvm-tools-preview on the
-    # SAME toolchain Cargo uses in this directory (may differ from `rustup default`).
-    RUST_SYSROOT=""
-    RUST_HOST=""
-    RUSTUP_ACTIVE_TOOLCHAIN=""
-    if command -v rustup &> /dev/null; then
-        RUSTUP_ACTIVE_TOOLCHAIN=$(rustup show active-toolchain 2>/dev/null | awk '{print $1; exit}')
-    fi
-    if [ -n "$RUSTUP_ACTIVE_TOOLCHAIN" ]; then
-        RUST_SYSROOT=$(rustup run "$RUSTUP_ACTIVE_TOOLCHAIN" rustc --print sysroot 2>/dev/null || true)
-        RUST_HOST=$(rustup run "$RUSTUP_ACTIVE_TOOLCHAIN" rustc -vV 2>/dev/null | sed -n 's/^host: //p' || true)
-    fi
-    if [ -z "$RUST_SYSROOT" ] || [ -z "$RUST_HOST" ]; then
-        RUST_SYSROOT=$(rustc --print sysroot 2>/dev/null || true)
-        RUST_HOST=$(rustc -vV 2>/dev/null | sed -n 's/^host: //p' || true)
-    fi
-    LLVM_BINDIR=""
-    LLVM_PROFDATA=""
-    LLVM_COV=""
-    if [ -n "$RUST_SYSROOT" ] && [ -n "$RUST_HOST" ]; then
-        LLVM_BINDIR="$RUST_SYSROOT/lib/rustlib/$RUST_HOST/bin"
-        LLVM_PROFDATA="$LLVM_BINDIR/llvm-profdata"
-        LLVM_COV="$LLVM_BINDIR/llvm-cov"
-    fi
-    LLVM_TOOLS_MISSING=""
-    if [ -z "$LLVM_PROFDATA" ] || [ ! -f "$LLVM_PROFDATA" ]; then
-        LLVM_TOOLS_MISSING=1
-    fi
-    if [ -z "$LLVM_COV" ] || [ ! -f "$LLVM_COV" ]; then
-        LLVM_TOOLS_MISSING=1
-    fi
-    if [ -n "$LLVM_TOOLS_MISSING" ]; then
-        print_warning "LLVM coverage tools missing (need llvm-profdata + llvm-cov from llvm-tools-preview). Skipping coverage check."
-        if [ -n "$RUSTUP_ACTIVE_TOOLCHAIN" ]; then
-            echo "  rustup component add llvm-tools-preview --toolchain $RUSTUP_ACTIVE_TOOLCHAIN"
-        else
-            echo "  rustup component add llvm-tools-preview"
-        fi
-        if [ -n "$LLVM_PROFDATA" ]; then
-            echo "  (llvm-profdata: $LLVM_PROFDATA)"
-        fi
-        if [ -n "$LLVM_COV" ]; then
-            echo "  (llvm-cov:      $LLVM_COV)"
-        fi
-    else
-        # Generate text format coverage report.
-        # Note: stdout/stderr are captured here. With `set -e`, a failing command
-        # substitution would exit the script before any output is shown — so we
-        # temporarily allow failure, then print the log and exit explicitly.
-        set +e
-        COVERAGE_OUTPUT=$(cargo llvm-cov --package "$PACKAGE_NAME" \
-            "${COVERAGE_THRESHOLDS[@]}" \
-            --ignore-filename-regex "(\.cargo/registry|\.rustup/)" 2>&1)
-        COVERAGE_EXIT=$?
-        set -e
-        if [ "$COVERAGE_EXIT" -ne 0 ]; then
-            print_error "cargo llvm-cov failed (exit $COVERAGE_EXIT)"
-            echo "$COVERAGE_OUTPUT"
-            exit 1
-        fi
-
-        # Extract coverage percentage
-        COVERAGE_LINE=$(echo "$COVERAGE_OUTPUT" | grep "TOTAL" || echo "")
-
-        if [ -n "$COVERAGE_LINE" ]; then
-            print_success "Coverage report generated and thresholds passed"
-            echo "$COVERAGE_LINE"
-            echo "Required thresholds: functions 100%, lines 95%, regions 95%"
-        else
-            print_warning "Unable to parse coverage data"
-        fi
-    fi
-else
+if ! command -v cargo-llvm-cov &> /dev/null; then
     print_warning "cargo-llvm-cov not installed, skipping coverage check"
     echo "Installation instructions:"
     echo "  cargo install cargo-llvm-cov"
     echo "  rustup component add llvm-tools-preview   # on the same toolchain as this project (see: rustup show active-toolchain)"
+elif ! command -v jq &> /dev/null; then
+    print_error "jq is required for per-source JSON coverage checks"
+    echo "Install jq, then rerun ./ci-check.sh"
+    exit 1
+elif ./coverage.sh json; then
+    print_success "Coverage report generated and per-source thresholds passed"
+else
+    print_error "Coverage check failed"
+    exit 1
 fi
 echo ""
 
