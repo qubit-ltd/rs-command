@@ -8,6 +8,7 @@
  ******************************************************************************/
 use std::{
     io,
+    path::PathBuf,
     time::Duration,
 };
 
@@ -65,6 +66,52 @@ pub enum CommandError {
         source: io::Error,
     },
 
+    /// Opening a stdin file failed.
+    #[error("failed to open stdin file `{path:?}` for command `{command}`: {source}")]
+    OpenInputFailed {
+        /// Human-readable command representation.
+        command: String,
+        /// Path that could not be opened.
+        path: PathBuf,
+        /// I/O error reported while opening the file.
+        source: io::Error,
+    },
+
+    /// Opening an output redirection file failed.
+    #[error("failed to open {stream} file `{path:?}` for command `{command}`: {source}")]
+    OpenOutputFailed {
+        /// Human-readable command representation.
+        command: String,
+        /// Stream whose file could not be opened.
+        stream: OutputStream,
+        /// Path that could not be opened.
+        path: PathBuf,
+        /// I/O error reported while opening the file.
+        source: io::Error,
+    },
+
+    /// Writing configured stdin bytes failed.
+    #[error("failed to write stdin for command `{command}`: {source}")]
+    WriteInputFailed {
+        /// Human-readable command representation.
+        command: String,
+        /// I/O error reported while writing stdin.
+        source: io::Error,
+    },
+
+    /// Writing captured output to a redirection file failed.
+    #[error("failed to write {stream} for command `{command}` to `{path:?}`: {source}")]
+    WriteOutputFailed {
+        /// Human-readable command representation.
+        command: String,
+        /// Stream whose redirected writer failed.
+        stream: OutputStream,
+        /// Path that could not be written.
+        path: PathBuf,
+        /// I/O error reported while writing the file.
+        source: io::Error,
+    },
+
     /// The command exceeded the configured timeout and was terminated.
     #[error("command `{command}` timed out after {timeout:?}")]
     TimedOut {
@@ -116,6 +163,10 @@ impl CommandError {
             | Self::WaitFailed { command, .. }
             | Self::KillFailed { command, .. }
             | Self::ReadOutputFailed { command, .. }
+            | Self::OpenInputFailed { command, .. }
+            | Self::OpenOutputFailed { command, .. }
+            | Self::WriteInputFailed { command, .. }
+            | Self::WriteOutputFailed { command, .. }
             | Self::TimedOut { command, .. }
             | Self::UnexpectedExit { command, .. } => command,
         }

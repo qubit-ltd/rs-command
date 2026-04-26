@@ -25,7 +25,9 @@ fn test_command_output_stdout_returns_utf8_text_and_bytes() {
         output.stdout().expect("stdout should be valid UTF-8"),
         "hello"
     );
+    assert_eq!(output.exit_status().code(), Some(0));
     assert_eq!(output.stdout_bytes(), b"hello");
+    assert!(!output.stdout_truncated());
 }
 
 #[test]
@@ -39,6 +41,7 @@ fn test_command_output_stderr_returns_utf8_text_and_bytes() {
         "error"
     );
     assert_eq!(output.stderr_bytes(), b"error");
+    assert!(!output.stderr_truncated());
 }
 
 #[test]
@@ -70,4 +73,17 @@ fn test_command_output_uses_lossy_text_when_configured() {
     );
     assert_eq!(output.stdout_bytes(), &[0xff]);
     assert_eq!(output.stderr_bytes(), &[0xff]);
+}
+
+#[test]
+fn test_command_output_reports_unix_termination_signal() {
+    let error = CommandRunner::new()
+        .run(Command::shell("kill -TERM $$"))
+        .expect_err("signal-terminated command should not be successful");
+    let output = error
+        .output()
+        .expect("unexpected exit should expose output");
+
+    assert_eq!(output.exit_code(), None);
+    assert_eq!(output.termination_signal(), Some(15));
 }

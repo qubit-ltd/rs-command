@@ -35,8 +35,30 @@ pub struct Command {
     args: Vec<OsString>,
     /// Working directory override for this command.
     working_directory: Option<PathBuf>,
+    /// Whether the command should clear inherited environment variables.
+    clear_environment: bool,
     /// Environment variables added or overridden for this command.
     envs: Vec<(OsString, OsString)>,
+    /// Environment variables removed for this command.
+    removed_envs: Vec<OsString>,
+    /// Standard input configuration for this command.
+    stdin: CommandStdin,
+}
+
+/// Standard input configuration for a command.
+///
+/// This type stays internal so the public builder API can evolve without
+/// exposing process-spawning details.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CommandStdin {
+    /// Connect stdin to null input.
+    Null,
+    /// Inherit stdin from the parent process.
+    Inherit,
+    /// Write these bytes to the child process stdin.
+    Bytes(Vec<u8>),
+    /// Read stdin bytes from this file.
+    File(PathBuf),
 }
 
 impl Command {
@@ -51,11 +73,31 @@ impl Command {
     /// A command with no arguments or per-command overrides.
     #[inline]
     pub fn new(program: &str) -> Self {
+        Self::new_os(program)
+    }
+
+    /// Creates a command from a program name or path that may not be UTF-8.
+    ///
+    /// # Parameters
+    ///
+    /// * `program` - Executable name or path to run.
+    ///
+    /// # Returns
+    ///
+    /// A command with no arguments or per-command overrides.
+    #[inline]
+    pub fn new_os<S>(program: S) -> Self
+    where
+        S: AsRef<OsStr>,
+    {
         Self {
-            program: OsString::from(program),
+            program: program.as_ref().to_owned(),
             args: Vec::new(),
             working_directory: None,
+            clear_environment: false,
             envs: Vec::new(),
+            removed_envs: Vec::new(),
+            stdin: CommandStdin::Null,
         }
     }
 
@@ -111,6 +153,24 @@ impl Command {
         self
     }
 
+    /// Adds one positional argument that may not be UTF-8.
+    ///
+    /// # Parameters
+    ///
+    /// * `arg` - Argument to append.
+    ///
+    /// # Returns
+    ///
+    /// The updated command.
+    #[inline]
+    pub fn arg_os<S>(mut self, arg: S) -> Self
+    where
+        S: AsRef<OsStr>,
+    {
+        self.args.push(arg.as_ref().to_owned());
+        self
+    }
+
     /// Adds multiple positional arguments.
     ///
     /// # Parameters
@@ -123,6 +183,25 @@ impl Command {
     #[inline]
     pub fn args(mut self, args: &[&str]) -> Self {
         self.args.extend(args.iter().map(OsString::from));
+        self
+    }
+
+    /// Adds multiple positional arguments that may not be UTF-8.
+    ///
+    /// # Parameters
+    ///
+    /// * `args` - Arguments to append in order.
+    ///
+    /// # Returns
+    ///
+    /// The updated command.
+    pub fn args_os<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.args
+            .extend(args.into_iter().map(|arg| arg.as_ref().to_owned()));
         self
     }
 
@@ -157,7 +236,141 @@ impl Command {
     /// The updated command.
     #[inline]
     pub fn env(mut self, key: &str, value: &str) -> Self {
-        self.envs.push((OsString::from(key), OsString::from(value)));
+        self = self.env_os(key, value);
+        self
+    }
+
+    /// Adds or overrides an environment variable that may not be UTF-8.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - Environment variable name.
+    /// * `value` - Environment variable value.
+    ///
+    /// # Returns
+    ///
+    /// The updated command.
+    pub fn env_os<K, V>(mut self, key: K, value: V) -> Self
+    where
+        K: AsRef<OsStr>,
+        V: AsRef<OsStr>,
+    {
+        let key = key.as_ref().to_owned();
+        let value = value.as_ref().to_owned();
+        self.removed_envs
+            .retain(|removed| !env_key_eq(removed, &key));
+        self.envs
+            .retain(|(existing_key, _)| !env_key_eq(existing_key, &key));
+        self.envs.push((key, value));
+        self
+    }
+
+    /// Removes an inherited or previously configured environment variable.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - Environment variable name to remove.
+    ///
+    /// # Returns
+    ///
+    /// The updated command.
+    #[inline]
+    pub fn env_remove(mut self, key: &str) -> Self {
+        self = self.env_remove_os(key);
+        self
+    }
+
+    /// Removes an environment variable whose name may not be UTF-8.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - Environment variable name to remove.
+    ///
+    /// # Returns
+    ///
+    /// The updated command.
+    pub fn env_remove_os<S>(mut self, key: S) -> Self
+    where
+        S: AsRef<OsStr>,
+    {
+        let key = key.as_ref().to_owned();
+        self.envs
+            .retain(|(existing_key, _)| !env_key_eq(existing_key, &key));
+        self.removed_envs
+            .retain(|removed| !env_key_eq(removed, &key));
+        self.removed_envs.push(key);
+        self
+    }
+
+    /// Clears all inherited environment variables for this command.
+    ///
+    /// Environment variables added after this call are still passed to the child
+    /// process.
+    ///
+    /// # Returns
+    ///
+    /// The updated command.
+    pub fn env_clear(mut self) -> Self {
+        self.clear_environment = true;
+        self.envs.clear();
+        self.removed_envs.clear();
+        self
+    }
+
+    /// Connects the command stdin to null input.
+    ///
+    /// # Returns
+    ///
+    /// The updated command.
+    pub fn stdin_null(mut self) -> Self {
+        self.stdin = CommandStdin::Null;
+        self
+    }
+
+    /// Inherits stdin from the parent process.
+    ///
+    /// # Returns
+    ///
+    /// The updated command.
+    pub fn stdin_inherit(mut self) -> Self {
+        self.stdin = CommandStdin::Inherit;
+        self
+    }
+
+    /// Writes bytes to the child process stdin.
+    ///
+    /// The runner writes the bytes on a helper thread after spawning the child
+    /// process, then closes stdin so the child can observe EOF.
+    ///
+    /// # Parameters
+    ///
+    /// * `bytes` - Bytes to send to stdin.
+    ///
+    /// # Returns
+    ///
+    /// The updated command.
+    pub fn stdin_bytes<B>(mut self, bytes: B) -> Self
+    where
+        B: Into<Vec<u8>>,
+    {
+        self.stdin = CommandStdin::Bytes(bytes.into());
+        self
+    }
+
+    /// Reads child process stdin from a file.
+    ///
+    /// # Parameters
+    ///
+    /// * `path` - File path to open and connect to stdin.
+    ///
+    /// # Returns
+    ///
+    /// The updated command.
+    pub fn stdin_file<P>(mut self, path: P) -> Self
+    where
+        P: Into<PathBuf>,
+    {
+        self.stdin = CommandStdin::File(path.into());
         self
     }
 
@@ -202,17 +415,81 @@ impl Command {
         &self.envs
     }
 
+    /// Returns environment variable removals.
+    ///
+    /// # Returns
+    ///
+    /// Borrowed environment variable names removed before spawning the command.
+    #[inline]
+    pub fn removed_environment(&self) -> &[OsString] {
+        &self.removed_envs
+    }
+
+    /// Returns whether the inherited environment is cleared.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the command should start from an empty environment.
+    #[inline]
+    pub const fn clears_environment(&self) -> bool {
+        self.clear_environment
+    }
+
+    /// Returns the configured stdin behavior.
+    ///
+    /// # Returns
+    ///
+    /// Borrowed stdin configuration used by the runner.
+    #[inline]
+    pub(crate) const fn stdin_configuration(&self) -> &CommandStdin {
+        &self.stdin
+    }
+
     /// Formats this command for diagnostics.
     ///
     /// # Returns
     ///
-    /// A lossy, human-readable command string suitable for logs and errors.
+    /// An argv-style command string suitable for logs and errors.
     pub(crate) fn display_command(&self) -> String {
-        let mut text = self.program.to_string_lossy().into_owned();
+        let mut parts = Vec::with_capacity(self.args.len() + 1);
+        parts.push(self.program.as_os_str());
         for arg in &self.args {
-            text.push(' ');
-            text.push_str(&arg.to_string_lossy());
+            parts.push(arg.as_os_str());
         }
-        text
+        format!("{parts:?}")
     }
+}
+
+/// Compares environment variable names using platform semantics.
+///
+/// # Parameters
+///
+/// * `left` - First environment variable name.
+/// * `right` - Second environment variable name.
+///
+/// # Returns
+///
+/// `true` when both names refer to the same environment entry on the current
+/// platform. Unix uses byte-preserving exact comparison; Windows uses
+/// case-insensitive comparison because Windows environment variable names are
+/// case-insensitive.
+#[cfg(not(windows))]
+fn env_key_eq(left: &OsStr, right: &OsStr) -> bool {
+    left == right
+}
+
+/// Compares environment variable names using Windows semantics.
+///
+/// # Parameters
+///
+/// * `left` - First environment variable name.
+/// * `right` - Second environment variable name.
+///
+/// # Returns
+///
+/// `true` when both names are equal ignoring ASCII case.
+#[cfg(windows)]
+fn env_key_eq(left: &OsStr, right: &OsStr) -> bool {
+    left.to_string_lossy()
+        .eq_ignore_ascii_case(&right.to_string_lossy())
 }

@@ -28,6 +28,7 @@ doctest = true
 
 [dependencies]
 log = "0.4"
+process-wrap = { version = "9.1.0", default-features = false, features = ["std", "process-group", "job-object"] }
 thiserror = "2.0"
 
 [lints.rust]

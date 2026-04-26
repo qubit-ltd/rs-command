@@ -19,12 +19,45 @@ clear error values.
 
 - Structured command execution with program and argument vectors
 - Explicit shell command support for cases that require shell parsing
-- Configurable timeout, working directory, environment variables, and success
-  exit codes
+- Configurable timeout, working directory, stdin, environment variables, and
+  success exit codes
+- Process-tree termination on timeout using Unix process groups and Windows Job
+  Objects
 - UTF-8 stdout and stderr text accessors, with raw byte accessors for binary
   output
+- Optional per-stream capture limits plus streaming tee files for large output
 - Typed errors for spawn failures, timeouts, failed output reads, and unexpected
   exit codes
+
+## Timeout Behavior
+
+`CommandRunner::new()` does not enforce a timeout by default. Use
+`timeout(Duration)` when a command must be bounded, or `without_timeout()` when
+the absence of a timeout should be explicit in builder chains.
+
+When a timeout is configured, the runner attempts to terminate the process tree:
+Unix commands are spawned in a new process group and Windows commands are spawned
+in a Job Object.
+
+## Large Output
+
+By default stdout and stderr are captured without an in-memory byte limit. For
+commands that can emit large logs, configure capture limits and tee files:
+
+```rust
+use qubit_command::{Command, CommandRunner};
+
+let output = CommandRunner::new()
+    .max_output_bytes(64 * 1024)
+    .tee_stdout_to_file("stdout.log")
+    .tee_stderr_to_file("stderr.log")
+    .run(Command::new("cargo").arg("test"))?;
+
+if output.stdout_truncated() {
+    eprintln!("stdout was truncated in memory; see stdout.log for the full stream");
+}
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
 
 ## Quick Start
 

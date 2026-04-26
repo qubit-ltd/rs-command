@@ -12,6 +12,7 @@
 
 use std::{
     io,
+    path::PathBuf,
     time::Duration,
 };
 
@@ -57,6 +58,47 @@ fn test_command_error_accessors_for_errors_without_output() {
     assert_eq!(read.command(), "read");
     assert!(read.output().is_none());
     assert!(read.to_string().contains("failed to read stdout"));
+
+    let open_input = CommandError::OpenInputFailed {
+        command: "open-input".to_owned(),
+        path: PathBuf::from("stdin.txt"),
+        source: io::Error::other("open input failed"),
+    };
+    assert_eq!(open_input.command(), "open-input");
+    assert!(open_input.output().is_none());
+    assert!(open_input.to_string().contains("failed to open stdin file"));
+
+    let open_output = CommandError::OpenOutputFailed {
+        command: "open-output".to_owned(),
+        stream: OutputStream::Stderr,
+        path: PathBuf::from("stderr.txt"),
+        source: io::Error::other("open output failed"),
+    };
+    assert_eq!(open_output.command(), "open-output");
+    assert!(open_output.output().is_none());
+    assert!(
+        open_output
+            .to_string()
+            .contains("failed to open stderr file")
+    );
+
+    let write_input = CommandError::WriteInputFailed {
+        command: "write-input".to_owned(),
+        source: io::Error::other("write input failed"),
+    };
+    assert_eq!(write_input.command(), "write-input");
+    assert!(write_input.output().is_none());
+    assert!(write_input.to_string().contains("failed to write stdin"));
+
+    let write_output = CommandError::WriteOutputFailed {
+        command: "write-output".to_owned(),
+        stream: OutputStream::Stdout,
+        path: PathBuf::from("stdout.txt"),
+        source: io::Error::other("write output failed"),
+    };
+    assert_eq!(write_output.command(), "write-output");
+    assert!(write_output.output().is_none());
+    assert!(write_output.to_string().contains("failed to write stdout"));
 }
 
 #[test]
