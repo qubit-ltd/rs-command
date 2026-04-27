@@ -145,16 +145,17 @@ fn test_command_env_names_are_case_insensitive_on_windows() {
 
 #[test]
 #[cfg(windows)]
-fn test_command_env_names_use_unicode_case_insensitive_comparison_on_windows() {
-    let command = Command::new("env")
-        .env("Straße", "street")
-        .env_remove("STRASSE");
+fn test_command_env_names_use_ordinal_case_insensitive_comparison_on_windows() {
+    use std::os::windows::ffi::OsStringExt;
 
-    assert!(command.environment().is_empty());
-    assert_eq!(
-        command.removed_environment()[0].to_string_lossy(),
-        "STRASSE",
-    );
+    let first_invalid_key = std::ffi::OsString::from_wide(&[0xD800]);
+    let second_invalid_key = std::ffi::OsString::from_wide(&[0xD801]);
+    let command = Command::new("env")
+        .env_os(&first_invalid_key, "first")
+        .env_remove_os(&second_invalid_key);
+
+    assert_eq!(command.environment().len(), 1);
+    assert_eq!(command.removed_environment().len(), 1);
 }
 
 #[test]
