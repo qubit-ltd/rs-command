@@ -17,6 +17,25 @@ use std::{
     },
 };
 
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
+
+#[cfg(windows)]
+const CSTR_EQUAL: i32 = 2;
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    #[link_name = "CompareStringOrdinal"]
+    fn compare_string_ordinal(
+        left: *const u16,
+        left_len: i32,
+        right: *const u16,
+        right_len: i32,
+        ignore_case: i32,
+    ) -> i32;
+}
+
 /// Structured description of an external command to run.
 ///
 /// `Command` stores a program and argument vector instead of parsing a
@@ -487,12 +506,21 @@ fn env_key_eq(left: &OsStr, right: &OsStr) -> bool {
 ///
 /// # Returns
 ///
-/// `true` when both names are equal after Unicode uppercase folding.
+/// `true` when both names are equal according to Windows ordinal
+/// case-insensitive UTF-16 comparison.
 #[cfg(windows)]
 fn env_key_eq(left: &OsStr, right: &OsStr) -> bool {
-    let left = left.to_string_lossy();
-    let right = right.to_string_lossy();
-    left.chars()
-        .flat_map(char::to_uppercase)
-        .eq(right.chars().flat_map(char::to_uppercase))
+    let left = left.encode_wide().collect::<Vec<_>>();
+    let right = right.encode_wide().collect::<Vec<_>>();
+    let Ok(left_len) = i32::try_from(left.len()) else {
+        return false;
+    };
+    let Ok(right_len) = i32::try_from(right.len()) else {
+        return false;
+    };
+    // SAFETY: The pointers refer to the collected UTF-16 buffers and remain
+    // valid for the duration of the call. The lengths are checked above.
+    unsafe {
+        compare_string_ordinal(left.as_ptr(), left_len, right.as_ptr(), right_len, 1) == CSTR_EQUAL
+    }
 }

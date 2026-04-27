@@ -510,12 +510,23 @@ impl CommandRunner {
             stderr,
             OutputCaptureOptions::new(self.max_stderr_bytes, stderr_file, self.stderr_file.clone()),
         );
+        let command_io = CommandIo::new(stdout_reader, stderr_reader, stdin_writer);
 
         let start = Instant::now();
         let exit_status = loop {
             let maybe_status = match child.try_wait() {
                 Ok(status) => status,
-                Err(source) => return Err(wait_failed(&command_text, source)),
+                Err(source) => {
+                    let error = wait_failed(&command_text, source);
+                    return Err(clean_up_after_wait_error(
+                        &command_text,
+                        child.as_mut(),
+                        start.elapsed(),
+                        self.lossy_output,
+                        command_io,
+                        error,
+                    ));
+                }
             };
             if let Some(status) = maybe_status {
                 break status;
@@ -524,20 +535,35 @@ impl CommandRunner {
                 && start.elapsed() >= timeout
             {
                 if let Err(source) = child.start_kill() {
-                    return Err(kill_failed(command_text, timeout, source));
+                    let error = kill_failed(command_text.clone(), timeout, source);
+                    return Err(collect_if_child_exited(
+                        &command_text,
+                        child.as_mut(),
+                        start.elapsed(),
+                        self.lossy_output,
+                        command_io,
+                        error,
+                    ));
                 }
                 let exit_status = match child.wait() {
                     Ok(status) => status,
-                    Err(source) => return Err(wait_failed(&command_text, source)),
+                    Err(source) => {
+                        let error = wait_failed(&command_text, source);
+                        return Err(collect_if_child_exited(
+                            &command_text,
+                            child.as_mut(),
+                            start.elapsed(),
+                            self.lossy_output,
+                            command_io,
+                            error,
+                        ));
+                    }
                 };
-                let output = collect_output(
+                let output = command_io.collect(
                     &command_text,
                     exit_status,
                     start.elapsed(),
                     self.lossy_output,
-                    stdout_reader,
-                    stderr_reader,
-                    stdin_writer,
                 )?;
                 return Err(CommandError::TimedOut {
                     command: command_text,
@@ -548,14 +574,11 @@ impl CommandRunner {
             thread::sleep(next_sleep(self.timeout, start.elapsed()));
         };
 
-        let output = collect_output(
+        let output = command_io.collect(
             &command_text,
             exit_status,
             start.elapsed(),
             self.lossy_output,
-            stdout_reader,
-            stderr_reader,
-            stdin_writer,
         )?;
 
         if output
@@ -593,6 +616,75 @@ type OutputReader = thread::JoinHandle<Result<CapturedOutput, OutputCaptureError
 
 /// Stdin writer thread result type.
 type StdinWriter = Option<thread::JoinHandle<io::Result<()>>>;
+
+/// Output and stdin helper threads for one running command.
+struct CommandIo {
+    /// Reader thread draining stdout.
+    stdout_reader: OutputReader,
+    /// Reader thread draining stderr.
+    stderr_reader: OutputReader,
+    /// Optional writer thread feeding stdin.
+    stdin_writer: StdinWriter,
+}
+
+impl CommandIo {
+    /// Creates a command I/O helper bundle.
+    ///
+    /// # Parameters
+    ///
+    /// * `stdout_reader` - Reader thread draining stdout.
+    /// * `stderr_reader` - Reader thread draining stderr.
+    /// * `stdin_writer` - Optional writer thread feeding stdin.
+    ///
+    /// # Returns
+    ///
+    /// I/O helper bundle consumed when output is collected or drained.
+    fn new(
+        stdout_reader: OutputReader,
+        stderr_reader: OutputReader,
+        stdin_writer: StdinWriter,
+    ) -> Self {
+        Self {
+            stdout_reader,
+            stderr_reader,
+            stdin_writer,
+        }
+    }
+
+    /// Collects output from all helper threads.
+    ///
+    /// # Parameters
+    ///
+    /// * `command` - Human-readable command text for diagnostics.
+    /// * `status` - Process exit status.
+    /// * `elapsed` - Observed command duration.
+    /// * `lossy_output` - Whether text accessors should replace invalid UTF-8.
+    ///
+    /// # Returns
+    ///
+    /// Captured command output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError`] if stream collection or stdin writing fails.
+    fn collect(
+        self,
+        command: &str,
+        status: ExitStatus,
+        elapsed: Duration,
+        lossy_output: bool,
+    ) -> Result<CommandOutput, CommandError> {
+        collect_output(
+            command,
+            status,
+            elapsed,
+            lossy_output,
+            self.stdout_reader,
+            self.stderr_reader,
+            self.stdin_writer,
+        )
+    }
+}
 
 /// Captured output bytes plus truncation metadata.
 #[derive(Debug)]
@@ -994,6 +1086,66 @@ fn kill_failed(command: String, timeout: Duration, source: io::Error) -> Command
     }
 }
 
+/// Attempts to terminate a child after a wait error and drain its I/O helpers.
+///
+/// # Parameters
+///
+/// * `command` - Human-readable command text for diagnostics.
+/// * `child` - Child process wrapper to clean up.
+/// * `elapsed` - Elapsed command duration.
+/// * `lossy_output` - Whether text accessors should replace invalid UTF-8.
+/// * `command_io` - Output and stdin helper threads to collect when safe.
+/// * `error` - Original error to return after cleanup.
+///
+/// # Returns
+///
+/// The original error after best-effort cleanup.
+fn clean_up_after_wait_error(
+    command: &str,
+    child: &mut dyn ChildWrapper,
+    elapsed: Duration,
+    lossy_output: bool,
+    command_io: CommandIo,
+    error: CommandError,
+) -> CommandError {
+    if child.start_kill().is_ok()
+        && let Ok(status) = child.wait()
+    {
+        let _ = command_io.collect(command, status, elapsed, lossy_output);
+        return error;
+    }
+    collect_if_child_exited(command, child, elapsed, lossy_output, command_io, error)
+}
+
+/// Drains I/O helpers if the child is already known to have exited.
+///
+/// # Parameters
+///
+/// * `command` - Human-readable command text for diagnostics.
+/// * `child` - Child process wrapper to inspect.
+/// * `elapsed` - Elapsed command duration.
+/// * `lossy_output` - Whether text accessors should replace invalid UTF-8.
+/// * `command_io` - Output and stdin helper threads to collect when safe.
+/// * `error` - Original error to return after cleanup.
+///
+/// # Returns
+///
+/// The original error. Output collection failures during cleanup are ignored so
+/// the primary process-control failure remains visible.
+fn collect_if_child_exited(
+    command: &str,
+    child: &mut dyn ChildWrapper,
+    elapsed: Duration,
+    lossy_output: bool,
+    command_io: CommandIo,
+    error: CommandError,
+) -> CommandError {
+    if let Ok(Some(status)) = child.try_wait() {
+        let _ = command_io.collect(command, status, elapsed, lossy_output);
+    }
+    error
+}
+
 /// Collects reader-thread results into a command output value.
 ///
 /// # Parameters
@@ -1024,6 +1176,9 @@ fn collect_output(
     stderr_reader: OutputReader,
     stdin_writer: StdinWriter,
 ) -> Result<CommandOutput, CommandError> {
+    #[cfg(coverage)]
+    coverage_support::record_collect_output(command);
+
     #[cfg(coverage)]
     let forced_error = coverage_support::forced_collect_output_error(command).map(|stream| {
         CommandError::ReadOutputFailed {
@@ -1178,6 +1333,7 @@ pub mod coverage_support {
     use std::os::windows::process::ExitStatusExt;
     use std::{
         cell::Cell,
+        cell::RefCell,
         ffi::OsStr,
         io::{
             self,
@@ -1221,6 +1377,8 @@ pub mod coverage_support {
     thread_local! {
         /// Whether synthetic children are enabled on this test thread.
         static FAKE_CHILDREN_ENABLED: Cell<bool> = const { Cell::new(false) };
+        /// Commands whose output collection path has been reached.
+        static COLLECT_OUTPUT_COMMANDS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     }
 
     /// Guard restoring synthetic-child state when dropped.
@@ -1258,6 +1416,24 @@ pub mod coverage_support {
     /// `true` only within [`with_fake_children_enabled`] on the current thread.
     pub(super) fn fake_children_enabled() -> bool {
         FAKE_CHILDREN_ENABLED.get()
+    }
+
+    /// Records that output collection was reached for a command.
+    ///
+    /// # Parameters
+    ///
+    /// * `command` - Human-readable command text passed to output collection.
+    pub(super) fn record_collect_output(command: &str) {
+        COLLECT_OUTPUT_COMMANDS.with_borrow_mut(|commands| commands.push(command.to_owned()));
+    }
+
+    /// Takes and clears recorded output-collection commands.
+    ///
+    /// # Returns
+    ///
+    /// Recorded command texts since the previous call on this thread.
+    pub fn take_collect_output_commands() -> Vec<String> {
+        COLLECT_OUTPUT_COMMANDS.take()
     }
 
     /// Enables coverage-only synthetic children for the current thread.
@@ -1394,6 +1570,24 @@ pub mod coverage_support {
                 None,
             )
             .expect_err("stderr collection error should be mapped")
+            .to_string(),
+        );
+
+        let empty_stdout = reader_ok(Vec::new());
+        let empty_stderr = reader_ok(Vec::new());
+        diagnostics.push(
+            collect_output(
+                "collect-stdin",
+                success_status(),
+                Duration::ZERO,
+                false,
+                empty_stdout,
+                empty_stderr,
+                Some(thread::spawn(|| {
+                    Err(io::Error::other("collect stdin failed"))
+                })),
+            )
+            .expect_err("stdin collection error should be mapped")
             .to_string(),
         );
 
@@ -1539,6 +1733,9 @@ pub mod coverage_support {
             "__qubit_command_missing_stdout__" => NoStdinChild::default(),
             "__qubit_command_missing_stderr__" => child_with_stdout_only(),
             "__qubit_command_try_wait_error__" => child_with_try_wait_error(),
+            "__qubit_command_try_wait_error_kill_cleanup__" => {
+                child_with_try_wait_error_kill_cleanup()
+            }
             "__qubit_command_kill_error__" => child_with_kill_error(),
             "__qubit_command_wait_after_kill_error__" => child_with_wait_after_kill_error(),
             "__qubit_command_collect_output_error__" => child_with_output_pipes(),
@@ -1623,6 +1820,25 @@ pub mod coverage_support {
         }
     }
 
+    /// Creates a synthetic child whose wait-error cleanup uses the fallback.
+    ///
+    /// # Returns
+    ///
+    /// Child wrapper state used to exercise cleanup after try-wait and kill
+    /// errors.
+    fn child_with_try_wait_error_kill_cleanup() -> NoStdinChild {
+        NoStdinChild {
+            stdout: Some(empty_stdout()),
+            stderr: Some(empty_stderr()),
+            try_wait_error: Some("try wait failed"),
+            clear_try_wait_error_after_first: true,
+            pending: true,
+            kill_error: Some("cleanup kill failed"),
+            exited_after_kill_attempt: true,
+            ..NoStdinChild::default()
+        }
+    }
+
     /// Creates a synthetic child whose kill operation fails.
     ///
     /// # Returns
@@ -1634,6 +1850,7 @@ pub mod coverage_support {
             stderr: Some(empty_stderr()),
             pending: true,
             kill_error: Some("kill failed"),
+            exited_after_kill_attempt: true,
             ..NoStdinChild::default()
         }
     }
@@ -1649,6 +1866,7 @@ pub mod coverage_support {
             stderr: Some(empty_stderr()),
             pending: true,
             wait_error: Some("wait after kill failed"),
+            exited_after_kill_attempt: true,
             ..NoStdinChild::default()
         }
     }
@@ -1721,8 +1939,14 @@ pub mod coverage_support {
         stderr: Option<ChildStderr>,
         /// Error returned by synthetic try-wait.
         try_wait_error: Option<&'static str>,
+        /// Whether the synthetic try-wait error is reported only once.
+        clear_try_wait_error_after_first: bool,
         /// Whether synthetic try-wait reports a still-running child.
         pending: bool,
+        /// Whether try-wait reports exit after a kill attempt.
+        exited_after_kill_attempt: bool,
+        /// Whether kill has been attempted.
+        kill_attempted: bool,
         /// Error returned by synthetic kill.
         kill_error: Option<&'static str>,
         /// Error returned by synthetic wait.
@@ -1768,8 +1992,11 @@ pub mod coverage_support {
         /// Reports that the synthetic child has already exited successfully.
         fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
             if let Some(message) = self.try_wait_error {
+                if self.clear_try_wait_error_after_first {
+                    self.try_wait_error = None;
+                }
                 Err(io::Error::other(message))
-            } else if self.pending {
+            } else if self.pending && !(self.kill_attempted && self.exited_after_kill_attempt) {
                 Ok(None)
             } else {
                 Ok(Some(success_status()))
@@ -1787,6 +2014,7 @@ pub mod coverage_support {
 
         /// Reports a successful synthetic kill.
         fn start_kill(&mut self) -> io::Result<()> {
+            self.kill_attempted = true;
             if let Some(message) = self.kill_error {
                 Err(io::Error::other(message))
             } else {

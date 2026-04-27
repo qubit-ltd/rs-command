@@ -586,12 +586,43 @@ fn test_command_runner_coverage_exercises_defensive_paths() {
             .run(Command::new("__qubit_command_try_wait_error__"))
             .expect_err("synthetic try-wait failure should be reported");
         assert!(matches!(try_wait_error, CommandError::WaitFailed { .. }));
+        let collected = coverage_support::take_collect_output_commands();
+        assert!(
+            collected
+                .iter()
+                .any(|command| command.contains("__qubit_command_try_wait_error__")),
+            "try-wait cleanup should drain output helpers before returning",
+        );
+
+        let try_wait_cleanup_error = CommandRunner::new()
+            .run(Command::new(
+                "__qubit_command_try_wait_error_kill_cleanup__",
+            ))
+            .expect_err("synthetic try-wait cleanup fallback should preserve wait error");
+        assert!(matches!(
+            try_wait_cleanup_error,
+            CommandError::WaitFailed { .. }
+        ));
+        let collected = coverage_support::take_collect_output_commands();
+        assert!(
+            collected
+                .iter()
+                .any(|command| command.contains("__qubit_command_try_wait_error_kill_cleanup__")),
+            "try-wait cleanup fallback should drain output helpers when the child already exited",
+        );
 
         let kill_error = CommandRunner::new()
             .timeout(Duration::ZERO)
             .run(Command::new("__qubit_command_kill_error__"))
             .expect_err("synthetic kill failure should be reported");
         assert!(matches!(kill_error, CommandError::KillFailed { .. }));
+        let collected = coverage_support::take_collect_output_commands();
+        assert!(
+            collected
+                .iter()
+                .any(|command| command.contains("__qubit_command_kill_error__")),
+            "kill-error cleanup should drain output helpers when the child already exited",
+        );
 
         let wait_after_kill_error = CommandRunner::new()
             .timeout(Duration::ZERO)
@@ -601,6 +632,13 @@ fn test_command_runner_coverage_exercises_defensive_paths() {
             wait_after_kill_error,
             CommandError::WaitFailed { .. }
         ));
+        let collected = coverage_support::take_collect_output_commands();
+        assert!(
+            collected
+                .iter()
+                .any(|command| command.contains("__qubit_command_wait_after_kill_error__")),
+            "wait-after-kill cleanup should drain output helpers when the child already exited",
+        );
 
         let collect_output_error = CommandRunner::new()
             .run(Command::new("__qubit_command_collect_output_error__"))
@@ -682,6 +720,11 @@ fn test_command_runner_coverage_exercises_defensive_paths() {
         diagnostics
             .iter()
             .any(|message| message.contains("collect stderr failed")),
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|message| message.contains("collect stdin failed")),
     );
     assert!(
         diagnostics
