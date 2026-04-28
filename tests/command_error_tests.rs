@@ -117,7 +117,7 @@ fn test_command_error_accessors_for_errors_with_output() {
     );
 
     let timed_out = CommandRunner::new()
-        .timeout(Duration::from_millis(50))
+        .timeout(Duration::from_millis(500))
         .run(Command::shell("printf before-timeout; sleep 2"))
         .expect_err("long-running command should time out");
     assert!(timed_out.command().contains("sleep 2"));

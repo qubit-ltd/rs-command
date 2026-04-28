@@ -9,19 +9,15 @@
 use std::{
     process::ExitStatus,
     thread,
-    time::{
-        Duration,
-        Instant,
-    },
+    time::{Duration, Instant},
 };
 
 use super::{
     command_io::CommandIo,
+    error_mapping::{kill_failed, wait_failed},
     finished_command::FinishedCommand,
-    kill_failed,
     managed_child_process::ManagedChildProcess,
-    next_sleep,
-    wait_failed,
+    wait_policy::next_sleep,
 };
 use crate::CommandError;
 

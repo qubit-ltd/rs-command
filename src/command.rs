@@ -7,36 +7,12 @@
  *
  ******************************************************************************/
 use std::{
-    ffi::{
-        OsStr,
-        OsString,
-    },
-    path::{
-        Path,
-        PathBuf,
-    },
+    ffi::{OsStr, OsString},
+    path::{Path, PathBuf},
 };
 
+use crate::command_env::env_key_eq;
 use crate::command_stdin::CommandStdin;
-
-#[cfg(windows)]
-use std::os::windows::ffi::OsStrExt;
-
-#[cfg(windows)]
-const CSTR_EQUAL: i32 = 2;
-
-#[cfg(windows)]
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    #[link_name = "CompareStringOrdinal"]
-    fn compare_string_ordinal(
-        left: *const u16,
-        left_len: i32,
-        right: *const u16,
-        right_len: i32,
-        ignore_case: i32,
-    ) -> i32;
-}
 
 /// Structured description of an external command to run.
 ///
@@ -463,55 +439,4 @@ impl Command {
         }
         format!("{parts:?}")
     }
-}
-
-/// Compares environment variable names using platform semantics.
-///
-/// # Parameters
-///
-/// * `left` - First environment variable name.
-/// * `right` - Second environment variable name.
-///
-/// # Returns
-///
-/// `true` when both names refer to the same environment entry on the current
-/// platform. Unix uses byte-preserving exact comparison; Windows uses
-/// case-insensitive comparison because Windows environment variable names are
-/// case-insensitive.
-#[cfg(not(windows))]
-fn env_key_eq(left: &OsStr, right: &OsStr) -> bool {
-    left == right
-}
-
-/// Compares environment variable names using Windows semantics.
-///
-/// # Parameters
-///
-/// * `left` - First environment variable name.
-/// * `right` - Second environment variable name.
-///
-/// # Returns
-///
-/// `true` when both names are equal according to Windows ordinal
-/// case-insensitive UTF-16 comparison.
-#[cfg(windows)]
-fn env_key_eq(left: &OsStr, right: &OsStr) -> bool {
-    let left = left.encode_wide().collect::<Vec<_>>();
-    let right = right.encode_wide().collect::<Vec<_>>();
-    let Ok(left_len) = i32::try_from(left.len()) else {
-        return false;
-    };
-    let Ok(right_len) = i32::try_from(right.len()) else {
-        return false;
-    };
-    // SAFETY: The pointers refer to the collected UTF-16 buffers and remain
-    // valid for the duration of the call. The lengths are checked above.
-    let comparison =
-        unsafe { compare_string_ordinal(left.as_ptr(), left_len, right.as_ptr(), right_len, 1) };
-    if comparison == 0 {
-        log::debug!(
-            "failed to compare Windows environment variable names; treating keys as distinct"
-        );
-    }
-    comparison == CSTR_EQUAL
 }
