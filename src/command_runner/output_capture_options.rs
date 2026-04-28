@@ -1,0 +1,72 @@
+/*******************************************************************************
+ *
+ *    Copyright (c) 2026.
+ *    Haixing Hu, Qubit Co. Ltd.
+ *
+ *    All rights reserved.
+ *
+ ******************************************************************************/
+#[cfg(coverage)]
+use std::io::Write;
+use std::{
+    fs::File,
+    path::PathBuf,
+};
+
+use super::output_tee::OutputTee;
+
+/// Output capture options moved into a reader thread.
+pub(crate) struct OutputCaptureOptions {
+    /// Maximum bytes retained in memory.
+    pub(crate) max_bytes: Option<usize>,
+    /// Optional writer receiving a streaming copy.
+    pub(crate) tee: Option<OutputTee>,
+}
+
+impl OutputCaptureOptions {
+    /// Creates output capture options.
+    ///
+    /// # Parameters
+    ///
+    /// * `max_bytes` - Optional in-memory retention limit.
+    /// * `file` - Optional file receiving all emitted bytes.
+    /// * `file_path` - File path used in write-failure diagnostics.
+    ///
+    /// # Returns
+    ///
+    /// Capture options moved into the output reader thread.
+    pub(crate) fn new(
+        max_bytes: Option<usize>,
+        file: Option<File>,
+        file_path: Option<PathBuf>,
+    ) -> Self {
+        let tee = file.map(|file| OutputTee {
+            writer: Box::new(file),
+            path: file_path.unwrap_or_default(),
+        });
+        Self { max_bytes, tee }
+    }
+
+    /// Creates output capture options from an arbitrary writer.
+    ///
+    /// # Parameters
+    ///
+    /// * `max_bytes` - Optional in-memory retention limit.
+    /// * `writer` - Writer receiving all emitted bytes.
+    /// * `path` - Diagnostic path reported when writes fail.
+    ///
+    /// # Returns
+    ///
+    /// Capture options moved into the output reader thread.
+    #[cfg(coverage)]
+    pub(crate) fn new_writer(
+        max_bytes: Option<usize>,
+        writer: Box<dyn Write + Send>,
+        path: PathBuf,
+    ) -> Self {
+        Self {
+            max_bytes,
+            tee: Some(OutputTee { writer, path }),
+        }
+    }
+}
