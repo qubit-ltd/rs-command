@@ -7,7 +7,10 @@
  *
  ******************************************************************************/
 use std::{
-    path::{Path, PathBuf},
+    path::{
+        Path,
+        PathBuf,
+    },
     time::Duration,
 };
 
@@ -21,6 +24,7 @@ pub(crate) mod output_capture_options;
 pub(crate) mod output_collector;
 pub(crate) mod output_reader;
 pub(crate) mod output_tee;
+pub(crate) mod prepared_command;
 pub(crate) mod process_launcher;
 pub(crate) mod process_setup;
 pub(crate) mod running_command;
@@ -29,16 +33,24 @@ pub(crate) mod stdin_writer;
 pub(crate) mod wait_policy;
 
 use command_io::CommandIo;
-use error_mapping::{output_pipe_error, spawn_failed};
+use error_mapping::{
+    output_pipe_error,
+    spawn_failed,
+};
 use finished_command::FinishedCommand;
 use output_capture_options::OutputCaptureOptions;
 use output_collector::read_output_stream;
+use prepared_command::PreparedCommand;
 use process_launcher::spawn_child;
-use process_setup::PreparedCommand;
 use running_command::RunningCommand;
 use stdin_pipe::write_stdin_bytes;
 
-use crate::{Command, CommandError, CommandOutput, OutputStream};
+use crate::{
+    Command,
+    CommandError,
+    CommandOutput,
+    OutputStream,
+};
 
 /// Predefined ten-second timeout value.
 ///

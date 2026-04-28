@@ -12,7 +12,10 @@ use std::os::unix::process::ExitStatusExt;
 use std::os::windows::process::ExitStatusExt;
 use std::{
     ffi::OsStr,
-    io::{self, Write},
+    io::{
+        self,
+        Write,
+    },
     panic,
     path::PathBuf,
     process::ExitStatus,
@@ -26,18 +29,38 @@ use crate::{
     OutputStream,
     command_runner::{
         captured_output::CapturedOutput,
-        error_mapping::{kill_failed, output_pipe_error, spawn_failed, wait_failed},
+        error_mapping::{
+            kill_failed,
+            output_pipe_error,
+            spawn_failed,
+            wait_failed,
+        },
         output_capture_error::OutputCaptureError,
         output_capture_options::OutputCaptureOptions,
-        output_collector::{collect_output, join_output_reader, read_output},
+        output_collector::{
+            collect_output,
+            join_output_reader,
+            read_output,
+        },
         output_reader::OutputReader,
-        stdin_pipe::{join_stdin_writer, write_stdin_bytes},
-        wait_policy::{WAIT_POLL_INTERVAL, next_sleep},
+        stdin_pipe::{
+            join_stdin_writer,
+            write_stdin_bytes,
+        },
+        wait_policy::{
+            WAIT_POLL_INTERVAL,
+            next_sleep,
+        },
     },
 };
 
 use super::{
-    FailingFlush, FailingReader, FailingWrite, NoStdinChild, fake_child_for, fake_children_enabled,
+    FailingFlush,
+    FailingReader,
+    FailingWrite,
+    NoStdinChild,
+    fake_child_for,
+    fake_children_enabled,
     with_fake_children_enabled,
 };
 

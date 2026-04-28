@@ -8,10 +8,18 @@
  ******************************************************************************/
 use std::{
     ffi::OsStr,
-    process::{ChildStderr, ChildStdout, Command as SyntheticCommand, Stdio},
+    process::{
+        ChildStderr,
+        ChildStdout,
+        Command as SyntheticCommand,
+        Stdio,
+    },
 };
 
-use crate::{OutputStream, command_runner::managed_child_process::ManagedChildProcess};
+use crate::{
+    OutputStream,
+    command_runner::managed_child_process::ManagedChildProcess,
+};
 
 use super::NoStdinChild;
 

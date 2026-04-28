@@ -9,12 +9,18 @@
 use std::{
     process::ExitStatus,
     thread,
-    time::{Duration, Instant},
+    time::{
+        Duration,
+        Instant,
+    },
 };
 
 use super::{
     command_io::CommandIo,
-    error_mapping::{kill_failed, wait_failed},
+    error_mapping::{
+        kill_failed,
+        wait_failed,
+    },
     finished_command::FinishedCommand,
     managed_child_process::ManagedChildProcess,
     wait_policy::next_sleep,
