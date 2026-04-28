@@ -7,62 +7,38 @@
  *
  ******************************************************************************/
 use std::{
-    fs::File,
-    io::{
-        self,
-        Read,
-        Write,
-    },
-    path::{
-        Path,
-        PathBuf,
-    },
-    process::{
-        Command as ProcessCommand,
-        ExitStatus,
-        Stdio,
-    },
-    thread,
+    path::{Path, PathBuf},
     time::Duration,
-};
-
-#[cfg(windows)]
-use process_wrap::std::JobObject;
-#[cfg(unix)]
-use process_wrap::std::ProcessGroup;
-use process_wrap::std::{
-    ChildWrapper,
-    CommandWrap,
 };
 
 pub(crate) mod captured_output;
 pub(crate) mod command_io;
+pub(crate) mod error_mapping;
 pub(crate) mod finished_command;
 pub(crate) mod managed_child_process;
 pub(crate) mod output_capture_error;
 pub(crate) mod output_capture_options;
+pub(crate) mod output_collector;
 pub(crate) mod output_reader;
 pub(crate) mod output_tee;
+pub(crate) mod process_launcher;
+pub(crate) mod process_setup;
 pub(crate) mod running_command;
+pub(crate) mod stdin_pipe;
 pub(crate) mod stdin_writer;
+pub(crate) mod wait_policy;
 
-use captured_output::CapturedOutput;
 use command_io::CommandIo;
+use error_mapping::{output_pipe_error, spawn_failed};
 use finished_command::FinishedCommand;
-use managed_child_process::ManagedChildProcess;
-use output_capture_error::OutputCaptureError;
 use output_capture_options::OutputCaptureOptions;
-use output_reader::OutputReader;
+use output_collector::read_output_stream;
+use process_launcher::spawn_child;
+use process_setup::PreparedCommand;
 use running_command::RunningCommand;
-use stdin_writer::StdinWriter;
+use stdin_pipe::write_stdin_bytes;
 
-use crate::command_stdin::CommandStdin;
-use crate::{
-    Command,
-    CommandError,
-    CommandOutput,
-    OutputStream,
-};
+use crate::{Command, CommandError, CommandOutput, OutputStream};
 
 /// Predefined ten-second timeout value.
 ///
@@ -70,9 +46,6 @@ use crate::{
 /// constant with [`CommandRunner::timeout`] when callers want a short, explicit
 /// command limit.
 pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Polling interval used while waiting for a child process with timeout.
-pub(crate) const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Runs external commands and captures their output.
 ///
@@ -472,38 +445,24 @@ impl CommandRunner {
     /// that cannot be read or written to a tee file, cannot receive configured
     /// stdin, or exits with a code not configured as successful.
     pub fn run(&self, command: Command) -> Result<CommandOutput, CommandError> {
-        let command_text = command.display_command();
+        let PreparedCommand {
+            command_text,
+            process_command,
+            stdin_bytes,
+            stdout_file,
+            stderr_file,
+            stdout_file_path,
+            stderr_file_path,
+        } = PreparedCommand::prepare(
+            command,
+            self.working_directory.as_deref(),
+            self.stdout_file.as_deref(),
+            self.stderr_file.as_deref(),
+        )?;
+
         if !self.disable_logging {
             log::info!("Running command: {command_text}");
         }
-
-        let mut process_command = ProcessCommand::new(command.program());
-        process_command.args(command.arguments());
-        process_command.stdout(Stdio::piped());
-        process_command.stderr(Stdio::piped());
-
-        if let Some(working_directory) = command
-            .working_directory_override()
-            .or(self.working_directory.as_deref())
-        {
-            process_command.current_dir(working_directory);
-        }
-
-        configure_environment(&command, &mut process_command);
-        let stdin_configuration = command.into_stdin_configuration();
-        let stdin_bytes =
-            configure_stdin(&command_text, stdin_configuration, &mut process_command)?;
-
-        let stdout_file = open_output_file(
-            &command_text,
-            OutputStream::Stdout,
-            self.stdout_file.as_deref(),
-        )?;
-        let stderr_file = open_output_file(
-            &command_text,
-            OutputStream::Stderr,
-            self.stderr_file.as_deref(),
-        )?;
 
         let mut child_process = match spawn_child(process_command, self.timeout.is_some()) {
             Ok(child_process) => child_process,
@@ -522,11 +481,11 @@ impl CommandRunner {
         };
         let stdout_reader = read_output_stream(
             Box::new(stdout),
-            OutputCaptureOptions::new(self.max_stdout_bytes, stdout_file, self.stdout_file.clone()),
+            OutputCaptureOptions::new(self.max_stdout_bytes, stdout_file, stdout_file_path),
         );
         let stderr_reader = read_output_stream(
             Box::new(stderr),
-            OutputCaptureOptions::new(self.max_stderr_bytes, stderr_file, self.stderr_file.clone()),
+            OutputCaptureOptions::new(self.max_stderr_bytes, stderr_file, stderr_file_path),
         );
         let command_io = CommandIo::new(stdout_reader, stderr_reader, stdin_writer);
         let finished =
@@ -565,500 +524,4 @@ impl CommandRunner {
             })
         }
     }
-}
-
-/// Configures stdin for a process command.
-///
-/// # Parameters
-///
-/// * `command_text` - Human-readable command text for diagnostics.
-/// * `stdin` - Owned stdin configuration for the command.
-/// * `process_command` - Process command being prepared.
-///
-/// # Returns
-///
-/// `Some(bytes)` when stdin bytes must be written after spawning, otherwise
-/// `None`.
-///
-/// # Errors
-///
-/// Returns [`CommandError::OpenInputFailed`] when a configured stdin file cannot
-/// be opened.
-fn configure_stdin(
-    command_text: &str,
-    stdin: CommandStdin,
-    process_command: &mut ProcessCommand,
-) -> Result<Option<Vec<u8>>, CommandError> {
-    match stdin {
-        CommandStdin::Null => {
-            process_command.stdin(Stdio::null());
-            Ok(None)
-        }
-        CommandStdin::Inherit => {
-            process_command.stdin(Stdio::inherit());
-            Ok(None)
-        }
-        CommandStdin::Bytes(bytes) => {
-            process_command.stdin(Stdio::piped());
-            Ok(Some(bytes))
-        }
-        CommandStdin::File(path) => match File::open(&path) {
-            Ok(file) => {
-                process_command.stdin(Stdio::from(file));
-                Ok(None)
-            }
-            Err(source) => Err(CommandError::OpenInputFailed {
-                command: command_text.to_owned(),
-                path,
-                source,
-            }),
-        },
-    }
-}
-
-/// Configures environment variables for a process command.
-///
-/// # Parameters
-///
-/// * `command` - Command environment configuration.
-/// * `process_command` - Process command being prepared.
-fn configure_environment(command: &Command, process_command: &mut ProcessCommand) {
-    if command.clears_environment() {
-        process_command.env_clear();
-    }
-    for key in command.removed_environment() {
-        process_command.env_remove(key);
-    }
-    for (key, value) in command.environment() {
-        process_command.env(key, value);
-    }
-}
-
-/// Spawns a child process with platform process-tree support.
-///
-/// # Parameters
-///
-/// * `process_command` - Prepared standard-library process command.
-/// * `kill_process_tree` - Whether timeout handling needs process-tree
-///   termination support.
-///
-/// # Returns
-///
-/// A child process. When `kill_process_tree` is `true`, Unix children are
-/// placed in a new process group and Windows children are placed in a Job
-/// Object.
-///
-/// # Errors
-///
-/// Returns the I/O error reported by process spawning or wrapper setup.
-fn spawn_child(
-    process_command: ProcessCommand,
-    kill_process_tree: bool,
-) -> io::Result<ManagedChildProcess> {
-    #[cfg(coverage)]
-    if crate::coverage_support::fake_children_enabled()
-        && let Some(child) = crate::coverage_support::fake_child_for(process_command.get_program())
-    {
-        return Ok(child);
-    }
-
-    let mut command = CommandWrap::from(process_command);
-    #[cfg(unix)]
-    if kill_process_tree {
-        command.wrap(ProcessGroup::leader());
-    }
-    #[cfg(windows)]
-    if kill_process_tree {
-        command.wrap(JobObject);
-    }
-    command.spawn()
-}
-
-/// Opens an output tee file before spawning the child.
-///
-/// # Parameters
-///
-/// * `command` - Human-readable command text for diagnostics.
-/// * `stream` - Stream associated with the file.
-/// * `path` - Optional file path.
-///
-/// # Returns
-///
-/// Open file handle when a path is configured, otherwise `None`.
-///
-/// # Errors
-///
-/// Returns [`CommandError::OpenOutputFailed`] when the path cannot be opened.
-fn open_output_file(
-    command: &str,
-    stream: OutputStream,
-    path: Option<&Path>,
-) -> Result<Option<File>, CommandError> {
-    match path {
-        Some(path) => {
-            File::create(path)
-                .map(Some)
-                .map_err(|source| CommandError::OpenOutputFailed {
-                    command: command.to_owned(),
-                    stream,
-                    path: path.to_path_buf(),
-                    source,
-                })
-        }
-        None => Ok(None),
-    }
-}
-
-/// Starts a helper thread that writes configured stdin bytes.
-///
-/// # Parameters
-///
-/// * `command` - Human-readable command text for diagnostics.
-/// * `child` - Spawned child process wrapper.
-/// * `stdin_bytes` - Optional bytes to write to stdin.
-///
-/// # Returns
-///
-/// Join handle for the stdin writer, if stdin bytes were configured.
-///
-/// # Errors
-///
-/// Returns [`CommandError::WriteInputFailed`] if stdin bytes were configured but
-/// the child stdin pipe was not available.
-pub(crate) fn write_stdin_bytes(
-    command: &str,
-    child: &mut dyn ChildWrapper,
-    stdin_bytes: Option<Vec<u8>>,
-) -> Result<StdinWriter, CommandError> {
-    match stdin_bytes {
-        Some(bytes) => match child.stdin().take() {
-            Some(mut stdin) => Ok(Some(thread::spawn(move || stdin.write_all(&bytes)))),
-            None => Err(CommandError::WriteInputFailed {
-                command: command.to_owned(),
-                source: io::Error::other("stdin pipe was not created"),
-            }),
-        },
-        None => Ok(None),
-    }
-}
-
-/// Spawns a reader thread for a child output stream.
-///
-/// # Parameters
-///
-/// * `reader` - Child process output pipe.
-/// * `options` - Capture and tee-file options.
-///
-/// # Returns
-///
-/// Join handle resolving to captured output bytes and truncation metadata.
-fn read_output_stream(
-    mut reader: Box<dyn Read + Send>,
-    options: OutputCaptureOptions,
-) -> OutputReader {
-    thread::spawn(move || read_output(reader.as_mut(), options))
-}
-
-/// Reads one child output stream to completion.
-///
-/// # Parameters
-///
-/// * `reader` - Pipe reader to drain.
-/// * `options` - Capture and tee-file options.
-///
-/// # Returns
-///
-/// Captured bytes and truncation metadata.
-///
-/// # Errors
-///
-/// Returns [`OutputCaptureError`] if reading the pipe or writing the tee file
-/// fails. Tee-file write failures are recorded while the reader continues
-/// draining the child pipe so the child is not blocked by a full output pipe.
-pub(crate) fn read_output(
-    reader: &mut dyn Read,
-    mut options: OutputCaptureOptions,
-) -> Result<CapturedOutput, OutputCaptureError> {
-    let mut bytes = Vec::new();
-    if let Some(max_bytes) = options.max_bytes {
-        bytes.reserve(max_bytes.min(8 * 1024));
-    }
-    let mut truncated = false;
-    let mut write_error = None;
-    let mut buffer = [0_u8; 8 * 1024];
-    loop {
-        let read = reader.read(&mut buffer).map_err(OutputCaptureError::Read)?;
-        if read == 0 {
-            break;
-        }
-        let chunk = &buffer[..read];
-        if let Some(tee) = options.tee.as_mut()
-            && write_error.is_none()
-            && let Err(source) = tee.writer.write_all(chunk)
-        {
-            write_error = Some(OutputCaptureError::Write {
-                path: tee.path.clone(),
-                source,
-            });
-            options.tee = None;
-        }
-        match options.max_bytes {
-            Some(max_bytes) => {
-                let remaining = max_bytes.saturating_sub(bytes.len());
-                if remaining > 0 {
-                    let retained = remaining.min(chunk.len());
-                    bytes.extend_from_slice(&chunk[..retained]);
-                }
-                if chunk.len() > remaining {
-                    truncated = true;
-                }
-            }
-            None => bytes.extend_from_slice(chunk),
-        }
-    }
-    if write_error.is_none()
-        && let Some(tee) = options.tee.as_mut()
-        && let Err(source) = tee.writer.flush()
-    {
-        write_error = Some(OutputCaptureError::Write {
-            path: tee.path.clone(),
-            source,
-        });
-    }
-    if let Some(error) = write_error {
-        Err(error)
-    } else {
-        Ok(CapturedOutput { bytes, truncated })
-    }
-}
-
-/// Builds a process spawn failure.
-///
-/// # Parameters
-///
-/// * `command` - Human-readable command text for diagnostics.
-/// * `source` - I/O error reported by process spawning.
-///
-/// # Returns
-///
-/// A command error preserving the command text and source error.
-pub(crate) fn spawn_failed(command: &str, source: io::Error) -> CommandError {
-    CommandError::SpawnFailed {
-        command: command.to_owned(),
-        source,
-    }
-}
-
-/// Builds a process wait failure.
-///
-/// # Parameters
-///
-/// * `command` - Human-readable command text for diagnostics.
-/// * `source` - I/O error reported while waiting for the process.
-///
-/// # Returns
-///
-/// A command error preserving the command text and source error.
-pub(crate) fn wait_failed(command: &str, source: io::Error) -> CommandError {
-    CommandError::WaitFailed {
-        command: command.to_owned(),
-        source,
-    }
-}
-
-/// Builds a timed-out process kill failure.
-///
-/// # Parameters
-///
-/// * `command` - Human-readable command text for diagnostics.
-/// * `timeout` - Timeout that had been exceeded.
-/// * `source` - I/O error reported while killing the process.
-///
-/// # Returns
-///
-/// A command error preserving timeout and kill-failure context.
-pub(crate) fn kill_failed(command: String, timeout: Duration, source: io::Error) -> CommandError {
-    CommandError::KillFailed {
-        command,
-        timeout,
-        source,
-    }
-}
-
-/// Collects reader-thread results into a command output value.
-///
-/// # Parameters
-///
-/// * `command` - Human-readable command text for diagnostics.
-/// * `status` - Process exit status.
-/// * `elapsed` - Observed command duration.
-/// * `lossy_output` - Whether output text accessors should replace invalid
-///   UTF-8 bytes.
-/// * `stdout_reader` - Reader thread for stdout.
-/// * `stderr_reader` - Reader thread for stderr.
-/// * `stdin_writer` - Optional writer thread for configured stdin bytes.
-///
-/// # Returns
-///
-/// Command output containing both captured streams.
-///
-/// # Errors
-///
-/// Returns [`CommandError`] if stream collection or stdin writing fails. All
-/// helper threads are joined before an error is returned.
-pub(crate) fn collect_output(
-    command: &str,
-    status: ExitStatus,
-    elapsed: Duration,
-    lossy_output: bool,
-    stdout_reader: OutputReader,
-    stderr_reader: OutputReader,
-    stdin_writer: StdinWriter,
-) -> Result<CommandOutput, CommandError> {
-    #[cfg(coverage)]
-    crate::coverage_support::record_collect_output(command);
-
-    #[cfg(coverage)]
-    let forced_error =
-        crate::coverage_support::forced_collect_output_error(command).map(|stream| {
-            CommandError::ReadOutputFailed {
-                command: command.to_owned(),
-                stream,
-                source: io::Error::other("forced output collection failure"),
-            }
-        });
-    #[cfg(not(coverage))]
-    let forced_error = None;
-
-    let stdout_result = join_output_reader(command, OutputStream::Stdout, stdout_reader);
-    let stderr_result = join_output_reader(command, OutputStream::Stderr, stderr_reader);
-    let stdin_result = join_stdin_writer(command, stdin_writer);
-
-    match (stdout_result, stderr_result, stdin_result, forced_error) {
-        (Ok(stdout), Ok(stderr), Ok(()), None) => Ok(CommandOutput::new(
-            status,
-            stdout.bytes,
-            stderr.bytes,
-            stdout.truncated,
-            stderr.truncated,
-            elapsed,
-            lossy_output,
-        )),
-        (Err(error), _, _, _)
-        | (_, Err(error), _, _)
-        | (_, _, Err(error), _)
-        | (_, _, _, Some(error)) => Err(error),
-    }
-}
-
-/// Joins one output reader and maps failures to command errors.
-///
-/// # Parameters
-///
-/// * `command` - Human-readable command text for diagnostics.
-/// * `stream` - Stream associated with the reader.
-/// * `reader` - Join handle to collect.
-///
-/// # Returns
-///
-/// Captured bytes and truncation metadata for the requested stream.
-///
-/// # Errors
-///
-/// Returns [`CommandError`] when the reader reports I/O failure, tee-file write
-/// failure, or panics.
-pub(crate) fn join_output_reader(
-    command: &str,
-    stream: OutputStream,
-    reader: OutputReader,
-) -> Result<CapturedOutput, CommandError> {
-    match reader.join() {
-        Ok(Ok(output)) => Ok(output),
-        Ok(Err(OutputCaptureError::Read(source))) => Err(CommandError::ReadOutputFailed {
-            command: command.to_owned(),
-            stream,
-            source,
-        }),
-        Ok(Err(OutputCaptureError::Write { path, source })) => {
-            Err(CommandError::WriteOutputFailed {
-                command: command.to_owned(),
-                stream,
-                path,
-                source,
-            })
-        }
-        Err(_) => Err(CommandError::ReadOutputFailed {
-            command: command.to_owned(),
-            stream,
-            source: io::Error::other("output reader thread panicked"),
-        }),
-    }
-}
-
-/// Joins the stdin writer and maps failures to command errors.
-///
-/// # Parameters
-///
-/// * `command` - Human-readable command text for diagnostics.
-/// * `writer` - Optional stdin writer thread.
-///
-/// # Errors
-///
-/// Returns [`CommandError::WriteInputFailed`] when writing stdin fails or the
-/// writer thread panics. A broken pipe is ignored because it only means the
-/// child closed stdin before consuming all configured bytes; the process exit
-/// status remains the authoritative command result.
-pub(crate) fn join_stdin_writer(command: &str, writer: StdinWriter) -> Result<(), CommandError> {
-    match writer {
-        Some(writer) => match writer.join() {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(source)) if source.kind() == io::ErrorKind::BrokenPipe => Ok(()),
-            Ok(Err(source)) => Err(CommandError::WriteInputFailed {
-                command: command.to_owned(),
-                source,
-            }),
-            Err(_) => Err(CommandError::WriteInputFailed {
-                command: command.to_owned(),
-                source: io::Error::other("stdin writer thread panicked"),
-            }),
-        },
-        None => Ok(()),
-    }
-}
-
-/// Builds an internal missing-pipe error.
-///
-/// # Parameters
-///
-/// * `command` - Human-readable command text for diagnostics.
-/// * `stream` - Missing output stream.
-///
-/// # Returns
-///
-/// A command error describing the missing pipe.
-pub(crate) fn output_pipe_error(command: &str, stream: OutputStream) -> CommandError {
-    CommandError::ReadOutputFailed {
-        command: command.to_owned(),
-        stream,
-        source: io::Error::other(format!("{} pipe was not created", stream.as_str())),
-    }
-}
-
-/// Calculates how long to sleep before polling the child again.
-///
-/// # Parameters
-///
-/// * `timeout` - Optional command timeout.
-/// * `elapsed` - Elapsed command duration.
-///
-/// # Returns
-///
-/// A short polling delay that does not intentionally sleep past the timeout.
-pub(crate) fn next_sleep(timeout: Option<Duration>, elapsed: Duration) -> Duration {
-    if let Some(timeout) = timeout
-        && let Some(remaining) = timeout.checked_sub(elapsed)
-    {
-        return remaining.min(WAIT_POLL_INTERVAL);
-    }
-    WAIT_POLL_INTERVAL
 }

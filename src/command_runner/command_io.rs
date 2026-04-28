@@ -9,14 +9,9 @@
 use std::time::Duration;
 
 use super::{
-    collect_output,
-    output_reader::OutputReader,
-    stdin_writer::StdinWriter,
+    output_collector::collect_output, output_reader::OutputReader, stdin_writer::StdinWriter,
 };
-use crate::{
-    CommandError,
-    CommandOutput,
-};
+use crate::{CommandError, CommandOutput};
 
 /// Output and stdin helper threads for one running command.
 pub(crate) struct CommandIo {
