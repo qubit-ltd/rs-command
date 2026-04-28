@@ -860,7 +860,7 @@ mod windows {
     #[test]
     fn test_command_runner_windows_captures_stderr() {
         let output = CommandRunner::new()
-            .run(Command::shell("echo command-error 1>&2"))
+            .run(Command::shell("echo command-error>&2"))
             .expect("Windows shell command should run successfully");
 
         assert_eq!(
