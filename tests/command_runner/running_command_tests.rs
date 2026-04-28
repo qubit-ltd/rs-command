@@ -1,0 +1,26 @@
+/*******************************************************************************
+ *
+ *    Copyright (c) 2026.
+ *    Haixing Hu, Qubit Co. Ltd.
+ *
+ *    All rights reserved.
+ *
+ ******************************************************************************/
+//! Tests for running command behavior.
+
+use std::time::Duration;
+
+use qubit_command::{
+    Command,
+    CommandRunner,
+};
+
+#[test]
+fn test_running_command_completes_before_timeout() {
+    let output = CommandRunner::new()
+        .timeout(Duration::from_secs(5))
+        .run(Command::new("rustc").arg("--version"))
+        .expect("short command should finish before timeout");
+
+    assert!(output.stdout_bytes().starts_with(b"rustc "));
+}

@@ -17,6 +17,8 @@ use std::{
     },
 };
 
+use crate::command_stdin::CommandStdin;
+
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 
@@ -62,22 +64,6 @@ pub struct Command {
     removed_envs: Vec<OsString>,
     /// Standard input configuration for this command.
     stdin: CommandStdin,
-}
-
-/// Standard input configuration for a command.
-///
-/// This type stays internal so the public builder API can evolve without
-/// exposing process-spawning details.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CommandStdin {
-    /// Connect stdin to null input.
-    Null,
-    /// Inherit stdin from the parent process.
-    Inherit,
-    /// Write these bytes to the child process stdin.
-    Bytes(Vec<u8>),
-    /// Read stdin bytes from this file.
-    File(PathBuf),
 }
 
 impl Command {

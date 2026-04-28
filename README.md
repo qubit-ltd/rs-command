@@ -105,7 +105,13 @@ assert_eq!(output.stdout()?, "HELLO");
 
 `stdout()` and `stderr()` return UTF-8 text by default. Use `stdout_bytes()` and
 `stderr_bytes()` when a command can emit arbitrary bytes. To replace invalid
-UTF-8 bytes with `�`, enable lossy output on the runner:
+UTF-8 bytes with `�`, enable lossy output on the runner.
+
+If lossy output is disabled and the captured stdout or stderr contains invalid
+UTF-8, `stdout()` / `stderr()` return `Err(str::Utf8Error)` from
+`str::from_utf8`—you cannot obtain a `&str` for that stream. The bytes are still
+stored on the returned `CommandOutput`; use `stdout_bytes()` / `stderr_bytes()` to read
+the raw output and decode or handle it yourself.
 
 ```rust
 use qubit_command::{Command, CommandRunner};
@@ -120,7 +126,38 @@ assert_eq!(output.stdout()?, "\u{fffd}");
 
 ## Testing
 
+A minimal local run:
+
 ```bash
 cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
+
+To mirror what continuous integration enforces, run the repository scripts from the project root: `./align-ci.sh` brings local tooling and configuration in line with CI, then `./ci-check.sh` runs the same checks the pipeline uses. For test coverage, use `./coverage.sh` to generate or open reports (see the script’s help and any project coverage notes for options such as HTML or JSON).
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+- Open an issue for bug reports, design questions, or larger feature proposals when it helps align on direction.
+- Keep pull requests scoped to one behavior change, fix, or documentation update when practical.
+- Before submitting, run `./align-ci.sh` and then `./ci-check.sh` so your branch matches CI rules and passes the same checks as the pipeline. When you need to review or improve coverage, use `./coverage.sh` as described under [Testing](#testing).
+- Add or update tests when you change runtime behavior, and update this README (or public rustdoc) when user-visible API behavior changes.
+
+By contributing, you agree to license your contributions under the [Apache License, Version 2.0](LICENSE), the same license as this project.
+
+## License
+
+Copyright © 2026 Haixing Hu, Qubit Co. Ltd.
+
+This project is licensed under the [Apache License, Version 2.0](LICENSE). See the `LICENSE` file in the repository for the full text.
+
+## Author
+
+**Haixing Hu** — Qubit Co. Ltd.
+
+| | |
+| --- | --- |
+| **Repository** | [github.com/qubit-ltd/rs-command](https://github.com/qubit-ltd/rs-command) |
+| **Documentation** | [docs.rs/qubit-command](https://docs.rs/qubit-command) |
+| **Crate** | [crates.io/crates/qubit-command](https://crates.io/crates/qubit-command) |
