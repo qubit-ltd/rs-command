@@ -487,18 +487,18 @@ impl CommandRunner {
             self.stderr_file.as_deref(),
         )?;
 
-        let mut child = match spawn_child(process_command, self.timeout.is_some()) {
-            Ok(child) => child,
+        let mut child_process = match spawn_child(process_command, self.timeout.is_some()) {
+            Ok(child_process) => child_process,
             Err(source) => return Err(spawn_failed(&command_text, source)),
         };
 
-        let stdin_writer = write_stdin_bytes(&command_text, child.as_mut(), stdin_bytes)?;
+        let stdin_writer = write_stdin_bytes(&command_text, child_process.as_mut(), stdin_bytes)?;
 
-        let stdout = match child.stdout().take() {
+        let stdout = match child_process.stdout().take() {
             Some(stdout) => stdout,
             None => return Err(output_pipe_error(&command_text, OutputStream::Stdout)),
         };
-        let stderr = match child.stderr().take() {
+        let stderr = match child_process.stderr().take() {
             Some(stderr) => stderr,
             None => return Err(output_pipe_error(&command_text, OutputStream::Stderr)),
         };
@@ -511,75 +511,13 @@ impl CommandRunner {
             OutputCaptureOptions::new(self.max_stderr_bytes, stderr_file, self.stderr_file.clone()),
         );
         let command_io = CommandIo::new(stdout_reader, stderr_reader, stdin_writer);
-
-        let start = Instant::now();
-        let exit_status = loop {
-            let maybe_status = match child.try_wait() {
-                Ok(status) => status,
-                Err(source) => {
-                    let error = wait_failed(&command_text, source);
-                    return Err(clean_up_after_wait_error(
-                        &command_text,
-                        child.as_mut(),
-                        start.elapsed(),
-                        self.lossy_output,
-                        command_io,
-                        error,
-                    ));
-                }
-            };
-            if let Some(status) = maybe_status {
-                break status;
-            }
-            if let Some(timeout) = self.timeout
-                && start.elapsed() >= timeout
-            {
-                if let Err(source) = child.start_kill() {
-                    let error = kill_failed(command_text.clone(), timeout, source);
-                    return Err(collect_if_child_exited(
-                        &command_text,
-                        child.as_mut(),
-                        start.elapsed(),
-                        self.lossy_output,
-                        command_io,
-                        error,
-                    ));
-                }
-                let exit_status = match child.wait() {
-                    Ok(status) => status,
-                    Err(source) => {
-                        let error = wait_failed(&command_text, source);
-                        return Err(collect_if_child_exited(
-                            &command_text,
-                            child.as_mut(),
-                            start.elapsed(),
-                            self.lossy_output,
-                            command_io,
-                            error,
-                        ));
-                    }
-                };
-                let output = command_io.collect(
-                    &command_text,
-                    exit_status,
-                    start.elapsed(),
-                    self.lossy_output,
-                )?;
-                return Err(CommandError::TimedOut {
-                    command: command_text,
-                    timeout,
-                    output: Box::new(output),
-                });
-            }
-            thread::sleep(next_sleep(self.timeout, start.elapsed()));
-        };
-
-        let output = command_io.collect(
-            &command_text,
-            exit_status,
-            start.elapsed(),
-            self.lossy_output,
-        )?;
+        let finished =
+            RunningCommand::new(command_text, child_process, command_io, self.lossy_output)
+                .wait_for_completion(self.timeout)?;
+        let FinishedCommand {
+            command_text,
+            output,
+        } = finished;
 
         if output
             .exit_code()
@@ -616,6 +554,188 @@ type OutputReader = thread::JoinHandle<Result<CapturedOutput, OutputCaptureError
 
 /// Stdin writer thread result type.
 type StdinWriter = Option<thread::JoinHandle<io::Result<()>>>;
+
+/// Child process wrapper managed by this runner.
+type ManagedChildProcess = Box<dyn ChildWrapper>;
+
+/// Output of a command whose process and I/O helpers have completed.
+struct FinishedCommand {
+    /// Human-readable command text for diagnostics and logging.
+    command_text: String,
+    /// Captured command output.
+    output: CommandOutput,
+}
+
+/// Running command state that owns process and I/O helper lifetimes.
+struct RunningCommand {
+    /// Human-readable command text for diagnostics.
+    command_text: String,
+    /// Child process managed by the command runner.
+    child_process: ManagedChildProcess,
+    /// Output readers and optional stdin writer.
+    io: CommandIo,
+    /// Time when the child process started being monitored.
+    started_at: Instant,
+    /// Whether captured text accessors should replace invalid UTF-8 bytes.
+    lossy_output: bool,
+}
+
+impl RunningCommand {
+    /// Creates a running command state object.
+    ///
+    /// # Parameters
+    ///
+    /// * `command_text` - Human-readable command text for diagnostics.
+    /// * `child_process` - Child process managed by the runner.
+    /// * `io` - Output readers and optional stdin writer.
+    /// * `lossy_output` - Whether text accessors should replace invalid UTF-8.
+    ///
+    /// # Returns
+    ///
+    /// Running command state that owns the process and its I/O helpers.
+    fn new(
+        command_text: String,
+        child_process: ManagedChildProcess,
+        io: CommandIo,
+        lossy_output: bool,
+    ) -> Self {
+        Self {
+            command_text,
+            child_process,
+            io,
+            started_at: Instant::now(),
+            lossy_output,
+        }
+    }
+
+    /// Waits for the child process to complete or time out.
+    ///
+    /// # Parameters
+    ///
+    /// * `timeout` - Optional command timeout.
+    ///
+    /// # Returns
+    ///
+    /// Finished command output when the child exits normally.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError`] if waiting fails, timeout handling fails, output
+    /// collection fails, or stdin writing fails. Wait-error cleanup only joins I/O
+    /// helpers after a non-blocking check confirms the child has exited.
+    fn wait_for_completion(
+        mut self,
+        timeout: Option<Duration>,
+    ) -> Result<FinishedCommand, CommandError> {
+        loop {
+            let maybe_status = match self.child_process.try_wait() {
+                Ok(status) => status,
+                Err(source) => {
+                    let error = wait_failed(&self.command_text, source);
+                    return Err(self.clean_up_after_wait_error(error));
+                }
+            };
+            if let Some(status) = maybe_status {
+                return self.complete(status);
+            }
+            if let Some(timeout) = timeout
+                && self.started_at.elapsed() >= timeout
+            {
+                return self.handle_timeout(timeout);
+            }
+            thread::sleep(next_sleep(timeout, self.started_at.elapsed()));
+        }
+    }
+
+    /// Handles timeout by killing the child process and collecting final output.
+    ///
+    /// # Parameters
+    ///
+    /// * `timeout` - Timeout that has been exceeded.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError::TimedOut`] after successful kill and wait, or the
+    /// process-control error if killing or waiting fails. Cleanup after those
+    /// errors only joins I/O helpers if the child is already confirmed exited.
+    fn handle_timeout(mut self, timeout: Duration) -> Result<FinishedCommand, CommandError> {
+        if let Err(source) = self.child_process.start_kill() {
+            let error = kill_failed(self.command_text.clone(), timeout, source);
+            return Err(self.collect_if_child_exited(error));
+        }
+        let exit_status = match self.child_process.wait() {
+            Ok(status) => status,
+            Err(source) => {
+                let error = wait_failed(&self.command_text, source);
+                return Err(self.collect_if_child_exited(error));
+            }
+        };
+        let finished = self.complete(exit_status)?;
+        Err(CommandError::TimedOut {
+            command: finished.command_text,
+            timeout,
+            output: Box::new(finished.output),
+        })
+    }
+
+    /// Completes a known-exited command by joining all I/O helpers.
+    ///
+    /// # Parameters
+    ///
+    /// * `status` - Exit status reported by the child process.
+    ///
+    /// # Returns
+    ///
+    /// Finished command output with retained stdout and stderr bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError`] if output collection or stdin writing fails.
+    fn complete(self, status: ExitStatus) -> Result<FinishedCommand, CommandError> {
+        let output = self.io.collect(
+            &self.command_text,
+            status,
+            self.started_at.elapsed(),
+            self.lossy_output,
+        )?;
+        Ok(FinishedCommand {
+            command_text: self.command_text,
+            output,
+        })
+    }
+
+    /// Attempts non-blocking cleanup after a wait error.
+    ///
+    /// # Parameters
+    ///
+    /// * `error` - Original wait error to preserve.
+    ///
+    /// # Returns
+    ///
+    /// The original error after best-effort cleanup. This method deliberately does
+    /// not call blocking wait APIs because it is already handling a wait failure.
+    fn clean_up_after_wait_error(mut self, error: CommandError) -> CommandError {
+        let _ = self.child_process.start_kill();
+        self.collect_if_child_exited(error)
+    }
+
+    /// Drains I/O helpers if the child is already known to have exited.
+    ///
+    /// # Parameters
+    ///
+    /// * `error` - Original process-control error to preserve.
+    ///
+    /// # Returns
+    ///
+    /// The original error. Output collection failures during cleanup are ignored
+    /// so the primary process-control failure remains visible.
+    fn collect_if_child_exited(mut self, error: CommandError) -> CommandError {
+        if let Ok(Some(status)) = self.child_process.try_wait() {
+            let _ = self.complete(status);
+        }
+        error
+    }
+}
 
 /// Output and stdin helper threads for one running command.
 struct CommandIo {
@@ -852,7 +972,7 @@ fn configure_environment(command: &Command, process_command: &mut ProcessCommand
 fn spawn_child(
     process_command: ProcessCommand,
     kill_process_tree: bool,
-) -> io::Result<Box<dyn ChildWrapper>> {
+) -> io::Result<ManagedChildProcess> {
     #[cfg(coverage)]
     if coverage_support::fake_children_enabled()
         && let Some(child) = coverage_support::fake_child_for(process_command.get_program())
@@ -1084,66 +1204,6 @@ fn kill_failed(command: String, timeout: Duration, source: io::Error) -> Command
         timeout,
         source,
     }
-}
-
-/// Attempts to terminate a child after a wait error and drain its I/O helpers.
-///
-/// # Parameters
-///
-/// * `command` - Human-readable command text for diagnostics.
-/// * `child` - Child process wrapper to clean up.
-/// * `elapsed` - Elapsed command duration.
-/// * `lossy_output` - Whether text accessors should replace invalid UTF-8.
-/// * `command_io` - Output and stdin helper threads to collect when safe.
-/// * `error` - Original error to return after cleanup.
-///
-/// # Returns
-///
-/// The original error after best-effort cleanup.
-fn clean_up_after_wait_error(
-    command: &str,
-    child: &mut dyn ChildWrapper,
-    elapsed: Duration,
-    lossy_output: bool,
-    command_io: CommandIo,
-    error: CommandError,
-) -> CommandError {
-    if child.start_kill().is_ok()
-        && let Ok(status) = child.wait()
-    {
-        let _ = command_io.collect(command, status, elapsed, lossy_output);
-        return error;
-    }
-    collect_if_child_exited(command, child, elapsed, lossy_output, command_io, error)
-}
-
-/// Drains I/O helpers if the child is already known to have exited.
-///
-/// # Parameters
-///
-/// * `command` - Human-readable command text for diagnostics.
-/// * `child` - Child process wrapper to inspect.
-/// * `elapsed` - Elapsed command duration.
-/// * `lossy_output` - Whether text accessors should replace invalid UTF-8.
-/// * `command_io` - Output and stdin helper threads to collect when safe.
-/// * `error` - Original error to return after cleanup.
-///
-/// # Returns
-///
-/// The original error. Output collection failures during cleanup are ignored so
-/// the primary process-control failure remains visible.
-fn collect_if_child_exited(
-    command: &str,
-    child: &mut dyn ChildWrapper,
-    elapsed: Duration,
-    lossy_output: bool,
-    command_io: CommandIo,
-    error: CommandError,
-) -> CommandError {
-    if let Ok(Some(status)) = child.try_wait() {
-        let _ = command_io.collect(command, status, elapsed, lossy_output);
-    }
-    error
 }
 
 /// Collects reader-thread results into a command output value.
@@ -1736,6 +1796,9 @@ pub mod coverage_support {
             "__qubit_command_try_wait_error_kill_cleanup__" => {
                 child_with_try_wait_error_kill_cleanup()
             }
+            "__qubit_command_try_wait_error_pending_after_kill__" => {
+                child_with_try_wait_error_pending_after_kill()
+            }
             "__qubit_command_kill_error__" => child_with_kill_error(),
             "__qubit_command_wait_after_kill_error__" => child_with_wait_after_kill_error(),
             "__qubit_command_collect_output_error__" => child_with_output_pipes(),
@@ -1810,12 +1873,16 @@ pub mod coverage_support {
     ///
     /// # Returns
     ///
-    /// Child wrapper state used to exercise wait-error handling.
+    /// Child wrapper state used to exercise wait-error cleanup when the child
+    /// exits after a kill request.
     fn child_with_try_wait_error() -> NoStdinChild {
         NoStdinChild {
             stdout: Some(empty_stdout()),
             stderr: Some(empty_stderr()),
             try_wait_error: Some("try wait failed"),
+            clear_try_wait_error_after_first: true,
+            pending: true,
+            exited_after_kill_attempt: true,
             ..NoStdinChild::default()
         }
     }
@@ -1835,6 +1902,23 @@ pub mod coverage_support {
             pending: true,
             kill_error: Some("cleanup kill failed"),
             exited_after_kill_attempt: true,
+            ..NoStdinChild::default()
+        }
+    }
+
+    /// Creates a synthetic child that remains pending after wait-error cleanup.
+    ///
+    /// # Returns
+    ///
+    /// Child wrapper state used to verify wait-error cleanup does not use a
+    /// blocking wait when the child is not confirmed to have exited.
+    fn child_with_try_wait_error_pending_after_kill() -> NoStdinChild {
+        NoStdinChild {
+            stdout: Some(empty_stdout()),
+            stderr: Some(empty_stderr()),
+            try_wait_error: Some("try wait failed"),
+            clear_try_wait_error_after_first: true,
+            pending: true,
             ..NoStdinChild::default()
         }
     }

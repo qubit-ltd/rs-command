@@ -594,6 +594,24 @@ fn test_command_runner_coverage_exercises_defensive_paths() {
             "try-wait cleanup should drain output helpers before returning",
         );
 
+        let pending_after_kill = CommandRunner::new()
+            .run(Command::new(
+                "__qubit_command_try_wait_error_pending_after_kill__",
+            ))
+            .expect_err("pending synthetic child should preserve the try-wait failure");
+        assert!(matches!(
+            pending_after_kill,
+            CommandError::WaitFailed { .. }
+        ));
+        let collected = coverage_support::take_collect_output_commands();
+        assert!(
+            !collected
+                .iter()
+                .any(|command| command
+                    .contains("__qubit_command_try_wait_error_pending_after_kill__")),
+            "wait-error cleanup must not collect output without confirmed child exit",
+        );
+
         let try_wait_cleanup_error = CommandRunner::new()
             .run(Command::new(
                 "__qubit_command_try_wait_error_kill_cleanup__",
