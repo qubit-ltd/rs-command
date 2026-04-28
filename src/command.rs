@@ -7,8 +7,14 @@
  *
  ******************************************************************************/
 use std::{
-    ffi::{OsStr, OsString},
-    path::{Path, PathBuf},
+    ffi::{
+        OsStr,
+        OsString,
+    },
+    path::{
+        Path,
+        PathBuf,
+    },
 };
 
 use crate::command_env::env_key_eq;

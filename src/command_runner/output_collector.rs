@@ -7,18 +7,29 @@
  *
  ******************************************************************************/
 use std::{
-    io::{self, Read, Write},
+    io::{
+        self,
+        Read,
+        Write,
+    },
     process::ExitStatus,
     thread,
     time::Duration,
 };
 
 use super::{
-    captured_output::CapturedOutput, output_capture_error::OutputCaptureError,
-    output_capture_options::OutputCaptureOptions, output_reader::OutputReader,
-    stdin_pipe::join_stdin_writer, stdin_writer::StdinWriter,
+    captured_output::CapturedOutput,
+    output_capture_error::OutputCaptureError,
+    output_capture_options::OutputCaptureOptions,
+    output_reader::OutputReader,
+    stdin_pipe::join_stdin_writer,
+    stdin_writer::StdinWriter,
 };
-use crate::{CommandError, CommandOutput, OutputStream};
+use crate::{
+    CommandError,
+    CommandOutput,
+    OutputStream,
+};
 
 /// Spawns a reader thread for a child output stream.
 pub(crate) fn read_output_stream(

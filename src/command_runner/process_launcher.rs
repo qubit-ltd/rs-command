@@ -6,7 +6,10 @@
  *    All rights reserved.
  *
  ******************************************************************************/
-use std::{io, process::Command as ProcessCommand};
+use std::{
+    io,
+    process::Command as ProcessCommand,
+};
 
 use process_wrap::std::CommandWrap;
 #[cfg(windows)]

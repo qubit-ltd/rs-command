@@ -13,7 +13,10 @@ use std::os::unix::process::ExitStatusExt;
 #[cfg(windows)]
 use std::os::windows::process::ExitStatusExt;
 use std::{
-    cell::{Cell, RefCell},
+    cell::{
+        Cell,
+        RefCell,
+    },
     ffi::OsStr,
     process::ExitStatus,
 };
@@ -32,7 +35,10 @@ use failing_write::FailingWrite;
 use fake_child_guard::FakeChildGuard;
 use no_stdin_child::NoStdinChild;
 
-use crate::{OutputStream, command_runner::managed_child_process::ManagedChildProcess};
+use crate::{
+    OutputStream,
+    command_runner::managed_child_process::ManagedChildProcess,
+};
 
 thread_local! {
     /// Whether synthetic children are enabled on this test thread.

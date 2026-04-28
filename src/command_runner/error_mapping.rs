@@ -6,9 +6,15 @@
  *    All rights reserved.
  *
  ******************************************************************************/
-use std::{io, time::Duration};
+use std::{
+    io,
+    time::Duration,
+};
 
-use crate::{CommandError, OutputStream};
+use crate::{
+    CommandError,
+    OutputStream,
+};
 
 /// Builds a process spawn failure.
 pub(crate) fn spawn_failed(command: &str, source: io::Error) -> CommandError {
