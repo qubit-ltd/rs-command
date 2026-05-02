@@ -1,9 +1,10 @@
 /*******************************************************************************
  *
- *    Copyright (c) 2026.
- *    Haixing Hu, Qubit Co. Ltd.
+ *    Copyright (c) 2026 Haixing Hu.
  *
- *    All rights reserved.
+ *    SPDX-License-Identifier: Apache-2.0
+ *
+ *    Licensed under the Apache License, Version 2.0.
  *
  ******************************************************************************/
 //! Tests for [`CommandRunner`](qubit_command::CommandRunner).
@@ -56,7 +57,21 @@ mod stdin_writer_tests;
 
 #[cfg(not(windows))]
 mod unix {
-    use super::*;
+    #[cfg(coverage)]
+    use super::coverage_support;
+    use super::{
+        Command,
+        CommandError,
+        CommandRunner,
+        Duration,
+        Instant,
+        Once,
+        OutputStream,
+        PathBuf,
+        SystemTime,
+        UNIX_EPOCH,
+        fs,
+    };
 
     static LOGGER_INIT: Once = Once::new();
     static TEST_LOGGER: TestLogger = TestLogger;
@@ -810,7 +825,16 @@ mod unix {
 
 #[cfg(windows)]
 mod windows {
-    use super::*;
+    use super::{
+        Command,
+        CommandError,
+        CommandRunner,
+        Duration,
+        PathBuf,
+        SystemTime,
+        UNIX_EPOCH,
+        fs,
+    };
 
     /// Removes trailing Windows line endings from command output.
     ///

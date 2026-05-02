@@ -1,9 +1,10 @@
 /*******************************************************************************
  *
- *    Copyright (c) 2026.
- *    Haixing Hu, Qubit Co. Ltd.
+ *    Copyright (c) 2026 Haixing Hu.
  *
- *    All rights reserved.
+ *    SPDX-License-Identifier: Apache-2.0
+ *
+ *    Licensed under the Apache License, Version 2.0.
  *
  ******************************************************************************/
 #[cfg(unix)]
@@ -26,9 +27,6 @@ use std::{
 /// the runner also stores lossy UTF-8 text where invalid byte sequences are
 /// replaced with the Unicode replacement character.
 ///
-/// # Author
-///
-/// Haixing Hu
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandOutput {
     /// Exit status reported by the process.
