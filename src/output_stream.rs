@@ -1,18 +1,16 @@
 /*******************************************************************************
  *
- *    Copyright (c) 2026.
- *    Haixing Hu, Qubit Co. Ltd.
+ *    Copyright (c) 2026 Haixing Hu.
  *
- *    All rights reserved.
+ *    SPDX-License-Identifier: Apache-2.0
+ *
+ *    Licensed under the Apache License, Version 2.0.
  *
  ******************************************************************************/
 use std::fmt;
 
 /// Output stream whose reader failed.
 ///
-/// # Author
-///
-/// Haixing Hu
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputStream {
     /// Standard output stream.

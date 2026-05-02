@@ -1,9 +1,10 @@
 /*******************************************************************************
  *
- *    Copyright (c) 2026.
- *    Haixing Hu, Qubit Co. Ltd.
+ *    Copyright (c) 2026 Haixing Hu.
  *
- *    All rights reserved.
+ *    SPDX-License-Identifier: Apache-2.0
+ *
+ *    Licensed under the Apache License, Version 2.0.
  *
  ******************************************************************************/
 use std::{
@@ -67,9 +68,6 @@ pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 /// and [`CommandOutput::stderr`] reject invalid UTF-8 or return replacement
 /// characters.
 ///
-/// # Author
-///
-/// Haixing Hu
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandRunner {
     /// Maximum duration allowed for each command.
