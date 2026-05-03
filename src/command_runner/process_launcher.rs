@@ -25,13 +25,6 @@ pub(crate) fn spawn_child(
     process_command: ProcessCommand,
     kill_process_tree: bool,
 ) -> io::Result<ManagedChildProcess> {
-    #[cfg(coverage)]
-    if crate::coverage_support::fake_children_enabled()
-        && let Some(child) = crate::coverage_support::fake_child_for(process_command.get_program())
-    {
-        return Ok(child);
-    }
-
     let mut command = CommandWrap::from(process_command);
     #[cfg(unix)]
     if kill_process_tree {

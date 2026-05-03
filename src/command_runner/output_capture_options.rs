@@ -7,8 +7,6 @@
  *    Licensed under the Apache License, Version 2.0.
  *
  ******************************************************************************/
-#[cfg(coverage)]
-use std::io::Write;
 use std::{
     fs::File,
     path::PathBuf,
@@ -46,28 +44,5 @@ impl OutputCaptureOptions {
             path: file_path.unwrap_or_default(),
         });
         Self { max_bytes, tee }
-    }
-
-    /// Creates output capture options from an arbitrary writer.
-    ///
-    /// # Parameters
-    ///
-    /// * `max_bytes` - Optional in-memory retention limit.
-    /// * `writer` - Writer receiving all emitted bytes.
-    /// * `path` - Diagnostic path reported when writes fail.
-    ///
-    /// # Returns
-    ///
-    /// Capture options moved into the output reader thread.
-    #[cfg(coverage)]
-    pub(crate) fn new_writer(
-        max_bytes: Option<usize>,
-        writer: Box<dyn Write + Send>,
-        path: PathBuf,
-    ) -> Self {
-        Self {
-            max_bytes,
-            tee: Some(OutputTee { writer, path }),
-        }
     }
 }

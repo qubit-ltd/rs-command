@@ -7,15 +7,7 @@
  *    Licensed under the Apache License, Version 2.0.
  *
  ******************************************************************************/
-//! Tests for coverage-only read failure support.
-
-#[test]
-fn test_failing_reader_path_is_exercised() {
-    let diagnostics = qubit_command::coverage_support::exercise_defensive_paths();
-
-    assert!(
-        diagnostics
-            .iter()
-            .any(|message| message.contains("read failed")),
-    );
-}
+//! Legacy placeholder kept so historical path references do not break.
+//!
+//! Defensive read-failure coverage now lives in `tests/coverage_support_tests.rs`
+//! without using library-only coverage hooks.

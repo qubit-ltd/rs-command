@@ -7,15 +7,7 @@
  *    Licensed under the Apache License, Version 2.0.
  *
  ******************************************************************************/
-//! Tests for coverage-only write failure support.
-
-#[test]
-fn test_failing_write_path_is_exercised() {
-    let diagnostics = qubit_command::coverage_support::exercise_defensive_paths();
-
-    assert!(
-        diagnostics
-            .iter()
-            .any(|message| message.contains("write failed")),
-    );
-}
+//! Legacy placeholder kept so historical path references do not break.
+//!
+//! Defensive write-failure coverage now lives in `tests/coverage_support_tests.rs`
+//! without using library-only coverage hooks.
