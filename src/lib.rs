@@ -18,9 +18,6 @@ mod command_error;
 mod command_output;
 mod command_runner;
 mod command_stdin;
-#[cfg(coverage)]
-#[doc(hidden)]
-pub mod coverage_support;
 mod output_stream;
 
 pub use command::Command;

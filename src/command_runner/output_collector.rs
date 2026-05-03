@@ -107,27 +107,12 @@ pub(crate) fn collect_output(
     stderr_reader: OutputReader,
     stdin_writer: StdinWriter,
 ) -> Result<CommandOutput, CommandError> {
-    #[cfg(coverage)]
-    crate::coverage_support::record_collect_output(command);
-
-    #[cfg(coverage)]
-    let forced_error =
-        crate::coverage_support::forced_collect_output_error(command).map(|stream| {
-            CommandError::ReadOutputFailed {
-                command: command.to_owned(),
-                stream,
-                source: io::Error::other("forced output collection failure"),
-            }
-        });
-    #[cfg(not(coverage))]
-    let forced_error = None;
-
     let stdout_result = join_output_reader(command, OutputStream::Stdout, stdout_reader);
     let stderr_result = join_output_reader(command, OutputStream::Stderr, stderr_reader);
     let stdin_result = join_stdin_writer(command, stdin_writer);
 
-    match (stdout_result, stderr_result, stdin_result, forced_error) {
-        (Ok(stdout), Ok(stderr), Ok(()), None) => Ok(CommandOutput::new(
+    match (stdout_result, stderr_result, stdin_result) {
+        (Ok(stdout), Ok(stderr), Ok(())) => Ok(CommandOutput::new(
             status,
             stdout.bytes,
             stderr.bytes,
@@ -135,10 +120,7 @@ pub(crate) fn collect_output(
             stderr.truncated,
             elapsed,
         )),
-        (Err(error), _, _, _)
-        | (_, Err(error), _, _)
-        | (_, _, Err(error), _)
-        | (_, _, _, Some(error)) => Err(error),
+        (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => Err(error),
     }
 }
 
