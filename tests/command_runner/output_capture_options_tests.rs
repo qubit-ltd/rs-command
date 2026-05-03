@@ -44,9 +44,9 @@ fn test_output_capture_options_keep_full_tee_with_limited_memory() {
         .expect("rustc version command should run successfully");
 
     let file_bytes = fs::read(&path).expect("tee file should be readable");
-    assert_eq!(output.stdout_bytes().len(), 5);
+    assert_eq!(output.stdout().len(), 5);
     assert!(file_bytes.starts_with(b"rustc "));
-    assert!(file_bytes.len() > output.stdout_bytes().len());
+    assert!(file_bytes.len() > output.stdout().len());
 
     let _ = fs::remove_file(path);
 }

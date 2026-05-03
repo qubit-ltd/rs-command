@@ -103,7 +103,6 @@ pub(crate) fn collect_output(
     command: &str,
     status: ExitStatus,
     elapsed: Duration,
-    lossy_output: bool,
     stdout_reader: OutputReader,
     stderr_reader: OutputReader,
     stdin_writer: StdinWriter,
@@ -135,7 +134,6 @@ pub(crate) fn collect_output(
             stdout.truncated,
             stderr.truncated,
             elapsed,
-            lossy_output,
         )),
         (Err(error), _, _, _)
         | (_, Err(error), _, _)

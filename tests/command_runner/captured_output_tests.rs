@@ -21,18 +21,18 @@ fn test_captured_output_records_stdout_truncation() {
         .run(Command::new("rustc").arg("--version"))
         .expect("rustc version command should run successfully");
 
-    assert_eq!(output.stdout_bytes().len(), 5);
+    assert_eq!(output.stdout().len(), 5);
     assert!(output.stdout_truncated());
 }
 
 #[test]
-fn test_captured_output_can_keep_zero_stdout_bytes() {
+fn test_captured_output_can_keep_zero_stdout() {
     let output = CommandRunner::new()
         .max_stdout_bytes(0)
         .run(Command::new("rustc").arg("--version"))
         .expect("rustc version command should run successfully");
 
-    assert!(output.stdout_bytes().is_empty());
+    assert!(output.stdout().is_empty());
     assert!(output.stdout_truncated());
 }
 
@@ -43,6 +43,6 @@ fn test_captured_output_limit_without_truncation() {
         .run(Command::new("rustc").arg("--version"))
         .expect("rustc version command should run successfully");
 
-    assert!(output.stdout_bytes().starts_with(b"rustc "));
+    assert!(output.stdout().starts_with(b"rustc "));
     assert!(!output.stdout_truncated());
 }

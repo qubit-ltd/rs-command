@@ -20,6 +20,6 @@ fn test_command_io_collects_stdout_and_stderr() {
         .run(Command::shell("rustc --version && rustc --version 1>&2"))
         .expect("shell command should run successfully");
 
-    assert!(output.stdout_bytes().starts_with(b"rustc "));
-    assert!(output.stderr_bytes().starts_with(b"rustc "));
+    assert!(output.stdout().starts_with(b"rustc "));
+    assert!(output.stderr().starts_with(b"rustc "));
 }

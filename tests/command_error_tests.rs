@@ -112,7 +112,7 @@ fn test_command_error_accessors_for_errors_with_output() {
         unexpected
             .output()
             .expect("unexpected exit should expose output")
-            .stdout()
+            .stdout_text()
             .expect("stdout should be valid UTF-8"),
         "output",
     );
@@ -126,7 +126,7 @@ fn test_command_error_accessors_for_errors_with_output() {
         timed_out
             .output()
             .expect("timeout should expose captured output")
-            .stdout()
+            .stdout_text()
             .expect("stdout should be valid UTF-8"),
         "before-timeout",
     );

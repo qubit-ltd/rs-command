@@ -115,7 +115,6 @@ mod unix {
         assert_eq!(runner.configured_success_exit_codes(), &[0]);
         assert!(runner.configured_working_directory().is_none());
         assert!(!runner.is_logging_disabled());
-        assert!(!runner.is_lossy_output_enabled());
         assert_eq!(runner.configured_max_stdout_bytes(), None);
         assert_eq!(runner.configured_max_stderr_bytes(), None);
         assert!(runner.configured_stdout_file().is_none());
@@ -131,10 +130,10 @@ mod unix {
 
         assert_eq!(output.exit_code(), Some(0));
         assert_eq!(
-            output.stdout().expect("stdout should be valid UTF-8"),
+            output.stdout_text().expect("stdout should be valid UTF-8"),
             "command-out",
         );
-        assert!(output.stderr_bytes().is_empty());
+        assert!(output.stderr().is_empty());
     }
 
     #[test]
@@ -144,9 +143,9 @@ mod unix {
             .run(Command::shell("printf command-error >&2"))
             .expect("command should run successfully");
 
-        assert!(output.stdout_bytes().is_empty());
+        assert!(output.stdout().is_empty());
         assert_eq!(
-            output.stderr().expect("stderr should be valid UTF-8"),
+            output.stderr_text().expect("stderr should be valid UTF-8"),
             "command-error",
         );
     }
@@ -162,7 +161,7 @@ mod unix {
             .expect("command should receive environment override");
 
         assert_eq!(
-            output.stdout().expect("stdout should be valid UTF-8"),
+            output.stdout_text().expect("stdout should be valid UTF-8"),
             "from-env",
         );
     }
@@ -179,7 +178,7 @@ mod unix {
             .expect("command should remove configured environment variable");
 
         assert_eq!(
-            output.stdout().expect("stdout should be valid UTF-8"),
+            output.stdout_text().expect("stdout should be valid UTF-8"),
             "missing",
         );
     }
@@ -196,7 +195,7 @@ mod unix {
             .expect("command should run with cleared environment plus explicit set");
 
         assert_eq!(
-            output.stdout().expect("stdout should be valid UTF-8"),
+            output.stdout_text().expect("stdout should be valid UTF-8"),
             "after-clear",
         );
     }
@@ -210,7 +209,7 @@ mod unix {
 
         assert_eq!(
             output
-                .stdout()
+                .stdout_text()
                 .expect("stdout should be valid UTF-8")
                 .trim(),
             "/",
@@ -227,7 +226,7 @@ mod unix {
 
         assert_eq!(
             output
-                .stdout()
+                .stdout_text()
                 .expect("stdout should be valid UTF-8")
                 .trim(),
             "/",
@@ -253,11 +252,11 @@ mod unix {
                 assert_eq!(exit_code, Some(7));
                 assert_eq!(expected, vec![0]);
                 assert_eq!(
-                    output.stdout().expect("stdout should be valid UTF-8"),
+                    output.stdout_text().expect("stdout should be valid UTF-8"),
                     "fail-out",
                 );
                 assert_eq!(
-                    output.stderr().expect("stderr should be valid UTF-8"),
+                    output.stderr_text().expect("stderr should be valid UTF-8"),
                     "fail-err",
                 );
             }
@@ -297,7 +296,7 @@ mod unix {
 
         assert_eq!(output.exit_code(), Some(0));
         assert_eq!(
-            output.stdout().expect("stdout should be valid UTF-8"),
+            output.stdout_text().expect("stdout should be valid UTF-8"),
             "no-timeout",
         );
     }
@@ -310,7 +309,7 @@ mod unix {
             .expect("command should receive stdin bytes");
 
         assert_eq!(
-            output.stdout().expect("stdout should be valid UTF-8"),
+            output.stdout_text().expect("stdout should be valid UTF-8"),
             "stdin-bytes",
         );
     }
@@ -358,7 +357,7 @@ mod unix {
             .expect("command should receive stdin file");
 
         assert_eq!(
-            output.stdout().expect("stdout should be valid UTF-8"),
+            output.stdout_text().expect("stdout should be valid UTF-8"),
             "stdin-file",
         );
         let _ = fs::remove_file(path);
@@ -372,7 +371,7 @@ mod unix {
             .expect("command should run with inherited stdin");
 
         assert_eq!(
-            output.stdout().expect("stdout should be valid UTF-8"),
+            output.stdout_text().expect("stdout should be valid UTF-8"),
             "inherited",
         );
     }
@@ -398,13 +397,6 @@ mod unix {
         let runner = CommandRunner::new().disable_logging(true);
 
         assert!(runner.is_logging_disabled());
-    }
-
-    #[test]
-    fn test_command_runner_lossy_output_updates_configuration() {
-        let runner = CommandRunner::new().lossy_output(true);
-
-        assert!(runner.is_lossy_output_enabled());
     }
 
     #[test]
@@ -435,7 +427,7 @@ mod unix {
             .expect("command should run successfully when logging is disabled");
 
         assert_eq!(
-            output.stdout().expect("stdout should be valid UTF-8"),
+            output.stdout_text().expect("stdout should be valid UTF-8"),
             "quiet-success",
         );
     }
@@ -494,8 +486,8 @@ mod unix {
             .run(Command::shell("printf abcdef; printf wxyz >&2"))
             .expect("command should run successfully");
 
-        assert_eq!(output.stdout_bytes(), b"abc");
-        assert_eq!(output.stderr_bytes(), b"wx");
+        assert_eq!(output.stdout(), b"abc");
+        assert_eq!(output.stderr(), b"wx");
         assert!(output.stdout_truncated());
         assert!(output.stderr_truncated());
     }
@@ -513,8 +505,8 @@ mod unix {
             .run(Command::shell("printf abcdef; printf wxyz >&2"))
             .expect("command should run successfully");
 
-        assert_eq!(output.stdout_bytes(), b"abc");
-        assert_eq!(output.stderr_bytes(), b"wxy");
+        assert_eq!(output.stdout(), b"abc");
+        assert_eq!(output.stderr(), b"wxy");
         assert_eq!(
             fs::read(&stdout_path).expect("stdout tee file should be readable"),
             b"abcdef",
@@ -876,7 +868,7 @@ mod windows {
             .expect("Windows shell command should run successfully");
 
         assert_eq!(
-            trim_windows_line_endings(output.stdout().expect("stdout should be UTF-8")),
+            trim_windows_line_endings(output.stdout_text().expect("stdout should be UTF-8")),
             "command-out",
         );
     }
@@ -888,7 +880,7 @@ mod windows {
             .expect("Windows shell command should run successfully");
 
         assert_eq!(
-            trim_windows_line_endings(output.stderr().expect("stderr should be UTF-8")),
+            trim_windows_line_endings(output.stderr_text().expect("stderr should be UTF-8")),
             "command-error",
         );
     }
@@ -912,7 +904,7 @@ mod windows {
             .run(Command::shell("echo abcdef"))
             .expect("Windows shell command should run successfully");
 
-        assert_eq!(output.stdout_bytes(), b"abc");
+        assert_eq!(output.stdout(), b"abc");
         assert!(output.stdout_truncated());
         assert_eq!(
             trim_windows_line_endings(

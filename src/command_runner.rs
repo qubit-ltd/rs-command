@@ -78,8 +78,6 @@ pub struct CommandRunner {
     success_exit_codes: Vec<i32>,
     /// Whether command execution logs are disabled.
     disable_logging: bool,
-    /// Whether captured text accessors should replace invalid UTF-8 bytes.
-    lossy_output: bool,
     /// Maximum stdout bytes retained in memory.
     max_stdout_bytes: Option<usize>,
     /// Maximum stderr bytes retained in memory.
@@ -96,8 +94,7 @@ impl Default for CommandRunner {
     /// # Returns
     ///
     /// A runner with no timeout, inherited working directory, success exit code
-    /// `0`, strict UTF-8 output text accessors, unlimited in-memory output
-    /// capture, and no output tee files.
+    /// `0`, unlimited in-memory output capture, and no output tee files.
     #[inline]
     fn default() -> Self {
         Self {
@@ -105,7 +102,6 @@ impl Default for CommandRunner {
             working_directory: None,
             success_exit_codes: vec![0],
             disable_logging: false,
-            lossy_output: false,
             max_stdout_bytes: None,
             max_stderr_bytes: None,
             stdout_file: None,
@@ -120,8 +116,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// A runner with no timeout, inherited working directory, success exit code
-    /// `0`, strict UTF-8 output text accessors, unlimited in-memory output
-    /// capture, and no output tee files.
+    /// `0`, unlimited in-memory output capture, and no output tee files.
     #[inline]
     pub fn new() -> Self {
         Self::default()
@@ -214,23 +209,6 @@ impl CommandRunner {
     #[inline]
     pub const fn disable_logging(mut self, disable_logging: bool) -> Self {
         self.disable_logging = disable_logging;
-        self
-    }
-
-    /// Configures whether output text accessors use lossy UTF-8 conversion.
-    ///
-    /// # Parameters
-    ///
-    /// * `lossy_output` - `true` to replace invalid UTF-8 bytes with the
-    ///   Unicode replacement character when [`CommandOutput::stdout`] or
-    ///   [`CommandOutput::stderr`] is called.
-    ///
-    /// # Returns
-    ///
-    /// The updated command runner.
-    #[inline]
-    pub const fn lossy_output(mut self, lossy_output: bool) -> Self {
-        self.lossy_output = lossy_output;
         self
     }
 
@@ -373,17 +351,6 @@ impl CommandRunner {
         self.disable_logging
     }
 
-    /// Returns whether output text accessors use lossy UTF-8 conversion.
-    ///
-    /// # Returns
-    ///
-    /// `true` when invalid UTF-8 bytes are replaced before output is returned
-    /// by [`CommandOutput::stdout`] or [`CommandOutput::stderr`].
-    #[inline]
-    pub const fn is_lossy_output_enabled(&self) -> bool {
-        self.lossy_output
-    }
-
     /// Returns the configured stdout capture limit.
     ///
     /// # Returns
@@ -435,10 +402,11 @@ impl CommandRunner {
     ///
     /// Captured output is retained as raw bytes up to the configured per-stream
     /// limits. Reader threads still drain complete streams so the child is not
-    /// blocked on full pipes. If lossy output mode is enabled, invalid UTF-8 is
-    /// replaced only for [`CommandOutput::stdout`] and
-    /// [`CommandOutput::stderr`]; byte accessors still return the retained raw
-    /// process output.
+    /// blocked on full pipes. Use [`CommandOutput::stdout_text`] and
+    /// [`CommandOutput::stderr_text`] for strict UTF-8 text, or
+    /// [`CommandOutput::stdout_lossy_text`] and
+    /// [`CommandOutput::stderr_lossy_text`] when invalid UTF-8 should be
+    /// replaced.
     ///
     /// # Parameters
     ///
@@ -498,9 +466,8 @@ impl CommandRunner {
             OutputCaptureOptions::new(self.max_stderr_bytes, stderr_file, stderr_file_path),
         );
         let command_io = CommandIo::new(stdout_reader, stderr_reader, stdin_writer);
-        let finished =
-            RunningCommand::new(command_text, child_process, command_io, self.lossy_output)
-                .wait_for_completion(self.timeout)?;
+        let finished = RunningCommand::new(command_text, child_process, command_io)
+            .wait_for_completion(self.timeout)?;
         let FinishedCommand {
             command_text,
             output,

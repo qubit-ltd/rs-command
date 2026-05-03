@@ -63,7 +63,7 @@ let output = CommandRunner::new()
     .timeout(Duration::from_secs(10))
     .run(Command::new("git").args(&["status", "--short"]))?;
 
-println!("{}", output.stdout()?);
+println!("{}", output.stdout_text()?);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -77,7 +77,7 @@ use qubit_command::{Command, CommandRunner};
 let output = CommandRunner::new()
     .run(Command::new("printf").arg("hello"))?;
 
-assert_eq!(output.stdout()?, "hello");
+assert_eq!(output.stdout_text()?, "hello");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -90,30 +90,28 @@ use qubit_command::{Command, CommandRunner};
 let output = CommandRunner::new()
     .run(Command::shell("printf hello | tr a-z A-Z"))?;
 
-assert_eq!(output.stdout()?, "HELLO");
+assert_eq!(output.stdout_text()?, "HELLO");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 ## 输出文本
 
-`stdout()` 和 `stderr()` 默认返回 UTF-8 文本。如果命令可能输出任意字节，
-使用 `stdout_bytes()` 和 `stderr_bytes()` 获取原始输出。需要把非法 UTF-8
-字节替换成 `�` 时，在 runner 上启用 lossy 输出。
+`stdout()` 和 `stderr()` 返回保留下来的原始字节。需要严格 UTF-8 文本时，
+使用 `stdout_text()` 和 `stderr_text()`；需要把非法 UTF-8 字节替换成 `�`
+时，使用 `stdout_lossy_text()` 和 `stderr_lossy_text()`。
 
-若未启用 lossy，而实际捕获的 stdout 或 stderr 中含有非法 UTF-8 序列，则
-`stdout()` / `stderr()` 会分别返回 `Err(str::Utf8Error)`（内部对保留字节
-执行 `str::from_utf8` 失败），无法得到 `&str`；此时输出仍已完整保留在
-`CommandOutput` 中，可改用 `stdout_bytes()` / `stderr_bytes()` 取得原始
-字节并自行处理。
+若实际捕获的 stdout 或 stderr 中含有非法 UTF-8 序列，则 `stdout_text()` /
+`stderr_text()` 会分别返回 `Err(str::Utf8Error)`（内部对保留字节执行
+`str::from_utf8` 失败），无法得到 `&str`；此时输出仍已完整保留在
+`CommandOutput` 中，可改用 `stdout()` / `stderr()` 取得原始字节并自行处理。
 
 ```rust
 use qubit_command::{Command, CommandRunner};
 
 let output = CommandRunner::new()
-    .lossy_output(true)
     .run(Command::shell("printf '\\377'"))?;
 
-assert_eq!(output.stdout()?, "\u{fffd}");
+assert_eq!(output.stdout_lossy_text(), "\u{fffd}");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 

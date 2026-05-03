@@ -17,63 +17,58 @@ use qubit_command::{
 };
 
 #[test]
-fn test_command_output_stdout_returns_utf8_text_and_bytes() {
+fn test_command_output_stdout_returns_bytes_and_text() {
     let output = CommandRunner::new()
         .run(Command::shell("printf hello"))
         .expect("command should run successfully");
 
+    assert_eq!(output.stdout(), b"hello");
     assert_eq!(
-        output.stdout().expect("stdout should be valid UTF-8"),
+        output.stdout_text().expect("stdout should be valid UTF-8"),
         "hello"
     );
+    assert_eq!(output.stdout_lossy_text(), "hello");
     assert_eq!(output.exit_status().code(), Some(0));
-    assert_eq!(output.stdout_bytes(), b"hello");
     assert!(!output.stdout_truncated());
 }
 
 #[test]
-fn test_command_output_stderr_returns_utf8_text_and_bytes() {
+fn test_command_output_stderr_returns_bytes_and_text() {
     let output = CommandRunner::new()
         .run(Command::shell("printf error >&2"))
         .expect("command should run successfully");
 
+    assert_eq!(output.stderr(), b"error");
     assert_eq!(
-        output.stderr().expect("stderr should be valid UTF-8"),
+        output.stderr_text().expect("stderr should be valid UTF-8"),
         "error"
     );
-    assert_eq!(output.stderr_bytes(), b"error");
+    assert_eq!(output.stderr_lossy_text(), "error");
     assert!(!output.stderr_truncated());
 }
 
 #[test]
-fn test_command_output_rejects_invalid_utf8_by_default() {
+fn test_command_output_rejects_invalid_utf8_for_strict_text() {
     let output = CommandRunner::new()
         .run(Command::shell("printf '\\377'; printf '\\377' >&2"))
         .expect("command should run successfully");
 
-    assert!(output.stdout().is_err());
-    assert!(output.stderr().is_err());
-    assert_eq!(output.stdout_bytes(), &[0xff]);
-    assert_eq!(output.stderr_bytes(), &[0xff]);
+    assert!(output.stdout_text().is_err());
+    assert!(output.stderr_text().is_err());
+    assert_eq!(output.stdout(), &[0xff]);
+    assert_eq!(output.stderr(), &[0xff]);
 }
 
 #[test]
-fn test_command_output_uses_lossy_text_when_configured() {
+fn test_command_output_always_exposes_lossy_text() {
     let output = CommandRunner::new()
-        .lossy_output(true)
         .run(Command::shell("printf '\\377'; printf '\\377' >&2"))
         .expect("command should run successfully");
 
-    assert_eq!(
-        output.stdout().expect("stdout should be lossy UTF-8"),
-        "\u{fffd}"
-    );
-    assert_eq!(
-        output.stderr().expect("stderr should be lossy UTF-8"),
-        "\u{fffd}"
-    );
-    assert_eq!(output.stdout_bytes(), &[0xff]);
-    assert_eq!(output.stderr_bytes(), &[0xff]);
+    assert_eq!(output.stdout_lossy_text(), "\u{fffd}");
+    assert_eq!(output.stderr_lossy_text(), "\u{fffd}");
+    assert_eq!(output.stdout(), &[0xff]);
+    assert_eq!(output.stderr(), &[0xff]);
 }
 
 #[test]
