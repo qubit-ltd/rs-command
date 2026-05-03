@@ -23,5 +23,5 @@ fn test_running_command_completes_before_timeout() {
         .run(Command::new("rustc").arg("--version"))
         .expect("short command should finish before timeout");
 
-    assert!(output.stdout_bytes().starts_with(b"rustc "));
+    assert!(output.stdout().starts_with(b"rustc "));
 }

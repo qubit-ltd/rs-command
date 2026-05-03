@@ -70,7 +70,7 @@ let output = CommandRunner::new()
     .timeout(Duration::from_secs(10))
     .run(Command::new("git").args(&["status", "--short"]))?;
 
-println!("{}", output.stdout()?);
+println!("{}", output.stdout_text()?);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -84,7 +84,7 @@ use qubit_command::{Command, CommandRunner};
 let output = CommandRunner::new()
     .run(Command::new("printf").arg("hello"))?;
 
-assert_eq!(output.stdout()?, "hello");
+assert_eq!(output.stdout_text()?, "hello");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -97,30 +97,29 @@ use qubit_command::{Command, CommandRunner};
 let output = CommandRunner::new()
     .run(Command::shell("printf hello | tr a-z A-Z"))?;
 
-assert_eq!(output.stdout()?, "HELLO");
+assert_eq!(output.stdout_text()?, "HELLO");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 ## Output Text
 
-`stdout()` and `stderr()` return UTF-8 text by default. Use `stdout_bytes()` and
-`stderr_bytes()` when a command can emit arbitrary bytes. To replace invalid
-UTF-8 bytes with `�`, enable lossy output on the runner.
+`stdout()` and `stderr()` return raw bytes exactly as retained. Use
+`stdout_text()` and `stderr_text()` when the command output must be valid UTF-8.
+Use `stdout_lossy_text()` and `stderr_lossy_text()` to replace invalid UTF-8
+bytes with `�`.
 
-If lossy output is disabled and the captured stdout or stderr contains invalid
-UTF-8, `stdout()` / `stderr()` return `Err(str::Utf8Error)` from
-`str::from_utf8`—you cannot obtain a `&str` for that stream. The bytes are still
-stored on the returned `CommandOutput`; use `stdout_bytes()` / `stderr_bytes()` to read
+If the captured stdout or stderr contains invalid UTF-8, `stdout_text()` /
+`stderr_text()` return `Err(str::Utf8Error)` from `str::from_utf8`. The bytes are
+still stored on the returned `CommandOutput`; use `stdout()` / `stderr()` to read
 the raw output and decode or handle it yourself.
 
 ```rust
 use qubit_command::{Command, CommandRunner};
 
 let output = CommandRunner::new()
-    .lossy_output(true)
     .run(Command::shell("printf '\\377'"))?;
 
-assert_eq!(output.stdout()?, "\u{fffd}");
+assert_eq!(output.stdout_lossy_text(), "\u{fffd}");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 

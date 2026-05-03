@@ -38,8 +38,6 @@ pub(crate) struct RunningCommand {
     io: CommandIo,
     /// Time when the child process started being monitored.
     started_at: Instant,
-    /// Whether captured text accessors should replace invalid UTF-8 bytes.
-    lossy_output: bool,
 }
 
 impl RunningCommand {
@@ -50,7 +48,6 @@ impl RunningCommand {
     /// * `command_text` - Human-readable command text for diagnostics.
     /// * `child_process` - Child process managed by the runner.
     /// * `io` - Output readers and optional stdin writer.
-    /// * `lossy_output` - Whether text accessors should replace invalid UTF-8.
     ///
     /// # Returns
     ///
@@ -59,14 +56,12 @@ impl RunningCommand {
         command_text: String,
         child_process: ManagedChildProcess,
         io: CommandIo,
-        lossy_output: bool,
     ) -> Self {
         Self {
             command_text,
             child_process,
             io,
             started_at: Instant::now(),
-            lossy_output,
         }
     }
 
@@ -154,12 +149,9 @@ impl RunningCommand {
     ///
     /// Returns [`CommandError`] if output collection or stdin writing fails.
     fn complete(self, status: ExitStatus) -> Result<FinishedCommand, CommandError> {
-        let output = self.io.collect(
-            &self.command_text,
-            status,
-            self.started_at.elapsed(),
-            self.lossy_output,
-        )?;
+        let output = self
+            .io
+            .collect(&self.command_text, status, self.started_at.elapsed())?;
         Ok(FinishedCommand {
             command_text: self.command_text,
             output,

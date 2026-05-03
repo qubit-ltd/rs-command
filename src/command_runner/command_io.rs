@@ -60,7 +60,6 @@ impl CommandIo {
     /// * `command` - Human-readable command text for diagnostics.
     /// * `status` - Process exit status.
     /// * `elapsed` - Observed command duration.
-    /// * `lossy_output` - Whether text accessors should replace invalid UTF-8.
     ///
     /// # Returns
     ///
@@ -74,13 +73,11 @@ impl CommandIo {
         command: &str,
         status: std::process::ExitStatus,
         elapsed: Duration,
-        lossy_output: bool,
     ) -> Result<CommandOutput, CommandError> {
         collect_output(
             command,
             status,
             elapsed,
-            lossy_output,
             self.stdout_reader,
             self.stderr_reader,
             self.stdin_writer,

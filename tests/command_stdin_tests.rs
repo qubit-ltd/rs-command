@@ -20,7 +20,7 @@ fn test_command_stdin_null_allows_command_without_input() {
         .run(Command::new("rustc").arg("--version").stdin_null())
         .expect("command with null stdin should run successfully");
 
-    assert!(output.stdout_bytes().starts_with(b"rustc "));
+    assert!(output.stdout().starts_with(b"rustc "));
 }
 
 #[cfg(not(windows))]
@@ -30,5 +30,5 @@ fn test_command_stdin_bytes_reaches_child_process() {
         .run(Command::new("cat").stdin_bytes(b"input".to_vec()))
         .expect("stdin bytes should be written to child");
 
-    assert_eq!(output.stdout_bytes(), b"input");
+    assert_eq!(output.stdout(), b"input");
 }

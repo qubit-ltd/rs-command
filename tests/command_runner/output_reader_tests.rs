@@ -21,7 +21,7 @@ fn test_output_reader_drains_stderr_even_when_stdout_is_limited() {
         .run(Command::shell("rustc --version && rustc --version 1>&2"))
         .expect("shell command should run successfully");
 
-    assert_eq!(output.stdout_bytes().len(), 1);
+    assert_eq!(output.stdout().len(), 1);
     assert!(output.stdout_truncated());
-    assert!(output.stderr_bytes().starts_with(b"rustc "));
+    assert!(output.stderr().starts_with(b"rustc "));
 }

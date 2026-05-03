@@ -44,7 +44,7 @@ fn test_output_tee_streams_stderr_to_file() {
         .expect("shell command should run successfully");
 
     let file_bytes = fs::read(&path).expect("tee file should be readable");
-    assert_eq!(output.stderr_bytes().len(), 5);
+    assert_eq!(output.stderr().len(), 5);
     assert!(output.stderr_truncated());
     assert!(file_bytes.starts_with(b"rustc "));
 

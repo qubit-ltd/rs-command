@@ -176,7 +176,6 @@ pub(super) fn exercise_defensive_paths() -> Vec<String> {
             "collect-stdout",
             success_status(),
             Duration::ZERO,
-            false,
             failed_stdout,
             empty_stderr,
             None,
@@ -192,7 +191,6 @@ pub(super) fn exercise_defensive_paths() -> Vec<String> {
             "collect-stderr",
             success_status(),
             Duration::ZERO,
-            false,
             empty_stdout,
             failed_stderr,
             None,
@@ -208,7 +206,6 @@ pub(super) fn exercise_defensive_paths() -> Vec<String> {
             "collect-stdin",
             success_status(),
             Duration::ZERO,
-            false,
             empty_stdout,
             empty_stderr,
             Some(thread::spawn(|| {

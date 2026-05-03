@@ -22,5 +22,5 @@ fn test_stdin_writer_sends_configured_bytes() {
         .run(Command::new("cat").stdin_bytes(b"writer-input".to_vec()))
         .expect("stdin writer should send configured bytes");
 
-    assert_eq!(output.stdout_bytes(), b"writer-input");
+    assert_eq!(output.stdout(), b"writer-input");
 }
