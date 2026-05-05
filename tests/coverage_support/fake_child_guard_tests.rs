@@ -7,7 +7,15 @@
  *    Licensed under the Apache License, Version 2.0.
  *
  ******************************************************************************/
-//! Legacy placeholder kept so historical path references do not break.
-//!
-//! Defensive child-process coverage now lives in `tests/coverage_support_tests.rs`
-//! without using library-only coverage hooks.
+//! Tests for coverage fake-child guard behavior.
+
+use super::coverage_support_subject;
+
+#[test]
+fn test_fake_child_guard_restores_previous_thread_state() {
+    assert!(!coverage_support_subject::fake_children_enabled());
+    coverage_support_subject::with_fake_children_enabled(|| {
+        assert!(coverage_support_subject::fake_children_enabled());
+    });
+    assert!(!coverage_support_subject::fake_children_enabled());
+}
