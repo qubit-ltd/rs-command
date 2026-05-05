@@ -32,40 +32,7 @@ use qubit_command::{
     CommandRunner,
 };
 
-#[path = "command_runner/captured_output_tests.rs"]
-mod captured_output_tests;
-#[path = "command_runner/command_io_tests.rs"]
-mod command_io_tests;
-#[path = "command_runner/error_mapping_tests.rs"]
-mod error_mapping_tests;
-#[path = "command_runner/finished_command_tests.rs"]
-mod finished_command_tests;
-#[path = "command_runner/managed_child_process_tests.rs"]
-mod managed_child_process_tests;
-#[path = "command_runner/output_capture_error_tests.rs"]
-mod output_capture_error_tests;
-#[path = "command_runner/output_capture_options_tests.rs"]
-mod output_capture_options_tests;
-#[path = "command_runner/output_collector_tests.rs"]
-mod output_collector_tests;
-#[path = "command_runner/output_reader_tests.rs"]
-mod output_reader_tests;
-#[path = "command_runner/output_tee_tests.rs"]
-mod output_tee_tests;
-#[path = "command_runner/prepared_command_tests.rs"]
-mod prepared_command_tests;
-#[path = "command_runner/process_launcher_tests.rs"]
-mod process_launcher_tests;
-#[path = "command_runner/process_setup_tests.rs"]
-mod process_setup_tests;
-#[path = "command_runner/running_command_tests.rs"]
-mod running_command_tests;
-#[path = "command_runner/stdin_pipe_tests.rs"]
-mod stdin_pipe_tests;
-#[path = "command_runner/stdin_writer_tests.rs"]
-mod stdin_writer_tests;
-#[path = "command_runner/wait_policy_tests.rs"]
-mod wait_policy_tests;
+mod command_runner;
 
 #[cfg(not(windows))]
 mod unix {
