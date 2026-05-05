@@ -1,2 +1,35 @@
-#[path = "../command_runner_tests.rs"]
-mod command_runner_tests;
+/*******************************************************************************
+ *
+ *    Copyright (c) 2026 Haixing Hu.
+ *
+ *    SPDX-License-Identifier: Apache-2.0
+ *
+ *    Licensed under the Apache License, Version 2.0.
+ *
+ ******************************************************************************/
+//! Tests for prepared command behavior.
+
+use std::fs;
+
+use qubit_command::{
+    Command,
+    CommandRunner,
+};
+
+#[test]
+#[cfg(not(windows))]
+fn test_prepared_command_applies_working_directory_override() {
+    let working_directory = fs::canonicalize("/tmp").expect("/tmp should resolve");
+    let output = CommandRunner::new()
+        .working_directory("/")
+        .run(Command::shell("pwd").working_directory(&working_directory))
+        .expect("command should run in per-command working directory");
+
+    assert_eq!(
+        output
+            .stdout_text()
+            .expect("pwd output should be valid UTF-8")
+            .trim(),
+        working_directory.to_string_lossy(),
+    );
+}

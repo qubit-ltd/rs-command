@@ -160,6 +160,80 @@ use process_wrap::std::ChildWrapper;
 
 use command_runner::finished_command::FinishedCommand;
 
+mod coverage_support_subject {
+    use std::{
+        cell::Cell,
+        ffi::OsStr,
+    };
+
+    use super::TestChild;
+    use crate::{
+        OutputStream,
+        command_runner::managed_child_process::ManagedChildProcess,
+    };
+
+    thread_local! {
+        static FAKE_CHILDREN_ENABLED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    struct FakeChildGuard {
+        previous: bool,
+    }
+
+    impl Drop for FakeChildGuard {
+        fn drop(&mut self) {
+            FAKE_CHILDREN_ENABLED.set(self.previous);
+        }
+    }
+
+    pub fn with_fake_children_enabled<T>(operation: impl FnOnce() -> T) -> T {
+        let _guard = enable_fake_children();
+        operation()
+    }
+
+    pub(crate) fn fake_children_enabled() -> bool {
+        FAKE_CHILDREN_ENABLED.get()
+    }
+
+    fn enable_fake_children() -> FakeChildGuard {
+        let previous = fake_children_enabled();
+        FAKE_CHILDREN_ENABLED.set(true);
+        FakeChildGuard { previous }
+    }
+
+    pub(crate) fn fake_child_for(program: &OsStr) -> Option<ManagedChildProcess> {
+        match program.to_string_lossy().as_ref() {
+            "__qubit_command_missing_stdout__" => Some(Box::new(TestChild::default())),
+            "__qubit_command_collect_output_error__" => Some(Box::new(TestChild::default())),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn forced_collect_output_error(command: &str) -> Option<OutputStream> {
+        if command.contains("__qubit_command_collect_output_error__")
+            || command.contains("__qubit_command_timeout_collect_output_error__")
+        {
+            Some(OutputStream::Stdout)
+        } else {
+            None
+        }
+    }
+}
+#[path = "coverage_support/defensive_paths_tests.rs"]
+mod defensive_paths_tests;
+#[path = "coverage_support/failing_flush_tests.rs"]
+mod failing_flush_tests;
+#[path = "coverage_support/failing_reader_tests.rs"]
+mod failing_reader_tests;
+#[path = "coverage_support/failing_write_tests.rs"]
+mod failing_write_tests;
+#[path = "coverage_support/fake_child_guard_tests.rs"]
+mod fake_child_guard_tests;
+#[path = "coverage_support/no_stdin_child_tests.rs"]
+mod no_stdin_child_tests;
+#[path = "coverage_support/synthetic_children_tests.rs"]
+mod synthetic_children_tests;
+
 /// Reader that always fails when read.
 struct FailingReader;
 
