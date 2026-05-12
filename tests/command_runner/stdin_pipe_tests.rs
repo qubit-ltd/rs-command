@@ -9,13 +9,14 @@
  ******************************************************************************/
 //! Tests for stdin pipe behavior.
 
+#[cfg(not(windows))]
 use qubit_command::{
     Command,
     CommandRunner,
 };
 
-#[test]
 #[cfg(not(windows))]
+#[test]
 fn test_stdin_pipe_closes_after_configured_bytes() {
     let output = CommandRunner::new()
         .run(Command::new("cat").stdin_bytes(b"pipe-input".to_vec()))

@@ -9,14 +9,15 @@
  ******************************************************************************/
 //! Tests for command runner error mapping.
 
+#[cfg(not(windows))]
 use qubit_command::{
     Command,
     CommandError,
     CommandRunner,
 };
 
-#[test]
 #[cfg(not(windows))]
+#[test]
 fn test_error_mapping_preserves_unexpected_exit_output() {
     let error = CommandRunner::new()
         .run(Command::shell(
