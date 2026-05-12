@@ -14,12 +14,11 @@ keywords = ["command", "process", "shell", "utility", "qubit"]
 categories = ["command-line-utilities", "development-tools"]
 exclude = [
     "align-ci.sh",
-    "coverage.sh",
-    "COVERAGE.md",
-    "COVERAGE.zh_CN.md",
-    ".circleci/*",
-    ".rs-ci/**",
     "ci-check.sh",
+    "coverage.sh",
+    "style-check.sh",
+    "update-submodule.sh",
+    ".github/*",
     ".llvm-cov.toml",
     ".cargo-audit.toml.example",
 ]
