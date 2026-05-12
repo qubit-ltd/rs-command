@@ -9,13 +9,14 @@
  ******************************************************************************/
 //! Tests for output collector behavior.
 
+#[cfg(not(windows))]
 use qubit_command::{
     Command,
     CommandRunner,
 };
 
-#[test]
 #[cfg(not(windows))]
+#[test]
 fn test_output_collector_keeps_streams_separate() {
     let output = CommandRunner::new()
         .run(Command::shell(

@@ -9,14 +9,15 @@
  ******************************************************************************/
 //! Tests for process setup behavior.
 
+#[cfg(not(windows))]
 use qubit_command::{
     Command,
     CommandError,
     CommandRunner,
 };
 
-#[test]
 #[cfg(not(windows))]
+#[test]
 fn test_process_setup_reports_missing_stdin_file_before_spawn() {
     let missing = std::env::temp_dir().join(format!(
         "qubit-command-missing-stdin-{}",

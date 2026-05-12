@@ -9,15 +9,17 @@
  ******************************************************************************/
 //! Tests for prepared command behavior.
 
+#[cfg(not(windows))]
 use std::fs;
 
+#[cfg(not(windows))]
 use qubit_command::{
     Command,
     CommandRunner,
 };
 
-#[test]
 #[cfg(not(windows))]
+#[test]
 fn test_prepared_command_applies_working_directory_override() {
     let working_directory = fs::canonicalize("/tmp").expect("/tmp should resolve");
     let output = CommandRunner::new()
