@@ -53,6 +53,21 @@ impl CommandIo {
         }
     }
 
+    /// Returns whether all helper threads have finished.
+    ///
+    /// # Returns
+    ///
+    /// `true` when stdout, stderr, and optional stdin helpers can be joined
+    /// without blocking.
+    pub(crate) fn is_finished(&self) -> bool {
+        self.stdout_reader.is_finished()
+            && self.stderr_reader.is_finished()
+            && self
+                .stdin_writer
+                .as_ref()
+                .is_none_or(std::thread::JoinHandle::is_finished)
+    }
+
     /// Collects output from all helper threads.
     ///
     /// # Parameters

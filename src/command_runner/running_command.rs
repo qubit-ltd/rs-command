@@ -93,7 +93,7 @@ impl RunningCommand {
                 }
             };
             if let Some(status) = maybe_status {
-                return self.complete(status);
+                return self.complete_after_exit(status, timeout);
             }
             if let Some(timeout) = timeout
                 && self.started_at.elapsed() >= timeout
@@ -102,6 +102,70 @@ impl RunningCommand {
             }
             thread::sleep(next_sleep(timeout, self.started_at.elapsed()));
         }
+    }
+
+    /// Completes a command after the direct child exits.
+    ///
+    /// # Parameters
+    ///
+    /// * `status` - Exit status reported by the direct child process.
+    /// * `timeout` - Optional command timeout that also bounds I/O collection.
+    ///
+    /// # Returns
+    ///
+    /// Finished command output when all I/O helpers finish before the timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError::TimedOut`] if inherited output pipes keep I/O
+    /// helpers alive beyond the configured timeout, or another [`CommandError`]
+    /// if cleanup or output collection fails.
+    fn complete_after_exit(
+        self,
+        status: ExitStatus,
+        timeout: Option<Duration>,
+    ) -> Result<FinishedCommand, CommandError> {
+        if let Some(timeout) = timeout {
+            while !self.io.is_finished() {
+                let elapsed = self.started_at.elapsed();
+                if elapsed >= timeout {
+                    return self.handle_output_collection_timeout(status, timeout);
+                }
+                thread::sleep(next_sleep(Some(timeout), elapsed));
+            }
+        }
+        self.complete(status)
+    }
+
+    /// Handles timeout reached while collecting inherited output pipes.
+    ///
+    /// # Parameters
+    ///
+    /// * `status` - Exit status reported by the direct child process.
+    /// * `timeout` - Timeout that has been exceeded.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError::TimedOut`] after terminating the process tree and
+    /// collecting final output, or the process-control / collection error that
+    /// prevented timeout output from being built.
+    fn handle_output_collection_timeout(
+        mut self,
+        status: ExitStatus,
+        timeout: Duration,
+    ) -> Result<FinishedCommand, CommandError> {
+        if let Err(source) = self.child_process.start_kill() {
+            return Err(kill_failed(self.command_text.clone(), timeout, source));
+        }
+        while !self.io.is_finished() {
+            thread::sleep(next_sleep(None, self.started_at.elapsed()));
+        }
+        let finished = self.complete(status)?;
+        Err(CommandError::TimedOut {
+            command: finished.command_text,
+            timeout,
+            output: Box::new(finished.output),
+        })
     }
 
     /// Handles timeout by killing the child process and collecting final output.

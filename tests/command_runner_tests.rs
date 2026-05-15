@@ -455,6 +455,22 @@ mod unix {
     }
 
     #[test]
+    fn test_command_runner_run_times_out_when_background_child_inherits_output() {
+        init_test_logger();
+        let start = Instant::now();
+        let error = CommandRunner::new()
+            .timeout(Duration::from_millis(50))
+            .run(Command::shell("sleep 2 &"))
+            .expect_err("background child with inherited output pipes should time out");
+
+        assert!(matches!(error, CommandError::TimedOut { .. }));
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "timeout should include output collection after the direct child exits",
+        );
+    }
+
+    #[test]
     fn test_command_runner_run_limits_captured_output() {
         init_test_logger();
         let output = CommandRunner::new()

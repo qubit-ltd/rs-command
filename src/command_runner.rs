@@ -63,10 +63,11 @@ pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 /// Runs external commands and captures their output.
 ///
 /// `CommandRunner` runs one [`Command`] synchronously on the caller thread and
-/// returns captured process output. The runner always preserves raw output
-/// bytes. Its lossy-output option controls whether [`CommandOutput::stdout`]
-/// and [`CommandOutput::stderr`] reject invalid UTF-8 or return replacement
-/// characters.
+/// returns captured process output. The runner always preserves raw output bytes
+/// up to the configured per-stream limits. Use
+/// [`CommandOutput::stdout_text`] and [`CommandOutput::stderr_text`] for strict
+/// UTF-8 text, or [`CommandOutput::stdout_lossy_text`] and
+/// [`CommandOutput::stderr_lossy_text`] when invalid UTF-8 should be replaced.
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandRunner {
@@ -393,11 +394,13 @@ impl CommandRunner {
 
     /// Runs a command and captures stdout and stderr.
     ///
-    /// This method blocks the caller thread until the child process exits or
-    /// the configured timeout is reached. When a timeout is configured, Unix
-    /// children run as leaders of new process groups and Windows children run
-    /// in Job Objects. This lets timeout killing target the process tree
-    /// instead of only the direct child process. Without a configured timeout,
+    /// This method blocks the caller thread until the command exits and its I/O
+    /// helpers finish, or until the configured timeout is reached. When a
+    /// timeout is configured, Unix children run as leaders of new process
+    /// groups and Windows children run in Job Objects. This lets timeout
+    /// killing target the process tree instead of only the direct child
+    /// process, including cases where the direct child exits but descendants
+    /// keep inherited stdout or stderr pipes open. Without a configured timeout,
     /// commands use the platform's normal process-spawning behavior.
     ///
     /// Captured output is retained as raw bytes up to the configured per-stream
