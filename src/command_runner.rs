@@ -247,6 +247,12 @@ impl CommandRunner {
 
     /// Adds multiple sensitive field names for command diagnostics.
     ///
+    /// This is the batch form of [`Self::sensitive_field`]. The fields extend
+    /// the default `qubit-sanitize` policy used by runner logs and
+    /// [`CommandError::command`]; standalone [`Command`](crate::Command)
+    /// [`Debug`](std::fmt::Debug) output still uses only the built-in default
+    /// policy because it has no runner context.
+    ///
     /// # Parameters
     ///
     /// * `fields` - Field or option names that should be treated as sensitive.
