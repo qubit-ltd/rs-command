@@ -15,6 +15,11 @@ use std::{
     time::Duration,
 };
 
+use qubit_sanitize::{
+    FieldSanitizer,
+    SensitivityLevel,
+};
+
 pub(crate) mod captured_output;
 pub(crate) mod command_io;
 pub(crate) mod error_mapping;
@@ -79,6 +84,8 @@ pub struct CommandRunner {
     success_exit_codes: Vec<i32>,
     /// Whether command execution logs are disabled.
     disable_logging: bool,
+    /// Field sanitizer used for command diagnostics and logs.
+    diagnostic_sanitizer: FieldSanitizer,
     /// Maximum stdout bytes retained in memory.
     max_stdout_bytes: Option<usize>,
     /// Maximum stderr bytes retained in memory.
@@ -103,6 +110,7 @@ impl Default for CommandRunner {
             working_directory: None,
             success_exit_codes: vec![0],
             disable_logging: false,
+            diagnostic_sanitizer: FieldSanitizer::default(),
             max_stdout_bytes: None,
             max_stderr_bytes: None,
             stdout_file: None,
@@ -210,6 +218,46 @@ impl CommandRunner {
     #[inline]
     pub const fn disable_logging(mut self, disable_logging: bool) -> Self {
         self.disable_logging = disable_logging;
+        self
+    }
+
+    /// Adds one sensitive field name for command diagnostics.
+    ///
+    /// The field is appended to the default `qubit-sanitize` policy used for
+    /// command text in logs, [`CommandError::command`], and `Command`'s
+    /// default [`Debug`](std::fmt::Debug) output. Matching uses
+    /// [`NameMatchMode::ExactOrSuffix`](qubit_sanitize::NameMatchMode::ExactOrSuffix),
+    /// so contextual names such as `TENANT_OPTION` match `tenant_option`.
+    ///
+    /// # Parameters
+    ///
+    /// * `field` - Field or option name that should be treated as sensitive.
+    /// * `level` - Sensitivity level controlling how values are masked.
+    ///
+    /// # Returns
+    ///
+    /// The updated command runner.
+    #[inline]
+    pub fn sensitive_field(mut self, field: &str, level: SensitivityLevel) -> Self {
+        self.diagnostic_sanitizer
+            .insert_sensitive_field(field, level);
+        self
+    }
+
+    /// Adds multiple sensitive field names for command diagnostics.
+    ///
+    /// # Parameters
+    ///
+    /// * `fields` - Field or option names that should be treated as sensitive.
+    /// * `level` - Sensitivity level applied to every provided field.
+    ///
+    /// # Returns
+    ///
+    /// The updated command runner.
+    #[inline]
+    pub fn sensitive_fields(mut self, fields: &[&str], level: SensitivityLevel) -> Self {
+        self.diagnostic_sanitizer
+            .extend_sensitive_fields(fields.iter().copied(), level);
         self
     }
 
@@ -436,6 +484,7 @@ impl CommandRunner {
             stderr_file_path,
         } = PreparedCommand::prepare(
             command,
+            &self.diagnostic_sanitizer,
             self.working_directory.as_deref(),
             self.stdout_file.as_deref(),
             self.stderr_file.as_deref(),

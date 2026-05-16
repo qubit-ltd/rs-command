@@ -21,6 +21,8 @@ Qubit Command 提供一个小而明确的结构化 API，用于运行外部程�
 - 超时时基于 Unix process group 和 Windows Job Object 尝试终止进程树。
 - 默认以 UTF-8 文本读取 stdout 和 stderr，同时提供原始字节访问方法。
 - 支持按流限制内存捕获字节数，并把完整输出流式写入文件。
+- 日志和诊断里的命令文本会对敏感 argv、显式环境变量覆盖、shell
+  脚本体以及调用方追加的敏感字段做脱敏展示。
 - 使用明确错误类型表示进程启动失败、超时、输出读取失败和非预期退出码。
 
 ## 超时行为
@@ -93,6 +95,33 @@ let output = CommandRunner::new()
 assert_eq!(output.stdout_text()?, "HELLO");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+## 诊断脱敏
+
+Runner 日志、`CommandError::command()` 和 `Command` 的 `Debug` 输出都会通过
+`qubit-sanitize` 生成脱敏命令文本。类似 `--password secret`、
+`--access-token=...`、`OPENAI_API_KEY=...` 的结构化 argv 值会被遮蔽；显式设置的
+环境变量覆盖也只展示脱敏后的 `KEY=value`。`Command::shell` 的脚本体不做 shell
+语法解析，统一作为不透明脚本显示为 `<shell command>`。
+
+当默认敏感字段不够时，可以在 runner 上追加业务字段：
+
+```rust
+use qubit_command::{Command, CommandRunner, SensitivityLevel};
+
+let error = CommandRunner::new()
+    .sensitive_field("tenant_option", SensitivityLevel::Secret)
+    .run(Command::new("__missing__").arg("--tenant-option").arg("secret"))
+    .expect_err("sample command should fail");
+
+assert_eq!(
+    error.command(),
+    r#"["__missing__", "--tenant-option", "<redacted>"]"#,
+);
+```
+
+捕获到的 stdout/stderr 字节以及 tee 文件仍然是进程原始输出。如果命令输出本身可能包含
+敏感信息，请配置捕获上限，并在调用方按业务语义过滤。
 
 ## 输出文本
 

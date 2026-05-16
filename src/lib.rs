@@ -20,6 +20,8 @@ mod command_runner;
 mod command_stdin;
 mod output_stream;
 
+pub use qubit_sanitize::SensitivityLevel;
+
 pub use command::Command;
 pub use command_error::CommandError;
 pub use command_output::CommandOutput;

@@ -15,12 +15,13 @@ use qubit_command::{
     CommandOutput,
     CommandRunner,
     OutputStream,
+    SensitivityLevel,
 };
 
 #[test]
 fn test_lib_exports_public_api() {
     let command = Command::new("printf").arg("hello");
-    let runner = CommandRunner::new();
+    let runner = CommandRunner::new().sensitive_field("tenant_option", SensitivityLevel::Secret);
     let stream = OutputStream::Stdout;
 
     assert_eq!(command.program().to_string_lossy(), "printf");

@@ -172,6 +172,46 @@ fn test_command_env_clear_clears_prior_environment_changes() {
 }
 
 #[test]
+fn test_command_debug_sanitizes_sensitive_display_values() {
+    let command = Command::new("docker")
+        .arg("login")
+        .arg("--password")
+        .arg("secret")
+        .env("OPENAI_API_KEY", "abcdef")
+        .stdin_bytes(b"stdin-secret".to_vec());
+
+    let debug = format!("{command:?}");
+
+    assert!(debug.contains(r#"argv: ["docker", "login", "--password", "<redacted>"]"#));
+    assert!(debug.contains(r#"env: ["OPENAI_API_KEY=****"]"#));
+    assert!(debug.contains("stdin: Bytes(12 bytes)"));
+    assert!(!debug.contains("secret"));
+    assert!(!debug.contains("abcdef"));
+    assert!(!debug.contains("stdin-secret"));
+}
+
+#[test]
+fn test_command_debug_redacts_cmd_shell_payload() {
+    let command = Command::new("cmd").arg("/C").arg("echo hunter2");
+
+    let debug = format!("{command:?}");
+
+    assert!(debug.contains(r#"argv: ["cmd", "/C", "<shell command>"]"#));
+    assert!(!debug.contains("hunter2"));
+}
+
+#[test]
+fn test_command_debug_formats_stdin_without_inline_bytes() {
+    let null_input = format!("{:?}", Command::new("cat").stdin_null());
+    let inherited_input = format!("{:?}", Command::new("cat").stdin_inherit());
+    let file_input = format!("{:?}", Command::new("cat").stdin_file("input.txt"));
+
+    assert!(null_input.contains("stdin: Null"));
+    assert!(inherited_input.contains("stdin: Inherit"));
+    assert!(file_input.contains(r#"stdin: File("input.txt")"#));
+}
+
+#[test]
 fn test_command_stdin_null_is_configurable() {
     let command = Command::new("cat").stdin_null();
 

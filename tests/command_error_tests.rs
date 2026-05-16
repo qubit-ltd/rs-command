@@ -107,7 +107,7 @@ fn test_command_error_accessors_for_errors_with_output() {
     let unexpected = CommandRunner::new()
         .run(Command::shell("printf output; exit 9"))
         .expect_err("non-success exit code should be rejected");
-    assert!(unexpected.command().contains("exit 9"));
+    assert_eq!(unexpected.command(), r#"["sh", "-c", "<shell command>"]"#);
     assert_eq!(
         unexpected
             .output()
@@ -121,7 +121,7 @@ fn test_command_error_accessors_for_errors_with_output() {
         .timeout(Duration::from_millis(500))
         .run(Command::shell("printf before-timeout; sleep 2"))
         .expect_err("long-running command should time out");
-    assert!(timed_out.command().contains("sleep 2"));
+    assert_eq!(timed_out.command(), r#"["sh", "-c", "<shell command>"]"#);
     assert_eq!(
         timed_out
             .output()
