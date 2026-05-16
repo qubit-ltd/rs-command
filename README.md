@@ -26,6 +26,8 @@ clear error values.
 - UTF-8 stdout and stderr text accessors, with raw byte accessors for binary
   output
 - Optional per-stream capture limits plus streaming tee files for large output
+- Sanitized command diagnostics for sensitive argv values, explicit
+  environment overrides, shell payloads, and caller-defined sensitive fields
 - Typed errors for spawn failures, timeouts, failed output reads, and unexpected
   exit codes
 
@@ -100,6 +102,36 @@ let output = CommandRunner::new()
 assert_eq!(output.stdout_text()?, "HELLO");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+## Sanitized Diagnostics
+
+Command strings used in runner logs, `CommandError::command()`, and
+`Command`'s `Debug` output are sanitized with `qubit-sanitize`.
+Sensitive structured argv values such as `--password secret`,
+`--access-token=...`, and `OPENAI_API_KEY=...` are masked. Explicit
+environment overrides are shown only in sanitized form. `Command::shell`
+payloads are treated as opaque shell scripts and displayed as
+`<shell command>` instead of being parsed.
+
+Add application-specific fields on the runner when the defaults are not enough:
+
+```rust
+use qubit_command::{Command, CommandRunner, SensitivityLevel};
+
+let error = CommandRunner::new()
+    .sensitive_field("tenant_option", SensitivityLevel::Secret)
+    .run(Command::new("__missing__").arg("--tenant-option").arg("secret"))
+    .expect_err("sample command should fail");
+
+assert_eq!(
+    error.command(),
+    r#"["__missing__", "--tenant-option", "<redacted>"]"#,
+);
+```
+
+Captured stdout/stderr bytes and tee files remain raw process output. Use
+capture limits and caller-side filtering when command output itself may contain
+secrets.
 
 ## Output Text
 

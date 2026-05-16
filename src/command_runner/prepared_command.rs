@@ -16,6 +16,8 @@ use std::{
     process::Command as ProcessCommand,
 };
 
+use qubit_sanitize::FieldSanitizer;
+
 use super::process_setup::{
     configure_environment,
     configure_stdin,
@@ -49,11 +51,12 @@ impl PreparedCommand {
     /// Creates the process command and all pre-spawn I/O resources.
     pub(crate) fn prepare(
         command: Command,
+        field_sanitizer: &FieldSanitizer,
         default_working_directory: Option<&Path>,
         stdout_file_path: Option<&Path>,
         stderr_file_path: Option<&Path>,
     ) -> Result<Self, CommandError> {
-        let command_text = command.display_command();
+        let command_text = command.display_command(field_sanitizer);
         let mut process_command = ProcessCommand::new(command.program());
         process_command.args(command.arguments());
         process_command.stdout(std::process::Stdio::piped());

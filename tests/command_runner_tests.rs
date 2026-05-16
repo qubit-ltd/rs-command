@@ -30,6 +30,7 @@ use qubit_command::{
     Command,
     CommandError,
     CommandRunner,
+    SensitivityLevel,
 };
 
 mod command_runner;
@@ -45,6 +46,7 @@ mod unix {
         Once,
         OutputStream,
         PathBuf,
+        SensitivityLevel,
         SystemTime,
         UNIX_EPOCH,
         fs,
@@ -578,6 +580,102 @@ mod unix {
             error.command(),
             r#"["__qubit_command_missing_executable__", "two words"]"#,
         );
+    }
+
+    #[test]
+    fn test_command_runner_error_sanitizes_sensitive_argv_values() {
+        init_test_logger();
+        let error = CommandRunner::new()
+            .run(
+                Command::new("__qubit_command_missing_executable__")
+                    .arg("--password")
+                    .arg("secret")
+                    .arg("--access-token=abcdef")
+                    .arg("OPENAI_API_KEY=uvwxyz")
+                    .arg("--mode")
+                    .arg("debug"),
+            )
+            .expect_err("missing executable should fail to spawn");
+
+        assert_eq!(
+            error.command(),
+            r#"["__qubit_command_missing_executable__", "--password", "<redacted>", "--access-token=****", "OPENAI_API_KEY=****", "--mode", "debug"]"#,
+        );
+        assert!(!error.command().contains("secret"));
+        assert!(!error.command().contains("abcdef"));
+        assert!(!error.command().contains("uvwxyz"));
+    }
+
+    #[test]
+    fn test_command_runner_error_redacts_shell_payload() {
+        init_test_logger();
+        let error = CommandRunner::new()
+            .run(Command::shell("printf ignored; printf hunter2 >&2; exit 9"))
+            .expect_err("non-success shell command should fail");
+
+        assert_eq!(error.command(), r#"["sh", "-c", "<shell command>"]"#);
+        assert!(!error.command().contains("hunter2"));
+    }
+
+    #[test]
+    fn test_command_runner_error_sanitizes_environment_display() {
+        init_test_logger();
+        let error = CommandRunner::new()
+            .run(
+                Command::new("__qubit_command_missing_executable__")
+                    .env("OPENAI_API_KEY", "abcdef")
+                    .env("MODE", "debug")
+                    .env_remove("OLD_TOKEN"),
+            )
+            .expect_err("missing executable should fail to spawn");
+
+        assert_eq!(
+            error.command(),
+            r#"Command { env: ["OPENAI_API_KEY=****", "MODE=debug"], unset: ["OLD_TOKEN"], argv: ["__qubit_command_missing_executable__"] }"#,
+        );
+        assert!(!error.command().contains("abcdef"));
+    }
+
+    #[test]
+    fn test_command_runner_error_sanitizes_configured_sensitive_fields() {
+        init_test_logger();
+        let error = CommandRunner::new()
+            .sensitive_field("tenant_option", SensitivityLevel::Secret)
+            .run(
+                Command::new("__qubit_command_missing_executable__")
+                    .arg("--tenant-option")
+                    .arg("argv-secret")
+                    .env("TENANT_OPTION", "env-secret"),
+            )
+            .expect_err("missing executable should fail to spawn");
+
+        assert_eq!(
+            error.command(),
+            r#"Command { env: ["TENANT_OPTION=<redacted>"], unset: [], argv: ["__qubit_command_missing_executable__", "--tenant-option", "<redacted>"] }"#,
+        );
+        assert!(!error.command().contains("argv-secret"));
+        assert!(!error.command().contains("env-secret"));
+    }
+
+    #[test]
+    fn test_command_runner_error_sanitizes_multiple_configured_sensitive_fields() {
+        init_test_logger();
+        let error = CommandRunner::new()
+            .sensitive_fields(&["tenant_option", "tenant_env"], SensitivityLevel::Secret)
+            .run(
+                Command::new("__qubit_command_missing_executable__")
+                    .arg("--tenant-option")
+                    .arg("argv-secret")
+                    .env("TENANT_ENV", "env-secret"),
+            )
+            .expect_err("missing executable should fail to spawn");
+
+        assert_eq!(
+            error.command(),
+            r#"Command { env: ["TENANT_ENV=<redacted>"], unset: [], argv: ["__qubit_command_missing_executable__", "--tenant-option", "<redacted>"] }"#,
+        );
+        assert!(!error.command().contains("argv-secret"));
+        assert!(!error.command().contains("env-secret"));
     }
 }
 
