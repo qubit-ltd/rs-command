@@ -120,6 +120,9 @@ assert_eq!(
 );
 ```
 
+Runner 上追加的字段只影响 runner 日志和 `CommandError::command()`。
+独立的 `Command` `Debug` 输出没有 runner 上下文，只使用内置默认字段。
+
 捕获到的 stdout/stderr 字节以及 tee 文件仍然是进程原始输出。如果命令输出本身可能包含
 敏感信息，请配置捕获上限，并在调用方按业务语义过滤。
 

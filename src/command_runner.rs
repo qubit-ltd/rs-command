@@ -224,8 +224,9 @@ impl CommandRunner {
     /// Adds one sensitive field name for command diagnostics.
     ///
     /// The field is appended to the default `qubit-sanitize` policy used for
-    /// command text in logs, [`CommandError::command`], and `Command`'s
-    /// default [`Debug`](std::fmt::Debug) output. Matching uses
+    /// command text in runner logs and [`CommandError::command`]. `Command`'s
+    /// standalone [`Debug`](std::fmt::Debug) output has no runner context and
+    /// uses the default policy only. Matching uses
     /// [`NameMatchMode::ExactOrSuffix`](qubit_sanitize::NameMatchMode::ExactOrSuffix),
     /// so contextual names such as `TENANT_OPTION` match `tenant_option`.
     ///

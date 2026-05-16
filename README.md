@@ -129,6 +129,10 @@ assert_eq!(
 );
 ```
 
+Runner-specific fields affect runner logs and `CommandError::command()`.
+Standalone `Command` `Debug` output has no runner context and uses the built-in
+defaults only.
+
 Captured stdout/stderr bytes and tee files remain raw process output. Use
 capture limits and caller-side filtering when command output itself may contain
 secrets.
