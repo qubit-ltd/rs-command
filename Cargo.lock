@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "qubit-command"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "log",
  "process-wrap",
@@ -270,9 +270,9 @@ dependencies = [
 
 [[package]]
 name = "qubit-sanitize"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f448ae9a00dc5f3611e83e6770c9035b57e96029bba8441b1f7e8007ef9a448e"
+checksum = "e5287493ce872f04169e9b07a5a386d97280f1743c9dcfca6200a69e5fa73b1a"
 dependencies = [
  "http",
  "serde_json",
