@@ -28,10 +28,7 @@ fn unique_temp_path(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system time should be after Unix epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!(
-        "qubit-command-{name}-{}-{suffix}",
-        std::process::id(),
-    ))
+    std::env::temp_dir().join(format!("qubit-command-{name}-{}-{suffix}", std::process::id(),))
 }
 
 #[test]

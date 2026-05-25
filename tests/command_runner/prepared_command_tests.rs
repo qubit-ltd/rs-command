@@ -28,10 +28,7 @@ fn test_prepared_command_applies_working_directory_override() {
         .expect("command should run in per-command working directory");
 
     assert_eq!(
-        output
-            .stdout_text()
-            .expect("pwd output should be valid UTF-8")
-            .trim(),
+        output.stdout_text().expect("pwd output should be valid UTF-8").trim(),
         working_directory.to_string_lossy(),
     );
 }

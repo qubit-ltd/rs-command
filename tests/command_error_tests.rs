@@ -77,11 +77,7 @@ fn test_command_error_accessors_for_errors_without_output() {
     };
     assert_eq!(open_output.command(), "open-output");
     assert!(open_output.output().is_none());
-    assert!(
-        open_output
-            .to_string()
-            .contains("failed to open stderr file")
-    );
+    assert!(open_output.to_string().contains("failed to open stderr file"));
 
     let write_input = CommandError::WriteInputFailed {
         command: "write-input".to_owned(),

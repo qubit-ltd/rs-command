@@ -66,10 +66,7 @@ impl fmt::Debug for Command {
             .field("argv", &self.sanitized_argv(&field_sanitizer))
             .field("working_directory", &self.working_directory)
             .field("clear_environment", &self.clear_environment)
-            .field(
-                "env",
-                &self.sanitized_environment_assignments(&field_sanitizer),
-            )
+            .field("env", &self.sanitized_environment_assignments(&field_sanitizer))
             .field("unset", &self.removed_environment_names())
             .field("stdin", &StdinDisplay(&self.stdin))
             .finish()
@@ -215,8 +212,7 @@ impl Command {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.args
-            .extend(args.into_iter().map(|arg| arg.as_ref().to_owned()));
+        self.args.extend(args.into_iter().map(|arg| arg.as_ref().to_owned()));
         self
     }
 
@@ -272,10 +268,8 @@ impl Command {
     {
         let key = key.as_ref().to_owned();
         let value = value.as_ref().to_owned();
-        self.removed_envs
-            .retain(|removed| !env_key_eq(removed, &key));
-        self.envs
-            .retain(|(existing_key, _)| !env_key_eq(existing_key, &key));
+        self.removed_envs.retain(|removed| !env_key_eq(removed, &key));
+        self.envs.retain(|(existing_key, _)| !env_key_eq(existing_key, &key));
         self.envs.push((key, value));
         self
     }
@@ -309,10 +303,8 @@ impl Command {
         S: AsRef<OsStr>,
     {
         let key = key.as_ref().to_owned();
-        self.envs
-            .retain(|(existing_key, _)| !env_key_eq(existing_key, &key));
-        self.removed_envs
-            .retain(|removed| !env_key_eq(removed, &key));
+        self.envs.retain(|(existing_key, _)| !env_key_eq(existing_key, &key));
+        self.removed_envs.retain(|removed| !env_key_eq(removed, &key));
         self.removed_envs.push(key);
         self
     }
@@ -482,8 +474,7 @@ impl Command {
     ///
     /// Sanitized argv tokens with secret-looking values masked.
     fn sanitized_argv(&self, field_sanitizer: &FieldSanitizer) -> Vec<String> {
-        ArgvSanitizer::new(field_sanitizer.clone())
-            .sanitize_argv(self.argv_for_display(), COMMAND_LOG_MATCH_MODE)
+        ArgvSanitizer::new(field_sanitizer.clone()).sanitize_argv(self.argv_for_display(), COMMAND_LOG_MATCH_MODE)
     }
 
     /// Builds argv tokens with opaque shell payloads hidden.

@@ -240,8 +240,7 @@ impl CommandRunner {
     /// The updated command runner.
     #[inline]
     pub fn sensitive_field(mut self, field: &str, level: SensitivityLevel) -> Self {
-        self.diagnostic_sanitizer
-            .insert_sensitive_field(field, level);
+        self.diagnostic_sanitizer.insert_sensitive_field(field, level);
         self
     }
 
@@ -525,32 +524,21 @@ impl CommandRunner {
             OutputCaptureOptions::new(self.max_stderr_bytes, stderr_file, stderr_file_path),
         );
         let command_io = CommandIo::new(stdout_reader, stderr_reader, stdin_writer);
-        let finished = RunningCommand::new(command_text, child_process, command_io)
-            .wait_for_completion(self.timeout)?;
-        let FinishedCommand {
-            command_text,
-            output,
-        } = finished;
+        let finished =
+            RunningCommand::new(command_text, child_process, command_io).wait_for_completion(self.timeout)?;
+        let FinishedCommand { command_text, output } = finished;
 
         if output
             .exit_code()
             .is_some_and(|exit_code| self.success_exit_codes.contains(&exit_code))
         {
             if !self.disable_logging {
-                log::info!(
-                    "Finished command `{}` in {:?}.",
-                    command_text,
-                    output.elapsed()
-                );
+                log::info!("Finished command `{}` in {:?}.", command_text, output.elapsed());
             }
             Ok(output)
         } else {
             if !self.disable_logging {
-                log::error!(
-                    "Command `{}` exited with code {:?}.",
-                    command_text,
-                    output.exit_code()
-                );
+                log::error!("Command `{}` exited with code {:?}.", command_text, output.exit_code());
             }
             Err(CommandError::UnexpectedExit {
                 command: command_text,

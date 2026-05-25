@@ -18,9 +18,7 @@ use qubit_command::{
 #[test]
 fn test_process_launcher_maps_spawn_failure() {
     let error = CommandRunner::new()
-        .run(Command::new(
-            "__qubit_command_program_that_should_not_exist__",
-        ))
+        .run(Command::new("__qubit_command_program_that_should_not_exist__"))
         .expect_err("missing executable should fail to spawn");
 
     assert!(matches!(error, CommandError::SpawnFailed { .. }));

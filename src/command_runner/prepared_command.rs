@@ -62,10 +62,7 @@ impl PreparedCommand {
         process_command.stdout(std::process::Stdio::piped());
         process_command.stderr(std::process::Stdio::piped());
 
-        if let Some(working_directory) = command
-            .working_directory_override()
-            .or(default_working_directory)
-        {
+        if let Some(working_directory) = command.working_directory_override().or(default_working_directory) {
             process_command.current_dir(working_directory);
         }
 

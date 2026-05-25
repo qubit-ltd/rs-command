@@ -29,9 +29,7 @@ fn test_wait_policy_enforces_configured_timeout() {
         .expect_err("long-running command should time out");
 
     match error {
-        CommandError::TimedOut {
-            timeout: actual, ..
-        } => assert_eq!(actual, timeout),
+        CommandError::TimedOut { timeout: actual, .. } => assert_eq!(actual, timeout),
         other => panic!("expected timeout, got {other:?}"),
     }
 }
