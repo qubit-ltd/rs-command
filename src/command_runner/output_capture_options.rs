@@ -34,11 +34,7 @@ impl OutputCaptureOptions {
     /// # Returns
     ///
     /// Capture options moved into the output reader thread.
-    pub(crate) fn new(
-        max_bytes: Option<usize>,
-        file: Option<File>,
-        file_path: Option<PathBuf>,
-    ) -> Self {
+    pub(crate) fn new(max_bytes: Option<usize>, file: Option<File>, file_path: Option<PathBuf>) -> Self {
         let tee = file.map(|file| OutputTee {
             writer: Box::new(file),
             path: file_path.unwrap_or_default(),

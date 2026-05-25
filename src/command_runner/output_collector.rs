@@ -33,10 +33,7 @@ use crate::{
 };
 
 /// Spawns a reader thread for a child output stream.
-pub(crate) fn read_output_stream(
-    mut reader: Box<dyn Read + Send>,
-    options: OutputCaptureOptions,
-) -> OutputReader {
+pub(crate) fn read_output_stream(mut reader: Box<dyn Read + Send>, options: OutputCaptureOptions) -> OutputReader {
     thread::spawn(move || read_output(reader.as_mut(), options))
 }
 
@@ -137,14 +134,12 @@ pub(crate) fn join_output_reader(
             stream,
             source,
         }),
-        Ok(Err(OutputCaptureError::Write { path, source })) => {
-            Err(CommandError::WriteOutputFailed {
-                command: command.to_owned(),
-                stream,
-                path,
-                source,
-            })
-        }
+        Ok(Err(OutputCaptureError::Write { path, source })) => Err(CommandError::WriteOutputFailed {
+            command: command.to_owned(),
+            stream,
+            path,
+            source,
+        }),
         Err(_) => Err(CommandError::ReadOutputFailed {
             command: command.to_owned(),
             stream,

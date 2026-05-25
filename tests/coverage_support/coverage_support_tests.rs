@@ -23,10 +23,7 @@ pub(crate) mod command_runner {
         ));
     }
     pub(crate) mod command_io {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/command_runner/command_io.rs"
-        ));
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/command_runner/command_io.rs"));
     }
     pub(crate) mod error_mapping {
         include!(concat!(
@@ -71,10 +68,7 @@ pub(crate) mod command_runner {
         ));
     }
     pub(crate) mod output_tee {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/command_runner/output_tee.rs"
-        ));
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/command_runner/output_tee.rs"));
     }
     pub(crate) mod running_command {
         include!(concat!(
@@ -83,10 +77,7 @@ pub(crate) mod command_runner {
         ));
     }
     pub(crate) mod stdin_pipe {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/command_runner/stdin_pipe.rs"
-        ));
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/command_runner/stdin_pipe.rs"));
     }
     pub(crate) mod stdin_writer {
         include!(concat!(
@@ -408,10 +399,7 @@ fn stdin_writer_error(message: &'static str) -> StdinWriter {
 /// Creates a stdin writer that reports a broken pipe.
 fn stdin_writer_broken_pipe() -> StdinWriter {
     Some(thread::spawn(move || {
-        Err(io::Error::new(
-            io::ErrorKind::BrokenPipe,
-            "stdin broken pipe",
-        ))
+        Err(io::Error::new(io::ErrorKind::BrokenPipe, "stdin broken pipe"))
     }))
 }
 
@@ -501,10 +489,7 @@ fn capture_with_writer(writer: Box<dyn Write + Send>, path: &str) -> OutputCaptu
 
 /// Extracts the error from a command-runner result without requiring success
 /// values to implement [`Debug`](std::fmt::Debug).
-fn expect_command_error(
-    result: Result<FinishedCommand, CommandError>,
-    message: &str,
-) -> CommandError {
+fn expect_command_error(result: Result<FinishedCommand, CommandError>, message: &str) -> CommandError {
     match result {
         Ok(_) => panic!("{message}"),
         Err(error) => error,
@@ -547,11 +532,8 @@ fn test_error_mapping_builds_all_error_variants() {
 
 #[test]
 fn test_read_output_reports_read_write_and_flush_failures() {
-    let read_error = read_output(
-        &mut FailingReader,
-        OutputCaptureOptions::new(None, None, None),
-    )
-    .expect_err("failing reader should report read error");
+    let read_error = read_output(&mut FailingReader, OutputCaptureOptions::new(None, None, None))
+        .expect_err("failing reader should report read error");
     assert!(matches!(read_error, OutputCaptureError::Read(_)));
 
     let write_error = read_output(
@@ -671,8 +653,8 @@ fn test_join_output_reader_maps_write_error_and_panic() {
 
     let previous_hook = panic::take_hook();
     panic::set_hook(Box::new(|_| {}));
-    let panic_error = join_output_reader("panic", OutputStream::Stderr, reader_panic())
-        .expect_err("reader panic should be mapped");
+    let panic_error =
+        join_output_reader("panic", OutputStream::Stderr, reader_panic()).expect_err("reader panic should be mapped");
     panic::set_hook(previous_hook);
 
     assert!(matches!(
@@ -687,12 +669,8 @@ fn test_join_output_reader_maps_write_error_and_panic() {
 #[test]
 fn test_stdin_pipe_maps_missing_pipe_write_error_and_panic() {
     let mut missing_stdin_child = TestChild::default();
-    let error = write_stdin_bytes(
-        "missing-stdin",
-        &mut missing_stdin_child,
-        Some(b"x".to_vec()),
-    )
-    .expect_err("missing stdin pipe should be reported");
+    let error = write_stdin_bytes("missing-stdin", &mut missing_stdin_child, Some(b"x".to_vec()))
+        .expect_err("missing stdin pipe should be reported");
     assert!(matches!(error, CommandError::WriteInputFailed { .. }));
 
     let mut no_input_child = TestChild::default();
@@ -709,8 +687,8 @@ fn test_stdin_pipe_maps_missing_pipe_write_error_and_panic() {
 
     let previous_hook = panic::take_hook();
     panic::set_hook(Box::new(|_| {}));
-    let panic_error = join_stdin_writer("stdin-panic", stdin_writer_panic())
-        .expect_err("stdin writer panic should be mapped");
+    let panic_error =
+        join_stdin_writer("stdin-panic", stdin_writer_panic()).expect_err("stdin writer panic should be mapped");
     panic::set_hook(previous_hook);
 
     assert!(matches!(panic_error, CommandError::WriteInputFailed { .. }));
@@ -727,8 +705,8 @@ fn test_stdin_pipe_writes_to_real_child_stdin() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("stdin test child should spawn");
-    let writer = write_stdin_bytes("stdin-success", &mut child, Some(b"input".to_vec()))
-        .expect("stdin writer should start");
+    let writer =
+        write_stdin_bytes("stdin-success", &mut child, Some(b"input".to_vec())).expect("stdin writer should start");
 
     join_stdin_writer("stdin-success", writer).expect("stdin writer should finish");
     child.wait().expect("stdin test child should exit");
@@ -746,12 +724,7 @@ fn test_running_command_maps_wait_error_with_exited_cleanup() {
         ..TestChild::default()
     };
     let error = expect_command_error(
-        RunningCommand::new(
-            "wait-error".to_owned(),
-            boxed_child(child),
-            empty_command_io(),
-        )
-        .wait_for_completion(None),
+        RunningCommand::new("wait-error".to_owned(), boxed_child(child), empty_command_io()).wait_for_completion(None),
         "try-wait failure should be reported",
     );
 
@@ -833,12 +806,8 @@ fn test_running_command_preserves_wait_error_when_child_stays_pending() {
         ..TestChild::default()
     };
     let error = expect_command_error(
-        RunningCommand::new(
-            "pending-wait-error".to_owned(),
-            boxed_child(child),
-            empty_command_io(),
-        )
-        .wait_for_completion(None),
+        RunningCommand::new("pending-wait-error".to_owned(), boxed_child(child), empty_command_io())
+            .wait_for_completion(None),
         "try-wait failure should be reported",
     );
 
@@ -877,12 +846,8 @@ fn test_running_command_returns_timeout_after_successful_kill_and_wait() {
         ..TestChild::default()
     };
     let error = expect_command_error(
-        RunningCommand::new(
-            "timeout-success".to_owned(),
-            boxed_child(child),
-            empty_command_io(),
-        )
-        .wait_for_completion(Some(Duration::ZERO)),
+        RunningCommand::new("timeout-success".to_owned(), boxed_child(child), empty_command_io())
+            .wait_for_completion(Some(Duration::ZERO)),
         "successful timeout cleanup should report timeout",
     );
 

@@ -21,9 +21,7 @@ fn test_command_new_stores_program() {
 
 #[test]
 fn test_command_args_appends_in_order() {
-    let command = Command::new("git")
-        .arg("status")
-        .args(&["--short", "--branch"]);
+    let command = Command::new("git").arg("status").args(&["--short", "--branch"]);
 
     let args = command
         .arguments()
@@ -78,10 +76,7 @@ fn test_command_env_os_removes_prior_removal() {
 
     assert!(command.removed_environment().is_empty());
     assert_eq!(command.environment().len(), 1);
-    assert_eq!(
-        command.environment()[0].0.to_string_lossy(),
-        "QUBIT_COMMAND_TEST",
-    );
+    assert_eq!(command.environment()[0].0.to_string_lossy(), "QUBIT_COMMAND_TEST",);
 }
 
 #[test]
@@ -91,10 +86,7 @@ fn test_command_env_remove_records_removal() {
         .env_remove("QUBIT_COMMAND_TEST");
 
     assert!(command.environment().is_empty());
-    assert_eq!(
-        command.removed_environment()[0].to_string_lossy(),
-        "QUBIT_COMMAND_TEST",
-    );
+    assert_eq!(command.removed_environment()[0].to_string_lossy(), "QUBIT_COMMAND_TEST",);
 }
 
 #[test]
@@ -104,10 +96,7 @@ fn test_command_env_remove_deduplicates_removals() {
         .env_remove("QUBIT_COMMAND_TEST");
 
     assert_eq!(command.removed_environment().len(), 1);
-    assert_eq!(
-        command.removed_environment()[0].to_string_lossy(),
-        "QUBIT_COMMAND_TEST",
-    );
+    assert_eq!(command.removed_environment()[0].to_string_lossy(), "QUBIT_COMMAND_TEST",);
 }
 
 #[test]
@@ -119,14 +108,8 @@ fn test_command_env_names_are_case_sensitive_on_unix() {
         .env_remove("QUBIT_COMMAND_TEST");
 
     assert_eq!(command.environment().len(), 1);
-    assert_eq!(
-        command.environment()[0].0.to_string_lossy(),
-        "qubit_command_test",
-    );
-    assert_eq!(
-        command.removed_environment()[0].to_string_lossy(),
-        "QUBIT_COMMAND_TEST",
-    );
+    assert_eq!(command.environment()[0].0.to_string_lossy(), "qubit_command_test",);
+    assert_eq!(command.removed_environment()[0].to_string_lossy(), "QUBIT_COMMAND_TEST",);
 }
 
 #[test]
@@ -138,10 +121,7 @@ fn test_command_env_names_are_case_insensitive_on_windows() {
         .env_remove("QUBIT_COMMAND_TEST");
 
     assert!(command.environment().is_empty());
-    assert_eq!(
-        command.removed_environment()[0].to_string_lossy(),
-        "QUBIT_COMMAND_TEST",
-    );
+    assert_eq!(command.removed_environment()[0].to_string_lossy(), "QUBIT_COMMAND_TEST",);
 }
 
 #[test]

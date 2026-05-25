@@ -79,10 +79,7 @@ mod unix {
             .duration_since(UNIX_EPOCH)
             .expect("system time should be after Unix epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!(
-            "qubit-command-{name}-{}-{suffix}",
-            std::process::id(),
-        ))
+        std::env::temp_dir().join(format!("qubit-command-{name}-{}-{suffix}", std::process::id(),))
     }
 
     #[test]
@@ -133,16 +130,10 @@ mod unix {
     fn test_command_runner_run_applies_environment_override() {
         init_test_logger();
         let output = CommandRunner::new()
-            .run(
-                Command::shell("printf \"$QUBIT_COMMAND_TEST\"")
-                    .env("QUBIT_COMMAND_TEST", "from-env"),
-            )
+            .run(Command::shell("printf \"$QUBIT_COMMAND_TEST\"").env("QUBIT_COMMAND_TEST", "from-env"))
             .expect("command should receive environment override");
 
-        assert_eq!(
-            output.stdout_text().expect("stdout should be valid UTF-8"),
-            "from-env",
-        );
+        assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8"), "from-env",);
     }
 
     #[test]
@@ -156,10 +147,7 @@ mod unix {
             )
             .expect("command should remove configured environment variable");
 
-        assert_eq!(
-            output.stdout_text().expect("stdout should be valid UTF-8"),
-            "missing",
-        );
+        assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8"), "missing",);
     }
 
     #[test]
@@ -186,13 +174,7 @@ mod unix {
             .run(Command::shell("pwd").working_directory("/"))
             .expect("command should run in requested working directory");
 
-        assert_eq!(
-            output
-                .stdout_text()
-                .expect("stdout should be valid UTF-8")
-                .trim(),
-            "/",
-        );
+        assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8").trim(), "/",);
     }
 
     #[test]
@@ -203,22 +185,14 @@ mod unix {
             .run(Command::shell("pwd"))
             .expect("command should run in runner working directory");
 
-        assert_eq!(
-            output
-                .stdout_text()
-                .expect("stdout should be valid UTF-8")
-                .trim(),
-            "/",
-        );
+        assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8").trim(), "/",);
     }
 
     #[test]
     fn test_command_runner_run_reports_unexpected_exit() {
         init_test_logger();
         let error = CommandRunner::new()
-            .run(Command::shell(
-                "printf fail-out; printf fail-err >&2; exit 7",
-            ))
+            .run(Command::shell("printf fail-out; printf fail-err >&2; exit 7"))
             .expect_err("non-success exit code should be rejected");
 
         match error {
@@ -230,14 +204,8 @@ mod unix {
             } => {
                 assert_eq!(exit_code, Some(7));
                 assert_eq!(expected, vec![0]);
-                assert_eq!(
-                    output.stdout_text().expect("stdout should be valid UTF-8"),
-                    "fail-out",
-                );
-                assert_eq!(
-                    output.stderr_text().expect("stderr should be valid UTF-8"),
-                    "fail-err",
-                );
+                assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8"), "fail-out",);
+                assert_eq!(output.stderr_text().expect("stderr should be valid UTF-8"), "fail-err",);
             }
             other => panic!("expected unexpected-exit error, got {other:?}"),
         }
@@ -314,9 +282,7 @@ mod unix {
 
         match error {
             CommandError::UnexpectedExit {
-                exit_code,
-                expected,
-                ..
+                exit_code, expected, ..
             } => {
                 assert_eq!(exit_code, Some(7));
                 assert_eq!(expected, vec![0]);
@@ -349,10 +315,7 @@ mod unix {
             .run(Command::shell("printf inherited").stdin_inherit())
             .expect("command should run with inherited stdin");
 
-        assert_eq!(
-            output.stdout_text().expect("stdout should be valid UTF-8"),
-            "inherited",
-        );
+        assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8"), "inherited",);
     }
 
     #[test]
@@ -364,9 +327,7 @@ mod unix {
             .expect_err("missing stdin file should be reported");
 
         match error {
-            CommandError::OpenInputFailed {
-                path: actual_path, ..
-            } => assert_eq!(actual_path, path),
+            CommandError::OpenInputFailed { path: actual_path, .. } => assert_eq!(actual_path, path),
             other => panic!("expected stdin open failure, got {other:?}"),
         }
     }
@@ -430,9 +391,7 @@ mod unix {
             .expect_err("long-running command should time out");
 
         match error {
-            CommandError::TimedOut {
-                timeout, output, ..
-            } => {
+            CommandError::TimedOut { timeout, output, .. } => {
                 assert_eq!(timeout, Duration::from_millis(50));
                 assert!(output.elapsed() >= Duration::from_millis(50));
             }
@@ -719,10 +678,7 @@ mod windows {
             .duration_since(UNIX_EPOCH)
             .expect("system time should be after Unix epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!(
-            "qubit-command-windows-{name}-{}-{suffix}",
-            std::process::id(),
-        ))
+        std::env::temp_dir().join(format!("qubit-command-windows-{name}-{}-{suffix}", std::process::id(),))
     }
 
     #[test]

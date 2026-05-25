@@ -18,11 +18,8 @@ use super::{
 
 #[test]
 fn test_failing_reader_helper_reports_read_failure() {
-    let error = read_output(
-        &mut FailingReader,
-        OutputCaptureOptions::new(None, None, None),
-    )
-    .expect_err("failing reader should report read error");
+    let error = read_output(&mut FailingReader, OutputCaptureOptions::new(None, None, None))
+        .expect_err("failing reader should report read error");
 
     match error {
         OutputCaptureError::Read(source) => assert_eq!(source.to_string(), "read failed"),

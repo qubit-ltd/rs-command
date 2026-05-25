@@ -52,11 +52,7 @@ impl RunningCommand {
     /// # Returns
     ///
     /// Running command state that owns the process and its I/O helpers.
-    pub(crate) fn new(
-        command_text: String,
-        child_process: ManagedChildProcess,
-        io: CommandIo,
-    ) -> Self {
+    pub(crate) fn new(command_text: String, child_process: ManagedChildProcess, io: CommandIo) -> Self {
         Self {
             command_text,
             child_process,
@@ -80,10 +76,7 @@ impl RunningCommand {
     /// Returns [`CommandError`] if waiting fails, timeout handling fails, output
     /// collection fails, or stdin writing fails. Wait-error cleanup only joins I/O
     /// helpers after a non-blocking check confirms the child has exited.
-    pub(crate) fn wait_for_completion(
-        mut self,
-        timeout: Option<Duration>,
-    ) -> Result<FinishedCommand, CommandError> {
+    pub(crate) fn wait_for_completion(mut self, timeout: Option<Duration>) -> Result<FinishedCommand, CommandError> {
         loop {
             let maybe_status = match self.child_process.try_wait() {
                 Ok(status) => status,
@@ -213,9 +206,7 @@ impl RunningCommand {
     ///
     /// Returns [`CommandError`] if output collection or stdin writing fails.
     fn complete(self, status: ExitStatus) -> Result<FinishedCommand, CommandError> {
-        let output = self
-            .io
-            .collect(&self.command_text, status, self.started_at.elapsed())?;
+        let output = self.io.collect(&self.command_text, status, self.started_at.elapsed())?;
         Ok(FinishedCommand {
             command_text: self.command_text,
             output,

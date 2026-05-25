@@ -76,16 +76,14 @@ pub(super) fn open_output_file(
     path: Option<&Path>,
 ) -> Result<Option<File>, CommandError> {
     match path {
-        Some(path) => {
-            File::create(path)
-                .map(Some)
-                .map_err(|source| CommandError::OpenOutputFailed {
-                    command: command.to_owned(),
-                    stream,
-                    path: path.to_path_buf(),
-                    source,
-                })
-        }
+        Some(path) => File::create(path)
+            .map(Some)
+            .map_err(|source| CommandError::OpenOutputFailed {
+                command: command.to_owned(),
+                stream,
+                path: path.to_path_buf(),
+                source,
+            }),
         None => Ok(None),
     }
 }

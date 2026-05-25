@@ -19,10 +19,7 @@ use qubit_command::{
 #[cfg(not(windows))]
 #[test]
 fn test_process_setup_reports_missing_stdin_file_before_spawn() {
-    let missing = std::env::temp_dir().join(format!(
-        "qubit-command-missing-stdin-{}",
-        std::process::id(),
-    ));
+    let missing = std::env::temp_dir().join(format!("qubit-command-missing-stdin-{}", std::process::id(),));
 
     let error = CommandRunner::new()
         .run(Command::new("cat").stdin_file(missing.clone()))
