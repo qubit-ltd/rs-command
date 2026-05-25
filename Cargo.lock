@@ -201,9 +201,9 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
 name = "log"
-version = "0.4.29"
+version = "0.4.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
+checksum = "616ec5685824bcc94416c6d4a7a446eea774a31efd7062c8480ba6fd06d7a6e5"
 
 [[package]]
 name = "memchr"
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "qubit-command"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "log",
  "process-wrap",
@@ -270,9 +270,9 @@ dependencies = [
 
 [[package]]
 name = "qubit-sanitize"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5287493ce872f04169e9b07a5a386d97280f1743c9dcfca6200a69e5fa73b1a"
+checksum = "676346cb1641a71f5c97368496b0fea66c4067f34e99169992d9b085da3f4d9b"
 dependencies = [
  "http",
  "serde_json",
@@ -319,9 +319,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.149"
+version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
+checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
 dependencies = [
  "itoa",
  "memchr",
