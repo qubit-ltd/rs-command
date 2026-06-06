@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::{
     fs::File,
     path::{
@@ -62,15 +60,27 @@ impl PreparedCommand {
         process_command.stdout(std::process::Stdio::piped());
         process_command.stderr(std::process::Stdio::piped());
 
-        if let Some(working_directory) = command.working_directory_override().or(default_working_directory) {
+        if let Some(working_directory) = command
+            .working_directory_override()
+            .or(default_working_directory)
+        {
             process_command.current_dir(working_directory);
         }
 
         configure_environment(&command, &mut process_command);
         let stdin = command.into_stdin_configuration();
-        let stdin_bytes = configure_stdin(&command_text, stdin, &mut process_command)?;
-        let stdout_file = open_output_file(&command_text, OutputStream::Stdout, stdout_file_path)?;
-        let stderr_file = open_output_file(&command_text, OutputStream::Stderr, stderr_file_path)?;
+        let stdin_bytes =
+            configure_stdin(&command_text, stdin, &mut process_command)?;
+        let stdout_file = open_output_file(
+            &command_text,
+            OutputStream::Stdout,
+            stdout_file_path,
+        )?;
+        let stderr_file = open_output_file(
+            &command_text,
+            OutputStream::Stderr,
+            stderr_file_path,
+        )?;
 
         Ok(Self {
             command_text,

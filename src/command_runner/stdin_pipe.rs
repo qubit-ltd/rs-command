@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::{
     io::{
         self,
@@ -28,7 +26,9 @@ pub(crate) fn write_stdin_bytes(
 ) -> Result<StdinWriter, CommandError> {
     match stdin_bytes {
         Some(bytes) => match child.stdin().take() {
-            Some(mut stdin) => Ok(Some(thread::spawn(move || stdin.write_all(&bytes)))),
+            Some(mut stdin) => {
+                Ok(Some(thread::spawn(move || stdin.write_all(&bytes))))
+            }
             None => Err(CommandError::WriteInputFailed {
                 command: command.to_owned(),
                 source: io::Error::other("stdin pipe was not created"),
@@ -39,11 +39,16 @@ pub(crate) fn write_stdin_bytes(
 }
 
 /// Joins the stdin writer and maps failures to command errors.
-pub(crate) fn join_stdin_writer(command: &str, writer: StdinWriter) -> Result<(), CommandError> {
+pub(crate) fn join_stdin_writer(
+    command: &str,
+    writer: StdinWriter,
+) -> Result<(), CommandError> {
     match writer {
         Some(writer) => match writer.join() {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(source)) if source.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+            Ok(Err(source)) if source.kind() == io::ErrorKind::BrokenPipe => {
+                Ok(())
+            }
             Ok(Err(source)) => Err(CommandError::WriteInputFailed {
                 command: command.to_owned(),
                 source,

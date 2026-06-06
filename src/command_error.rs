@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::{
     io,
     path::PathBuf,
@@ -21,7 +19,6 @@ use crate::{
 };
 
 /// Error returned while spawning, waiting for, or validating a command.
-///
 #[derive(Debug, Error)]
 pub enum CommandError {
     /// The process could not be spawned.
@@ -43,7 +40,9 @@ pub enum CommandError {
     },
 
     /// The process could not be killed after exceeding the configured timeout.
-    #[error("failed to kill timed-out command `{command}` after {timeout:?}: {source}")]
+    #[error(
+        "failed to kill timed-out command `{command}` after {timeout:?}: {source}"
+    )]
     KillFailed {
         /// Human-readable command representation.
         command: String,
@@ -65,7 +64,9 @@ pub enum CommandError {
     },
 
     /// Opening a stdin file failed.
-    #[error("failed to open stdin file `{path:?}` for command `{command}`: {source}")]
+    #[error(
+        "failed to open stdin file `{path:?}` for command `{command}`: {source}"
+    )]
     OpenInputFailed {
         /// Human-readable command representation.
         command: String,
@@ -76,7 +77,9 @@ pub enum CommandError {
     },
 
     /// Opening an output redirection file failed.
-    #[error("failed to open {stream} file `{path:?}` for command `{command}`: {source}")]
+    #[error(
+        "failed to open {stream} file `{path:?}` for command `{command}`: {source}"
+    )]
     OpenOutputFailed {
         /// Human-readable command representation.
         command: String,
@@ -98,7 +101,9 @@ pub enum CommandError {
     },
 
     /// Writing captured output to a redirection file failed.
-    #[error("failed to write {stream} for command `{command}` to `{path:?}`: {source}")]
+    #[error(
+        "failed to write {stream} for command `{command}` to `{path:?}`: {source}"
+    )]
     WriteOutputFailed {
         /// Human-readable command representation.
         command: String,
@@ -122,7 +127,9 @@ pub enum CommandError {
     },
 
     /// The command completed with an exit code not configured as successful.
-    #[error("command `{command}` exited with code {exit_code:?}; expected one of {expected:?}")]
+    #[error(
+        "command `{command}` exited with code {exit_code:?}; expected one of {expected:?}"
+    )]
     UnexpectedExit {
         /// Human-readable command representation.
         command: String,
@@ -144,7 +151,8 @@ impl CommandError {
     #[inline]
     pub const fn output(&self) -> Option<&CommandOutput> {
         match self {
-            Self::TimedOut { output, .. } | Self::UnexpectedExit { output, .. } => Some(output),
+            Self::TimedOut { output, .. }
+            | Self::UnexpectedExit { output, .. } => Some(output),
             _ => None,
         }
     }

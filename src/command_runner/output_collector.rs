@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::{
     io::{
         self,
@@ -33,7 +31,10 @@ use crate::{
 };
 
 /// Spawns a reader thread for a child output stream.
-pub(crate) fn read_output_stream(mut reader: Box<dyn Read + Send>, options: OutputCaptureOptions) -> OutputReader {
+pub(crate) fn read_output_stream(
+    mut reader: Box<dyn Read + Send>,
+    options: OutputCaptureOptions,
+) -> OutputReader {
     thread::spawn(move || read_output(reader.as_mut(), options))
 }
 
@@ -50,7 +51,8 @@ pub(crate) fn read_output(
     let mut write_error = None;
     let mut buffer = [0_u8; 8 * 1024];
     loop {
-        let read = reader.read(&mut buffer).map_err(OutputCaptureError::Read)?;
+        let read =
+            reader.read(&mut buffer).map_err(OutputCaptureError::Read)?;
         if read == 0 {
             break;
         }
@@ -104,8 +106,10 @@ pub(crate) fn collect_output(
     stderr_reader: OutputReader,
     stdin_writer: StdinWriter,
 ) -> Result<CommandOutput, CommandError> {
-    let stdout_result = join_output_reader(command, OutputStream::Stdout, stdout_reader);
-    let stderr_result = join_output_reader(command, OutputStream::Stderr, stderr_reader);
+    let stdout_result =
+        join_output_reader(command, OutputStream::Stdout, stdout_reader);
+    let stderr_result =
+        join_output_reader(command, OutputStream::Stderr, stderr_reader);
     let stdin_result = join_stdin_writer(command, stdin_writer);
 
     match (stdout_result, stderr_result, stdin_result) {
@@ -117,7 +121,9 @@ pub(crate) fn collect_output(
             stderr.truncated,
             elapsed,
         )),
-        (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => Err(error),
+        (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+            Err(error)
+        }
     }
 }
 
@@ -129,17 +135,21 @@ pub(crate) fn join_output_reader(
 ) -> Result<CapturedOutput, CommandError> {
     match reader.join() {
         Ok(Ok(output)) => Ok(output),
-        Ok(Err(OutputCaptureError::Read(source))) => Err(CommandError::ReadOutputFailed {
-            command: command.to_owned(),
-            stream,
-            source,
-        }),
-        Ok(Err(OutputCaptureError::Write { path, source })) => Err(CommandError::WriteOutputFailed {
-            command: command.to_owned(),
-            stream,
-            path,
-            source,
-        }),
+        Ok(Err(OutputCaptureError::Read(source))) => {
+            Err(CommandError::ReadOutputFailed {
+                command: command.to_owned(),
+                stream,
+                source,
+            })
+        }
+        Ok(Err(OutputCaptureError::Write { path, source })) => {
+            Err(CommandError::WriteOutputFailed {
+                command: command.to_owned(),
+                stream,
+                path,
+                source,
+            })
+        }
         Err(_) => Err(CommandError::ReadOutputFailed {
             command: command.to_owned(),
             stream,

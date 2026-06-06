@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::time::Duration;
 
 use super::{
@@ -41,7 +39,11 @@ impl CommandIo {
     /// # Returns
     ///
     /// I/O helper bundle consumed when output is collected or drained.
-    pub(crate) fn new(stdout_reader: OutputReader, stderr_reader: OutputReader, stdin_writer: StdinWriter) -> Self {
+    pub(crate) fn new(
+        stdout_reader: OutputReader,
+        stderr_reader: OutputReader,
+        stdin_writer: StdinWriter,
+    ) -> Self {
         Self {
             stdout_reader,
             stderr_reader,
