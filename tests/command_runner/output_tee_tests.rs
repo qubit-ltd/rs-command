@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 //! Tests for output tee behavior.
 
 use std::{
@@ -28,7 +26,10 @@ fn unique_temp_path(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system time should be after Unix epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!("qubit-command-{name}-{}-{suffix}", std::process::id(),))
+    std::env::temp_dir().join(format!(
+        "qubit-command-{name}-{}-{suffix}",
+        std::process::id(),
+    ))
 }
 
 #[test]

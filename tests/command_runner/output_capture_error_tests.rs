@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 //! Tests for output capture error mapping.
 
 use qubit_command::{
@@ -18,7 +16,8 @@ use qubit_command::{
 
 #[test]
 fn test_output_capture_error_reports_unopenable_stdout_file() {
-    let missing_directory = std::env::temp_dir().join("qubit-command-missing-output-directory");
+    let missing_directory =
+        std::env::temp_dir().join("qubit-command-missing-output-directory");
     let path = missing_directory.join("stdout.txt");
     let error = CommandRunner::new()
         .tee_stdout_to_file(path)
