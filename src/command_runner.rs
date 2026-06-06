@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::{
     path::{
         Path,
@@ -68,12 +66,11 @@ pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 /// Runs external commands and captures their output.
 ///
 /// `CommandRunner` runs one [`Command`] synchronously on the caller thread and
-/// returns captured process output. The runner always preserves raw output bytes
-/// up to the configured per-stream limits. Use
+/// returns captured process output. The runner always preserves raw output
+/// bytes up to the configured per-stream limits. Use
 /// [`CommandOutput::stdout_text`] and [`CommandOutput::stderr_text`] for strict
 /// UTF-8 text, or [`CommandOutput::stdout_lossy_text`] and
 /// [`CommandOutput::stderr_lossy_text`] when invalid UTF-8 should be replaced.
-///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandRunner {
     /// Maximum duration allowed for each command.
@@ -161,8 +158,8 @@ impl CommandRunner {
     ///
     /// # Parameters
     ///
-    /// * `working_directory` - Directory used when a command has no
-    ///   per-command working directory override.
+    /// * `working_directory` - Directory used when a command has no per-command
+    ///   working directory override.
     ///
     /// # Returns
     ///
@@ -239,8 +236,13 @@ impl CommandRunner {
     ///
     /// The updated command runner.
     #[inline]
-    pub fn sensitive_field(mut self, field: &str, level: SensitivityLevel) -> Self {
-        self.diagnostic_sanitizer.insert_sensitive_field(field, level);
+    pub fn sensitive_field(
+        mut self,
+        field: &str,
+        level: SensitivityLevel,
+    ) -> Self {
+        self.diagnostic_sanitizer
+            .insert_sensitive_field(field, level);
         self
     }
 
@@ -261,7 +263,11 @@ impl CommandRunner {
     ///
     /// The updated command runner.
     #[inline]
-    pub fn sensitive_fields(mut self, fields: &[&str], level: SensitivityLevel) -> Self {
+    pub fn sensitive_fields(
+        mut self,
+        fields: &[&str],
+        level: SensitivityLevel,
+    ) -> Self {
         self.diagnostic_sanitizer
             .extend_sensitive_fields(fields.iter().copied(), level);
         self
@@ -270,8 +276,8 @@ impl CommandRunner {
     /// Sets the maximum stdout bytes retained in memory.
     ///
     /// The reader still drains the complete stdout stream. Bytes beyond this
-    /// limit are not retained in [`CommandOutput`], but they are still written to
-    /// a configured stdout tee file.
+    /// limit are not retained in [`CommandOutput`], but they are still written
+    /// to a configured stdout tee file.
     ///
     /// # Parameters
     ///
@@ -289,8 +295,8 @@ impl CommandRunner {
     /// Sets the maximum stderr bytes retained in memory.
     ///
     /// The reader still drains the complete stderr stream. Bytes beyond this
-    /// limit are not retained in [`CommandOutput`], but they are still written to
-    /// a configured stderr tee file.
+    /// limit are not retained in [`CommandOutput`], but they are still written
+    /// to a configured stderr tee file.
     ///
     /// # Parameters
     ///
@@ -454,8 +460,9 @@ impl CommandRunner {
     /// groups and Windows children run in Job Objects. This lets timeout
     /// killing target the process tree instead of only the direct child
     /// process, including cases where the direct child exits but descendants
-    /// keep inherited stdout or stderr pipes open. Without a configured timeout,
-    /// commands use the platform's normal process-spawning behavior.
+    /// keep inherited stdout or stderr pipes open. Without a configured
+    /// timeout, commands use the platform's normal process-spawning
+    /// behavior.
     ///
     /// Captured output is retained as raw bytes up to the configured per-stream
     /// limits. Reader threads still drain complete streams so the child is not
@@ -500,45 +507,80 @@ impl CommandRunner {
             log::info!("Running command: {command_text}");
         }
 
-        let mut child_process = match spawn_child(process_command, self.timeout.is_some()) {
-            Ok(child_process) => child_process,
-            Err(source) => return Err(spawn_failed(&command_text, source)),
-        };
+        let mut child_process =
+            match spawn_child(process_command, self.timeout.is_some()) {
+                Ok(child_process) => child_process,
+                Err(source) => return Err(spawn_failed(&command_text, source)),
+            };
 
-        let stdin_writer = write_stdin_bytes(&command_text, child_process.as_mut(), stdin_bytes)?;
+        let stdin_writer = write_stdin_bytes(
+            &command_text,
+            child_process.as_mut(),
+            stdin_bytes,
+        )?;
 
         let stdout = match child_process.stdout().take() {
             Some(stdout) => stdout,
-            None => return Err(output_pipe_error(&command_text, OutputStream::Stdout)),
+            None => {
+                return Err(output_pipe_error(
+                    &command_text,
+                    OutputStream::Stdout,
+                ));
+            }
         };
         let stderr = match child_process.stderr().take() {
             Some(stderr) => stderr,
-            None => return Err(output_pipe_error(&command_text, OutputStream::Stderr)),
+            None => {
+                return Err(output_pipe_error(
+                    &command_text,
+                    OutputStream::Stderr,
+                ));
+            }
         };
         let stdout_reader = read_output_stream(
             Box::new(stdout),
-            OutputCaptureOptions::new(self.max_stdout_bytes, stdout_file, stdout_file_path),
+            OutputCaptureOptions::new(
+                self.max_stdout_bytes,
+                stdout_file,
+                stdout_file_path,
+            ),
         );
         let stderr_reader = read_output_stream(
             Box::new(stderr),
-            OutputCaptureOptions::new(self.max_stderr_bytes, stderr_file, stderr_file_path),
+            OutputCaptureOptions::new(
+                self.max_stderr_bytes,
+                stderr_file,
+                stderr_file_path,
+            ),
         );
-        let command_io = CommandIo::new(stdout_reader, stderr_reader, stdin_writer);
+        let command_io =
+            CommandIo::new(stdout_reader, stderr_reader, stdin_writer);
         let finished =
-            RunningCommand::new(command_text, child_process, command_io).wait_for_completion(self.timeout)?;
-        let FinishedCommand { command_text, output } = finished;
+            RunningCommand::new(command_text, child_process, command_io)
+                .wait_for_completion(self.timeout)?;
+        let FinishedCommand {
+            command_text,
+            output,
+        } = finished;
 
-        if output
-            .exit_code()
-            .is_some_and(|exit_code| self.success_exit_codes.contains(&exit_code))
-        {
+        if output.exit_code().is_some_and(|exit_code| {
+            self.success_exit_codes.contains(&exit_code)
+        }) {
             if !self.disable_logging {
-                log::info!("Finished command `{}` in {:?}.", command_text, output.elapsed());
+                log::info!(
+                    "Finished command `{}` in {:?}.",
+                    command_text,
+                    output.elapsed()
+                );
             }
             Ok(output)
         } else {
             if !self.disable_logging {
-                log::error!("Command `{}` exited with code {:?}.", command_text, output.exit_code());
+                log::error!(
+                    "Command `{}` exited with code {:?}.",
+                    command_text,
+                    output.exit_code()
+                );
             }
             Err(CommandError::UnexpectedExit {
                 command: command_text,

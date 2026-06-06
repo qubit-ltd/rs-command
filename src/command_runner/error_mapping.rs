@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::{
     io,
     time::Duration,
@@ -34,7 +32,11 @@ pub(crate) fn wait_failed(command: &str, source: io::Error) -> CommandError {
 }
 
 /// Builds a timed-out process kill failure.
-pub(crate) fn kill_failed(command: String, timeout: Duration, source: io::Error) -> CommandError {
+pub(crate) fn kill_failed(
+    command: String,
+    timeout: Duration,
+    source: io::Error,
+) -> CommandError {
     CommandError::KillFailed {
         command,
         timeout,
@@ -43,10 +45,16 @@ pub(crate) fn kill_failed(command: String, timeout: Duration, source: io::Error)
 }
 
 /// Builds an internal missing-pipe error.
-pub(crate) fn output_pipe_error(command: &str, stream: OutputStream) -> CommandError {
+pub(crate) fn output_pipe_error(
+    command: &str,
+    stream: OutputStream,
+) -> CommandError {
     CommandError::ReadOutputFailed {
         command: command.to_owned(),
         stream,
-        source: io::Error::other(format!("{} pipe was not created", stream.as_str())),
+        source: io::Error::other(format!(
+            "{} pipe was not created",
+            stream.as_str()
+        )),
     }
 }

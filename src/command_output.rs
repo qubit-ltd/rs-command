@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::{
@@ -26,7 +24,6 @@ use std::{
 /// [`Self::stdout_text`] and [`Self::stderr_text`] for strict UTF-8 text, or
 /// [`Self::stdout_lossy_text`] and [`Self::stderr_lossy_text`] to replace
 /// invalid byte sequences with the Unicode replacement character.
-///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandOutput {
     /// Exit status reported by the process.

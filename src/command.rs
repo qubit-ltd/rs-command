@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::{
     ffi::{
         OsStr,
@@ -38,7 +36,6 @@ const SHELL_COMMAND_REPLACEMENT: &str = "<shell command>";
 /// shell-like command line. This avoids quoting ambiguity and accidental shell
 /// injection. Use [`Self::shell`] only when shell parsing, redirection,
 /// expansion, or pipes are intentionally required.
-///
 #[derive(Clone, PartialEq, Eq)]
 pub struct Command {
     /// Program executable name or path.
@@ -66,7 +63,10 @@ impl fmt::Debug for Command {
             .field("argv", &self.sanitized_argv(&field_sanitizer))
             .field("working_directory", &self.working_directory)
             .field("clear_environment", &self.clear_environment)
-            .field("env", &self.sanitized_environment_assignments(&field_sanitizer))
+            .field(
+                "env",
+                &self.sanitized_environment_assignments(&field_sanitizer),
+            )
             .field("unset", &self.removed_environment_names())
             .field("stdin", &StdinDisplay(&self.stdin))
             .finish()
@@ -212,7 +212,8 @@ impl Command {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.args.extend(args.into_iter().map(|arg| arg.as_ref().to_owned()));
+        self.args
+            .extend(args.into_iter().map(|arg| arg.as_ref().to_owned()));
         self
     }
 
@@ -268,8 +269,10 @@ impl Command {
     {
         let key = key.as_ref().to_owned();
         let value = value.as_ref().to_owned();
-        self.removed_envs.retain(|removed| !env_key_eq(removed, &key));
-        self.envs.retain(|(existing_key, _)| !env_key_eq(existing_key, &key));
+        self.removed_envs
+            .retain(|removed| !env_key_eq(removed, &key));
+        self.envs
+            .retain(|(existing_key, _)| !env_key_eq(existing_key, &key));
         self.envs.push((key, value));
         self
     }
@@ -303,16 +306,18 @@ impl Command {
         S: AsRef<OsStr>,
     {
         let key = key.as_ref().to_owned();
-        self.envs.retain(|(existing_key, _)| !env_key_eq(existing_key, &key));
-        self.removed_envs.retain(|removed| !env_key_eq(removed, &key));
+        self.envs
+            .retain(|(existing_key, _)| !env_key_eq(existing_key, &key));
+        self.removed_envs
+            .retain(|removed| !env_key_eq(removed, &key));
         self.removed_envs.push(key);
         self
     }
 
     /// Clears all inherited environment variables for this command.
     ///
-    /// Environment variables added after this call are still passed to the child
-    /// process.
+    /// Environment variables added after this call are still passed to the
+    /// child process.
     ///
     /// # Returns
     ///
@@ -457,7 +462,10 @@ impl Command {
     /// # Returns
     ///
     /// A sanitized command string suitable for logs and errors.
-    pub(crate) fn display_command(&self, field_sanitizer: &FieldSanitizer) -> String {
+    pub(crate) fn display_command(
+        &self,
+        field_sanitizer: &FieldSanitizer,
+    ) -> String {
         let argv = self.sanitized_argv(field_sanitizer);
         if self.envs.is_empty() && self.removed_envs.is_empty() {
             return format!("{argv:?}");
@@ -474,7 +482,8 @@ impl Command {
     ///
     /// Sanitized argv tokens with secret-looking values masked.
     fn sanitized_argv(&self, field_sanitizer: &FieldSanitizer) -> Vec<String> {
-        ArgvSanitizer::new(field_sanitizer.clone()).sanitize_argv(self.argv_for_display(), COMMAND_LOG_MATCH_MODE)
+        ArgvSanitizer::new(field_sanitizer.clone())
+            .sanitize_argv(self.argv_for_display(), COMMAND_LOG_MATCH_MODE)
     }
 
     /// Builds argv tokens with opaque shell payloads hidden.
@@ -507,13 +516,16 @@ impl Command {
             return None;
         }
         let first_arg = self.args.first()?;
-        if self.program.as_os_str() == OsStr::new("sh") && first_arg == OsStr::new("-c") {
+        if self.program.as_os_str() == OsStr::new("sh")
+            && first_arg == OsStr::new("-c")
+        {
             return Some(1);
         }
 
         let program = self.program.to_string_lossy();
         let first_arg = first_arg.to_string_lossy();
-        if (program.eq_ignore_ascii_case("cmd") || program.eq_ignore_ascii_case("cmd.exe"))
+        if (program.eq_ignore_ascii_case("cmd")
+            || program.eq_ignore_ascii_case("cmd.exe"))
             && first_arg.eq_ignore_ascii_case("/C")
         {
             return Some(1);
@@ -526,12 +538,19 @@ impl Command {
     /// # Returns
     ///
     /// Sanitized `KEY=value` entries for explicit environment overrides.
-    fn sanitized_environment_assignments(&self, field_sanitizer: &FieldSanitizer) -> Vec<String> {
+    fn sanitized_environment_assignments(
+        &self,
+        field_sanitizer: &FieldSanitizer,
+    ) -> Vec<String> {
         let sanitizer = EnvSanitizer::new(field_sanitizer.clone());
         self.envs
             .iter()
             .map(|(key, value)| {
-                let (key, value) = sanitizer.sanitize_os_pair(key, value, COMMAND_LOG_MATCH_MODE);
+                let (key, value) = sanitizer.sanitize_os_pair(
+                    key,
+                    value,
+                    COMMAND_LOG_MATCH_MODE,
+                );
                 format!("{key}={value}")
             })
             .collect()
@@ -559,8 +578,12 @@ impl fmt::Debug for StdinDisplay<'_> {
         match self.0 {
             CommandStdin::Null => formatter.write_str("Null"),
             CommandStdin::Inherit => formatter.write_str("Inherit"),
-            CommandStdin::Bytes(bytes) => write!(formatter, "Bytes({} bytes)", bytes.len()),
-            CommandStdin::File(path) => formatter.debug_tuple("File").field(path).finish(),
+            CommandStdin::Bytes(bytes) => {
+                write!(formatter, "Bytes({} bytes)", bytes.len())
+            }
+            CommandStdin::File(path) => {
+                formatter.debug_tuple("File").field(path).finish()
+            }
         }
     }
 }

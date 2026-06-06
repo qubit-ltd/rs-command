@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::{
     fs::File,
     path::Path,
@@ -57,7 +55,10 @@ pub(super) fn configure_stdin(
 }
 
 /// Configures environment variables for a process command.
-pub(super) fn configure_environment(command: &Command, process_command: &mut ProcessCommand) {
+pub(super) fn configure_environment(
+    command: &Command,
+    process_command: &mut ProcessCommand,
+) {
     if command.clears_environment() {
         process_command.env_clear();
     }
@@ -76,14 +77,14 @@ pub(super) fn open_output_file(
     path: Option<&Path>,
 ) -> Result<Option<File>, CommandError> {
     match path {
-        Some(path) => File::create(path)
-            .map(Some)
-            .map_err(|source| CommandError::OpenOutputFailed {
+        Some(path) => File::create(path).map(Some).map_err(|source| {
+            CommandError::OpenOutputFailed {
                 command: command.to_owned(),
                 stream,
                 path: path.to_path_buf(),
                 source,
-            }),
+            }
+        }),
         None => Ok(None),
     }
 }
