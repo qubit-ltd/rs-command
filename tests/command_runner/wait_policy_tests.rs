@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 //! Tests for wait policy behavior.
 
 #[cfg(not(windows))]
@@ -29,7 +27,9 @@ fn test_wait_policy_enforces_configured_timeout() {
         .expect_err("long-running command should time out");
 
     match error {
-        CommandError::TimedOut { timeout: actual, .. } => assert_eq!(actual, timeout),
+        CommandError::TimedOut {
+            timeout: actual, ..
+        } => assert_eq!(actual, timeout),
         other => panic!("expected timeout, got {other:?}"),
     }
 }

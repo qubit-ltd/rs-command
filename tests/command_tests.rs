@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 //! Tests for [`Command`](qubit_command::Command).
 
 use qubit_command::Command;
@@ -21,7 +19,9 @@ fn test_command_new_stores_program() {
 
 #[test]
 fn test_command_args_appends_in_order() {
-    let command = Command::new("git").arg("status").args(&["--short", "--branch"]);
+    let command = Command::new("git")
+        .arg("status")
+        .args(&["--short", "--branch"]);
 
     let args = command
         .arguments()
@@ -76,7 +76,10 @@ fn test_command_env_os_removes_prior_removal() {
 
     assert!(command.removed_environment().is_empty());
     assert_eq!(command.environment().len(), 1);
-    assert_eq!(command.environment()[0].0.to_string_lossy(), "QUBIT_COMMAND_TEST",);
+    assert_eq!(
+        command.environment()[0].0.to_string_lossy(),
+        "QUBIT_COMMAND_TEST",
+    );
 }
 
 #[test]
@@ -86,7 +89,10 @@ fn test_command_env_remove_records_removal() {
         .env_remove("QUBIT_COMMAND_TEST");
 
     assert!(command.environment().is_empty());
-    assert_eq!(command.removed_environment()[0].to_string_lossy(), "QUBIT_COMMAND_TEST",);
+    assert_eq!(
+        command.removed_environment()[0].to_string_lossy(),
+        "QUBIT_COMMAND_TEST",
+    );
 }
 
 #[test]
@@ -96,7 +102,10 @@ fn test_command_env_remove_deduplicates_removals() {
         .env_remove("QUBIT_COMMAND_TEST");
 
     assert_eq!(command.removed_environment().len(), 1);
-    assert_eq!(command.removed_environment()[0].to_string_lossy(), "QUBIT_COMMAND_TEST",);
+    assert_eq!(
+        command.removed_environment()[0].to_string_lossy(),
+        "QUBIT_COMMAND_TEST",
+    );
 }
 
 #[test]
@@ -108,8 +117,14 @@ fn test_command_env_names_are_case_sensitive_on_unix() {
         .env_remove("QUBIT_COMMAND_TEST");
 
     assert_eq!(command.environment().len(), 1);
-    assert_eq!(command.environment()[0].0.to_string_lossy(), "qubit_command_test",);
-    assert_eq!(command.removed_environment()[0].to_string_lossy(), "QUBIT_COMMAND_TEST",);
+    assert_eq!(
+        command.environment()[0].0.to_string_lossy(),
+        "qubit_command_test",
+    );
+    assert_eq!(
+        command.removed_environment()[0].to_string_lossy(),
+        "QUBIT_COMMAND_TEST",
+    );
 }
 
 #[test]
@@ -121,7 +136,10 @@ fn test_command_env_names_are_case_insensitive_on_windows() {
         .env_remove("QUBIT_COMMAND_TEST");
 
     assert!(command.environment().is_empty());
-    assert_eq!(command.removed_environment()[0].to_string_lossy(), "QUBIT_COMMAND_TEST",);
+    assert_eq!(
+        command.removed_environment()[0].to_string_lossy(),
+        "QUBIT_COMMAND_TEST",
+    );
 }
 
 #[test]
@@ -162,7 +180,11 @@ fn test_command_debug_sanitizes_sensitive_display_values() {
 
     let debug = format!("{command:?}");
 
-    assert!(debug.contains(r#"argv: ["docker", "login", "--password", "<redacted>"]"#));
+    assert!(
+        debug.contains(
+            r#"argv: ["docker", "login", "--password", "<redacted>"]"#
+        )
+    );
     assert!(debug.contains(r#"env: ["OPENAI_API_KEY=****"]"#));
     assert!(debug.contains("stdin: Bytes(12 bytes)"));
     assert!(!debug.contains("secret"));
@@ -184,7 +206,8 @@ fn test_command_debug_redacts_cmd_shell_payload() {
 fn test_command_debug_formats_stdin_without_inline_bytes() {
     let null_input = format!("{:?}", Command::new("cat").stdin_null());
     let inherited_input = format!("{:?}", Command::new("cat").stdin_inherit());
-    let file_input = format!("{:?}", Command::new("cat").stdin_file("input.txt"));
+    let file_input =
+        format!("{:?}", Command::new("cat").stdin_file("input.txt"));
 
     assert!(null_input.contains("stdin: Null"));
     assert!(inherited_input.contains("stdin: Inherit"));

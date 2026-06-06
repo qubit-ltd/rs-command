@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 //! Tests for crate-level exports.
 
 use qubit_command::{
@@ -21,7 +19,8 @@ use qubit_command::{
 #[test]
 fn test_lib_exports_public_api() {
     let command = Command::new("printf").arg("hello");
-    let runner = CommandRunner::new().sensitive_field("tenant_option", SensitivityLevel::Secret);
+    let runner = CommandRunner::new()
+        .sensitive_field("tenant_option", SensitivityLevel::Secret);
     let stream = OutputStream::Stdout;
 
     assert_eq!(command.program().to_string_lossy(), "printf");

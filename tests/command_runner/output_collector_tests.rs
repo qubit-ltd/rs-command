@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 //! Tests for output collector behavior.
 
 #[cfg(not(windows))]
@@ -19,7 +17,9 @@ use qubit_command::{
 #[test]
 fn test_output_collector_keeps_streams_separate() {
     let output = CommandRunner::new()
-        .run(Command::shell("printf stdout-bytes; printf stderr-bytes >&2"))
+        .run(Command::shell(
+            "printf stdout-bytes; printf stderr-bytes >&2",
+        ))
         .expect("command should run successfully");
 
     assert_eq!(output.stdout(), b"stdout-bytes");

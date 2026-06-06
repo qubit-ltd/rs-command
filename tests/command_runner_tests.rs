@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 //! Tests for [`CommandRunner`](qubit_command::CommandRunner).
 
 use std::{
@@ -69,7 +67,8 @@ mod unix {
 
     fn init_test_logger() {
         LOGGER_INIT.call_once(|| {
-            log::set_logger(&TEST_LOGGER).expect("test logger should be installed once");
+            log::set_logger(&TEST_LOGGER)
+                .expect("test logger should be installed once");
             log::set_max_level(log::LevelFilter::Trace);
         });
     }
@@ -79,7 +78,10 @@ mod unix {
             .duration_since(UNIX_EPOCH)
             .expect("system time should be after Unix epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("qubit-command-{name}-{}-{suffix}", std::process::id(),))
+        std::env::temp_dir().join(format!(
+            "qubit-command-{name}-{}-{suffix}",
+            std::process::id(),
+        ))
     }
 
     #[test]
@@ -130,10 +132,16 @@ mod unix {
     fn test_command_runner_run_applies_environment_override() {
         init_test_logger();
         let output = CommandRunner::new()
-            .run(Command::shell("printf \"$QUBIT_COMMAND_TEST\"").env("QUBIT_COMMAND_TEST", "from-env"))
+            .run(
+                Command::shell("printf \"$QUBIT_COMMAND_TEST\"")
+                    .env("QUBIT_COMMAND_TEST", "from-env"),
+            )
             .expect("command should receive environment override");
 
-        assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8"), "from-env",);
+        assert_eq!(
+            output.stdout_text().expect("stdout should be valid UTF-8"),
+            "from-env",
+        );
     }
 
     #[test]
@@ -147,7 +155,10 @@ mod unix {
             )
             .expect("command should remove configured environment variable");
 
-        assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8"), "missing",);
+        assert_eq!(
+            output.stdout_text().expect("stdout should be valid UTF-8"),
+            "missing",
+        );
     }
 
     #[test]
@@ -159,7 +170,9 @@ mod unix {
                     .env_clear()
                     .env("QUBIT_COMMAND_TEST", "after-clear"),
             )
-            .expect("command should run with cleared environment plus explicit set");
+            .expect(
+                "command should run with cleared environment plus explicit set",
+            );
 
         assert_eq!(
             output.stdout_text().expect("stdout should be valid UTF-8"),
@@ -174,7 +187,13 @@ mod unix {
             .run(Command::shell("pwd").working_directory("/"))
             .expect("command should run in requested working directory");
 
-        assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8").trim(), "/",);
+        assert_eq!(
+            output
+                .stdout_text()
+                .expect("stdout should be valid UTF-8")
+                .trim(),
+            "/",
+        );
     }
 
     #[test]
@@ -185,14 +204,22 @@ mod unix {
             .run(Command::shell("pwd"))
             .expect("command should run in runner working directory");
 
-        assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8").trim(), "/",);
+        assert_eq!(
+            output
+                .stdout_text()
+                .expect("stdout should be valid UTF-8")
+                .trim(),
+            "/",
+        );
     }
 
     #[test]
     fn test_command_runner_run_reports_unexpected_exit() {
         init_test_logger();
         let error = CommandRunner::new()
-            .run(Command::shell("printf fail-out; printf fail-err >&2; exit 7"))
+            .run(Command::shell(
+                "printf fail-out; printf fail-err >&2; exit 7",
+            ))
             .expect_err("non-success exit code should be rejected");
 
         match error {
@@ -204,8 +231,14 @@ mod unix {
             } => {
                 assert_eq!(exit_code, Some(7));
                 assert_eq!(expected, vec![0]);
-                assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8"), "fail-out",);
-                assert_eq!(output.stderr_text().expect("stderr should be valid UTF-8"), "fail-err",);
+                assert_eq!(
+                    output.stdout_text().expect("stdout should be valid UTF-8"),
+                    "fail-out",
+                );
+                assert_eq!(
+                    output.stderr_text().expect("stderr should be valid UTF-8"),
+                    "fail-err",
+                );
             }
             other => panic!("expected unexpected-exit error, got {other:?}"),
         }
@@ -278,11 +311,15 @@ mod unix {
         let input = vec![b'x'; 1024 * 1024];
         let error = CommandRunner::new()
             .run(Command::shell("exit 7").stdin_bytes(input))
-            .expect_err("non-success exit should remain visible after stdin closes");
+            .expect_err(
+                "non-success exit should remain visible after stdin closes",
+            );
 
         match error {
             CommandError::UnexpectedExit {
-                exit_code, expected, ..
+                exit_code,
+                expected,
+                ..
             } => {
                 assert_eq!(exit_code, Some(7));
                 assert_eq!(expected, vec![0]);
@@ -295,7 +332,8 @@ mod unix {
     fn test_command_runner_run_reads_stdin_file() {
         init_test_logger();
         let path = unique_temp_path("stdin.txt");
-        fs::write(&path, b"stdin-file").expect("stdin fixture should be written");
+        fs::write(&path, b"stdin-file")
+            .expect("stdin fixture should be written");
 
         let output = CommandRunner::new()
             .run(Command::shell("cat").stdin_file(path.clone()))
@@ -315,7 +353,10 @@ mod unix {
             .run(Command::shell("printf inherited").stdin_inherit())
             .expect("command should run with inherited stdin");
 
-        assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8"), "inherited",);
+        assert_eq!(
+            output.stdout_text().expect("stdout should be valid UTF-8"),
+            "inherited",
+        );
     }
 
     #[test]
@@ -327,7 +368,9 @@ mod unix {
             .expect_err("missing stdin file should be reported");
 
         match error {
-            CommandError::OpenInputFailed { path: actual_path, .. } => assert_eq!(actual_path, path),
+            CommandError::OpenInputFailed {
+                path: actual_path, ..
+            } => assert_eq!(actual_path, path),
             other => panic!("expected stdin open failure, got {other:?}"),
         }
     }
@@ -341,7 +384,8 @@ mod unix {
 
     #[test]
     fn test_command_runner_output_limit_updates_configuration() {
-        let runner = CommandRunner::new().max_stdout_bytes(3).max_stderr_bytes(4);
+        let runner =
+            CommandRunner::new().max_stdout_bytes(3).max_stderr_bytes(4);
 
         assert_eq!(runner.configured_max_stdout_bytes(), Some(3));
         assert_eq!(runner.configured_max_stderr_bytes(), Some(4));
@@ -355,8 +399,14 @@ mod unix {
             .tee_stdout_to_file(stdout_path.clone())
             .tee_stderr_to_file(stderr_path.clone());
 
-        assert_eq!(runner.configured_stdout_file(), Some(stdout_path.as_path()));
-        assert_eq!(runner.configured_stderr_file(), Some(stderr_path.as_path()));
+        assert_eq!(
+            runner.configured_stdout_file(),
+            Some(stdout_path.as_path())
+        );
+        assert_eq!(
+            runner.configured_stderr_file(),
+            Some(stderr_path.as_path())
+        );
     }
 
     #[test]
@@ -391,7 +441,9 @@ mod unix {
             .expect_err("long-running command should time out");
 
         match error {
-            CommandError::TimedOut { timeout, output, .. } => {
+            CommandError::TimedOut {
+                timeout, output, ..
+            } => {
                 assert_eq!(timeout, Duration::from_millis(50));
                 assert!(output.elapsed() >= Duration::from_millis(50));
             }
@@ -416,13 +468,16 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_run_times_out_when_background_child_inherits_output() {
+    fn test_command_runner_run_times_out_when_background_child_inherits_output()
+    {
         init_test_logger();
         let start = Instant::now();
         let error = CommandRunner::new()
             .timeout(Duration::from_millis(50))
             .run(Command::shell("sleep 2 &"))
-            .expect_err("background child with inherited output pipes should time out");
+            .expect_err(
+                "background child with inherited output pipes should time out",
+            );
 
         assert!(matches!(error, CommandError::TimedOut { .. }));
         assert!(
@@ -532,7 +587,10 @@ mod unix {
     fn test_command_runner_error_uses_argv_style_command_text() {
         init_test_logger();
         let error = CommandRunner::new()
-            .run(Command::new("__qubit_command_missing_executable__").arg("two words"))
+            .run(
+                Command::new("__qubit_command_missing_executable__")
+                    .arg("two words"),
+            )
             .expect_err("missing executable should fail to spawn");
 
         assert_eq!(
@@ -617,10 +675,14 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_error_sanitizes_multiple_configured_sensitive_fields() {
+    fn test_command_runner_error_sanitizes_multiple_configured_sensitive_fields()
+     {
         init_test_logger();
         let error = CommandRunner::new()
-            .sensitive_fields(&["tenant_option", "tenant_env"], SensitivityLevel::Secret)
+            .sensitive_fields(
+                &["tenant_option", "tenant_env"],
+                SensitivityLevel::Secret,
+            )
             .run(
                 Command::new("__qubit_command_missing_executable__")
                     .arg("--tenant-option")
@@ -678,7 +740,10 @@ mod windows {
             .duration_since(UNIX_EPOCH)
             .expect("system time should be after Unix epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("qubit-command-windows-{name}-{}-{suffix}", std::process::id(),))
+        std::env::temp_dir().join(format!(
+            "qubit-command-windows-{name}-{}-{suffix}",
+            std::process::id(),
+        ))
     }
 
     #[test]
@@ -688,7 +753,9 @@ mod windows {
             .expect("Windows shell command should run successfully");
 
         assert_eq!(
-            trim_windows_line_endings(output.stdout_text().expect("stdout should be UTF-8")),
+            trim_windows_line_endings(
+                output.stdout_text().expect("stdout should be UTF-8")
+            ),
             "command-out",
         );
     }
@@ -700,7 +767,9 @@ mod windows {
             .expect("Windows shell command should run successfully");
 
         assert_eq!(
-            trim_windows_line_endings(output.stderr_text().expect("stderr should be UTF-8")),
+            trim_windows_line_endings(
+                output.stderr_text().expect("stderr should be UTF-8")
+            ),
             "command-error",
         );
     }
@@ -728,8 +797,11 @@ mod windows {
         assert!(output.stdout_truncated());
         assert_eq!(
             trim_windows_line_endings(
-                std::str::from_utf8(&fs::read(&stdout_path).expect("tee file should be readable"))
-                    .expect("tee file should contain UTF-8"),
+                std::str::from_utf8(
+                    &fs::read(&stdout_path)
+                        .expect("tee file should be readable")
+                )
+                .expect("tee file should contain UTF-8"),
             ),
             "abcdef",
         );
