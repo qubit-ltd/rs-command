@@ -33,7 +33,7 @@ doctest = true
 [dependencies]
 log = "0.4"
 process-wrap = { version = "9.1", default-features = false, features = ["std", "process-group", "job-object"] }
-qubit-sanitize = "0.2"
+qubit-sanitize = { version = "0.3", path = "../rs-sanitize", default-features = false }
 thiserror = "2.0"
 
 [lints.rust]
