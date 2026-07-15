@@ -81,3 +81,23 @@ fn test_command_output_reports_unix_termination_signal() {
     assert_eq!(output.exit_code(), None);
     assert_eq!(output.termination_signal(), Some(15));
 }
+
+#[test]
+fn test_command_output_debug_redacts_captured_streams() {
+    let output = CommandRunner::new()
+        .run(Command::shell(
+            "printf stdout-secret; printf stderr-secret >&2",
+        ))
+        .expect("command should run successfully");
+
+    let debug = format!("{output:?}");
+    let stdout_debug = format!("{:?}", b"stdout-secret".to_vec());
+    let stderr_debug = format!("{:?}", b"stderr-secret".to_vec());
+    assert!(!debug.contains("stdout-secret"));
+    assert!(!debug.contains("stderr-secret"));
+    assert!(!debug.contains(&stdout_debug));
+    assert!(!debug.contains(&stderr_debug));
+    assert!(debug.contains("stdout_len"));
+    assert!(debug.contains("stderr_len"));
+    assert!(debug.contains("<redacted>"));
+}

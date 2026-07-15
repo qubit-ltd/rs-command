@@ -129,3 +129,20 @@ fn test_command_error_accessors_for_errors_with_output() {
         "before-timeout",
     );
 }
+
+#[test]
+fn test_command_error_debug_does_not_expose_captured_streams() {
+    let error = CommandRunner::new()
+        .run(Command::shell(
+            "printf stdout-secret; printf stderr-secret >&2; exit 7",
+        ))
+        .expect_err("command should fail");
+
+    let debug = format!("{error:?}");
+    let stdout_debug = format!("{:?}", b"stdout-secret".to_vec());
+    let stderr_debug = format!("{:?}", b"stderr-secret".to_vec());
+    assert!(!debug.contains("stdout-secret"));
+    assert!(!debug.contains("stderr-secret"));
+    assert!(!debug.contains(&stdout_debug));
+    assert!(!debug.contains(&stderr_debug));
+}

@@ -133,9 +133,11 @@ Runner-specific fields affect runner logs and `CommandError::command()`.
 Standalone `Command` `Debug` output has no runner context and uses the built-in
 defaults only.
 
-Captured stdout/stderr bytes and tee files remain raw process output. Use
-capture limits and caller-side filtering when command output itself may contain
-secrets.
+`CommandOutput`'s `Debug` output redacts both captured streams and reports only
+their byte lengths, truncation flags, status, and elapsed time. Captured
+stdout/stderr bytes, their explicit accessors, and tee files remain raw process
+output. Use capture limits and caller-side filtering when command output itself
+may contain secrets.
 
 ## Output Text
 

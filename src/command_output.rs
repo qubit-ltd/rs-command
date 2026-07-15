@@ -9,10 +9,13 @@
 use std::os::unix::process::ExitStatusExt;
 use std::{
     borrow::Cow,
+    fmt,
     process::ExitStatus,
     str,
     time::Duration,
 };
+
+use qubit_sanitize::redacted_debug;
 
 /// Captured output and status information from a finished command.
 ///
@@ -23,8 +26,10 @@ use std::{
 /// [`Self::stderr`] return raw bytes exactly as retained. Use
 /// [`Self::stdout_text`] and [`Self::stderr_text`] for strict UTF-8 text, or
 /// [`Self::stdout_lossy_text`] and [`Self::stderr_lossy_text`] to replace
-/// invalid byte sequences with the Unicode replacement character.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// invalid byte sequences with the Unicode replacement character. Its
+/// [`fmt::Debug`] implementation redacts both captured streams and reports
+/// only their retained lengths and truncation flags.
+#[derive(Clone, PartialEq, Eq)]
 pub struct CommandOutput {
     /// Exit status reported by the process.
     status: ExitStatus,
@@ -38,6 +43,23 @@ pub struct CommandOutput {
     stderr_truncated: bool,
     /// Duration from process spawn to observed termination.
     elapsed: Duration,
+}
+
+impl fmt::Debug for CommandOutput {
+    /// Formats process metadata while redacting both captured streams.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CommandOutput")
+            .field("status", &self.status)
+            .field("stdout", &redacted_debug(&self.stdout))
+            .field("stdout_len", &self.stdout.len())
+            .field("stdout_truncated", &self.stdout_truncated)
+            .field("stderr", &redacted_debug(&self.stderr))
+            .field("stderr_len", &self.stderr.len())
+            .field("stderr_truncated", &self.stderr_truncated)
+            .field("elapsed", &self.elapsed)
+            .finish()
+    }
 }
 
 impl CommandOutput {
