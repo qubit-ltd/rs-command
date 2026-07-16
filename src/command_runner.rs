@@ -273,6 +273,48 @@ impl CommandRunner {
         self
     }
 
+    /// Excludes one field from command diagnostic sanitization.
+    ///
+    /// This can remove a built-in sensitive field. The matching command-line
+    /// argument or environment value may then appear verbatim in logs and
+    /// [`CommandError::command`]. Use this only for a known false positive
+    /// whose exposure is acceptable in the caller's diagnostic context.
+    ///
+    /// # Parameters
+    ///
+    /// * `field` - Field or option name to stop treating as sensitive.
+    ///
+    /// # Returns
+    ///
+    /// The updated command runner.
+    #[inline]
+    pub fn exclude_sensitive_field(mut self, field: &str) -> Self {
+        self.diagnostic_sanitizer.remove_sensitive_field(field);
+        self
+    }
+
+    /// Excludes multiple fields from command diagnostic sanitization.
+    ///
+    /// This is the batch form of [`Self::exclude_sensitive_field`]. Removed
+    /// built-in fields may be rendered verbatim in logs and
+    /// [`CommandError::command`], so callers must review every exclusion as a
+    /// deliberate disclosure decision.
+    ///
+    /// # Parameters
+    ///
+    /// * `fields` - Field or option names to stop treating as sensitive.
+    ///
+    /// # Returns
+    ///
+    /// The updated command runner.
+    #[inline]
+    pub fn exclude_sensitive_fields(mut self, fields: &[&str]) -> Self {
+        for field in fields {
+            self.diagnostic_sanitizer.remove_sensitive_field(field);
+        }
+        self
+    }
+
     /// Sets the maximum stdout bytes retained in memory.
     ///
     /// The reader still drains the complete stdout stream. Bytes beyond this

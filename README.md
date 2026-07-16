@@ -131,7 +131,10 @@ assert_eq!(
 
 Runner-specific fields affect runner logs and `CommandError::command()`.
 Standalone `Command` `Debug` output has no runner context and uses the built-in
-defaults only.
+defaults only. A runner can call `exclude_sensitive_field` or
+`exclude_sensitive_fields` for a verified false positive. This deliberately
+allows matching argv or environment values to appear unchanged in runner logs
+and `CommandError::command()`, so every exclusion should be security-reviewed.
 
 `CommandOutput`'s `Debug` output redacts both captured streams and reports only
 their byte lengths, truncation flags, status, and elapsed time. Captured

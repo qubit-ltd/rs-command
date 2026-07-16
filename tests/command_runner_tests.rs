@@ -718,6 +718,24 @@ mod unix {
         assert!(!error.command().contains("argv-secret"));
         assert!(!error.command().contains("env-secret"));
     }
+
+    #[test]
+    fn test_command_runner_can_exclude_default_sensitive_fields() {
+        init_test_logger();
+        let error = CommandRunner::new()
+            .exclude_sensitive_field("sig")
+            .exclude_sensitive_fields(&["signature"])
+            .run(
+                Command::new("__qubit_command_missing_executable__")
+                    .arg("--sig")
+                    .arg("known-false-positive")
+                    .env("SIGNATURE", "known-env-false-positive"),
+            )
+            .expect_err("missing executable should fail to spawn");
+
+        assert!(error.command().contains("known-false-positive"));
+        assert!(error.command().contains("known-env-false-positive"));
+    }
 }
 
 #[cfg(windows)]
