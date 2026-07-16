@@ -121,7 +121,10 @@ assert_eq!(
 ```
 
 Runner 上追加的字段只影响 runner 日志和 `CommandError::command()`。
-独立的 `Command` `Debug` 输出没有 runner 上下文，只使用内置默认字段。
+独立的 `Command` `Debug` 输出没有 runner 上下文，只使用内置默认字段。对于确认过的
+误报，runner 可以调用 `exclude_sensitive_field` 或 `exclude_sensitive_fields` 排除默认
+字段。这会让匹配的 argv 或环境变量值原样出现在 runner 日志和
+`CommandError::command()` 中，因此每个排除项都应经过安全审阅。
 
 `CommandOutput` 的 `Debug` 输出会遮盖两个捕获流，只报告字节数、截断标志、退出状态和
 耗时。捕获到的 stdout/stderr 字节、显式访问方法以及 tee 文件仍然是进程原始输出。
