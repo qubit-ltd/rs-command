@@ -654,6 +654,26 @@ mod unix {
     }
 
     #[test]
+    fn test_command_runner_error_sanitizes_default_database_credentials() {
+        init_test_logger();
+        let error = CommandRunner::new()
+            .run(
+                Command::new("__qubit_command_missing_executable__")
+                    .arg("--passphrase")
+                    .arg("argv-secret")
+                    .env("PGPASSWORD", "env-secret"),
+            )
+            .expect_err("missing executable should fail to spawn");
+
+        assert_eq!(
+            error.command(),
+            r#"Command { env: ["PGPASSWORD=<redacted>"], unset: [], argv: ["__qubit_command_missing_executable__", "--passphrase", "<redacted>"] }"#,
+        );
+        assert!(!error.command().contains("argv-secret"));
+        assert!(!error.command().contains("env-secret"));
+    }
+
+    #[test]
     fn test_command_runner_error_sanitizes_configured_sensitive_fields() {
         init_test_logger();
         let error = CommandRunner::new()
