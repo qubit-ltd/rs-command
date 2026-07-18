@@ -5,7 +5,7 @@
 [![Crates.io](https://img.shields.io/crates/v/qubit-command.svg?color=blue)](https://crates.io/crates/qubit-command)
 [![Rust](https://img.shields.io/badge/rust-1.94+-blue.svg?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![English Documentation](https://img.shields.io/badge/docs-English-blue.svg)](README.md)
+[![English Document](https://img.shields.io/badge/Document-English-blue.svg)](README.md)
 
 面向 Rust 的命令行进程运行工具库。
 
@@ -21,6 +21,7 @@ Qubit Command 提供一个小而明确的结构化 API，用于运行外部程�
 - 超时时基于 Unix process group 和 Windows Job Object 尝试终止进程树。
 - 默认以 UTF-8 文本读取 stdout 和 stderr，同时提供原始字节访问方法。
 - 支持按流限制内存捕获字节数，并把完整输出流式写入文件。
+- 在截断任何 tee 文件前检查 stdin、stdout 和 stderr 的文件冲突。
 - 日志和诊断里的命令文本会对敏感 argv、显式环境变量覆盖、shell
   脚本体以及调用方追加的敏感字段做脱敏展示。
 - 使用明确错误类型表示进程启动失败、超时、输出读取失败和非预期退出码。
@@ -33,6 +34,9 @@ Qubit Command 提供一个小而明确的结构化 API，用于运行外部程�
 
 设置超时后，runner 会尝试终止整个进程树：Unix 平台把命令放入新的
 process group，Windows 平台把命令放入 Job Object。
+
+超时测量和休眠使用可注入的 `qubit-clock` timer，因此单元测试可以用手动单调时钟
+驱动超时逻辑。未设置超时时，runner 会直接等待进程结束，不进行轮询。
 
 ## 大输出
 
@@ -107,7 +111,8 @@ Runner 日志、`CommandError::command()` 和 `Command` 的 `Debug` 输出都会
 当默认敏感字段不够时，可以在 runner 上追加业务字段：
 
 ```rust
-use qubit_command::{Command, CommandRunner, SensitivityLevel};
+use qubit_command::{Command, CommandRunner};
+use qubit_sanitize::SensitivityLevel;
 
 let error = CommandRunner::new()
     .sensitive_field("tenant_option", SensitivityLevel::Secret)
@@ -119,6 +124,10 @@ assert_eq!(
     r#"["__missing__", "--tenant-option", "<redacted>"]"#,
 );
 ```
+
+对于客户文件路径等位置参数，请使用 `Command::sensitive_arg` 或
+`Command::sensitive_arg_os`。原值仍会不加修改地传给子进程，但诊断中只显示配置的
+秘密掩码。
 
 Runner 上追加的字段只影响 runner 日志和 `CommandError::command()`。
 独立的 `Command` `Debug` 输出没有 runner 上下文，只使用内置默认字段。对于确认过的
@@ -153,38 +162,34 @@ assert_eq!(output.stdout_lossy_text(), "\u{fffd}");
 
 ## 测试
 
-快速在本地跑一遍：
-
 ```bash
+# 使用默认 feature 集运行测试
 cargo test
-cargo clippy --all-targets --all-features -- -D warnings
+
+# 使用项目声明的全部 feature 运行测试
+cargo test --all-features
+
+# 运行项目 CI 检查
+./ci-check.sh
+
+# 检查代码覆盖率
+./coverage.sh
 ```
 
-若要与持续集成（CI）保持一致，请在仓库根目录依次执行：`./align-ci.sh` 将本地工具链与配置对齐到 CI 规则，再执行 `./ci-check.sh` 复现流水线中的检查。需要查看或生成测试覆盖率时，使用 `./coverage.sh`（具体参数与输出形式见脚本说明及项目内与覆盖率相关的说明）。
+## 许可证
 
-## 参与贡献
+Copyright (c) 2025 - 2026. Haixing Hu. All rights reserved.
 
-欢迎通过 Issue 与 Pull Request 参与本仓库。建议：
+本项目基于 Apache License 2.0 授权。完整许可证文本请参阅
+[LICENSE](LICENSE)。
 
-- 报告缺陷、讨论设计或较大能力扩展时，可先开 Issue 对齐方向再投入实现。
-- 单次 PR 尽量聚焦单一主题，便于代码审查与合并历史。
-- 提交 PR 前请先运行 `./align-ci.sh`，再运行 `./ci-check.sh`，确保本地与 CI 使用同一套规则且能通过流水线等价检查；若需关注测试覆盖率，请配合使用 `./coverage.sh`（用法见上文「测试」一节）。
-- 若修改运行期行为，请补充或更新相应测试；若影响对外 API 或用户可见行为，请同步更新本文档或相关 rustdoc。
+## 贡献
 
-向本仓库贡献内容即表示您同意以 [Apache License, Version 2.0](LICENSE)（与本项目相同）授权您的贡献。
+欢迎贡献。请遵循 Rust API 指南，及时更新公共 API 文档与测试，并在提交
+Pull Request 前运行 `./align-ci.sh`格式化代码，运行`./ci-check.sh`对齐CI要求。
 
-## 许可证与版权
+## 作者
 
-版权所有 © 2026 Haixing Hu，Qubit Co. Ltd.。
+**Haixing Hu** - *Qubit Co. Ltd.*
 
-本软件依据 [Apache License, Version 2.0](LICENSE) 授权；完整许可文本见仓库根目录的 `LICENSE` 文件。
-
-## 作者与维护
-
-**Haixing Hu** — Qubit Co. Ltd.
-
-| | |
-| --- | --- |
-| **源码仓库** | [github.com/qubit-ltd/rs-command](https://github.com/qubit-ltd/rs-command) |
-| **API 文档** | [docs.rs/qubit-command](https://docs.rs/qubit-command) |
-| **Crate 发布** | [crates.io/crates/qubit-command](https://crates.io/crates/qubit-command) |
+仓库地址：[https://github.com/qubit-ltd/rs-command](https://github.com/qubit-ltd/rs-command)
