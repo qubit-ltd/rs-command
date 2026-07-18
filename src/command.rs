@@ -22,8 +22,10 @@ use qubit_sanitize::{
     EnvSanitizer,
     FieldSanitizer,
     NameMatchMode,
+    SensitivityLevel,
 };
 
+use crate::command_argument::CommandArgument;
 use crate::command_env::env_key_eq;
 use crate::command_stdin::CommandStdin;
 
@@ -36,12 +38,22 @@ const SHELL_COMMAND_REPLACEMENT: &str = "<shell command>";
 /// shell-like command line. This avoids quoting ambiguity and accidental shell
 /// injection. Use [`Self::shell`] only when shell parsing, redirection,
 /// expansion, or pipes are intentionally required.
+///
+/// # Examples
+///
+/// ```compile_fail
+/// #![deny(unused_must_use)]
+/// use qubit_command::Command;
+///
+/// Command::new("true");
+/// ```
 #[derive(Clone, PartialEq, Eq)]
+#[must_use]
 pub struct Command {
     /// Program executable name or path.
     program: OsString,
     /// Positional arguments passed to the program.
-    args: Vec<OsString>,
+    args: Vec<CommandArgument>,
     /// Working directory override for this command.
     working_directory: Option<PathBuf>,
     /// Whether the command should clear inherited environment variables.
@@ -68,7 +80,7 @@ impl fmt::Debug for Command {
                 &self.sanitized_environment_assignments(&field_sanitizer),
             )
             .field("unset", &self.removed_environment_names())
-            .field("stdin", &StdinDisplay(&self.stdin))
+            .field("stdin", &self.stdin)
             .finish()
     }
 }
@@ -83,7 +95,7 @@ impl Command {
     /// # Returns
     ///
     /// A command with no arguments or per-command overrides.
-    #[inline]
+    #[inline(always)]
     pub fn new(program: &str) -> Self {
         Self::new_os(program)
     }
@@ -150,6 +162,27 @@ impl Command {
         Self::new("cmd").arg("/C").arg(command_line)
     }
 
+    /// Returns the executable name or path.
+    ///
+    /// # Returns
+    ///
+    /// Program executable name or path as an [`OsStr`].
+    #[must_use]
+    #[inline(always)]
+    pub fn program(&self) -> &OsStr {
+        &self.program
+    }
+
+    /// Returns the configured argument list.
+    ///
+    /// # Returns
+    ///
+    /// Borrowed raw argument values in submission order.
+    #[inline(always)]
+    pub fn arguments(&self) -> impl ExactSizeIterator<Item = &OsStr> {
+        self.args.iter().map(CommandArgument::value)
+    }
+
     /// Adds one positional argument.
     ///
     /// # Parameters
@@ -159,9 +192,10 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline]
+    #[inline(always)]
     pub fn arg(mut self, arg: &str) -> Self {
-        self.args.push(OsString::from(arg));
+        self.args
+            .push(CommandArgument::visible(OsString::from(arg)));
         self
     }
 
@@ -174,12 +208,52 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline]
+    #[inline(always)]
     pub fn arg_os<S>(mut self, arg: S) -> Self
     where
         S: AsRef<OsStr>,
     {
-        self.args.push(arg.as_ref().to_owned());
+        self.args
+            .push(CommandArgument::visible(arg.as_ref().to_owned()));
+        self
+    }
+
+    /// Adds one positional argument whose value is redacted in diagnostics.
+    ///
+    /// The original value is still passed unchanged to the child process.
+    ///
+    /// # Parameters
+    ///
+    /// * `arg` - Sensitive argument to append.
+    ///
+    /// # Returns
+    ///
+    /// The updated command.
+    #[inline(always)]
+    pub fn sensitive_arg(mut self, arg: &str) -> Self {
+        self.args
+            .push(CommandArgument::sensitive(OsString::from(arg)));
+        self
+    }
+
+    /// Adds a possibly non-UTF-8 argument redacted in diagnostics.
+    ///
+    /// The original value is still passed unchanged to the child process.
+    ///
+    /// # Parameters
+    ///
+    /// * `arg` - Sensitive argument to append.
+    ///
+    /// # Returns
+    ///
+    /// The updated command.
+    #[inline(always)]
+    pub fn sensitive_arg_os<S>(mut self, arg: S) -> Self
+    where
+        S: AsRef<OsStr>,
+    {
+        self.args
+            .push(CommandArgument::sensitive(arg.as_ref().to_owned()));
         self
     }
 
@@ -194,7 +268,10 @@ impl Command {
     /// The updated command.
     #[inline]
     pub fn args(mut self, args: &[&str]) -> Self {
-        self.args.extend(args.iter().map(OsString::from));
+        self.args.extend(
+            args.iter()
+                .map(|arg| CommandArgument::visible(OsString::from(arg))),
+        );
         self
     }
 
@@ -212,9 +289,22 @@ impl Command {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.args
-            .extend(args.into_iter().map(|arg| arg.as_ref().to_owned()));
+        self.args.extend(
+            args.into_iter()
+                .map(|arg| CommandArgument::visible(arg.as_ref().to_owned())),
+        );
         self
+    }
+
+    /// Returns the per-command working directory override.
+    ///
+    /// # Returns
+    ///
+    /// `Some(path)` when the command has a working directory override, or
+    /// `None` when the runner default should be used.
+    #[inline(always)]
+    pub fn working_directory_override(&self) -> Option<&Path> {
+        self.working_directory.as_deref()
     }
 
     /// Sets a per-command working directory.
@@ -227,13 +317,46 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline]
+    #[inline(always)]
     pub fn working_directory<P>(mut self, working_directory: P) -> Self
     where
         P: Into<PathBuf>,
     {
         self.working_directory = Some(working_directory.into());
         self
+    }
+
+    /// Returns environment variable overrides.
+    ///
+    /// # Returns
+    ///
+    /// Borrowed environment variable entries in insertion order.
+    #[must_use]
+    #[inline(always)]
+    pub fn environment(&self) -> &[(OsString, OsString)] {
+        &self.envs
+    }
+
+    /// Returns environment variable removals.
+    ///
+    /// # Returns
+    ///
+    /// Borrowed environment variable names removed before spawning the command.
+    #[must_use]
+    #[inline(always)]
+    pub fn removed_environment(&self) -> &[OsString] {
+        &self.removed_envs
+    }
+
+    /// Returns whether the inherited environment is cleared.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the command should start from an empty environment.
+    #[must_use]
+    #[inline(always)]
+    pub const fn clears_environment(&self) -> bool {
+        self.clear_environment
     }
 
     /// Adds or overrides an environment variable for this command.
@@ -246,7 +369,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline]
+    #[inline(always)]
     pub fn env(mut self, key: &str, value: &str) -> Self {
         self = self.env_os(key, value);
         self
@@ -286,7 +409,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline]
+    #[inline(always)]
     pub fn env_remove(mut self, key: &str) -> Self {
         self = self.env_remove_os(key);
         self
@@ -322,6 +445,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
+    #[inline(always)]
     pub fn env_clear(mut self) -> Self {
         self.clear_environment = true;
         self.envs.clear();
@@ -334,6 +458,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
+    #[inline(always)]
     pub fn stdin_null(mut self) -> Self {
         self.stdin = CommandStdin::Null;
         self
@@ -344,6 +469,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
+    #[inline(always)]
     pub fn stdin_inherit(mut self) -> Self {
         self.stdin = CommandStdin::Inherit;
         self
@@ -361,6 +487,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
+    #[inline(always)]
     pub fn stdin_bytes<B>(mut self, bytes: B) -> Self
     where
         B: Into<Vec<u8>>,
@@ -378,6 +505,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
+    #[inline(always)]
     pub fn stdin_file<P>(mut self, path: P) -> Self
     where
         P: Into<PathBuf>,
@@ -386,73 +514,12 @@ impl Command {
         self
     }
 
-    /// Returns the executable name or path.
-    ///
-    /// # Returns
-    ///
-    /// Program executable name or path as an [`OsStr`].
-    #[inline]
-    pub fn program(&self) -> &OsStr {
-        &self.program
-    }
-
-    /// Returns the configured argument list.
-    ///
-    /// # Returns
-    ///
-    /// Borrowed argument list in submission order.
-    #[inline]
-    pub fn arguments(&self) -> &[OsString] {
-        &self.args
-    }
-
-    /// Returns the per-command working directory override.
-    ///
-    /// # Returns
-    ///
-    /// `Some(path)` when the command has a working directory override, or
-    /// `None` when the runner default should be used.
-    #[inline]
-    pub fn working_directory_override(&self) -> Option<&Path> {
-        self.working_directory.as_deref()
-    }
-
-    /// Returns environment variable overrides.
-    ///
-    /// # Returns
-    ///
-    /// Borrowed environment variable entries in insertion order.
-    #[inline]
-    pub fn environment(&self) -> &[(OsString, OsString)] {
-        &self.envs
-    }
-
-    /// Returns environment variable removals.
-    ///
-    /// # Returns
-    ///
-    /// Borrowed environment variable names removed before spawning the command.
-    #[inline]
-    pub fn removed_environment(&self) -> &[OsString] {
-        &self.removed_envs
-    }
-
-    /// Returns whether the inherited environment is cleared.
-    ///
-    /// # Returns
-    ///
-    /// `true` when the command should start from an empty environment.
-    #[inline]
-    pub const fn clears_environment(&self) -> bool {
-        self.clear_environment
-    }
-
     /// Consumes the command and returns the configured stdin behavior.
     ///
     /// # Returns
     ///
     /// Owned stdin configuration used by the runner.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn into_stdin_configuration(self) -> CommandStdin {
         self.stdin
     }
@@ -462,6 +529,7 @@ impl Command {
     /// # Returns
     ///
     /// A sanitized command string suitable for logs and errors.
+    #[must_use]
     pub(crate) fn display_command(
         &self,
         field_sanitizer: &FieldSanitizer,
@@ -481,9 +549,13 @@ impl Command {
     /// # Returns
     ///
     /// Sanitized argv tokens with secret-looking values masked.
+    #[must_use]
     fn sanitized_argv(&self, field_sanitizer: &FieldSanitizer) -> Vec<String> {
         ArgvSanitizer::new(field_sanitizer.clone())
-            .sanitize_argv(self.argv_for_display(), COMMAND_LOG_MATCH_MODE)
+            .sanitize_argv_with_sensitivity(
+                self.argv_for_display(),
+                COMMAND_LOG_MATCH_MODE,
+            )
     }
 
     /// Builds argv tokens with opaque shell payloads hidden.
@@ -491,15 +563,16 @@ impl Command {
     /// # Returns
     ///
     /// Owned argv tokens suitable for structured sanitization.
-    fn argv_for_display(&self) -> Vec<OsString> {
+    #[must_use]
+    fn argv_for_display(&self) -> Vec<(OsString, Option<SensitivityLevel>)> {
         let shell_payload_index = self.shell_payload_arg_index();
         let mut argv = Vec::with_capacity(self.args.len() + 1);
-        argv.push(self.program.clone());
+        argv.push((self.program.clone(), None));
         for (index, arg) in self.args.iter().enumerate() {
             if Some(index) == shell_payload_index {
-                argv.push(OsString::from(SHELL_COMMAND_REPLACEMENT));
+                argv.push((OsString::from(SHELL_COMMAND_REPLACEMENT), None));
             } else {
-                argv.push(arg.clone());
+                argv.push((arg.value().to_owned(), arg.sensitivity()));
             }
         }
         argv
@@ -515,7 +588,7 @@ impl Command {
         if self.args.len() < 2 {
             return None;
         }
-        let first_arg = self.args.first()?;
+        let first_arg = self.args.first()?.value();
         if self.program.as_os_str() == OsStr::new("sh")
             && first_arg == OsStr::new("-c")
         {
@@ -538,6 +611,7 @@ impl Command {
     /// # Returns
     ///
     /// Sanitized `KEY=value` entries for explicit environment overrides.
+    #[must_use]
     fn sanitized_environment_assignments(
         &self,
         field_sanitizer: &FieldSanitizer,
@@ -561,29 +635,11 @@ impl Command {
     /// # Returns
     ///
     /// Environment variable names rendered lossily for diagnostics.
+    #[must_use]
     fn removed_environment_names(&self) -> Vec<String> {
         self.removed_envs
             .iter()
             .map(|key| key.to_string_lossy().into_owned())
             .collect()
-    }
-}
-
-/// Sanitized diagnostic wrapper for command stdin configuration.
-struct StdinDisplay<'a>(&'a CommandStdin);
-
-impl fmt::Debug for StdinDisplay<'_> {
-    /// Formats stdin configuration without exposing inline bytes.
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            CommandStdin::Null => formatter.write_str("Null"),
-            CommandStdin::Inherit => formatter.write_str("Inherit"),
-            CommandStdin::Bytes(bytes) => {
-                write!(formatter, "Bytes({} bytes)", bytes.len())
-            }
-            CommandStdin::File(path) => {
-                formatter.debug_tuple("File").field(path).finish()
-            }
-        }
     }
 }

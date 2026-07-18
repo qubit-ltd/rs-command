@@ -14,7 +14,7 @@ fn test_command_new_stores_program() {
     let command = Command::new("git");
 
     assert_eq!(command.program().to_string_lossy(), "git");
-    assert!(command.arguments().is_empty());
+    assert!(command.arguments().next().is_none());
 }
 
 #[test]
@@ -25,7 +25,6 @@ fn test_command_args_appends_in_order() {
 
     let args = command
         .arguments()
-        .iter()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     assert_eq!(args, vec!["status", "--short", "--branch"]);
@@ -39,7 +38,6 @@ fn test_command_os_args_appends_in_order() {
 
     let args = command
         .arguments()
-        .iter()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     assert_eq!(args, vec!["status", "--short"]);
@@ -193,6 +191,33 @@ fn test_command_debug_sanitizes_sensitive_display_values() {
 }
 
 #[test]
+fn test_command_debug_redacts_sensitive_positional_argument() {
+    let command = Command::new("ffprobe")
+        .arg("-i")
+        .sensitive_arg("/private/customer/video.mp4");
+
+    let debug = format!("{command:?}");
+
+    assert!(debug.contains("<redacted>"));
+    assert!(!debug.contains("/private/customer/video.mp4"));
+}
+
+#[test]
+fn test_command_sensitive_os_arg_preserves_raw_value_and_redacts_debug() {
+    let path = std::ffi::OsStr::new("/private/customer/video.mp4");
+    let command = Command::new("ffprobe").sensitive_arg_os(path);
+
+    assert_eq!(
+        command
+            .arguments()
+            .next()
+            .expect("sensitive argument should be retained"),
+        path,
+    );
+    assert!(!format!("{command:?}").contains("/private/customer/video.mp4"));
+}
+
+#[test]
 fn test_command_debug_sanitizes_credential_containers() {
     let command = Command::new("worker")
         .arg("--redis-url")
@@ -255,7 +280,6 @@ fn test_command_shell_uses_unix_shell() {
     assert_eq!(command.program().to_string_lossy(), "sh");
     let args = command
         .arguments()
-        .iter()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     assert_eq!(args, vec!["-c", "printf ok"]);

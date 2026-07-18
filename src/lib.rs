@@ -10,6 +10,7 @@
 //! Provides command-line process running utilities for Rust.
 
 mod command;
+mod command_argument;
 mod command_env;
 mod command_error;
 mod command_output;
