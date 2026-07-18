@@ -25,38 +25,20 @@ use qubit_sanitize::{
     SensitivityLevel,
 };
 
-pub(crate) mod captured_output;
-pub(crate) mod command_io;
-pub(crate) mod error_mapping;
-pub(crate) mod finished_command;
-pub(crate) mod io_files;
-pub(crate) mod managed_child_process;
-pub(crate) mod output_capture_error;
-pub(crate) mod output_capture_options;
-pub(crate) mod output_collector;
-pub(crate) mod output_reader;
-pub(crate) mod output_tee;
-pub(crate) mod prepared_command;
-pub(crate) mod process_launcher;
-pub(crate) mod process_setup;
-pub(crate) mod running_command;
-pub(crate) mod starting_command;
-pub(crate) mod stdin_pipe;
-pub(crate) mod stdin_writer;
-pub(crate) mod wait_policy;
+pub(crate) mod internal;
 
-use error_mapping::{
+use internal::error_mapping::{
     output_pipe_error,
     spawn_failed,
 };
-use finished_command::FinishedCommand;
-use output_capture_options::OutputCaptureOptions;
-use output_collector::read_output_stream;
-use prepared_command::PreparedCommand;
-use process_launcher::spawn_child;
-use running_command::RunningCommand;
-use starting_command::StartingCommand;
-use stdin_pipe::write_stdin_bytes;
+use internal::finished_command::FinishedCommand;
+use internal::output_capture_options::OutputCaptureOptions;
+use internal::output_collector::read_output_stream;
+use internal::prepared_command::PreparedCommand;
+use internal::process_launcher::spawn_child;
+use internal::running_command::RunningCommand;
+use internal::starting_command::StartingCommand;
+use internal::stdin_pipe::write_stdin_bytes;
 
 use crate::{
     Command,
@@ -65,11 +47,12 @@ use crate::{
     OutputStream,
 };
 
-/// Predefined ten-second timeout value.
+const REDACTED_PATH: &str = "<redacted path>";
+
+/// Default ten-second timeout applied by [`CommandRunner::new`].
 ///
-/// `CommandRunner::new` does not apply this timeout automatically. Use this
-/// constant with [`CommandRunner::timeout`] when callers want a short, explicit
-/// command limit.
+/// Use [`CommandRunner::timeout`] to select a different command limit or
+/// [`CommandRunner::without_timeout`] to opt out of timeout handling.
 pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Runs external commands and captures their output.
@@ -116,19 +99,36 @@ pub struct CommandRunner {
 
 impl fmt::Debug for CommandRunner {
     /// Formats runner configuration without requiring a debug timer object.
+    ///
+    /// # Parameters
+    ///
+    /// * `formatter` - Destination formatter.
+    ///
+    /// # Returns
+    ///
+    /// Formatting result after rendering redacted path configuration.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CommandRunner")
             .field("timeout", &self.timeout)
             .field("timer", &"<dyn Timer>")
-            .field("working_directory", &self.working_directory)
+            .field(
+                "working_directory",
+                &self.working_directory.as_ref().map(|_| REDACTED_PATH),
+            )
             .field("success_exit_codes", &self.success_exit_codes)
             .field("disable_logging", &self.disable_logging)
             .field("diagnostic_sanitizer", &self.diagnostic_sanitizer)
             .field("max_stdout_bytes", &self.max_stdout_bytes)
             .field("max_stderr_bytes", &self.max_stderr_bytes)
-            .field("stdout_file", &self.stdout_file)
-            .field("stderr_file", &self.stderr_file)
+            .field(
+                "stdout_file",
+                &self.stdout_file.as_ref().map(|_| REDACTED_PATH),
+            )
+            .field(
+                "stderr_file",
+                &self.stderr_file.as_ref().map(|_| REDACTED_PATH),
+            )
             .finish()
     }
 }
@@ -138,13 +138,13 @@ impl Default for CommandRunner {
     ///
     /// # Returns
     ///
-    /// A runner with no timeout, a standard monotonic timer, inherited working
-    /// directory, success exit code `0`, enabled logging, unlimited in-memory
-    /// output capture, and no output tee files.
+    /// A runner with the default timeout, a standard monotonic timer, inherited
+    /// working directory, success exit code `0`, enabled logging, unlimited
+    /// in-memory output capture, and no output tee files.
     #[inline]
     fn default() -> Self {
         Self {
-            timeout: None,
+            timeout: Some(DEFAULT_COMMAND_TIMEOUT),
             timer: StdMonotonicClock::new().new_timer(),
             working_directory: None,
             success_exit_codes: vec![0],
@@ -163,9 +163,9 @@ impl CommandRunner {
     ///
     /// # Returns
     ///
-    /// A runner with no timeout, a standard monotonic timer, inherited working
-    /// directory, success exit code `0`, enabled logging, unlimited in-memory
-    /// output capture, and no output tee files.
+    /// A runner with the default timeout, a standard monotonic timer, inherited
+    /// working directory, success exit code `0`, enabled logging, unlimited
+    /// in-memory output capture, and no output tee files.
     #[inline(always)]
     pub fn new() -> Self {
         Self::default()
@@ -624,10 +624,11 @@ impl CommandRunner {
             log::info!("Running command: {command_text}");
         }
 
-        let child_process = match spawn_child(process_command) {
-            Ok(child_process) => child_process,
-            Err(source) => return Err(spawn_failed(&command_text, source)),
-        };
+        let child_process =
+            match spawn_child(process_command, self.timeout.is_some()) {
+                Ok(child_process) => child_process,
+                Err(source) => return Err(spawn_failed(&command_text, source)),
+            };
         let mut starting_command =
             StartingCommand::new(&command_text, child_process);
         let started_at = self.timer.clock().now();

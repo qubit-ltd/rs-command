@@ -28,6 +28,14 @@ pub(crate) enum CommandStdin {
 
 impl fmt::Debug for CommandStdin {
     /// Formats stdin configuration without exposing inline bytes.
+    ///
+    /// # Parameters
+    ///
+    /// * `formatter` - Destination formatter.
+    ///
+    /// # Returns
+    ///
+    /// Formatting result after rendering stdin kind and safe metadata.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Null => formatter.write_str("Null"),
@@ -35,9 +43,10 @@ impl fmt::Debug for CommandStdin {
             Self::Bytes(bytes) => {
                 write!(formatter, "Bytes({} bytes)", bytes.len())
             }
-            Self::File(path) => {
-                formatter.debug_tuple("File").field(path).finish()
-            }
+            Self::File(_) => formatter
+                .debug_tuple("File")
+                .field(&"<redacted path>")
+                .finish(),
         }
     }
 }

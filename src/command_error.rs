@@ -6,6 +6,7 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 use std::{
+    fmt,
     io,
     path::PathBuf,
     time::Duration,
@@ -26,7 +27,7 @@ use crate::{
 /// This enum is non-exhaustive; downstream matches must retain a wildcard arm
 /// so future process and platform failures can be represented without another
 /// breaking change.
-#[derive(Debug, Error)]
+#[derive(Error)]
 #[non_exhaustive]
 pub enum CommandError {
     /// The process could not be spawned.
@@ -73,7 +74,7 @@ pub enum CommandError {
 
     /// Opening a stdin file failed.
     #[error(
-        "failed to open stdin file `{path:?}` for command `{command}`: {source}"
+        "failed to open stdin file `<redacted path>` for command `{command}`: {source}"
     )]
     OpenInputFailed {
         /// Human-readable command representation.
@@ -86,7 +87,7 @@ pub enum CommandError {
 
     /// Opening an output redirection file failed.
     #[error(
-        "failed to open {stream} file `{path:?}` for command `{command}`: {source}"
+        "failed to open {stream} file `<redacted path>` for command `{command}`: {source}"
     )]
     OpenOutputFailed {
         /// Human-readable command representation.
@@ -101,7 +102,7 @@ pub enum CommandError {
 
     /// An input file and one output tee identify the same file.
     #[error(
-        "stdin file '{input_path:?}' conflicts with {output_stream} file '{output_path:?}' for command '{command}'"
+        "stdin file '<redacted path>' conflicts with {output_stream} file '<redacted path>' for command '{command}'"
     )]
     InputOutputConflict {
         /// Human-readable command representation.
@@ -116,7 +117,7 @@ pub enum CommandError {
 
     /// Stdout and stderr tee paths identify the same file.
     #[error(
-        "stdout file '{stdout_path:?}' conflicts with stderr file '{stderr_path:?}' for command '{command}'"
+        "stdout file '<redacted path>' conflicts with stderr file '<redacted path>' for command '{command}'"
     )]
     OutputFilesConflict {
         /// Human-readable command representation.
@@ -129,7 +130,7 @@ pub enum CommandError {
 
     /// Inspecting an I/O file for conflict detection failed.
     #[error(
-        "failed to inspect I/O file '{path:?}' for command '{command}': {source}"
+        "failed to inspect I/O file '<redacted path>' for command '{command}': {source}"
     )]
     InspectIoFileFailed {
         /// Human-readable command representation.
@@ -182,7 +183,7 @@ pub enum CommandError {
 
     /// Writing captured output to a redirection file failed.
     #[error(
-        "failed to write {stream} for command `{command}` to `{path:?}`: {source}"
+        "failed to write {stream} for command `{command}` to `<redacted path>`: {source}"
     )]
     WriteOutputFailed {
         /// Human-readable command representation.
@@ -220,6 +221,24 @@ pub enum CommandError {
         /// Captured output from the failed command.
         output: Box<CommandOutput>,
     },
+}
+
+impl fmt::Debug for CommandError {
+    /// Formats the error without exposing retained I/O path fields.
+    ///
+    /// # Parameters
+    ///
+    /// * `formatter` - Destination formatter.
+    ///
+    /// # Returns
+    ///
+    /// Formatting result after rendering the sanitized error message.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CommandError")
+            .field("message", &self.to_string())
+            .finish()
+    }
 }
 
 impl CommandError {
