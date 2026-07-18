@@ -61,6 +61,14 @@ pub struct CommandOutput {
 
 impl fmt::Debug for CommandOutput {
     /// Formats process metadata while redacting both captured streams.
+    ///
+    /// # Parameters
+    ///
+    /// * `formatter` - Destination formatter.
+    ///
+    /// # Returns
+    ///
+    /// Formatting result after rendering redacted output metadata.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CommandOutput")

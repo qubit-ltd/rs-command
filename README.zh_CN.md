@@ -19,7 +19,7 @@ Qubit Command 提供一个小而明确的结构化 API，用于运行外部程�
 - 在确实需要 shell 解析时，提供显式 shell 命令支持。
 - 支持配置超时、工作目录、stdin、环境变量和成功退出码。
 - 超时时基于 Unix process group 和 Windows Job Object 尝试终止进程树。
-- 默认以 UTF-8 文本读取 stdout 和 stderr，同时提供原始字节访问方法。
+- 默认保留 stdout 和 stderr 的原始字节，同时提供严格和有损 UTF-8 文本访问方法。
 - 支持按流限制内存捕获字节数，并把完整输出流式写入文件。
 - 在截断任何 tee 文件前检查 stdin、stdout 和 stderr 的文件冲突。
 - 日志和诊断里的命令文本会对敏感 argv、显式环境变量覆盖、shell
@@ -28,8 +28,8 @@ Qubit Command 提供一个小而明确的结构化 API，用于运行外部程�
 
 ## 超时行为
 
-`CommandRunner::new()` 默认不限制执行时间。需要约束命令运行时长时，请显式调用
-`timeout(Duration)`；如果希望在 builder 链中明确表达不设超时，可以调用
+`CommandRunner::new()` 默认应用 `DEFAULT_COMMAND_TIMEOUT`（当前为十秒）。需要
+不同的命令时长限制时，请调用 `timeout(Duration)`；只有确实需要无限等待时才调用
 `without_timeout()`。
 
 设置超时后，runner 会尝试终止整个进程树：Unix 平台把命令放入新的
@@ -61,12 +61,9 @@ if output.stdout_truncated() {
 ## 快速开始
 
 ```rust
-use std::time::Duration;
-
 use qubit_command::{Command, CommandRunner};
 
 let output = CommandRunner::new()
-    .timeout(Duration::from_secs(10))
     .run(Command::new("git").args(&["status", "--short"]))?;
 
 println!("{}", output.stdout_text()?);
@@ -138,6 +135,9 @@ Runner 上追加的字段只影响 runner 日志和 `CommandError::command()`。
 `CommandOutput` 的 `Debug` 输出会遮盖两个捕获流，只报告字节数、截断标志、退出状态和
 耗时。捕获到的 stdout/stderr 字节、显式访问方法以及 tee 文件仍然是进程原始输出。
 如果命令输出本身可能包含敏感信息，请配置捕获上限，并在调用方按业务语义过滤。
+
+工作目录、stdin 文件和 tee 文件路径不会出现在 `Debug`、`Display` 或
+`CommandError` 的诊断文本中；需要按错误类型处理时，结构化错误字段仍保留原始路径。
 
 ## 输出文本
 

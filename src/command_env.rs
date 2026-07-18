@@ -20,6 +20,24 @@ unsafe extern "system" {
     ///
     /// The integer lengths describe the buffers addressed by `left` and
     /// `right`; a nonzero `ignore_case` requests case-insensitive comparison.
+    ///
+    /// # Parameters
+    ///
+    /// * `left` - Pointer to the first UTF-16 buffer.
+    /// * `left_len` - Number of UTF-16 code units in `left`.
+    /// * `right` - Pointer to the second UTF-16 buffer.
+    /// * `right_len` - Number of UTF-16 code units in `right`.
+    /// * `ignore_case` - Nonzero to compare without case sensitivity.
+    ///
+    /// # Returns
+    ///
+    /// Windows ordinal comparison result, or zero when the API reports an
+    /// error.
+    ///
+    /// # Safety
+    ///
+    /// Both pointers must remain valid for their declared lengths throughout
+    /// the call.
     #[link_name = "CompareStringOrdinal"]
     fn compare_string_ordinal(
         left: *const u16,

@@ -31,6 +31,7 @@ use crate::command_stdin::CommandStdin;
 
 const COMMAND_LOG_MATCH_MODE: NameMatchMode = NameMatchMode::ExactOrSuffix;
 const SHELL_COMMAND_REPLACEMENT: &str = "<shell command>";
+const REDACTED_PATH: &str = "<redacted path>";
 
 /// Structured description of an external command to run.
 ///
@@ -68,12 +69,23 @@ pub struct Command {
 
 impl fmt::Debug for Command {
     /// Formats this command without exposing sensitive log values.
+    ///
+    /// # Parameters
+    ///
+    /// * `formatter` - Destination formatter.
+    ///
+    /// # Returns
+    ///
+    /// Formatting result after rendering sanitized command metadata.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let field_sanitizer = FieldSanitizer::default();
         formatter
             .debug_struct("Command")
             .field("argv", &self.sanitized_argv(&field_sanitizer))
-            .field("working_directory", &self.working_directory)
+            .field(
+                "working_directory",
+                &self.working_directory.as_ref().map(|_| REDACTED_PATH),
+            )
             .field("clear_environment", &self.clear_environment)
             .field(
                 "env",

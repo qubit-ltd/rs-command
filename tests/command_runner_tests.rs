@@ -25,6 +25,7 @@ use qubit_command::{
     Command,
     CommandError,
     CommandRunner,
+    DEFAULT_COMMAND_TIMEOUT,
 };
 use qubit_sanitize::SensitivityLevel;
 
@@ -37,6 +38,7 @@ mod unix {
         Command,
         CommandError,
         CommandRunner,
+        DEFAULT_COMMAND_TIMEOUT,
         Duration,
         Instant,
         OutputStream,
@@ -62,7 +64,7 @@ mod unix {
     fn test_command_runner_default_configuration() {
         let runner = CommandRunner::new();
 
-        assert_eq!(runner.configured_timeout(), None);
+        assert_eq!(runner.configured_timeout(), Some(DEFAULT_COMMAND_TIMEOUT),);
         assert_eq!(runner.configured_success_exit_codes(), &[0]);
         assert!(runner.configured_working_directory().is_none());
         assert!(!runner.is_logging_disabled());
@@ -82,6 +84,24 @@ mod unix {
     }
 
     #[test]
+    fn test_command_runner_debug_redacts_path_configuration() {
+        let debug = format!(
+            "{:?}",
+            CommandRunner::new()
+                .working_directory("customer/working-directory")
+                .tee_stdout_to_file("customer/stdout.log")
+                .tee_stderr_to_file("customer/stderr.log"),
+        );
+
+        assert!(debug.contains("working_directory: Some(\"<redacted path>\")"));
+        assert!(debug.contains("stdout_file: Some(\"<redacted path>\")"));
+        assert!(debug.contains("stderr_file: Some(\"<redacted path>\")"));
+        assert!(!debug.contains("customer/working-directory"));
+        assert!(!debug.contains("customer/stdout.log"));
+        assert!(!debug.contains("customer/stderr.log"));
+    }
+
+    #[test]
     fn test_command_runner_run_captures_stdout() {
         let output = CommandRunner::new()
             .run(Command::shell("printf command-out"))
@@ -93,6 +113,28 @@ mod unix {
             "command-out",
         );
         assert!(output.stderr().is_empty());
+    }
+
+    #[test]
+    fn test_runner_without_timeout_uses_parent_process_group() {
+        let output = CommandRunner::new()
+            .without_timeout()
+            .run(Command::shell("ps -o pgid= -p $$; ps -o pgid= -p $PPID"))
+            .expect("command without timeout should run successfully");
+        let process_groups: Vec<i32> = output
+            .stdout_text()
+            .expect("process groups should be valid UTF-8")
+            .split_whitespace()
+            .map(|value| {
+                value.parse().expect("process group should be numeric")
+            })
+            .collect();
+
+        assert_eq!(process_groups.len(), 2);
+        assert_eq!(
+            process_groups[0], process_groups[1],
+            "a command without timeout must remain in its parent's process group",
+        );
     }
 
     #[test]
@@ -479,6 +521,57 @@ mod unix {
             .join()
             .expect("runner thread should not panic")
             .expect_err("command should time out");
+        assert!(matches!(error, CommandError::TimedOut { .. }));
+    }
+
+    #[test]
+    fn test_runner_timeout_rejects_child_that_exits_after_deadline() {
+        use qubit_clock::{
+            ManualMonotonicClock,
+            MonotonicClock,
+        };
+
+        let signal_path = unique_temp_path("deadline-signal");
+        let completion_path = unique_temp_path("deadline-completion");
+        let script = "while [ ! -e \"$1\" ]; do sleep 0.01; done; : > \"$2\"";
+        let clock = ManualMonotonicClock::new_shared();
+        let timeout = Duration::from_secs(30);
+        let runner = CommandRunner::new()
+            .timeout(timeout)
+            .timer(clock.new_timer());
+        let child_signal_path = signal_path.clone();
+        let child_completion_path = completion_path.clone();
+        let worker = std::thread::spawn(move || {
+            runner.run(
+                Command::new("sh")
+                    .arg("-c")
+                    .arg(script)
+                    .arg("sh")
+                    .arg_os(&child_signal_path)
+                    .arg_os(&child_completion_path),
+            )
+        });
+
+        assert!(clock.wait_for_waiters(1, Duration::from_secs(2)));
+        fs::write(&signal_path, b"release")
+            .expect("signal file should release child command");
+        let completed_before_deadline = Instant::now() + Duration::from_secs(2);
+        while !completion_path.exists() {
+            assert!(
+                Instant::now() < completed_before_deadline,
+                "child command should exit before the manual deadline advances",
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        clock.advance(timeout).expect("manual time should advance");
+
+        let result = worker.join().expect("runner thread should not panic");
+        let _ = fs::remove_file(&signal_path);
+        let _ = fs::remove_file(&completion_path);
+        let error = result.expect_err(
+            "a child that exits after the deadline must still be timed out",
+        );
+
         assert!(matches!(error, CommandError::TimedOut { .. }));
     }
 

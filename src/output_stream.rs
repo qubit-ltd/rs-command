@@ -8,7 +8,15 @@
 use std::fmt;
 
 /// Output stream whose reader failed.
+///
+/// ```compile_fail
+/// #![deny(unused_must_use)]
+/// use qubit_command::OutputStream;
+///
+/// OutputStream::Stdout;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
 pub enum OutputStream {
     /// Standard output stream.
     Stdout,

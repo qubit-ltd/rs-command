@@ -216,6 +216,11 @@ fn open_output(
 ///
 /// Returns a conflict error for equal normalized paths, or
 /// [CommandError::InspectIoFileFailed] when normalization fails.
+///
+/// # Panics
+///
+/// Panics when normalized paths exist without their corresponding original
+/// input paths, which indicates an internal invariant violation.
 fn validate_normalized_paths(
     command: &str,
     stdin_path: Option<&Path>,
@@ -337,6 +342,11 @@ fn normalize_lexically(path: &Path) -> PathBuf {
 ///
 /// Returns a conflict error for identical handles, or
 /// [CommandError::InspectIoFileFailed] when a handle cannot be inspected.
+///
+/// # Panics
+///
+/// Panics when an inspected handle exists without its original configured
+/// path, which indicates an internal invariant violation.
 fn validate_file_identities(
     command: &str,
     stdin: Option<(&Path, &File)>,
@@ -433,6 +443,11 @@ fn file_handle(
 ///
 /// Returns [CommandError::InspectIoFileFailed] when file metadata cannot be
 /// read, or [CommandError::OpenOutputFailed] when truncation fails.
+///
+/// # Panics
+///
+/// Panics when an open tee file has no corresponding configured path, which
+/// indicates an internal invariant violation.
 fn truncate_output(
     command: &str,
     stream: OutputStream,

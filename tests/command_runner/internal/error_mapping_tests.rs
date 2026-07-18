@@ -34,3 +34,23 @@ fn test_error_mapping_preserves_unexpected_exit_output() {
         other => panic!("expected unexpected-exit error, got {other:?}"),
     }
 }
+
+#[cfg(not(windows))]
+#[test]
+fn test_error_mapping_redacts_io_paths_in_diagnostics() {
+    let path = std::env::temp_dir().join(format!(
+        "qubit-command-private-input-{}",
+        std::process::id(),
+    ));
+    let error = CommandRunner::new()
+        .run(Command::new("cat").stdin_file(&path))
+        .expect_err("missing private stdin file should fail");
+    let path_text = path.to_string_lossy();
+
+    assert!(matches!(
+        error,
+        CommandError::OpenInputFailed { ref path, .. } if path == path_text.as_ref()
+    ));
+    assert!(!error.to_string().contains(path_text.as_ref()));
+    assert!(!format!("{error:?}").contains(path_text.as_ref()));
+}

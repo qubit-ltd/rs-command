@@ -34,9 +34,9 @@ clear error values.
 
 ## Timeout Behavior
 
-`CommandRunner::new()` does not enforce a timeout by default. Use
-`timeout(Duration)` when a command must be bounded, or `without_timeout()` when
-the absence of a timeout should be explicit in builder chains.
+`CommandRunner::new()` enforces `DEFAULT_COMMAND_TIMEOUT` (currently ten
+seconds). Use `timeout(Duration)` when a command needs a different bound, or
+`without_timeout()` only when the absence of a timeout is deliberate.
 
 When a timeout is configured, the runner attempts to terminate the process tree:
 Unix commands are spawned in a new process group and Windows commands are spawned
@@ -69,12 +69,9 @@ if output.stdout_truncated() {
 ## Quick Start
 
 ```rust
-use std::time::Duration;
-
 use qubit_command::{Command, CommandRunner};
 
 let output = CommandRunner::new()
-    .timeout(Duration::from_secs(10))
     .run(Command::new("git").args(&["status", "--short"]))?;
 
 println!("{}", output.stdout_text()?);
@@ -151,6 +148,10 @@ their byte lengths, truncation flags, status, and elapsed time. Captured
 stdout/stderr bytes, their explicit accessors, and tee files remain raw process
 output. Use capture limits and caller-side filtering when command output itself
 may contain secrets.
+
+Working-directory, stdin-file, and tee-file paths are redacted from `Debug`,
+`Display`, and `CommandError` diagnostics. Structured error fields still retain
+the raw paths for callers that need to handle the failure programmatically.
 
 ## Output Text
 

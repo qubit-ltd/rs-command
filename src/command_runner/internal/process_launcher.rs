@@ -18,11 +18,13 @@ use process_wrap::std::ProcessGroup;
 
 use super::managed_child_process::ManagedChildProcess;
 
-/// Spawns a child process with platform process-tree support.
+/// Spawns a child process with optional platform process-tree support.
 ///
 /// # Parameters
 ///
 /// * `process_command` - Fully prepared standard-library process command.
+/// * `manage_process_tree` - Whether timeout handling must own the child
+///   process tree.
 ///
 /// # Returns
 ///
@@ -34,11 +36,16 @@ use super::managed_child_process::ManagedChildProcess;
 /// the process group or Job Object.
 pub(crate) fn spawn_child(
     process_command: ProcessCommand,
+    manage_process_tree: bool,
 ) -> io::Result<ManagedChildProcess> {
     let mut command = CommandWrap::from(process_command);
     #[cfg(unix)]
-    command.wrap(ProcessGroup::leader());
+    if manage_process_tree {
+        command.wrap(ProcessGroup::leader());
+    }
     #[cfg(windows)]
-    command.wrap(JobObject);
+    if manage_process_tree {
+        command.wrap(JobObject);
+    }
     command.spawn()
 }

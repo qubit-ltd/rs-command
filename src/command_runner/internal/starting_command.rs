@@ -64,6 +64,10 @@ impl<'a> StartingCommand<'a> {
     /// # Returns
     ///
     /// Child wrapper used to take configured standard-I/O pipes.
+    ///
+    /// # Panics
+    ///
+    /// Panics after ownership has transferred to a running command.
     #[must_use]
     #[inline(always)]
     pub(crate) fn child_process(&mut self) -> &mut dyn ChildWrapper {
@@ -110,7 +114,8 @@ impl<'a> StartingCommand<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if either output reader has not been registered.
+    /// Panics if the child process or either output reader has not been
+    /// registered.
     #[must_use = "transfer both the child and its I/O helpers to running state"]
     #[inline]
     pub(crate) fn finish(mut self) -> (ManagedChildProcess, CommandIo) {

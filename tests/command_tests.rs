@@ -223,12 +223,21 @@ fn test_command_debug_redacts_cmd_shell_payload() {
 fn test_command_debug_formats_stdin_without_inline_bytes() {
     let null_input = format!("{:?}", Command::new("cat").stdin_null());
     let inherited_input = format!("{:?}", Command::new("cat").stdin_inherit());
-    let file_input =
-        format!("{:?}", Command::new("cat").stdin_file("input.txt"));
+    let file_input = format!(
+        "{:?}",
+        Command::new("cat")
+            .working_directory("customer/working-directory")
+            .stdin_file("customer/private-input.txt"),
+    );
 
     assert!(null_input.contains("stdin: Null"));
     assert!(inherited_input.contains("stdin: Inherit"));
-    assert!(file_input.contains(r#"stdin: File("input.txt")"#));
+    assert!(file_input.contains(r#"stdin: File("<redacted path>")"#));
+    assert!(
+        file_input.contains("working_directory: Some(\"<redacted path>\")")
+    );
+    assert!(!file_input.contains("customer/working-directory"));
+    assert!(!file_input.contains("customer/private-input.txt"));
 }
 
 #[test]
