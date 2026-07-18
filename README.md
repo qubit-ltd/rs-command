@@ -26,6 +26,7 @@ clear error values.
 - UTF-8 stdout and stderr text accessors, with raw byte accessors for binary
   output
 - Optional per-stream capture limits plus streaming tee files for large output
+- Input and output file conflict detection before any tee file is truncated
 - Sanitized command diagnostics for sensitive argv values, explicit
   environment overrides, shell payloads, and caller-defined sensitive fields
 - Typed errors for spawn failures, timeouts, failed output reads, and unexpected
@@ -40,6 +41,10 @@ the absence of a timeout should be explicit in builder chains.
 When a timeout is configured, the runner attempts to terminate the process tree:
 Unix commands are spawned in a new process group and Windows commands are spawned
 in a Job Object.
+
+Timeout measurement and sleeping use an injectable `qubit-clock` timer. This
+lets tests drive timeout behavior with a manual monotonic clock. Without a
+timeout, the runner waits directly for process completion instead of polling.
 
 ## Large Output
 
@@ -116,7 +121,8 @@ payloads are treated as opaque shell scripts and displayed as
 Add application-specific fields on the runner when the defaults are not enough:
 
 ```rust
-use qubit_command::{Command, CommandRunner, SensitivityLevel};
+use qubit_command::{Command, CommandRunner};
+use qubit_sanitize::SensitivityLevel;
 
 let error = CommandRunner::new()
     .sensitive_field("tenant_option", SensitivityLevel::Secret)
@@ -128,6 +134,10 @@ assert_eq!(
     r#"["__missing__", "--tenant-option", "<redacted>"]"#,
 );
 ```
+
+Use `Command::sensitive_arg` or `Command::sensitive_arg_os` for positional
+values such as customer file paths. The original value is passed unchanged to
+the child process, while diagnostics display the configured secret mask.
 
 Runner-specific fields affect runner logs and `CommandError::command()`.
 Standalone `Command` `Debug` output has no runner context and uses the built-in
@@ -166,38 +176,35 @@ assert_eq!(output.stdout_lossy_text(), "\u{fffd}");
 
 ## Testing
 
-A minimal local run:
-
 ```bash
+# Run tests with the default feature set
 cargo test
-cargo clippy --all-targets --all-features -- -D warnings
+
+# Run tests with all declared features
+cargo test --all-features
+
+# Project CI checks
+./ci-check.sh
+
+# Check code coverage
+./coverage.sh
 ```
-
-To mirror what continuous integration enforces, run the repository scripts from the project root: `./align-ci.sh` brings local tooling and configuration in line with CI, then `./ci-check.sh` runs the same checks the pipeline uses. For test coverage, use `./coverage.sh` to generate or open reports (see the script’s help and any project coverage notes for options such as HTML or JSON).
-
-## Contributing
-
-Issues and pull requests are welcome.
-
-- Open an issue for bug reports, design questions, or larger feature proposals when it helps align on direction.
-- Keep pull requests scoped to one behavior change, fix, or documentation update when practical.
-- Before submitting, run `./align-ci.sh` and then `./ci-check.sh` so your branch matches CI rules and passes the same checks as the pipeline. When you need to review or improve coverage, use `./coverage.sh` as described under [Testing](#testing).
-- Add or update tests when you change runtime behavior, and update this README (or public rustdoc) when user-visible API behavior changes.
-
-By contributing, you agree to license your contributions under the [Apache License, Version 2.0](LICENSE), the same license as this project.
 
 ## License
 
-Copyright © 2026 Haixing Hu, Qubit Co. Ltd.
+Copyright (c) 2025 - 2026. Haixing Hu. All rights reserved.
 
-This project is licensed under the [Apache License, Version 2.0](LICENSE). See the `LICENSE` file in the repository for the full text.
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the
+full license text.
+
+## Contributing
+
+Contributions are welcome. Please follow the Rust API guidelines, keep public
+API documentation and tests current, and run `./align-ci.sh` to format code and
+`./ci-check.sh` to satisfy CI requirements before submitting a pull request.
 
 ## Author
 
-**Haixing Hu** — Qubit Co. Ltd.
+**Haixing Hu** - *Qubit Co. Ltd.*
 
-| | |
-| --- | --- |
-| **Repository** | [github.com/qubit-ltd/rs-command](https://github.com/qubit-ltd/rs-command) |
-| **Documentation** | [docs.rs/qubit-command](https://docs.rs/qubit-command) |
-| **Crate** | [crates.io/crates/qubit-command](https://crates.io/crates/qubit-command) |
+Repository: [https://github.com/qubit-ltd/rs-command](https://github.com/qubit-ltd/rs-command)
