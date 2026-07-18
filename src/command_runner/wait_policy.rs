@@ -11,6 +11,18 @@ use std::time::Duration;
 pub(crate) const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Calculates how long to sleep before polling the child again.
+///
+/// # Parameters
+///
+/// * `timeout` - Optional total timeout.
+/// * `elapsed` - Elapsed command time.
+///
+/// # Returns
+///
+/// The lesser of the polling interval and remaining timeout, or the polling
+/// interval when no positive remainder is available.
+#[must_use]
+#[inline]
 pub(crate) fn next_sleep(
     timeout: Option<Duration>,
     elapsed: Duration,

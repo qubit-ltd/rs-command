@@ -19,6 +19,22 @@ use super::stdin_writer::StdinWriter;
 use crate::CommandError;
 
 /// Starts a helper thread that writes configured stdin bytes.
+///
+/// # Parameters
+///
+/// * `command` - Sanitized command text used in errors.
+/// * `child` - Spawned child whose stdin pipe may be taken.
+/// * `stdin_bytes` - Optional byte buffer to write and then close.
+///
+/// # Returns
+///
+/// An optional join handle when buffered stdin is configured.
+///
+/// # Errors
+///
+/// Returns [`CommandError::WriteInputFailed`] when the configured pipe is
+/// missing, or [`CommandError::StartInputThreadFailed`] when the writer thread
+/// cannot be created.
 pub(crate) fn write_stdin_bytes(
     command: &str,
     child: &mut dyn ChildWrapper,
@@ -26,9 +42,14 @@ pub(crate) fn write_stdin_bytes(
 ) -> Result<StdinWriter, CommandError> {
     match stdin_bytes {
         Some(bytes) => match child.stdin().take() {
-            Some(mut stdin) => {
-                Ok(Some(thread::spawn(move || stdin.write_all(&bytes))))
-            }
+            Some(mut stdin) => thread::Builder::new()
+                .name("qubit-command-stdin-writer".to_owned())
+                .spawn(move || stdin.write_all(&bytes))
+                .map(Some)
+                .map_err(|source| CommandError::StartInputThreadFailed {
+                    command: command.to_owned(),
+                    source,
+                }),
             None => Err(CommandError::WriteInputFailed {
                 command: command.to_owned(),
                 source: io::Error::other("stdin pipe was not created"),
@@ -39,6 +60,23 @@ pub(crate) fn write_stdin_bytes(
 }
 
 /// Joins the stdin writer and maps failures to command errors.
+///
+/// Broken-pipe errors are accepted because the child may intentionally close
+/// stdin before consuming every configured byte.
+///
+/// # Parameters
+///
+/// * `command` - Sanitized command text used in errors.
+/// * `writer` - Optional writer-thread join handle.
+///
+/// # Returns
+///
+/// `Ok(())` when no writer exists or the writer completes acceptably.
+///
+/// # Errors
+///
+/// Returns [`CommandError::WriteInputFailed`] for non-broken-pipe write errors
+/// or a writer-thread panic.
 pub(crate) fn join_stdin_writer(
     command: &str,
     writer: StdinWriter,

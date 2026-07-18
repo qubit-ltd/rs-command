@@ -5,13 +5,16 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::path::PathBuf;
+use std::{
+    fmt,
+    path::PathBuf,
+};
 
 /// Standard input configuration for a command.
 ///
 /// This type stays internal so the public builder API can evolve without
 /// exposing process-spawning details.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) enum CommandStdin {
     /// Connect stdin to null input.
     Null,
@@ -21,4 +24,20 @@ pub(crate) enum CommandStdin {
     Bytes(Vec<u8>),
     /// Read stdin bytes from this file.
     File(PathBuf),
+}
+
+impl fmt::Debug for CommandStdin {
+    /// Formats stdin configuration without exposing inline bytes.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Null => formatter.write_str("Null"),
+            Self::Inherit => formatter.write_str("Inherit"),
+            Self::Bytes(bytes) => {
+                write!(formatter, "Bytes({} bytes)", bytes.len())
+            }
+            Self::File(path) => {
+                formatter.debug_tuple("File").field(path).finish()
+            }
+        }
+    }
 }

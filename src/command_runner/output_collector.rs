@@ -31,14 +31,45 @@ use crate::{
 };
 
 /// Spawns a reader thread for a child output stream.
+///
+/// # Parameters
+///
+/// * `reader` - Child output pipe to drain.
+/// * `options` - In-memory capture limit and optional tee destination.
+///
+/// # Returns
+///
+/// Join handle for the named output-reader thread.
+///
+/// # Errors
+///
+/// Returns the thread builder's I/O error when the helper cannot be started.
+#[inline]
 pub(crate) fn read_output_stream(
     mut reader: Box<dyn Read + Send>,
     options: OutputCaptureOptions,
-) -> OutputReader {
-    thread::spawn(move || read_output(reader.as_mut(), options))
+) -> io::Result<OutputReader> {
+    thread::Builder::new()
+        .name("qubit-command-output-reader".to_owned())
+        .spawn(move || read_output(reader.as_mut(), options))
 }
 
 /// Reads one child output stream to completion.
+///
+/// # Parameters
+///
+/// * `reader` - Child output pipe to drain.
+/// * `options` - In-memory capture limit and optional tee destination.
+///
+/// # Returns
+///
+/// Retained bytes and their truncation state.
+///
+/// # Errors
+///
+/// Returns [`OutputCaptureError::Read`] for pipe reads or
+/// [`OutputCaptureError::Write`] for tee writes and flushing. The reader still
+/// drains the child pipe after the first tee failure.
 pub(crate) fn read_output(
     reader: &mut dyn Read,
     mut options: OutputCaptureOptions,
@@ -98,6 +129,23 @@ pub(crate) fn read_output(
 }
 
 /// Collects reader-thread results into a command output value.
+///
+/// # Parameters
+///
+/// * `command` - Sanitized command text used in errors.
+/// * `status` - Child exit status.
+/// * `elapsed` - Observed command duration.
+/// * `stdout_reader` - Helper draining stdout.
+/// * `stderr_reader` - Helper draining stderr.
+/// * `stdin_writer` - Optional helper writing stdin.
+///
+/// # Returns
+///
+/// Captured command output after every helper has been joined.
+///
+/// # Errors
+///
+/// Returns the first stdout, stderr, or stdin helper failure in that order.
 pub(crate) fn collect_output(
     command: &str,
     status: ExitStatus,
@@ -128,6 +176,21 @@ pub(crate) fn collect_output(
 }
 
 /// Joins one output reader and maps failures to command errors.
+///
+/// # Parameters
+///
+/// * `command` - Sanitized command text used in errors.
+/// * `stream` - Stream drained by the helper.
+/// * `reader` - Reader-thread join handle.
+///
+/// # Returns
+///
+/// Captured bytes and truncation state from the reader.
+///
+/// # Errors
+///
+/// Returns [`CommandError::ReadOutputFailed`] for read failures or thread
+/// panics, and [`CommandError::WriteOutputFailed`] for tee failures.
 pub(crate) fn join_output_reader(
     command: &str,
     stream: OutputStream,

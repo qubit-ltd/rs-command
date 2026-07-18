@@ -19,6 +19,21 @@ use process_wrap::std::ProcessGroup;
 use super::managed_child_process::ManagedChildProcess;
 
 /// Spawns a child process with platform process-tree support.
+///
+/// # Parameters
+///
+/// * `process_command` - Fully prepared standard-library process command.
+/// * `kill_process_tree` - Whether to install the platform process-tree wrapper
+///   used by timeout termination.
+///
+/// # Returns
+///
+/// Managed child wrapper owning the spawned process.
+///
+/// # Errors
+///
+/// Returns the operating-system spawn error, including failures to configure
+/// the requested process group or Job Object.
 pub(crate) fn spawn_child(
     process_command: ProcessCommand,
     kill_process_tree: bool,

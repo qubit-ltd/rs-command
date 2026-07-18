@@ -6,13 +6,20 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 use std::{
+    fmt,
     path::{
         Path,
         PathBuf,
     },
+    sync::Arc,
     time::Duration,
 };
 
+use qubit_clock::{
+    MonotonicClock,
+    StdMonotonicClock,
+    Timer,
+};
 use qubit_sanitize::{
     FieldSanitizer,
     SensitivityLevel,
@@ -22,6 +29,7 @@ pub(crate) mod captured_output;
 pub(crate) mod command_io;
 pub(crate) mod error_mapping;
 pub(crate) mod finished_command;
+pub(crate) mod io_files;
 pub(crate) mod managed_child_process;
 pub(crate) mod output_capture_error;
 pub(crate) mod output_capture_options;
@@ -32,11 +40,11 @@ pub(crate) mod prepared_command;
 pub(crate) mod process_launcher;
 pub(crate) mod process_setup;
 pub(crate) mod running_command;
+pub(crate) mod starting_command;
 pub(crate) mod stdin_pipe;
 pub(crate) mod stdin_writer;
 pub(crate) mod wait_policy;
 
-use command_io::CommandIo;
 use error_mapping::{
     output_pipe_error,
     spawn_failed,
@@ -47,6 +55,7 @@ use output_collector::read_output_stream;
 use prepared_command::PreparedCommand;
 use process_launcher::spawn_child;
 use running_command::RunningCommand;
+use starting_command::StartingCommand;
 use stdin_pipe::write_stdin_bytes;
 
 use crate::{
@@ -71,10 +80,22 @@ pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 /// [`CommandOutput::stdout_text`] and [`CommandOutput::stderr_text`] for strict
 /// UTF-8 text, or [`CommandOutput::stdout_lossy_text`] and
 /// [`CommandOutput::stderr_lossy_text`] when invalid UTF-8 should be replaced.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// # Examples
+///
+/// ```compile_fail
+/// #![deny(unused_must_use)]
+/// use qubit_command::CommandRunner;
+///
+/// CommandRunner::new();
+/// ```
+#[derive(Clone)]
+#[must_use]
 pub struct CommandRunner {
     /// Maximum duration allowed for each command.
     timeout: Option<Duration>,
+    /// Monotonic timer used for timeout measurement and blocking sleeps.
+    timer: Arc<dyn Timer>,
     /// Default working directory used when a command does not override it.
     working_directory: Option<PathBuf>,
     /// Exit codes treated as successful.
@@ -93,17 +114,38 @@ pub struct CommandRunner {
     stderr_file: Option<PathBuf>,
 }
 
+impl fmt::Debug for CommandRunner {
+    /// Formats runner configuration without requiring a debug timer object.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CommandRunner")
+            .field("timeout", &self.timeout)
+            .field("timer", &"<dyn Timer>")
+            .field("working_directory", &self.working_directory)
+            .field("success_exit_codes", &self.success_exit_codes)
+            .field("disable_logging", &self.disable_logging)
+            .field("diagnostic_sanitizer", &self.diagnostic_sanitizer)
+            .field("max_stdout_bytes", &self.max_stdout_bytes)
+            .field("max_stderr_bytes", &self.max_stderr_bytes)
+            .field("stdout_file", &self.stdout_file)
+            .field("stderr_file", &self.stderr_file)
+            .finish()
+    }
+}
+
 impl Default for CommandRunner {
     /// Creates a command runner with the default exit-code policy.
     ///
     /// # Returns
     ///
-    /// A runner with no timeout, inherited working directory, success exit code
-    /// `0`, unlimited in-memory output capture, and no output tee files.
+    /// A runner with no timeout, a standard monotonic timer, inherited working
+    /// directory, success exit code `0`, enabled logging, unlimited in-memory
+    /// output capture, and no output tee files.
     #[inline]
     fn default() -> Self {
         Self {
             timeout: None,
+            timer: StdMonotonicClock::new().new_timer(),
             working_directory: None,
             success_exit_codes: vec![0],
             disable_logging: false,
@@ -121,11 +163,22 @@ impl CommandRunner {
     ///
     /// # Returns
     ///
-    /// A runner with no timeout, inherited working directory, success exit code
-    /// `0`, unlimited in-memory output capture, and no output tee files.
-    #[inline]
+    /// A runner with no timeout, a standard monotonic timer, inherited working
+    /// directory, success exit code `0`, enabled logging, unlimited in-memory
+    /// output capture, and no output tee files.
+    #[inline(always)]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns the configured timeout.
+    ///
+    /// # Returns
+    ///
+    /// `Some(duration)` when timeout handling is enabled, otherwise `None`.
+    #[inline(always)]
+    pub const fn configured_timeout(&self) -> Option<Duration> {
+        self.timeout
     }
 
     /// Sets the command timeout.
@@ -137,7 +190,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline]
+    #[inline(always)]
     pub const fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
@@ -148,10 +201,47 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline]
+    #[inline(always)]
     pub const fn without_timeout(mut self) -> Self {
         self.timeout = None;
         self
+    }
+
+    /// Returns the configured monotonic timer.
+    ///
+    /// # Returns
+    ///
+    /// Timer used for timeout measurement and blocking sleeps.
+    #[must_use]
+    #[inline(always)]
+    pub fn configured_timer(&self) -> &dyn Timer {
+        self.timer.as_ref()
+    }
+
+    /// Replaces the monotonic timer used for timeout handling.
+    ///
+    /// # Parameters
+    ///
+    /// * `timer` - Timer whose clock measures elapsed command time.
+    ///
+    /// # Returns
+    ///
+    /// The updated command runner.
+    #[inline(always)]
+    pub fn timer(mut self, timer: Arc<dyn Timer>) -> Self {
+        self.timer = timer;
+        self
+    }
+
+    /// Returns the default working directory.
+    ///
+    /// # Returns
+    ///
+    /// `Some(path)` when a default working directory is configured, otherwise
+    /// `None` to inherit the current process working directory.
+    #[inline(always)]
+    pub fn configured_working_directory(&self) -> Option<&Path> {
+        self.working_directory.as_deref()
     }
 
     /// Sets the default working directory.
@@ -164,13 +254,24 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline]
+    #[inline(always)]
     pub fn working_directory<P>(mut self, working_directory: P) -> Self
     where
         P: Into<PathBuf>,
     {
         self.working_directory = Some(working_directory.into());
         self
+    }
+
+    /// Returns the configured successful exit codes.
+    ///
+    /// # Returns
+    ///
+    /// Borrowed list of exit codes treated as successful.
+    #[must_use]
+    #[inline(always)]
+    pub fn configured_success_exit_codes(&self) -> &[i32] {
+        &self.success_exit_codes
     }
 
     /// Sets the only exit code treated as successful.
@@ -203,6 +304,17 @@ impl CommandRunner {
         self
     }
 
+    /// Returns whether logging is disabled.
+    ///
+    /// # Returns
+    ///
+    /// `true` when runner logs are disabled.
+    #[must_use]
+    #[inline(always)]
+    pub const fn is_logging_disabled(&self) -> bool {
+        self.disable_logging
+    }
+
     /// Enables or disables command execution logs.
     ///
     /// # Parameters
@@ -212,7 +324,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline]
+    #[inline(always)]
     pub const fn disable_logging(mut self, disable_logging: bool) -> Self {
         self.disable_logging = disable_logging;
         self
@@ -289,7 +401,7 @@ impl CommandRunner {
     /// The updated command runner.
     #[inline]
     pub fn exclude_sensitive_field(mut self, field: &str) -> Self {
-        self.diagnostic_sanitizer.remove_sensitive_field(field);
+        self.diagnostic_sanitizer.exclude_sensitive_field(field);
         self
     }
 
@@ -307,12 +419,21 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline]
     pub fn exclude_sensitive_fields(mut self, fields: &[&str]) -> Self {
         for field in fields {
-            self.diagnostic_sanitizer.remove_sensitive_field(field);
+            self.diagnostic_sanitizer.exclude_sensitive_field(field);
         }
         self
+    }
+
+    /// Returns the configured stdout capture limit.
+    ///
+    /// # Returns
+    ///
+    /// `Some(max_bytes)` when stdout capture is limited, otherwise `None`.
+    #[inline(always)]
+    pub const fn configured_max_stdout_bytes(&self) -> Option<usize> {
+        self.max_stdout_bytes
     }
 
     /// Sets the maximum stdout bytes retained in memory.
@@ -328,10 +449,20 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline]
+    #[inline(always)]
     pub const fn max_stdout_bytes(mut self, max_bytes: usize) -> Self {
         self.max_stdout_bytes = Some(max_bytes);
         self
+    }
+
+    /// Returns the configured stderr capture limit.
+    ///
+    /// # Returns
+    ///
+    /// `Some(max_bytes)` when stderr capture is limited, otherwise `None`.
+    #[inline(always)]
+    pub const fn configured_max_stderr_bytes(&self) -> Option<usize> {
+        self.max_stderr_bytes
     }
 
     /// Sets the maximum stderr bytes retained in memory.
@@ -347,7 +478,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline]
+    #[inline(always)]
     pub const fn max_stderr_bytes(mut self, max_bytes: usize) -> Self {
         self.max_stderr_bytes = Some(max_bytes);
         self
@@ -362,18 +493,30 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline]
+    #[inline(always)]
     pub const fn max_output_bytes(mut self, max_bytes: usize) -> Self {
         self.max_stdout_bytes = Some(max_bytes);
         self.max_stderr_bytes = Some(max_bytes);
         self
     }
 
+    /// Returns the stdout tee file path.
+    ///
+    /// # Returns
+    ///
+    /// `Some(path)` when stdout is streamed to a file, otherwise `None`.
+    #[inline(always)]
+    pub fn configured_stdout_file(&self) -> Option<&Path> {
+        self.stdout_file.as_deref()
+    }
+
     /// Streams stdout to a file while still capturing it in memory.
     ///
-    /// The file is created or truncated before the command is spawned. Combine
-    /// this with [`Self::max_stdout_bytes`] to avoid unbounded memory use for
-    /// large stdout streams.
+    /// Before spawning, the file is opened without truncation and checked for
+    /// identity conflicts with configured stdin and stderr files. It is
+    /// truncated only after all checks pass. Combine this with
+    /// [`Self::max_stdout_bytes`] to avoid unbounded memory use for large
+    /// stdout streams.
     ///
     /// # Parameters
     ///
@@ -382,7 +525,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline]
+    #[inline(always)]
     pub fn tee_stdout_to_file<P>(mut self, path: P) -> Self
     where
         P: Into<PathBuf>,
@@ -391,11 +534,23 @@ impl CommandRunner {
         self
     }
 
+    /// Returns the stderr tee file path.
+    ///
+    /// # Returns
+    ///
+    /// `Some(path)` when stderr is streamed to a file, otherwise `None`.
+    #[inline(always)]
+    pub fn configured_stderr_file(&self) -> Option<&Path> {
+        self.stderr_file.as_deref()
+    }
+
     /// Streams stderr to a file while still capturing it in memory.
     ///
-    /// The file is created or truncated before the command is spawned. Combine
-    /// this with [`Self::max_stderr_bytes`] to avoid unbounded memory use for
-    /// large stderr streams.
+    /// Before spawning, the file is opened without truncation and checked for
+    /// identity conflicts with configured stdin and stdout files. It is
+    /// truncated only after all checks pass. Combine this with
+    /// [`Self::max_stderr_bytes`] to avoid unbounded memory use for large
+    /// stderr streams.
     ///
     /// # Parameters
     ///
@@ -404,94 +559,13 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline]
+    #[inline(always)]
     pub fn tee_stderr_to_file<P>(mut self, path: P) -> Self
     where
         P: Into<PathBuf>,
     {
         self.stderr_file = Some(path.into());
         self
-    }
-
-    /// Returns the configured timeout.
-    ///
-    /// # Returns
-    ///
-    /// `Some(duration)` when timeout handling is enabled, otherwise `None`.
-    #[inline]
-    pub const fn configured_timeout(&self) -> Option<Duration> {
-        self.timeout
-    }
-
-    /// Returns the default working directory.
-    ///
-    /// # Returns
-    ///
-    /// `Some(path)` when a default working directory is configured, otherwise
-    /// `None` to inherit the current process working directory.
-    #[inline]
-    pub fn configured_working_directory(&self) -> Option<&Path> {
-        self.working_directory.as_deref()
-    }
-
-    /// Returns the configured successful exit codes.
-    ///
-    /// # Returns
-    ///
-    /// Borrowed list of exit codes treated as successful.
-    #[inline]
-    pub fn configured_success_exit_codes(&self) -> &[i32] {
-        &self.success_exit_codes
-    }
-
-    /// Returns whether logging is disabled.
-    ///
-    /// # Returns
-    ///
-    /// `true` when runner logs are disabled.
-    #[inline]
-    pub const fn is_logging_disabled(&self) -> bool {
-        self.disable_logging
-    }
-
-    /// Returns the configured stdout capture limit.
-    ///
-    /// # Returns
-    ///
-    /// `Some(max_bytes)` when stdout capture is limited, otherwise `None`.
-    #[inline]
-    pub const fn configured_max_stdout_bytes(&self) -> Option<usize> {
-        self.max_stdout_bytes
-    }
-
-    /// Returns the configured stderr capture limit.
-    ///
-    /// # Returns
-    ///
-    /// `Some(max_bytes)` when stderr capture is limited, otherwise `None`.
-    #[inline]
-    pub const fn configured_max_stderr_bytes(&self) -> Option<usize> {
-        self.max_stderr_bytes
-    }
-
-    /// Returns the stdout tee file path.
-    ///
-    /// # Returns
-    ///
-    /// `Some(path)` when stdout is streamed to a file, otherwise `None`.
-    #[inline]
-    pub fn configured_stdout_file(&self) -> Option<&Path> {
-        self.stdout_file.as_deref()
-    }
-
-    /// Returns the stderr tee file path.
-    ///
-    /// # Returns
-    ///
-    /// `Some(path)` when stderr is streamed to a file, otherwise `None`.
-    #[inline]
-    pub fn configured_stderr_file(&self) -> Option<&Path> {
-        self.stderr_file.as_deref()
     }
 
     /// Runs a command and captures stdout and stderr.
@@ -524,10 +598,11 @@ impl CommandRunner {
     ///
     /// # Errors
     ///
-    /// Returns [`CommandError`] if the process cannot be spawned, cannot be
-    /// waited on, times out, cannot be killed after timing out, emits output
-    /// that cannot be read or written to a tee file, cannot receive configured
-    /// stdin, or exits with a code not configured as successful.
+    /// Returns [`CommandError`] if I/O paths conflict or cannot be prepared,
+    /// the process or an I/O helper cannot be started, waiting or injected time
+    /// handling fails, the timeout expires, process-tree termination fails,
+    /// captured output or configured stdin cannot be transferred, or the child
+    /// exits with a code not configured as successful.
     pub fn run(&self, command: Command) -> Result<CommandOutput, CommandError> {
         let PreparedCommand {
             command_text,
@@ -549,19 +624,23 @@ impl CommandRunner {
             log::info!("Running command: {command_text}");
         }
 
-        let mut child_process =
+        let child_process =
             match spawn_child(process_command, self.timeout.is_some()) {
                 Ok(child_process) => child_process,
                 Err(source) => return Err(spawn_failed(&command_text, source)),
             };
+        let mut starting_command =
+            StartingCommand::new(&command_text, child_process);
+        let started_at = self.timer.clock().now();
 
         let stdin_writer = write_stdin_bytes(
             &command_text,
-            child_process.as_mut(),
+            starting_command.child_process(),
             stdin_bytes,
         )?;
+        starting_command.set_stdin_writer(stdin_writer);
 
-        let stdout = match child_process.stdout().take() {
+        let stdout = match starting_command.child_process().stdout().take() {
             Some(stdout) => stdout,
             None => {
                 return Err(output_pipe_error(
@@ -570,7 +649,7 @@ impl CommandRunner {
                 ));
             }
         };
-        let stderr = match child_process.stderr().take() {
+        let stderr = match starting_command.child_process().stderr().take() {
             Some(stderr) => stderr,
             None => {
                 return Err(output_pipe_error(
@@ -586,7 +665,13 @@ impl CommandRunner {
                 stdout_file,
                 stdout_file_path,
             ),
-        );
+        )
+        .map_err(|source| CommandError::StartOutputThreadFailed {
+            command: command_text.clone(),
+            stream: OutputStream::Stdout,
+            source,
+        })?;
+        starting_command.set_stdout_reader(stdout_reader);
         let stderr_reader = read_output_stream(
             Box::new(stderr),
             OutputCaptureOptions::new(
@@ -594,12 +679,22 @@ impl CommandRunner {
                 stderr_file,
                 stderr_file_path,
             ),
-        );
-        let command_io =
-            CommandIo::new(stdout_reader, stderr_reader, stdin_writer);
-        let finished =
-            RunningCommand::new(command_text, child_process, command_io)
-                .wait_for_completion(self.timeout)?;
+        )
+        .map_err(|source| CommandError::StartOutputThreadFailed {
+            command: command_text.clone(),
+            stream: OutputStream::Stderr,
+            source,
+        })?;
+        starting_command.set_stderr_reader(stderr_reader);
+        let (child_process, command_io) = starting_command.finish();
+        let finished = RunningCommand::new(
+            command_text,
+            child_process,
+            command_io,
+            started_at,
+            Arc::clone(&self.timer),
+        )
+        .wait_for_completion(self.timeout)?;
         let FinishedCommand {
             command_text,
             output,

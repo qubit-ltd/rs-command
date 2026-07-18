@@ -7,6 +7,8 @@
 // =============================================================================
 //! Tests for [`CommandRunner`](qubit_command::CommandRunner).
 
+#[cfg(not(windows))]
+use std::time::Instant;
 use std::{
     fs,
     path::PathBuf,
@@ -16,20 +18,15 @@ use std::{
         UNIX_EPOCH,
     },
 };
-#[cfg(not(windows))]
-use std::{
-    sync::Once,
-    time::Instant,
-};
 
-#[cfg(any(not(windows), coverage))]
+#[cfg(not(windows))]
 use qubit_command::OutputStream;
 use qubit_command::{
     Command,
     CommandError,
     CommandRunner,
-    SensitivityLevel,
 };
+use qubit_sanitize::SensitivityLevel;
 
 mod command_runner;
 
@@ -41,7 +38,6 @@ mod unix {
         CommandRunner,
         Duration,
         Instant,
-        Once,
         OutputStream,
         PathBuf,
         SensitivityLevel,
@@ -49,29 +45,6 @@ mod unix {
         UNIX_EPOCH,
         fs,
     };
-
-    static LOGGER_INIT: Once = Once::new();
-    static TEST_LOGGER: TestLogger = TestLogger;
-
-    struct TestLogger;
-
-    impl log::Log for TestLogger {
-        fn enabled(&self, _metadata: &log::Metadata<'_>) -> bool {
-            true
-        }
-
-        fn log(&self, _record: &log::Record<'_>) {}
-
-        fn flush(&self) {}
-    }
-
-    fn init_test_logger() {
-        LOGGER_INIT.call_once(|| {
-            log::set_logger(&TEST_LOGGER)
-                .expect("test logger should be installed once");
-            log::set_max_level(log::LevelFilter::Trace);
-        });
-    }
 
     fn unique_temp_path(name: &str) -> PathBuf {
         let suffix = SystemTime::now()
@@ -86,7 +59,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_default_configuration() {
-        init_test_logger();
         let runner = CommandRunner::new();
 
         assert_eq!(runner.configured_timeout(), None);
@@ -101,7 +73,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_captures_stdout() {
-        init_test_logger();
         let output = CommandRunner::new()
             .run(Command::shell("printf command-out"))
             .expect("command should run successfully");
@@ -116,7 +87,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_captures_stderr() {
-        init_test_logger();
         let output = CommandRunner::new()
             .run(Command::shell("printf command-error >&2"))
             .expect("command should run successfully");
@@ -130,7 +100,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_applies_environment_override() {
-        init_test_logger();
         let output = CommandRunner::new()
             .run(
                 Command::shell("printf \"$QUBIT_COMMAND_TEST\"")
@@ -146,7 +115,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_applies_environment_remove() {
-        init_test_logger();
         let output = CommandRunner::new()
             .run(
                 Command::shell("printf \"${QUBIT_COMMAND_TEST:-missing}\"")
@@ -163,7 +131,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_applies_environment_clear_then_set() {
-        init_test_logger();
         let output = CommandRunner::new()
             .run(
                 Command::shell("printf \"$QUBIT_COMMAND_TEST\"")
@@ -182,7 +149,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_applies_working_directory_override() {
-        init_test_logger();
         let output = CommandRunner::new()
             .run(Command::shell("pwd").working_directory("/"))
             .expect("command should run in requested working directory");
@@ -198,7 +164,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_applies_default_working_directory() {
-        init_test_logger();
         let output = CommandRunner::new()
             .working_directory("/")
             .run(Command::shell("pwd"))
@@ -215,7 +180,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_reports_unexpected_exit() {
-        init_test_logger();
         let error = CommandRunner::new()
             .run(Command::shell(
                 "printf fail-out; printf fail-err >&2; exit 7",
@@ -246,7 +210,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_accepts_configured_success_code() {
-        init_test_logger();
         let output = CommandRunner::new()
             .success_exit_code(7)
             .run(Command::shell("exit 7"))
@@ -257,7 +220,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_accepts_configured_success_codes() {
-        init_test_logger();
         let output = CommandRunner::new()
             .success_exit_codes(&[3, 7])
             .run(Command::shell("exit 3"))
@@ -268,7 +230,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_without_timeout() {
-        init_test_logger();
         let output = CommandRunner::new()
             .without_timeout()
             .run(Command::shell("printf no-timeout"))
@@ -282,8 +243,49 @@ mod unix {
     }
 
     #[test]
+    fn test_runner_without_timeout_does_not_wait_on_injected_timer() {
+        use qubit_clock::{
+            ManualMonotonicClock,
+            MonotonicClock,
+        };
+
+        let clock = ManualMonotonicClock::new_shared();
+        let runner = CommandRunner::new()
+            .without_timeout()
+            .timer(clock.new_timer());
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let result = runner.run(Command::shell("sleep 0.05"));
+            sender
+                .send(result)
+                .expect("test receiver should remain connected");
+        });
+
+        let first_result = receiver.recv_timeout(Duration::from_millis(250));
+        let completed_without_advance = first_result.is_ok();
+        let result = match first_result {
+            Ok(result) => result,
+            Err(_) => {
+                clock
+                    .advance(Duration::from_millis(10))
+                    .expect("manual time should advance for cleanup");
+                receiver
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("runner should finish after cleanup advance")
+            }
+        };
+        worker.join().expect("runner thread should not panic");
+
+        assert!(
+            completed_without_advance,
+            "a runner without timeout must block on the child, not its timer",
+        );
+        let output = result.expect("command should complete successfully");
+        assert_eq!(Some(0), output.exit_code());
+    }
+
+    #[test]
     fn test_command_runner_run_writes_stdin_bytes() {
-        init_test_logger();
         let output = CommandRunner::new()
             .run(Command::shell("cat").stdin_bytes(b"stdin-bytes".to_vec()))
             .expect("command should receive stdin bytes");
@@ -296,7 +298,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_ignores_stdin_broken_pipe_for_success() {
-        init_test_logger();
         let input = vec![b'x'; 1024 * 1024];
         let output = CommandRunner::new()
             .run(Command::shell("true").stdin_bytes(input))
@@ -307,7 +308,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_preserves_exit_status_after_stdin_broken_pipe() {
-        init_test_logger();
         let input = vec![b'x'; 1024 * 1024];
         let error = CommandRunner::new()
             .run(Command::shell("exit 7").stdin_bytes(input))
@@ -330,7 +330,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_reads_stdin_file() {
-        init_test_logger();
         let path = unique_temp_path("stdin.txt");
         fs::write(&path, b"stdin-file")
             .expect("stdin fixture should be written");
@@ -348,7 +347,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_accepts_stdin_inherit() {
-        init_test_logger();
         let output = CommandRunner::new()
             .run(Command::shell("printf inherited").stdin_inherit())
             .expect("command should run with inherited stdin");
@@ -361,7 +359,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_reports_missing_stdin_file() {
-        init_test_logger();
         let path = unique_temp_path("missing-stdin.txt");
         let error = CommandRunner::new()
             .run(Command::shell("cat").stdin_file(path.clone()))
@@ -434,7 +431,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_reports_timeout() {
-        init_test_logger();
         let error = CommandRunner::new()
             .timeout(Duration::from_millis(50))
             .run(Command::shell("sleep 2"))
@@ -452,8 +448,48 @@ mod unix {
     }
 
     #[test]
+    fn test_runner_timeout_uses_injected_manual_timer() {
+        use qubit_clock::{
+            ManualMonotonicClock,
+            MonotonicClock,
+        };
+
+        let clock = ManualMonotonicClock::new_shared();
+        let runner = CommandRunner::new()
+            .timeout(Duration::from_secs(30))
+            .timer(clock.new_timer());
+        let worker =
+            std::thread::spawn(move || runner.run(Command::shell("sleep 60")));
+
+        assert!(clock.wait_for_waiters(1, Duration::from_secs(2)));
+        clock
+            .advance(Duration::from_secs(30))
+            .expect("manual time should advance");
+        let error = worker
+            .join()
+            .expect("runner thread should not panic")
+            .expect_err("command should time out");
+        assert!(matches!(error, CommandError::TimedOut { .. }));
+    }
+
+    #[test]
+    fn test_command_runner_timer_updates_configuration() {
+        use qubit_clock::{
+            ManualMonotonicClock,
+            MonotonicClock,
+        };
+
+        let clock = ManualMonotonicClock::new_shared();
+        let runner = CommandRunner::new().timer(clock.new_timer());
+
+        assert_eq!(
+            runner.configured_timer().clock().now().domain(),
+            clock.now().domain(),
+        );
+    }
+
+    #[test]
     fn test_command_runner_run_kills_process_group_on_timeout() {
-        init_test_logger();
         let start = Instant::now();
         let error = CommandRunner::new()
             .timeout(Duration::from_millis(50))
@@ -470,7 +506,6 @@ mod unix {
     #[test]
     fn test_command_runner_run_times_out_when_background_child_inherits_output()
     {
-        init_test_logger();
         let start = Instant::now();
         let error = CommandRunner::new()
             .timeout(Duration::from_millis(50))
@@ -488,7 +523,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_limits_captured_output() {
-        init_test_logger();
         let output = CommandRunner::new()
             .max_stdout_bytes(3)
             .max_stderr_bytes(2)
@@ -503,7 +537,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_tees_output_to_files() {
-        init_test_logger();
         let stdout_path = unique_temp_path("stdout.txt");
         let stderr_path = unique_temp_path("stderr.txt");
 
@@ -530,8 +563,107 @@ mod unix {
     }
 
     #[test]
+    fn test_runner_rejects_stdin_stdout_conflict_without_truncating_input() {
+        let path = unique_temp_path("stdin-stdout-conflict");
+        fs::write(&path, b"preserve-me")
+            .expect("stdin fixture should be written");
+
+        let error = CommandRunner::new()
+            .tee_stdout_to_file(&path)
+            .run(Command::new("cat").stdin_file(&path))
+            .expect_err("conflicting files should be rejected");
+
+        assert!(matches!(error, CommandError::InputOutputConflict { .. }));
+        assert_eq!(
+            fs::read(&path).expect("stdin fixture should remain readable"),
+            b"preserve-me",
+        );
+        fs::remove_file(path).expect("stdin fixture should be removed");
+    }
+
+    #[test]
+    fn test_runner_rejects_stdin_stderr_conflict_without_truncating_input() {
+        let path = unique_temp_path("stdin-stderr-conflict");
+        fs::write(&path, b"preserve-me")
+            .expect("stdin fixture should be written");
+
+        let error = CommandRunner::new()
+            .tee_stderr_to_file(&path)
+            .run(Command::new("cat").stdin_file(&path))
+            .expect_err("conflicting files should be rejected");
+
+        assert!(matches!(error, CommandError::InputOutputConflict { .. }));
+        assert_eq!(
+            fs::read(&path).expect("stdin fixture should remain readable"),
+            b"preserve-me",
+        );
+        fs::remove_file(path).expect("stdin fixture should be removed");
+    }
+
+    #[test]
+    fn test_runner_rejects_stdout_stderr_conflict_before_creating_file() {
+        let path = unique_temp_path("stdout-stderr-conflict");
+
+        let error = CommandRunner::new()
+            .tee_stdout_to_file(&path)
+            .tee_stderr_to_file(&path)
+            .run(Command::shell("printf out; printf err >&2"))
+            .expect_err("conflicting output files should be rejected");
+
+        assert!(matches!(error, CommandError::OutputFilesConflict { .. }));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn test_runner_rejects_symlinked_input_output_conflict() {
+        let input_path = unique_temp_path("symlink-conflict-input");
+        let output_path = unique_temp_path("symlink-conflict-output");
+        fs::write(&input_path, b"preserve-me")
+            .expect("stdin fixture should be written");
+        std::os::unix::fs::symlink(&input_path, &output_path)
+            .expect("symlink fixture should be created");
+
+        let error = CommandRunner::new()
+            .tee_stdout_to_file(&output_path)
+            .run(Command::new("cat").stdin_file(&input_path))
+            .expect_err("symlinked files should be rejected");
+
+        assert!(matches!(error, CommandError::InputOutputConflict { .. }));
+        assert_eq!(
+            fs::read(&input_path)
+                .expect("stdin fixture should remain readable"),
+            b"preserve-me",
+        );
+        fs::remove_file(output_path).expect("symlink should be removed");
+        fs::remove_file(input_path).expect("stdin fixture should be removed");
+    }
+
+    #[test]
+    fn test_runner_rejects_hard_linked_input_output_conflict() {
+        let input_path = unique_temp_path("hard-link-conflict-input");
+        let output_path = unique_temp_path("hard-link-conflict-output");
+        fs::write(&input_path, b"preserve-me")
+            .expect("stdin fixture should be written");
+        fs::hard_link(&input_path, &output_path)
+            .expect("hard link fixture should be created");
+
+        let error = CommandRunner::new()
+            .tee_stdout_to_file(&output_path)
+            .run(Command::new("cat").stdin_file(&input_path))
+            .expect_err("hard-linked files should be rejected");
+
+        assert!(matches!(error, CommandError::InputOutputConflict { .. }));
+        assert_eq!(
+            fs::read(&input_path)
+                .expect("stdin fixture should remain readable"),
+            b"preserve-me",
+        );
+        fs::remove_file(output_path).expect("hard link should be removed");
+        fs::remove_file(input_path).expect("stdin fixture should be removed");
+    }
+
+    #[test]
     fn test_command_runner_run_reports_output_file_open_failure() {
-        init_test_logger();
         let path = unique_temp_path("missing-dir").join("stdout.txt");
         let error = CommandRunner::new()
             .tee_stdout_to_file(path.clone())
@@ -553,7 +685,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_reports_stderr_file_open_failure() {
-        init_test_logger();
         let path = unique_temp_path("missing-dir").join("stderr.txt");
         let error = CommandRunner::new()
             .tee_stderr_to_file(path.clone())
@@ -575,7 +706,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_reports_spawn_failure() {
-        init_test_logger();
         let error = CommandRunner::new()
             .run(Command::new("__qubit_command_missing_executable__"))
             .expect_err("missing executable should fail to spawn");
@@ -585,7 +715,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_error_uses_argv_style_command_text() {
-        init_test_logger();
         let error = CommandRunner::new()
             .run(
                 Command::new("__qubit_command_missing_executable__")
@@ -601,7 +730,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_error_sanitizes_sensitive_argv_values() {
-        init_test_logger();
         let error = CommandRunner::new()
             .run(
                 Command::new("__qubit_command_missing_executable__")
@@ -625,7 +753,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_error_redacts_shell_payload() {
-        init_test_logger();
         let error = CommandRunner::new()
             .run(Command::shell("printf ignored; printf hunter2 >&2; exit 9"))
             .expect_err("non-success shell command should fail");
@@ -636,7 +763,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_error_sanitizes_environment_display() {
-        init_test_logger();
         let error = CommandRunner::new()
             .run(
                 Command::new("__qubit_command_missing_executable__")
@@ -655,7 +781,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_error_sanitizes_default_database_credentials() {
-        init_test_logger();
         let error = CommandRunner::new()
             .run(
                 Command::new("__qubit_command_missing_executable__")
@@ -675,7 +800,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_error_sanitizes_configured_sensitive_fields() {
-        init_test_logger();
         let error = CommandRunner::new()
             .sensitive_field("tenant_option", SensitivityLevel::Secret)
             .run(
@@ -697,7 +821,6 @@ mod unix {
     #[test]
     fn test_command_runner_error_sanitizes_multiple_configured_sensitive_fields()
      {
-        init_test_logger();
         let error = CommandRunner::new()
             .sensitive_fields(
                 &["tenant_option", "tenant_env"],
@@ -721,7 +844,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_can_exclude_default_sensitive_fields() {
-        init_test_logger();
         let error = CommandRunner::new()
             .exclude_sensitive_field("sig")
             .exclude_sensitive_fields(&["signature"])
@@ -739,7 +861,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_exclusion_wins_over_sensitive_suffix() {
-        init_test_logger();
         let error = CommandRunner::new()
             .exclude_sensitive_field("access_token")
             .run(

@@ -29,7 +29,21 @@ use qubit_sanitize::redacted_debug;
 /// invalid byte sequences with the Unicode replacement character. Its
 /// [`fmt::Debug`] implementation redacts both captured streams and reports
 /// only their retained lengths and truncation flags.
+///
+/// # Examples
+///
+/// ```compile_fail
+/// #![deny(unused_must_use)]
+/// use qubit_command::{Command, CommandOutput, CommandRunner};
+///
+/// fn run_command() -> CommandOutput {
+///     CommandRunner::new().run(Command::new("true")).unwrap()
+/// }
+///
+/// run_command();
+/// ```
 #[derive(Clone, PartialEq, Eq)]
+#[must_use]
 pub struct CommandOutput {
     /// Exit status reported by the process.
     status: ExitStatus,
@@ -102,7 +116,7 @@ impl CommandOutput {
     /// `Some(code)` when the platform reports a numeric process exit code, or
     /// `None` when the process ended in a way that does not map to a numeric
     /// code.
-    #[inline]
+    #[inline(always)]
     pub fn exit_code(&self) -> Option<i32> {
         self.status.code()
     }
@@ -112,7 +126,8 @@ impl CommandOutput {
     /// # Returns
     ///
     /// Platform-specific process exit status reported by the operating system.
-    #[inline]
+    #[must_use]
+    #[inline(always)]
     pub const fn exit_status(&self) -> &ExitStatus {
         &self.status
     }
@@ -124,7 +139,7 @@ impl CommandOutput {
     /// `Some(signal)` when the process was terminated by a signal, otherwise
     /// `None`.
     #[cfg(unix)]
-    #[inline]
+    #[inline(always)]
     pub fn termination_signal(&self) -> Option<i32> {
         self.status.signal()
     }
@@ -134,7 +149,8 @@ impl CommandOutput {
     /// # Returns
     ///
     /// A borrowed slice containing stdout exactly as emitted by the process.
-    #[inline]
+    #[must_use]
+    #[inline(always)]
     pub fn stdout(&self) -> &[u8] {
         &self.stdout
     }
@@ -144,7 +160,8 @@ impl CommandOutput {
     /// # Returns
     ///
     /// A borrowed slice containing stderr exactly as emitted by the process.
-    #[inline]
+    #[must_use]
+    #[inline(always)]
     pub fn stderr(&self) -> &[u8] {
         &self.stderr
     }
@@ -158,7 +175,7 @@ impl CommandOutput {
     /// # Errors
     ///
     /// Returns [`str::Utf8Error`] when stdout contains invalid UTF-8.
-    #[inline]
+    #[inline(always)]
     pub fn stdout_text(&self) -> Result<&str, str::Utf8Error> {
         str::from_utf8(&self.stdout)
     }
@@ -172,7 +189,7 @@ impl CommandOutput {
     /// # Errors
     ///
     /// Returns [`str::Utf8Error`] when stderr contains invalid UTF-8.
-    #[inline]
+    #[inline(always)]
     pub fn stderr_text(&self) -> Result<&str, str::Utf8Error> {
         str::from_utf8(&self.stderr)
     }
@@ -183,7 +200,8 @@ impl CommandOutput {
     ///
     /// Borrowed UTF-8 text when stdout is valid UTF-8, or an owned string with
     /// invalid byte sequences replaced by the Unicode replacement character.
-    #[inline]
+    #[must_use]
+    #[inline(always)]
     pub fn stdout_lossy_text(&self) -> Cow<'_, str> {
         String::from_utf8_lossy(&self.stdout)
     }
@@ -194,7 +212,8 @@ impl CommandOutput {
     ///
     /// Borrowed UTF-8 text when stderr is valid UTF-8, or an owned string with
     /// invalid byte sequences replaced by the Unicode replacement character.
-    #[inline]
+    #[must_use]
+    #[inline(always)]
     pub fn stderr_lossy_text(&self) -> Cow<'_, str> {
         String::from_utf8_lossy(&self.stderr)
     }
@@ -204,7 +223,8 @@ impl CommandOutput {
     /// # Returns
     ///
     /// Duration from process spawn to observed termination.
-    #[inline]
+    #[must_use]
+    #[inline(always)]
     pub const fn elapsed(&self) -> Duration {
         self.elapsed
     }
@@ -214,7 +234,8 @@ impl CommandOutput {
     /// # Returns
     ///
     /// `true` when stdout emitted more bytes than the runner retained.
-    #[inline]
+    #[must_use]
+    #[inline(always)]
     pub const fn stdout_truncated(&self) -> bool {
         self.stdout_truncated
     }
@@ -224,7 +245,8 @@ impl CommandOutput {
     /// # Returns
     ///
     /// `true` when stderr emitted more bytes than the runner retained.
-    #[inline]
+    #[must_use]
+    #[inline(always)]
     pub const fn stderr_truncated(&self) -> bool {
         self.stderr_truncated
     }
