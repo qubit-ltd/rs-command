@@ -415,7 +415,7 @@ fn file_handle(
     .transpose()
 }
 
-/// Truncates one validated output file.
+/// Truncates one validated regular output file.
 ///
 /// # Parameters
 ///
@@ -426,11 +426,13 @@ fn file_handle(
 ///
 /// # Returns
 ///
-/// `Ok(())` after a configured output file has been truncated.
+/// `Ok(())` after a configured regular file has been truncated. Special files
+/// such as devices are left intact and receive output through normal writes.
 ///
 /// # Errors
 ///
-/// Returns [CommandError::OpenOutputFailed] when truncation fails.
+/// Returns [CommandError::InspectIoFileFailed] when file metadata cannot be
+/// read, or [CommandError::OpenOutputFailed] when truncation fails.
 fn truncate_output(
     command: &str,
     stream: OutputStream,
@@ -439,13 +441,20 @@ fn truncate_output(
 ) -> Result<(), CommandError> {
     if let Some(file) = file {
         let path = path.expect("an open output file has an original path");
-        file.set_len(0)
-            .map_err(|source| CommandError::OpenOutputFailed {
-                command: command.to_owned(),
-                stream,
-                path: path.to_path_buf(),
-                source,
+        let file_type = file
+            .metadata()
+            .map_err(|source| inspect_error(command, path, source))?
+            .file_type();
+        if file_type.is_file() {
+            file.set_len(0).map_err(|source| {
+                CommandError::OpenOutputFailed {
+                    command: command.to_owned(),
+                    stream,
+                    path: path.to_path_buf(),
+                    source,
+                }
             })?;
+        }
     }
     Ok(())
 }
