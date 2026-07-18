@@ -193,6 +193,25 @@ fn test_command_debug_sanitizes_sensitive_display_values() {
 }
 
 #[test]
+fn test_command_debug_sanitizes_credential_containers() {
+    let command = Command::new("worker")
+        .arg("--redis-url")
+        .arg("redis://:argv-password@example.com")
+        .env(
+            "HTTPS_PROXY",
+            "http://proxy-user:proxy-password@example.com",
+        )
+        .env("DOCKER_AUTH_CONFIG", r#"{"auths":{"secret":"value"}}"#);
+
+    let debug = format!("{command:?}");
+
+    assert!(!debug.contains("argv-password"));
+    assert!(!debug.contains("proxy-password"));
+    assert!(!debug.contains("\"secret\""));
+    assert!(debug.contains("<redacted>"));
+}
+
+#[test]
 fn test_command_debug_redacts_cmd_shell_payload() {
     let command = Command::new("cmd").arg("/C").arg("echo hunter2");
 

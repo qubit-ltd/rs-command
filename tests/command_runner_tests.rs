@@ -736,6 +736,23 @@ mod unix {
         assert!(error.command().contains("known-false-positive"));
         assert!(error.command().contains("known-env-false-positive"));
     }
+
+    #[test]
+    fn test_command_runner_exclusion_wins_over_sensitive_suffix() {
+        init_test_logger();
+        let error = CommandRunner::new()
+            .exclude_sensitive_field("access_token")
+            .run(
+                Command::new("__qubit_command_missing_executable__")
+                    .arg("--openai-access-token")
+                    .arg("known-argv-false-positive")
+                    .env("OPENAI_ACCESS_TOKEN", "known-env-false-positive"),
+            )
+            .expect_err("missing executable should fail to spawn");
+
+        assert!(error.command().contains("known-argv-false-positive"));
+        assert!(error.command().contains("known-env-false-positive"));
+    }
 }
 
 #[cfg(windows)]
