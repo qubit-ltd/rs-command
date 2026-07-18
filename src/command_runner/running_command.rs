@@ -130,7 +130,7 @@ impl RunningCommand {
             if elapsed >= timeout {
                 return self.handle_timeout(timeout);
             }
-            let sleep = next_sleep(Some(timeout), elapsed);
+            let sleep = next_sleep(timeout, elapsed);
             if let Err(source) =
                 BlockingSleeper::new(Arc::clone(&self.timer)).sleep_for(sleep)
             {
@@ -173,7 +173,7 @@ impl RunningCommand {
                     return self
                         .handle_output_collection_timeout(status, timeout);
                 }
-                let sleep = next_sleep(Some(timeout), elapsed);
+                let sleep = next_sleep(timeout, elapsed);
                 if let Err(source) =
                     BlockingSleeper::new(Arc::clone(&self.timer))
                         .sleep_for(sleep)

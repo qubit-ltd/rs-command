@@ -29,6 +29,7 @@ use qubit_command::{
 use qubit_sanitize::SensitivityLevel;
 
 mod command_runner;
+mod support;
 
 #[cfg(not(windows))]
 mod unix {
@@ -69,6 +70,15 @@ mod unix {
         assert_eq!(runner.configured_max_stderr_bytes(), None);
         assert!(runner.configured_stdout_file().is_none());
         assert!(runner.configured_stderr_file().is_none());
+    }
+
+    #[test]
+    fn test_command_runner_debug_describes_configuration() {
+        let debug = format!("{:?}", CommandRunner::new());
+
+        assert!(debug.contains("CommandRunner"));
+        assert!(debug.contains("success_exit_codes: [0]"));
+        assert!(debug.contains("timer: \"<dyn Timer>\""));
     }
 
     #[test]
@@ -560,106 +570,6 @@ mod unix {
 
         let _ = fs::remove_file(stdout_path);
         let _ = fs::remove_file(stderr_path);
-    }
-
-    #[test]
-    fn test_runner_rejects_stdin_stdout_conflict_without_truncating_input() {
-        let path = unique_temp_path("stdin-stdout-conflict");
-        fs::write(&path, b"preserve-me")
-            .expect("stdin fixture should be written");
-
-        let error = CommandRunner::new()
-            .tee_stdout_to_file(&path)
-            .run(Command::new("cat").stdin_file(&path))
-            .expect_err("conflicting files should be rejected");
-
-        assert!(matches!(error, CommandError::InputOutputConflict { .. }));
-        assert_eq!(
-            fs::read(&path).expect("stdin fixture should remain readable"),
-            b"preserve-me",
-        );
-        fs::remove_file(path).expect("stdin fixture should be removed");
-    }
-
-    #[test]
-    fn test_runner_rejects_stdin_stderr_conflict_without_truncating_input() {
-        let path = unique_temp_path("stdin-stderr-conflict");
-        fs::write(&path, b"preserve-me")
-            .expect("stdin fixture should be written");
-
-        let error = CommandRunner::new()
-            .tee_stderr_to_file(&path)
-            .run(Command::new("cat").stdin_file(&path))
-            .expect_err("conflicting files should be rejected");
-
-        assert!(matches!(error, CommandError::InputOutputConflict { .. }));
-        assert_eq!(
-            fs::read(&path).expect("stdin fixture should remain readable"),
-            b"preserve-me",
-        );
-        fs::remove_file(path).expect("stdin fixture should be removed");
-    }
-
-    #[test]
-    fn test_runner_rejects_stdout_stderr_conflict_before_creating_file() {
-        let path = unique_temp_path("stdout-stderr-conflict");
-
-        let error = CommandRunner::new()
-            .tee_stdout_to_file(&path)
-            .tee_stderr_to_file(&path)
-            .run(Command::shell("printf out; printf err >&2"))
-            .expect_err("conflicting output files should be rejected");
-
-        assert!(matches!(error, CommandError::OutputFilesConflict { .. }));
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn test_runner_rejects_symlinked_input_output_conflict() {
-        let input_path = unique_temp_path("symlink-conflict-input");
-        let output_path = unique_temp_path("symlink-conflict-output");
-        fs::write(&input_path, b"preserve-me")
-            .expect("stdin fixture should be written");
-        std::os::unix::fs::symlink(&input_path, &output_path)
-            .expect("symlink fixture should be created");
-
-        let error = CommandRunner::new()
-            .tee_stdout_to_file(&output_path)
-            .run(Command::new("cat").stdin_file(&input_path))
-            .expect_err("symlinked files should be rejected");
-
-        assert!(matches!(error, CommandError::InputOutputConflict { .. }));
-        assert_eq!(
-            fs::read(&input_path)
-                .expect("stdin fixture should remain readable"),
-            b"preserve-me",
-        );
-        fs::remove_file(output_path).expect("symlink should be removed");
-        fs::remove_file(input_path).expect("stdin fixture should be removed");
-    }
-
-    #[test]
-    fn test_runner_rejects_hard_linked_input_output_conflict() {
-        let input_path = unique_temp_path("hard-link-conflict-input");
-        let output_path = unique_temp_path("hard-link-conflict-output");
-        fs::write(&input_path, b"preserve-me")
-            .expect("stdin fixture should be written");
-        fs::hard_link(&input_path, &output_path)
-            .expect("hard link fixture should be created");
-
-        let error = CommandRunner::new()
-            .tee_stdout_to_file(&output_path)
-            .run(Command::new("cat").stdin_file(&input_path))
-            .expect_err("hard-linked files should be rejected");
-
-        assert!(matches!(error, CommandError::InputOutputConflict { .. }));
-        assert_eq!(
-            fs::read(&input_path)
-                .expect("stdin fixture should remain readable"),
-            b"preserve-me",
-        );
-        fs::remove_file(output_path).expect("hard link should be removed");
-        fs::remove_file(input_path).expect("stdin fixture should be removed");
     }
 
     #[test]

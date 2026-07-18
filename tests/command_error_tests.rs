@@ -15,6 +15,7 @@ use std::{
     time::Duration,
 };
 
+use qubit_clock::TimeError;
 use qubit_command::{
     Command,
     CommandError,
@@ -98,6 +99,49 @@ fn test_command_error_accessors_for_errors_without_output() {
     assert_eq!(write_output.command(), "write-output");
     assert!(write_output.output().is_none());
     assert!(write_output.to_string().contains("failed to write stdout"));
+}
+
+#[test]
+fn test_command_error_accessors_for_preparation_and_time_errors() {
+    let input_output = CommandError::InputOutputConflict {
+        command: "input-output".to_owned(),
+        input_path: PathBuf::from("input.txt"),
+        output_stream: OutputStream::Stdout,
+        output_path: PathBuf::from("output.txt"),
+    };
+    assert_eq!(input_output.command(), "input-output");
+    assert!(input_output.output().is_none());
+    assert!(input_output.to_string().contains("conflicts with stdout"));
+
+    let output_files = CommandError::OutputFilesConflict {
+        command: "output-files".to_owned(),
+        stdout_path: PathBuf::from("stdout.txt"),
+        stderr_path: PathBuf::from("stderr.txt"),
+    };
+    assert_eq!(output_files.command(), "output-files");
+    assert!(output_files.output().is_none());
+    assert!(
+        output_files
+            .to_string()
+            .contains("conflicts with stderr file")
+    );
+
+    let inspect = CommandError::InspectIoFileFailed {
+        command: "inspect".to_owned(),
+        path: PathBuf::from("loop"),
+        source: io::Error::other("inspection failed"),
+    };
+    assert_eq!(inspect.command(), "inspect");
+    assert!(inspect.output().is_none());
+    assert!(inspect.to_string().contains("failed to inspect I/O file"));
+
+    let time = CommandError::TimeFailed {
+        command: "time".to_owned(),
+        source: TimeError::TimerUnavailable,
+    };
+    assert_eq!(time.command(), "time");
+    assert!(time.output().is_none());
+    assert!(time.to_string().contains("time handling failed"));
 }
 
 #[test]

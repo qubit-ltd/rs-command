@@ -624,11 +624,10 @@ impl CommandRunner {
             log::info!("Running command: {command_text}");
         }
 
-        let child_process =
-            match spawn_child(process_command, self.timeout.is_some()) {
-                Ok(child_process) => child_process,
-                Err(source) => return Err(spawn_failed(&command_text, source)),
-            };
+        let child_process = match spawn_child(process_command) {
+            Ok(child_process) => child_process,
+            Err(source) => return Err(spawn_failed(&command_text, source)),
+        };
         let mut starting_command =
             StartingCommand::new(&command_text, child_process);
         let started_at = self.timer.clock().now();
@@ -686,6 +685,13 @@ impl CommandRunner {
             source,
         })?;
         starting_command.set_stderr_reader(stderr_reader);
+        if let Err(source) = self.timer.clock().now().duration_since(started_at)
+        {
+            return Err(CommandError::TimeFailed {
+                command: command_text.clone(),
+                source,
+            });
+        }
         let (child_process, command_io) = starting_command.finish();
         let finished = RunningCommand::new(
             command_text,

@@ -14,23 +14,14 @@ pub(crate) const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 ///
 /// # Parameters
 ///
-/// * `timeout` - Optional total timeout.
+/// * `timeout` - Total timeout.
 /// * `elapsed` - Elapsed command time.
 ///
 /// # Returns
 ///
-/// The lesser of the polling interval and remaining timeout, or the polling
-/// interval when no positive remainder is available.
+/// The lesser of the polling interval and the remaining timeout.
 #[must_use]
 #[inline]
-pub(crate) fn next_sleep(
-    timeout: Option<Duration>,
-    elapsed: Duration,
-) -> Duration {
-    if let Some(timeout) = timeout
-        && let Some(remaining) = timeout.checked_sub(elapsed)
-    {
-        return remaining.min(WAIT_POLL_INTERVAL);
-    }
-    WAIT_POLL_INTERVAL
+pub(crate) fn next_sleep(timeout: Duration, elapsed: Duration) -> Duration {
+    timeout.saturating_sub(elapsed).min(WAIT_POLL_INTERVAL)
 }
