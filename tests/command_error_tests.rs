@@ -15,7 +15,10 @@ use std::{
     time::Duration,
 };
 
-use qubit_clock::TimeError;
+use qubit_clock::{
+    TimeError,
+    TimerUnavailableReason,
+};
 use qubit_command::{
     Command,
     CommandError,
@@ -137,7 +140,9 @@ fn test_command_error_accessors_for_preparation_and_time_errors() {
 
     let time = CommandError::TimeFailed {
         command: "time".to_owned(),
-        source: TimeError::TimerUnavailable,
+        source: TimeError::TimerUnavailable {
+            reason: TimerUnavailableReason::BackendUnavailable,
+        },
     };
     assert_eq!(time.command(), "time");
     assert!(time.output().is_none());
