@@ -19,6 +19,7 @@ use qubit_clock::{
     TimeError,
     Timer,
     TimerFuture,
+    TimerUnavailableReason,
 };
 
 pub(crate) struct SwitchingTimer {
@@ -58,6 +59,8 @@ impl Timer for SwitchingTimer {
         &self,
         _deadline: MonotonicInstant,
     ) -> Result<TimerFuture, TimeError> {
-        Err(TimeError::TimerUnavailable)
+        Err(TimeError::TimerUnavailable {
+            reason: TimerUnavailableReason::BackendUnavailable,
+        })
     }
 }
