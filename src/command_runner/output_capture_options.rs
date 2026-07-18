@@ -32,6 +32,7 @@ impl OutputCaptureOptions {
     /// # Returns
     ///
     /// Capture options moved into the output reader thread.
+    #[inline]
     pub(crate) fn new(
         max_bytes: Option<usize>,
         file: Option<File>,

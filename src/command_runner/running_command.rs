@@ -7,11 +7,15 @@
 // =============================================================================
 use std::{
     process::ExitStatus,
-    thread,
-    time::{
-        Duration,
-        Instant,
-    },
+    sync::Arc,
+    time::Duration,
+};
+
+use qubit_clock::{
+    BlockingSleeper,
+    MonotonicInstant,
+    TimeError,
+    Timer,
 };
 
 use super::{
@@ -27,6 +31,7 @@ use super::{
 use crate::CommandError;
 
 /// Running command state that owns process and I/O helper lifetimes.
+#[must_use = "a running command must be waited on to collect its process and I/O"]
 pub(crate) struct RunningCommand {
     /// Human-readable command text for diagnostics.
     command_text: String,
@@ -35,7 +40,9 @@ pub(crate) struct RunningCommand {
     /// Output readers and optional stdin writer.
     io: CommandIo,
     /// Time when the child process started being monitored.
-    started_at: Instant,
+    started_at: MonotonicInstant,
+    /// Timer sharing the same monotonic domain as the start instant.
+    timer: Arc<dyn Timer>,
 }
 
 impl RunningCommand {
@@ -46,24 +53,33 @@ impl RunningCommand {
     /// * `command_text` - Human-readable command text for diagnostics.
     /// * `child_process` - Child process managed by the runner.
     /// * `io` - Output readers and optional stdin writer.
+    /// * `started_at` - Monotonic instant sampled immediately after spawning.
+    /// * `timer` - Timer in the same clock domain as `started_at`.
     ///
     /// # Returns
     ///
     /// Running command state that owns the process and its I/O helpers.
+    #[inline]
     pub(crate) fn new(
         command_text: String,
         child_process: ManagedChildProcess,
         io: CommandIo,
+        started_at: MonotonicInstant,
+        timer: Arc<dyn Timer>,
     ) -> Self {
         Self {
             command_text,
             child_process,
             io,
-            started_at: Instant::now(),
+            started_at,
+            timer,
         }
     }
 
     /// Waits for the child process to complete or time out.
+    ///
+    /// This method blocks the current thread. Without a timeout it delegates
+    /// directly to the child process's blocking wait operation.
     ///
     /// # Parameters
     ///
@@ -83,6 +99,17 @@ impl RunningCommand {
         mut self,
         timeout: Option<Duration>,
     ) -> Result<FinishedCommand, CommandError> {
+        let Some(timeout) = timeout else {
+            let status = match self.child_process.wait() {
+                Ok(status) => status,
+                Err(source) => {
+                    let error = wait_failed(&self.command_text, source);
+                    return Err(self.clean_up_after_wait_error(error));
+                }
+            };
+            return self.complete_after_exit(status, None);
+        };
+
         loop {
             let maybe_status = match self.child_process.try_wait() {
                 Ok(status) => status,
@@ -92,14 +119,23 @@ impl RunningCommand {
                 }
             };
             if let Some(status) = maybe_status {
-                return self.complete_after_exit(status, timeout);
+                return self.complete_after_exit(status, Some(timeout));
             }
-            if let Some(timeout) = timeout
-                && self.started_at.elapsed() >= timeout
-            {
+            let elapsed = match self.elapsed() {
+                Ok(elapsed) => elapsed,
+                Err(source) => {
+                    return Err(self.clean_up_after_time_error(source));
+                }
+            };
+            if elapsed >= timeout {
                 return self.handle_timeout(timeout);
             }
-            thread::sleep(next_sleep(timeout, self.started_at.elapsed()));
+            let sleep = next_sleep(Some(timeout), elapsed);
+            if let Err(source) =
+                BlockingSleeper::new(Arc::clone(&self.timer)).sleep_for(sleep)
+            {
+                return Err(self.clean_up_after_time_error(source));
+            }
         }
     }
 
@@ -126,12 +162,24 @@ impl RunningCommand {
     ) -> Result<FinishedCommand, CommandError> {
         if let Some(timeout) = timeout {
             while !self.io.is_finished() {
-                let elapsed = self.started_at.elapsed();
+                let elapsed = match self.elapsed() {
+                    Ok(elapsed) => elapsed,
+                    Err(source) => {
+                        return self
+                            .handle_time_error_after_exit(status, source);
+                    }
+                };
                 if elapsed >= timeout {
                     return self
                         .handle_output_collection_timeout(status, timeout);
                 }
-                thread::sleep(next_sleep(Some(timeout), elapsed));
+                let sleep = next_sleep(Some(timeout), elapsed);
+                if let Err(source) =
+                    BlockingSleeper::new(Arc::clone(&self.timer))
+                        .sleep_for(sleep)
+                {
+                    return self.handle_time_error_after_exit(status, source);
+                }
             }
         }
         self.complete(status)
@@ -143,6 +191,11 @@ impl RunningCommand {
     ///
     /// * `status` - Exit status reported by the direct child process.
     /// * `timeout` - Timeout that has been exceeded.
+    ///
+    /// # Returns
+    ///
+    /// This method returns an error after timeout handling; its success type is
+    /// retained to compose with the surrounding state machine.
     ///
     /// # Errors
     ///
@@ -161,9 +214,6 @@ impl RunningCommand {
                 source,
             ));
         }
-        while !self.io.is_finished() {
-            thread::sleep(next_sleep(None, self.started_at.elapsed()));
-        }
         let finished = self.complete(status)?;
         Err(CommandError::TimedOut {
             command: finished.command_text,
@@ -178,6 +228,11 @@ impl RunningCommand {
     /// # Parameters
     ///
     /// * `timeout` - Timeout that has been exceeded.
+    ///
+    /// # Returns
+    ///
+    /// This method returns an error after timeout handling; its success type is
+    /// retained to compose with the surrounding state machine.
     ///
     /// # Errors
     ///
@@ -225,15 +280,92 @@ impl RunningCommand {
         self,
         status: ExitStatus,
     ) -> Result<FinishedCommand, CommandError> {
+        let elapsed = self.elapsed();
         let output = self.io.collect(
             &self.command_text,
             status,
-            self.started_at.elapsed(),
-        )?;
-        Ok(FinishedCommand {
-            command_text: self.command_text,
-            output,
-        })
+            elapsed.as_ref().copied().unwrap_or_default(),
+        );
+        match elapsed {
+            Ok(_) => Ok(FinishedCommand {
+                command_text: self.command_text,
+                output: output?,
+            }),
+            Err(source) => {
+                let _ = output;
+                Err(CommandError::TimeFailed {
+                    command: self.command_text,
+                    source,
+                })
+            }
+        }
+    }
+
+    /// Returns elapsed time in the injected timer's clock domain.
+    ///
+    /// # Returns
+    ///
+    /// Duration since the child process was spawned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimeError`] if the timer violates the retained clock domain or
+    /// monotonic ordering.
+    fn elapsed(&self) -> Result<Duration, TimeError> {
+        self.timer.clock().now().duration_since(self.started_at)
+    }
+
+    /// Terminates a running child after timer handling fails.
+    ///
+    /// # Parameters
+    ///
+    /// * `source` - Timer or monotonic-clock failure to preserve.
+    ///
+    /// # Returns
+    ///
+    /// The timer error after best-effort process and I/O cleanup.
+    #[must_use]
+    fn clean_up_after_time_error(mut self, source: TimeError) -> CommandError {
+        let error = CommandError::TimeFailed {
+            command: self.command_text.clone(),
+            source,
+        };
+        let status = match self.child_process.start_kill() {
+            Ok(()) => self.child_process.wait().ok(),
+            Err(_) => self.child_process.try_wait().ok().flatten(),
+        };
+        if let Some(status) = status {
+            let _ = self.io.collect(&self.command_text, status, Duration::ZERO);
+        }
+        error
+    }
+
+    /// Cleans up inherited output pipes after timer handling fails.
+    ///
+    /// # Parameters
+    ///
+    /// * `status` - Exit status already reported for the direct child.
+    /// * `source` - Timer or monotonic-clock failure to preserve.
+    ///
+    /// # Returns
+    ///
+    /// This method always returns the preserved time error.
+    ///
+    /// # Errors
+    ///
+    /// Always returns [`CommandError::TimeFailed`] after best-effort cleanup.
+    fn handle_time_error_after_exit(
+        mut self,
+        status: ExitStatus,
+        source: TimeError,
+    ) -> Result<FinishedCommand, CommandError> {
+        let error = CommandError::TimeFailed {
+            command: self.command_text.clone(),
+            source,
+        };
+        let _ = self.child_process.start_kill();
+        let _ = self.io.collect(&self.command_text, status, Duration::ZERO);
+        Err(error)
     }
 
     /// Attempts non-blocking cleanup after a wait error.
@@ -247,6 +379,7 @@ impl RunningCommand {
     /// The original error after best-effort cleanup. This method deliberately
     /// does not call blocking wait APIs because it is already handling a
     /// wait failure.
+    #[must_use]
     fn clean_up_after_wait_error(
         mut self,
         error: CommandError,
@@ -265,6 +398,7 @@ impl RunningCommand {
     ///
     /// The original error. Output collection failures during cleanup are
     /// ignored so the primary process-control failure remains visible.
+    #[must_use]
     fn collect_if_child_exited(mut self, error: CommandError) -> CommandError {
         if let Ok(Some(status)) = self.child_process.try_wait() {
             let _ = self.complete(status);

@@ -16,15 +16,11 @@ use std::{
 
 use qubit_sanitize::FieldSanitizer;
 
-use super::process_setup::{
-    configure_environment,
-    configure_stdin,
-    open_output_file,
-};
+use super::io_files::IoFiles;
+use super::process_setup::configure_environment;
 use crate::{
     Command,
     CommandError,
-    OutputStream,
 };
 
 /// Fully prepared standard-library command plus runner-side I/O resources.
@@ -47,6 +43,24 @@ pub(crate) struct PreparedCommand {
 
 impl PreparedCommand {
     /// Creates the process command and all pre-spawn I/O resources.
+    ///
+    /// # Parameters
+    ///
+    /// * `command` - Structured command to prepare.
+    /// * `field_sanitizer` - Sanitizer used to build diagnostic command text.
+    /// * `default_working_directory` - Runner working directory used when the
+    ///   command has no override.
+    /// * `stdout_file_path` - Optional stdout tee path.
+    /// * `stderr_file_path` - Optional stderr tee path.
+    ///
+    /// # Returns
+    ///
+    /// Process builder, sanitized diagnostics, and validated I/O resources.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError`] when an I/O file cannot be opened or inspected,
+    /// or when configured input and output files conflict.
     pub(crate) fn prepare(
         command: Command,
         field_sanitizer: &FieldSanitizer,
@@ -68,18 +82,16 @@ impl PreparedCommand {
         }
 
         configure_environment(&command, &mut process_command);
-        let stdin = command.into_stdin_configuration();
-        let stdin_bytes =
-            configure_stdin(&command_text, stdin, &mut process_command)?;
-        let stdout_file = open_output_file(
+        let IoFiles {
+            stdin_bytes,
+            stdout_file,
+            stderr_file,
+        } = IoFiles::prepare(
             &command_text,
-            OutputStream::Stdout,
+            command.into_stdin_configuration(),
             stdout_file_path,
-        )?;
-        let stderr_file = open_output_file(
-            &command_text,
-            OutputStream::Stderr,
             stderr_file_path,
+            &mut process_command,
         )?;
 
         Ok(Self {

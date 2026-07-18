@@ -13,13 +13,21 @@ use std::{
 
 use thiserror::Error;
 
+use qubit_clock::TimeError;
+
 use crate::{
     CommandOutput,
     OutputStream,
 };
 
-/// Error returned while spawning, waiting for, or validating a command.
+/// Error returned while preparing, spawning, waiting for, or collecting a
+/// command.
+///
+/// This enum is non-exhaustive; downstream matches must retain a wildcard arm
+/// so future process and platform failures can be represented without another
+/// breaking change.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum CommandError {
     /// The process could not be spawned.
     #[error("failed to spawn command `{command}`: {source}")]
@@ -91,6 +99,78 @@ pub enum CommandError {
         source: io::Error,
     },
 
+    /// An input file and one output tee identify the same file.
+    #[error(
+        "stdin file '{input_path:?}' conflicts with {output_stream} file '{output_path:?}' for command '{command}'"
+    )]
+    InputOutputConflict {
+        /// Human-readable command representation.
+        command: String,
+        /// Configured stdin file path.
+        input_path: PathBuf,
+        /// Output stream whose tee file conflicts with stdin.
+        output_stream: OutputStream,
+        /// Configured output tee path.
+        output_path: PathBuf,
+    },
+
+    /// Stdout and stderr tee paths identify the same file.
+    #[error(
+        "stdout file '{stdout_path:?}' conflicts with stderr file '{stderr_path:?}' for command '{command}'"
+    )]
+    OutputFilesConflict {
+        /// Human-readable command representation.
+        command: String,
+        /// Configured stdout tee path.
+        stdout_path: PathBuf,
+        /// Configured stderr tee path.
+        stderr_path: PathBuf,
+    },
+
+    /// Inspecting an I/O file for conflict detection failed.
+    #[error(
+        "failed to inspect I/O file '{path:?}' for command '{command}': {source}"
+    )]
+    InspectIoFileFailed {
+        /// Human-readable command representation.
+        command: String,
+        /// Configured I/O file path.
+        path: PathBuf,
+        /// I/O error reported while resolving or inspecting the file.
+        source: io::Error,
+    },
+
+    /// Starting the helper thread that writes stdin failed.
+    #[error("failed to start stdin writer for command '{command}': {source}")]
+    StartInputThreadFailed {
+        /// Human-readable command representation.
+        command: String,
+        /// I/O error reported while creating the helper thread.
+        source: io::Error,
+    },
+
+    /// Starting a helper thread that reads captured output failed.
+    #[error(
+        "failed to start {stream} reader for command '{command}': {source}"
+    )]
+    StartOutputThreadFailed {
+        /// Human-readable command representation.
+        command: String,
+        /// Output stream whose helper thread could not be started.
+        stream: OutputStream,
+        /// I/O error reported while creating the helper thread.
+        source: io::Error,
+    },
+
+    /// Monotonic time measurement or sleeping failed.
+    #[error("time handling failed for command '{command}': {source}")]
+    TimeFailed {
+        /// Human-readable command representation.
+        command: String,
+        /// Timer or monotonic-clock error.
+        source: TimeError,
+    },
+
     /// Writing configured stdin bytes failed.
     #[error("failed to write stdin for command `{command}`: {source}")]
     WriteInputFailed {
@@ -148,7 +228,7 @@ impl CommandError {
     /// # Returns
     ///
     /// `Some(output)` for timeout and unexpected-exit errors, otherwise `None`.
-    #[inline]
+    #[inline(always)]
     pub const fn output(&self) -> Option<&CommandOutput> {
         match self {
             Self::TimedOut { output, .. }
@@ -162,7 +242,8 @@ impl CommandError {
     /// # Returns
     ///
     /// A human-readable command representation used in diagnostics.
-    #[inline]
+    #[must_use]
+    #[inline(always)]
     pub fn command(&self) -> &str {
         match self {
             Self::SpawnFailed { command, .. }
@@ -171,6 +252,12 @@ impl CommandError {
             | Self::ReadOutputFailed { command, .. }
             | Self::OpenInputFailed { command, .. }
             | Self::OpenOutputFailed { command, .. }
+            | Self::InputOutputConflict { command, .. }
+            | Self::OutputFilesConflict { command, .. }
+            | Self::InspectIoFileFailed { command, .. }
+            | Self::StartInputThreadFailed { command, .. }
+            | Self::StartOutputThreadFailed { command, .. }
+            | Self::TimeFailed { command, .. }
             | Self::WriteInputFailed { command, .. }
             | Self::WriteOutputFailed { command, .. }
             | Self::TimedOut { command, .. }

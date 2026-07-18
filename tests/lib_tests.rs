@@ -13,8 +13,8 @@ use qubit_command::{
     CommandOutput,
     CommandRunner,
     OutputStream,
-    SensitivityLevel,
 };
+use qubit_sanitize::SensitivityLevel;
 
 #[test]
 fn test_lib_exports_public_api() {

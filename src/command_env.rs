@@ -16,6 +16,10 @@ const CSTR_EQUAL: i32 = 2;
 #[cfg(windows)]
 #[link(name = "kernel32")]
 unsafe extern "system" {
+    /// Compares two explicit-length UTF-16 strings using Windows ordinal rules.
+    ///
+    /// The integer lengths describe the buffers addressed by `left` and
+    /// `right`; a nonzero `ignore_case` requests case-insensitive comparison.
     #[link_name = "CompareStringOrdinal"]
     fn compare_string_ordinal(
         left: *const u16,
@@ -27,13 +31,35 @@ unsafe extern "system" {
 }
 
 /// Compares environment variable names using platform semantics.
+///
+/// # Parameters
+///
+/// * `left` - First environment variable name.
+/// * `right` - Second environment variable name.
+///
+/// # Returns
+///
+/// `true` when the names are byte-for-byte equal.
 #[cfg(not(windows))]
+#[must_use]
+#[inline(always)]
 pub(crate) fn env_key_eq(left: &OsStr, right: &OsStr) -> bool {
     left == right
 }
 
 /// Compares environment variable names using Windows semantics.
+///
+/// # Parameters
+///
+/// * `left` - First environment variable name.
+/// * `right` - Second environment variable name.
+///
+/// # Returns
+///
+/// `true` when Windows ordinal case-insensitive comparison reports equality;
+/// `false` when either length exceeds the platform API or comparison fails.
 #[cfg(windows)]
+#[must_use]
 pub(crate) fn env_key_eq(left: &OsStr, right: &OsStr) -> bool {
     let left = left.encode_wide().collect::<Vec<_>>();
     let right = right.encode_wide().collect::<Vec<_>>();

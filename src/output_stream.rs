@@ -23,7 +23,8 @@ impl OutputStream {
     /// # Returns
     ///
     /// `"stdout"` for [`Self::Stdout`] and `"stderr"` for [`Self::Stderr`].
-    #[inline]
+    #[must_use]
+    #[inline(always)]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Stdout => "stdout",

@@ -101,6 +101,31 @@ fn test_command_error_accessors_for_errors_without_output() {
 }
 
 #[test]
+fn test_start_output_thread_error_reports_command_and_stream() {
+    let error = CommandError::StartOutputThreadFailed {
+        command: "tool <redacted>".to_owned(),
+        stream: OutputStream::Stdout,
+        source: io::Error::other("thread unavailable"),
+    };
+
+    assert_eq!(error.command(), "tool <redacted>");
+    assert!(error.output().is_none());
+    assert!(error.to_string().contains("stdout"));
+}
+
+#[test]
+fn test_start_input_thread_error_reports_command() {
+    let error = CommandError::StartInputThreadFailed {
+        command: "tool <redacted>".to_owned(),
+        source: io::Error::other("thread unavailable"),
+    };
+
+    assert_eq!(error.command(), "tool <redacted>");
+    assert!(error.output().is_none());
+    assert!(error.to_string().contains("stdin"));
+}
+
+#[test]
 fn test_command_error_accessors_for_errors_with_output() {
     let unexpected = CommandRunner::new()
         .run(Command::shell("printf output; exit 9"))
