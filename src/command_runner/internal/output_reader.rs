@@ -13,5 +13,5 @@ use super::{
 };
 
 /// Output reader thread result type.
-pub(crate) type OutputReader =
+pub(in crate::command_runner) type OutputReader =
     thread::JoinHandle<Result<CapturedOutput, OutputCaptureError>>;

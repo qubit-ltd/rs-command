@@ -7,9 +7,9 @@
 // =============================================================================
 /// Captured output bytes plus truncation metadata.
 #[derive(Debug)]
-pub(crate) struct CapturedOutput {
+pub(in crate::command_runner) struct CapturedOutput {
     /// Bytes retained in memory.
-    pub(crate) bytes: Vec<u8>,
+    pub(in crate::command_runner) bytes: Vec<u8>,
     /// Whether emitted bytes exceeded the configured retention limit.
-    pub(crate) truncated: bool,
+    pub(in crate::command_runner) truncated: bool,
 }

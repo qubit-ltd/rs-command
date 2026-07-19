@@ -24,21 +24,21 @@ use crate::{
 };
 
 /// Fully prepared standard-library command plus runner-side I/O resources.
-pub(crate) struct PreparedCommand {
+pub(in crate::command_runner) struct PreparedCommand {
     /// Human-readable command text for logs and diagnostics.
-    pub(crate) command_text: String,
+    pub(in crate::command_runner) command_text: String,
     /// Process command ready to spawn.
-    pub(crate) process_command: ProcessCommand,
+    pub(in crate::command_runner) process_command: ProcessCommand,
     /// Bytes to write to stdin after spawning, if configured.
-    pub(crate) stdin_bytes: Option<Vec<u8>>,
+    pub(in crate::command_runner) stdin_bytes: Option<Vec<u8>>,
     /// Open tee file for stdout.
-    pub(crate) stdout_file: Option<File>,
+    pub(in crate::command_runner) stdout_file: Option<File>,
     /// Open tee file for stderr.
-    pub(crate) stderr_file: Option<File>,
+    pub(in crate::command_runner) stderr_file: Option<File>,
     /// Diagnostic path for stdout tee writes.
-    pub(crate) stdout_file_path: Option<PathBuf>,
+    pub(in crate::command_runner) stdout_file_path: Option<PathBuf>,
     /// Diagnostic path for stderr tee writes.
-    pub(crate) stderr_file_path: Option<PathBuf>,
+    pub(in crate::command_runner) stderr_file_path: Option<PathBuf>,
 }
 
 impl PreparedCommand {
@@ -61,7 +61,7 @@ impl PreparedCommand {
     ///
     /// Returns [`CommandError`] when an I/O file cannot be opened or inspected,
     /// or when configured input and output files conflict.
-    pub(crate) fn prepare(
+    pub(in crate::command_runner) fn prepare(
         command: Command,
         field_sanitizer: &FieldSanitizer,
         default_working_directory: Option<&Path>,

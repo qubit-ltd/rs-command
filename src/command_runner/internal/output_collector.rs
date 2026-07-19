@@ -45,7 +45,7 @@ use crate::{
 ///
 /// Returns the thread builder's I/O error when the helper cannot be started.
 #[inline]
-pub(crate) fn read_output_stream(
+pub(in crate::command_runner) fn read_output_stream(
     mut reader: Box<dyn Read + Send>,
     options: OutputCaptureOptions,
 ) -> io::Result<OutputReader> {
@@ -70,7 +70,7 @@ pub(crate) fn read_output_stream(
 /// Returns [`OutputCaptureError::Read`] for pipe reads or
 /// [`OutputCaptureError::Write`] for tee writes and flushing. The reader still
 /// drains the child pipe after the first tee failure.
-pub(crate) fn read_output(
+pub(in crate::command_runner) fn read_output(
     reader: &mut dyn Read,
     mut options: OutputCaptureOptions,
 ) -> Result<CapturedOutput, OutputCaptureError> {
@@ -146,7 +146,7 @@ pub(crate) fn read_output(
 /// # Errors
 ///
 /// Returns the first stdout, stderr, or stdin helper failure in that order.
-pub(crate) fn collect_output(
+pub(in crate::command_runner) fn collect_output(
     command: &str,
     status: ExitStatus,
     elapsed: Duration,
@@ -191,7 +191,7 @@ pub(crate) fn collect_output(
 ///
 /// Returns [`CommandError::ReadOutputFailed`] for read failures or thread
 /// panics, and [`CommandError::WriteOutputFailed`] for tee failures.
-pub(crate) fn join_output_reader(
+pub(in crate::command_runner) fn join_output_reader(
     command: &str,
     stream: OutputStream,
     reader: OutputReader,

@@ -37,13 +37,13 @@ use crate::{
 type PreparedInputParts = (Option<PathBuf>, Option<File>, Option<Vec<u8>>);
 
 /// Prepared command-side stdin and runner-side output files.
-pub(crate) struct IoFiles {
+pub(in crate::command_runner) struct IoFiles {
     /// Bytes written to piped stdin after spawning, if configured.
-    pub(crate) stdin_bytes: Option<Vec<u8>>,
+    pub(in crate::command_runner) stdin_bytes: Option<Vec<u8>>,
     /// Open, validated, and truncated stdout tee file.
-    pub(crate) stdout_file: Option<File>,
+    pub(in crate::command_runner) stdout_file: Option<File>,
     /// Open, validated, and truncated stderr tee file.
-    pub(crate) stderr_file: Option<File>,
+    pub(in crate::command_runner) stderr_file: Option<File>,
 }
 
 impl IoFiles {
@@ -65,7 +65,7 @@ impl IoFiles {
     ///
     /// Returns [CommandError] when an input or output cannot be prepared, or
     /// when multiple configured streams identify the same file.
-    pub(crate) fn prepare(
+    pub(in crate::command_runner) fn prepare(
         command: &str,
         stdin: CommandStdin,
         stdout_path: Option<&Path>,

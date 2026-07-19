@@ -32,7 +32,7 @@ use crate::CommandError;
 
 /// Running command state that owns process and I/O helper lifetimes.
 #[must_use = "a running command must be waited on to collect its process and I/O"]
-pub(crate) struct RunningCommand {
+pub(in crate::command_runner) struct RunningCommand {
     /// Human-readable command text for diagnostics.
     command_text: String,
     /// Child process managed by the command runner.
@@ -60,7 +60,7 @@ impl RunningCommand {
     ///
     /// Running command state that owns the process and its I/O helpers.
     #[inline]
-    pub(crate) fn new(
+    pub(in crate::command_runner) fn new(
         command_text: String,
         child_process: ManagedChildProcess,
         io: CommandIo,
@@ -95,7 +95,7 @@ impl RunningCommand {
     /// output collection fails, or stdin writing fails. Wait-error cleanup
     /// only joins I/O helpers after a non-blocking check confirms the child
     /// has exited.
-    pub(crate) fn wait_for_completion(
+    pub(in crate::command_runner) fn wait_for_completion(
         mut self,
         timeout: Option<Duration>,
     ) -> Result<FinishedCommand, CommandError> {

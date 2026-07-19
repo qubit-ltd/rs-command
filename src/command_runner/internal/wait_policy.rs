@@ -8,7 +8,8 @@
 use std::time::Duration;
 
 /// Polling interval used while waiting for a child process with timeout.
-pub(crate) const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+pub(in crate::command_runner) const WAIT_POLL_INTERVAL: Duration =
+    Duration::from_millis(10);
 
 /// Calculates how long to sleep before polling the child again.
 ///
@@ -22,6 +23,9 @@ pub(crate) const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// The lesser of the polling interval and the remaining timeout.
 #[must_use]
 #[inline]
-pub(crate) fn next_sleep(timeout: Duration, elapsed: Duration) -> Duration {
+pub(in crate::command_runner) fn next_sleep(
+    timeout: Duration,
+    elapsed: Duration,
+) -> Duration {
     timeout.saturating_sub(elapsed).min(WAIT_POLL_INTERVAL)
 }

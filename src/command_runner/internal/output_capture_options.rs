@@ -13,11 +13,11 @@ use std::{
 use super::output_tee::OutputTee;
 
 /// Output capture options moved into a reader thread.
-pub(crate) struct OutputCaptureOptions {
+pub(in crate::command_runner) struct OutputCaptureOptions {
     /// Maximum bytes retained in memory.
-    pub(crate) max_bytes: Option<usize>,
+    pub(in crate::command_runner) max_bytes: Option<usize>,
     /// Optional writer receiving a streaming copy.
-    pub(crate) tee: Option<OutputTee>,
+    pub(in crate::command_runner) tee: Option<OutputTee>,
 }
 
 impl OutputCaptureOptions {
@@ -33,7 +33,7 @@ impl OutputCaptureOptions {
     ///
     /// Capture options moved into the output reader thread.
     #[inline]
-    pub(crate) fn new(
+    pub(in crate::command_runner) fn new(
         max_bytes: Option<usize>,
         file: Option<File>,
         file_path: Option<PathBuf>,
