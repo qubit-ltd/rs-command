@@ -16,13 +16,32 @@ use std::{
     },
 };
 
+#[cfg(target_os = "linux")]
+use qubit_command::OutputStream;
 use qubit_command::{
     Command,
     CommandError,
     CommandRunner,
-    OutputStream,
 };
 
+/// Creates a command that conflict tests must reject before spawning.
+///
+/// # Returns
+///
+/// A command whose executable intentionally does not exist.
+fn unspawnable_command() -> Command {
+    Command::new("__qubit_command_should_not_spawn__")
+}
+
+/// Creates a unique temporary file path for one test run.
+///
+/// # Parameters
+///
+/// * `name` - Human-readable filename component.
+///
+/// # Returns
+///
+/// Path inside the platform temporary directory.
 fn unique_temp_path(name: &str) -> PathBuf {
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -41,7 +60,7 @@ fn test_runner_rejects_stdin_stdout_conflict_without_truncating_input() {
 
     let error = CommandRunner::new()
         .tee_stdout_to_file(&path)
-        .run(Command::new("cat").stdin_file(&path))
+        .run(unspawnable_command().stdin_file(&path))
         .expect_err("conflicting files should be rejected");
 
     assert!(matches!(error, CommandError::InputOutputConflict { .. }));
@@ -59,7 +78,7 @@ fn test_runner_rejects_stdin_stderr_conflict_without_truncating_input() {
 
     let error = CommandRunner::new()
         .tee_stderr_to_file(&path)
-        .run(Command::new("cat").stdin_file(&path))
+        .run(unspawnable_command().stdin_file(&path))
         .expect_err("conflicting files should be rejected");
 
     assert!(matches!(error, CommandError::InputOutputConflict { .. }));
@@ -77,13 +96,14 @@ fn test_runner_rejects_stdout_stderr_conflict_before_creating_file() {
     let error = CommandRunner::new()
         .tee_stdout_to_file(&path)
         .tee_stderr_to_file(&path)
-        .run(Command::shell("printf out; printf err >&2"))
+        .run(unspawnable_command())
         .expect_err("conflicting output files should be rejected");
 
     assert!(matches!(error, CommandError::OutputFilesConflict { .. }));
     assert!(!path.exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn test_runner_rejects_symlinked_input_output_conflict() {
     let input_path = unique_temp_path("symlink-conflict-input");
@@ -95,7 +115,7 @@ fn test_runner_rejects_symlinked_input_output_conflict() {
 
     let error = CommandRunner::new()
         .tee_stdout_to_file(&output_path)
-        .run(Command::new("cat").stdin_file(&input_path))
+        .run(unspawnable_command().stdin_file(&input_path))
         .expect_err("symlinked files should be rejected");
 
     assert!(matches!(error, CommandError::InputOutputConflict { .. }));
@@ -118,7 +138,7 @@ fn test_runner_rejects_hard_linked_input_output_conflict() {
 
     let error = CommandRunner::new()
         .tee_stdout_to_file(&output_path)
-        .run(Command::new("cat").stdin_file(&input_path))
+        .run(unspawnable_command().stdin_file(&input_path))
         .expect_err("hard-linked files should be rejected");
 
     assert!(matches!(error, CommandError::InputOutputConflict { .. }));
@@ -141,7 +161,7 @@ fn test_runner_rejects_hard_linked_input_stderr_conflict() {
 
     let error = CommandRunner::new()
         .tee_stderr_to_file(&output_path)
-        .run(Command::new("cat").stdin_file(&input_path))
+        .run(unspawnable_command().stdin_file(&input_path))
         .expect_err("hard-linked files should be rejected");
 
     assert!(matches!(error, CommandError::InputOutputConflict { .. }));
@@ -165,7 +185,7 @@ fn test_runner_rejects_hard_linked_output_files() {
     let error = CommandRunner::new()
         .tee_stdout_to_file(&stdout_path)
         .tee_stderr_to_file(&stderr_path)
-        .run(Command::shell("printf out; printf err >&2"))
+        .run(unspawnable_command())
         .expect_err("hard-linked output files should be rejected");
 
     assert!(matches!(error, CommandError::OutputFilesConflict { .. }));
@@ -177,6 +197,7 @@ fn test_runner_rejects_hard_linked_output_files() {
     fs::remove_file(stdout_path).expect("stdout fixture should be removed");
 }
 
+#[cfg(not(windows))]
 #[test]
 fn test_runner_normalizes_relative_output_path_components() {
     let file_name = unique_temp_path("relative-output")
@@ -202,6 +223,7 @@ fn test_runner_normalizes_relative_output_path_components() {
     fs::remove_file(path).expect("relative output should be removed");
 }
 
+#[cfg(unix)]
 #[test]
 fn test_runner_reports_symlink_loop_during_path_inspection() {
     let first = unique_temp_path("symlink-loop-first");
