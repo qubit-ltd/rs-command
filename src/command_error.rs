@@ -207,6 +207,17 @@ pub enum CommandError {
         output: Box<CommandOutput>,
     },
 
+    /// The command succeeded, but its captured output was truncated.
+    #[error(
+        "command `{command}` completed successfully, but captured output was truncated"
+    )]
+    OutputTruncated {
+        /// Human-readable command representation.
+        command: String,
+        /// Partially retained output from the successful command.
+        output: Box<CommandOutput>,
+    },
+
     /// The command completed with an exit code not configured as successful.
     #[error(
         "command `{command}` exited with code {exit_code:?}; expected one of {expected:?}"
@@ -246,11 +257,13 @@ impl CommandError {
     ///
     /// # Returns
     ///
-    /// `Some(output)` for timeout and unexpected-exit errors, otherwise `None`.
+    /// `Some(output)` for timeout, output-truncation, and unexpected-exit
+    /// errors, otherwise `None`.
     #[inline(always)]
     pub const fn output(&self) -> Option<&CommandOutput> {
         match self {
             Self::TimedOut { output, .. }
+            | Self::OutputTruncated { output, .. }
             | Self::UnexpectedExit { output, .. } => Some(output),
             _ => None,
         }
@@ -280,6 +293,7 @@ impl CommandError {
             | Self::WriteInputFailed { command, .. }
             | Self::WriteOutputFailed { command, .. }
             | Self::TimedOut { command, .. }
+            | Self::OutputTruncated { command, .. }
             | Self::UnexpectedExit { command, .. } => command,
         }
     }

@@ -21,6 +21,7 @@ Qubit Command 提供一个小而明确的结构化 API，用于运行外部程�
 - 超时时基于 Unix process group 和 Windows Job Object 尝试终止进程树。
 - 默认保留 stdout 和 stderr 的原始字节，同时提供严格和有损 UTF-8 文本访问方法。
 - 支持按流限制内存捕获字节数，并把完整输出流式写入文件。
+- 可选择在命令成功但内存输出被截断时返回错误。
 - 在截断任何 tee 文件前检查 stdin、stdout 和 stderr 的文件冲突。
 - 日志和诊断里的命令文本会对敏感 argv、显式环境变量覆盖、shell
   脚本体以及调用方追加的敏感字段做脱敏展示。
@@ -58,6 +59,24 @@ if output.stdout_truncated() {
 }
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+默认情况下，截断只通过 `CommandOutput` 报告，成功命令仍返回 `Ok`。如果调用方不能
+接受不完整的内存输出，可启用 `fail_on_output_truncation(true)`：
+
+```rust
+use qubit_command::{Command, CommandRunner};
+
+let output = CommandRunner::new()
+    .max_output_bytes(64 * 1024)
+    .fail_on_output_truncation(true)
+    .run(Command::new("cargo").arg("test"))?;
+
+assert!(!output.stdout_truncated());
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+即使保留输出发生截断，非预期退出或超时仍是优先错误。这三类错误都可以通过
+`CommandError::output()` 取得保留输出。
 
 ## 快速开始
 
@@ -132,6 +151,9 @@ Runner 上追加的字段只影响 runner 日志和 `CommandError::command()`。
 误报，runner 可以调用 `exclude_sensitive_field` 或 `exclude_sensitive_fields` 排除默认
 字段。这会让匹配的 argv 或环境变量值原样出现在 runner 日志和
 `CommandError::command()` 中，因此每个排除项都应经过安全审阅。
+
+命令生命周期日志使用 `debug` 级别。调用 `disable_logging(true)` 会抑制这些日志；
+无法通过 `CommandError` 返回的清理失败仍可能使用 `error` 级别记录。
 
 `CommandOutput` 的 `Debug` 输出会遮盖两个捕获流，只报告字节数、截断标志、退出状态和
 耗时。捕获到的 stdout/stderr 字节、显式访问方法以及 tee 文件仍然是进程原始输出。

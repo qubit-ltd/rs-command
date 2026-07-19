@@ -59,8 +59,10 @@ pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 ///
 /// `CommandRunner` runs one [`Command`] synchronously on the caller thread and
 /// returns captured process output. The configured timeout begins after the
-/// child process is spawned. The runner always preserves raw output
-/// bytes up to the configured per-stream limits. Use
+/// child process is spawned. The runner always preserves raw output bytes up
+/// to the configured per-stream limits. By default, truncation is reported on
+/// [`CommandOutput`]; use [`CommandRunner::fail_on_output_truncation`] when
+/// successful commands with truncated output must be rejected. Use
 /// [`CommandOutput::stdout_text`] and [`CommandOutput::stderr_text`] for strict
 /// UTF-8 text, or [`CommandOutput::stdout_lossy_text`] and
 /// [`CommandOutput::stderr_lossy_text`] when invalid UTF-8 should be replaced.
@@ -86,6 +88,8 @@ pub struct CommandRunner {
     success_exit_codes: Vec<i32>,
     /// Whether command execution logs are disabled.
     disable_logging: bool,
+    /// Whether successful commands fail when captured output is truncated.
+    fail_on_output_truncation: bool,
     /// Field sanitizer used for command diagnostics and logs.
     diagnostic_sanitizer: FieldSanitizer,
     /// Maximum stdout bytes retained in memory.
@@ -119,6 +123,7 @@ impl fmt::Debug for CommandRunner {
             )
             .field("success_exit_codes", &self.success_exit_codes)
             .field("disable_logging", &self.disable_logging)
+            .field("fail_on_output_truncation", &self.fail_on_output_truncation)
             .field("diagnostic_sanitizer", &self.diagnostic_sanitizer)
             .field("max_stdout_bytes", &self.max_stdout_bytes)
             .field("max_stderr_bytes", &self.max_stderr_bytes)
@@ -141,7 +146,8 @@ impl Default for CommandRunner {
     ///
     /// A runner with the default timeout, a standard monotonic timer, inherited
     /// working directory, success exit code `0`, enabled logging, unlimited
-    /// in-memory output capture, and no output tee files.
+    /// in-memory output capture, allowed output truncation, and no output tee
+    /// files.
     #[inline]
     fn default() -> Self {
         Self {
@@ -150,6 +156,7 @@ impl Default for CommandRunner {
             working_directory: None,
             success_exit_codes: vec![0],
             disable_logging: false,
+            fail_on_output_truncation: false,
             diagnostic_sanitizer: FieldSanitizer::default(),
             max_stdout_bytes: None,
             max_stderr_bytes: None,
@@ -166,7 +173,8 @@ impl CommandRunner {
     ///
     /// A runner with the default timeout, a standard monotonic timer, inherited
     /// working directory, success exit code `0`, enabled logging, unlimited
-    /// in-memory output capture, and no output tee files.
+    /// in-memory output capture, allowed output truncation, and no output tee
+    /// files.
     #[inline(always)]
     pub fn new() -> Self {
         Self::default()
@@ -305,22 +313,26 @@ impl CommandRunner {
         self
     }
 
-    /// Returns whether logging is disabled.
+    /// Returns whether command lifecycle logging is disabled.
     ///
     /// # Returns
     ///
-    /// `true` when runner logs are disabled.
+    /// `true` when runner lifecycle logs are disabled.
     #[must_use]
     #[inline(always)]
     pub const fn is_logging_disabled(&self) -> bool {
         self.disable_logging
     }
 
-    /// Enables or disables command execution logs.
+    /// Enables or disables command lifecycle logs.
+    ///
+    /// This setting controls the `debug` records emitted when a command starts
+    /// and completes. Cleanup failures that cannot be returned to the caller
+    /// may still be logged at `error` level.
     ///
     /// # Parameters
     ///
-    /// * `disable_logging` - `true` to suppress runner logs.
+    /// * `disable_logging` - `true` to suppress runner lifecycle logs.
     ///
     /// # Returns
     ///
@@ -328,6 +340,43 @@ impl CommandRunner {
     #[inline(always)]
     pub const fn disable_logging(mut self, disable_logging: bool) -> Self {
         self.disable_logging = disable_logging;
+        self
+    }
+
+    /// Returns whether truncated output makes a successful command fail.
+    ///
+    /// # Returns
+    ///
+    /// `true` when a successful command returns
+    /// [`CommandError::OutputTruncated`] if either captured stream is
+    /// truncated.
+    #[must_use]
+    #[inline(always)]
+    pub const fn is_output_truncation_failure_enabled(&self) -> bool {
+        self.fail_on_output_truncation
+    }
+
+    /// Enables or disables failure on truncated captured output.
+    ///
+    /// This policy applies only after the process exits with a configured
+    /// success code. Timeout and unexpected-exit errors keep precedence and
+    /// continue to expose their captured output through
+    /// [`CommandError::output`].
+    ///
+    /// # Parameters
+    ///
+    /// * `fail_on_output_truncation` - `true` to reject successful commands
+    ///   when stdout or stderr is truncated in memory.
+    ///
+    /// # Returns
+    ///
+    /// The updated command runner.
+    #[inline(always)]
+    pub const fn fail_on_output_truncation(
+        mut self,
+        fail_on_output_truncation: bool,
+    ) -> Self {
+        self.fail_on_output_truncation = fail_on_output_truncation;
         self
     }
 
@@ -603,7 +652,9 @@ impl CommandRunner {
     /// the process or an I/O helper cannot be started, waiting or injected time
     /// handling fails, the timeout expires, process-tree termination fails,
     /// captured output or configured stdin cannot be transferred, or the child
-    /// exits with a code not configured as successful.
+    /// exits with a code not configured as successful. Also returns
+    /// [`CommandError::OutputTruncated`] when the child succeeds, either stream
+    /// is truncated, and [`Self::fail_on_output_truncation`] is enabled.
     pub fn run(&self, command: Command) -> Result<CommandOutput, CommandError> {
         let PreparedCommand {
             command_text,
@@ -622,7 +673,7 @@ impl CommandRunner {
         )?;
 
         if !self.disable_logging {
-            log::info!("Running command: {command_text}");
+            log::debug!("Running command: {command_text}");
         }
 
         let child_process =
@@ -711,8 +762,23 @@ impl CommandRunner {
         if output.exit_code().is_some_and(|exit_code| {
             self.success_exit_codes.contains(&exit_code)
         }) {
+            if self.fail_on_output_truncation
+                && (output.stdout_truncated() || output.stderr_truncated())
+            {
+                if !self.disable_logging {
+                    log::debug!(
+                        "Finished command `{}` with truncated output in {:?}.",
+                        command_text,
+                        output.elapsed()
+                    );
+                }
+                return Err(CommandError::OutputTruncated {
+                    command: command_text,
+                    output: Box::new(output),
+                });
+            }
             if !self.disable_logging {
-                log::info!(
+                log::debug!(
                     "Finished command `{}` in {:?}.",
                     command_text,
                     output.elapsed()
@@ -721,7 +787,7 @@ impl CommandRunner {
             Ok(output)
         } else {
             if !self.disable_logging {
-                log::error!(
+                log::debug!(
                     "Command `{}` exited with code {:?}.",
                     command_text,
                     output.exit_code()
