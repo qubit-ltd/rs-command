@@ -7,6 +7,8 @@
 // =============================================================================
 //! Timer that deterministically rejects every deadline registration.
 
+use std::io;
+
 use qubit_clock::{
     ManualMonotonicClock,
     MonotonicClock,
@@ -14,7 +16,7 @@ use qubit_clock::{
     TimeError,
     Timer,
     TimerFuture,
-    TimerUnavailableReason,
+    TimerUnavailableError,
 };
 
 pub(crate) struct FailingTimer {
@@ -39,7 +41,12 @@ impl Timer for FailingTimer {
         _deadline: MonotonicInstant,
     ) -> Result<TimerFuture, TimeError> {
         Err(TimeError::TimerUnavailable {
-            reason: TimerUnavailableReason::BackendUnavailable,
+            source: TimerUnavailableError::BackendUnavailable {
+                backend: "test",
+                source: Box::new(io::Error::other(
+                    "test timer backend unavailable",
+                )),
+            },
         })
     }
 }
