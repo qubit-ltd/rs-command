@@ -7,7 +7,6 @@
 // =============================================================================
 //! Tests for [`CommandRunner`](qubit_command::CommandRunner).
 
-#[cfg(not(windows))]
 use std::time::Instant;
 use std::{
     fs,
@@ -47,6 +46,10 @@ mod unix {
         SystemTime,
         UNIX_EPOCH,
         fs,
+        support::{
+            captured_log_records_containing,
+            initialize_captured_logger,
+        },
     };
 
     fn unique_temp_path(name: &str) -> PathBuf {
@@ -68,6 +71,7 @@ mod unix {
         assert_eq!(runner.configured_success_exit_codes(), &[0]);
         assert!(runner.configured_working_directory().is_none());
         assert!(!runner.is_logging_disabled());
+        assert!(!runner.is_output_truncation_failure_enabled());
         assert_eq!(runner.configured_max_stdout_bytes(), None);
         assert_eq!(runner.configured_max_stderr_bytes(), None);
         assert!(runner.configured_stdout_file().is_none());
@@ -441,6 +445,13 @@ mod unix {
     }
 
     #[test]
+    fn test_command_runner_fail_on_output_truncation_updates_configuration() {
+        let runner = CommandRunner::new().fail_on_output_truncation(true);
+
+        assert!(runner.is_output_truncation_failure_enabled());
+    }
+
+    #[test]
     fn test_command_runner_output_file_updates_configuration() {
         let stdout_path = unique_temp_path("stdout-config.txt");
         let stderr_path = unique_temp_path("stderr-config.txt");
@@ -459,26 +470,102 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_run_suppresses_success_logging() {
-        let output = CommandRunner::new()
-            .disable_logging(true)
-            .run(Command::shell("printf quiet-success"))
-            .expect("command should run successfully when logging is disabled");
+    fn test_command_runner_run_logs_success_lifecycle_at_debug() {
+        const MARKER: &str = "qubit-command-log-success-marker";
+        initialize_captured_logger();
 
-        assert_eq!(
-            output.stdout_text().expect("stdout should be valid UTF-8"),
-            "quiet-success",
+        let output = CommandRunner::new()
+            .run(Command::new("printf").arg(MARKER))
+            .expect("command should run successfully");
+
+        assert_eq!(output.stdout(), MARKER.as_bytes());
+        let records = captured_log_records_containing(MARKER);
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|(level, _)| *level == log::Level::Debug));
+        assert!(
+            records
+                .iter()
+                .any(|(_, message)| message.contains("Running"))
+        );
+        assert!(
+            records
+                .iter()
+                .any(|(_, message)| message.contains("Finished"))
         );
     }
 
     #[test]
+    fn test_command_runner_run_suppresses_success_logging() {
+        const MARKER: &str = "qubit-command-log-quiet-success-marker";
+        initialize_captured_logger();
+
+        let output = CommandRunner::new()
+            .disable_logging(true)
+            .run(Command::new("printf").arg(MARKER))
+            .expect("command should run successfully when logging is disabled");
+
+        assert_eq!(output.stdout(), MARKER.as_bytes());
+        assert!(captured_log_records_containing(MARKER).is_empty());
+    }
+
+    #[test]
+    fn test_command_runner_run_logs_unexpected_exit_without_error_level() {
+        const MARKER: &str = "qubit-command-log-failure-marker";
+        initialize_captured_logger();
+
+        let error = CommandRunner::new()
+            .run(Command::new("sh").arg("-c").arg("exit 8").arg(MARKER))
+            .expect_err("unexpected exit should be reported");
+
+        assert!(matches!(error, CommandError::UnexpectedExit { .. }));
+        let records = captured_log_records_containing(MARKER);
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|(level, _)| *level == log::Level::Debug));
+    }
+
+    #[test]
     fn test_command_runner_run_suppresses_failure_logging() {
+        const MARKER: &str = "qubit-command-log-quiet-failure-marker";
+        initialize_captured_logger();
+
         let error = CommandRunner::new()
             .disable_logging(true)
-            .run(Command::shell("exit 8"))
+            .run(
+                Command::new("sh")
+                    .arg("-c")
+                    .arg("exit 8")
+                    .arg(MARKER),
+            )
             .expect_err("unexpected exit should still be reported when logging is disabled");
 
         assert!(matches!(error, CommandError::UnexpectedExit { .. }));
+        assert!(captured_log_records_containing(MARKER).is_empty());
+    }
+
+    #[test]
+    fn test_command_runner_run_logs_sanitized_command_text() {
+        const MARKER: &str = "qubit-command-log-sanitized-marker";
+        const SECRET: &str = "command-log-secret";
+        initialize_captured_logger();
+
+        let output = CommandRunner::new()
+            .run(
+                Command::new("printf")
+                    .arg("%s")
+                    .arg(MARKER)
+                    .arg("--password")
+                    .arg(SECRET),
+            )
+            .expect("command should run successfully");
+
+        assert_eq!(
+            output.stdout(),
+            format!("{MARKER}--password{SECRET}").as_bytes()
+        );
+
+        let records = captured_log_records_containing(MARKER);
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|(_, message)| !message.contains(SECRET)));
     }
 
     #[test]
@@ -636,6 +723,42 @@ mod unix {
         assert_eq!(output.stderr(), b"wx");
         assert!(output.stdout_truncated());
         assert!(output.stderr_truncated());
+    }
+
+    #[test]
+    fn test_command_runner_run_fails_when_output_is_truncated() {
+        let error = CommandRunner::new()
+            .max_stdout_bytes(3)
+            .max_stderr_bytes(2)
+            .fail_on_output_truncation(true)
+            .run(Command::shell("printf abcdef; printf wxyz >&2"))
+            .expect_err("truncated successful output should be rejected");
+
+        assert!(matches!(error, CommandError::OutputTruncated { .. }));
+        let output = error
+            .output()
+            .expect("truncation error should expose output");
+        assert_eq!(output.stdout(), b"abc");
+        assert_eq!(output.stderr(), b"wx");
+        assert!(output.stdout_truncated());
+        assert!(output.stderr_truncated());
+    }
+
+    #[test]
+    fn test_command_runner_unexpected_exit_precedes_output_truncation() {
+        let error = CommandRunner::new()
+            .max_output_bytes(3)
+            .fail_on_output_truncation(true)
+            .run(Command::shell("printf abcdef; exit 7"))
+            .expect_err("unexpected exit should be rejected");
+
+        assert!(matches!(error, CommandError::UnexpectedExit { .. }));
+        assert!(
+            error
+                .output()
+                .expect("unexpected exit should expose output")
+                .stdout_truncated()
+        );
     }
 
     #[test]
@@ -886,6 +1009,7 @@ mod windows {
         CommandError,
         CommandRunner,
         Duration,
+        Instant,
         PathBuf,
         SystemTime,
         UNIX_EPOCH,
@@ -961,6 +1085,24 @@ mod windows {
             .expect_err("long-running Windows command should time out");
 
         assert!(matches!(error, CommandError::TimedOut { .. }));
+    }
+
+    #[test]
+    fn test_command_runner_windows_times_out_when_background_child_inherits_output()
+     {
+        let started = Instant::now();
+        let error = CommandRunner::new()
+            .timeout(Duration::from_millis(250))
+            .run(Command::shell("start \"\" /B ping -n 6 127.0.0.1"))
+            .expect_err(
+                "background child with inherited output should time out",
+            );
+
+        assert!(matches!(error, CommandError::TimedOut { .. }));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "timeout should not wait for the background child to exit",
+        );
     }
 
     #[test]

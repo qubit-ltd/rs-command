@@ -26,6 +26,8 @@ clear error values.
 - UTF-8 stdout and stderr text accessors, with raw byte accessors for binary
   output
 - Optional per-stream capture limits plus streaming tee files for large output
+- Optional failure policy for successful commands whose captured output is
+  truncated
 - Input and output file conflict detection before any tee file is truncated
 - Sanitized command diagnostics for sensitive argv values, explicit
   environment overrides, shell payloads, and caller-defined sensitive fields
@@ -67,6 +69,26 @@ if output.stdout_truncated() {
 }
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+By default, truncation is reported through `CommandOutput` and the successful
+command still returns `Ok`. Enable `fail_on_output_truncation(true)` when a
+caller must reject partial in-memory output:
+
+```rust
+use qubit_command::{Command, CommandRunner};
+
+let output = CommandRunner::new()
+    .max_output_bytes(64 * 1024)
+    .fail_on_output_truncation(true)
+    .run(Command::new("cargo").arg("test"))?;
+
+assert!(!output.stdout_truncated());
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+An unexpected exit or timeout remains the primary error even when its retained
+output is truncated. All three error kinds expose retained output through
+`CommandError::output()`.
 
 ## Quick Start
 
@@ -144,6 +166,10 @@ defaults only. A runner can call `exclude_sensitive_field` or
 `exclude_sensitive_fields` for a verified false positive. This deliberately
 allows matching argv or environment values to appear unchanged in runner logs
 and `CommandError::command()`, so every exclusion should be security-reviewed.
+
+Command lifecycle records are emitted at `debug` level. Calling
+`disable_logging(true)` suppresses those records. Cleanup failures that cannot
+be returned through `CommandError` may still be logged at `error` level.
 
 `CommandOutput`'s `Debug` output redacts both captured streams and reports only
 their byte lengths, truncation flags, status, and elapsed time. Captured

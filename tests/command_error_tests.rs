@@ -181,6 +181,21 @@ fn test_start_input_thread_error_reports_command() {
 
 #[test]
 fn test_command_error_accessors_for_errors_with_output() {
+    let truncated = CommandRunner::new()
+        .max_stdout_bytes(3)
+        .fail_on_output_truncation(true)
+        .run(Command::shell("printf output"))
+        .expect_err("truncated output should be rejected");
+    assert!(matches!(truncated, CommandError::OutputTruncated { .. }));
+    assert_eq!(truncated.command(), r#"["sh", "-c", "<shell command>"]"#);
+    assert_eq!(
+        truncated
+            .output()
+            .expect("truncation error should expose output")
+            .stdout(),
+        b"out",
+    );
+
     let unexpected = CommandRunner::new()
         .run(Command::shell("printf output; exit 9"))
         .expect_err("non-success exit code should be rejected");
