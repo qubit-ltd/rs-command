@@ -8,4 +8,4 @@
 use process_wrap::std::ChildWrapper;
 
 /// Child process wrapper managed by this runner.
-pub(crate) type ManagedChildProcess = Box<dyn ChildWrapper>;
+pub(in crate::command_runner) type ManagedChildProcess = Box<dyn ChildWrapper>;

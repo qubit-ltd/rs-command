@@ -27,7 +27,10 @@ use crate::{
 /// Structured spawn failure retaining the command and source.
 #[must_use]
 #[inline]
-pub(crate) fn spawn_failed(command: &str, source: io::Error) -> CommandError {
+pub(in crate::command_runner) fn spawn_failed(
+    command: &str,
+    source: io::Error,
+) -> CommandError {
     CommandError::SpawnFailed {
         command: command.to_owned(),
         source,
@@ -46,7 +49,10 @@ pub(crate) fn spawn_failed(command: &str, source: io::Error) -> CommandError {
 /// Structured wait failure retaining the command and source.
 #[must_use]
 #[inline]
-pub(crate) fn wait_failed(command: &str, source: io::Error) -> CommandError {
+pub(in crate::command_runner) fn wait_failed(
+    command: &str,
+    source: io::Error,
+) -> CommandError {
     CommandError::WaitFailed {
         command: command.to_owned(),
         source,
@@ -66,7 +72,7 @@ pub(crate) fn wait_failed(command: &str, source: io::Error) -> CommandError {
 /// Structured kill failure retaining the command, timeout, and source.
 #[must_use]
 #[inline]
-pub(crate) fn kill_failed(
+pub(in crate::command_runner) fn kill_failed(
     command: String,
     timeout: Duration,
     source: io::Error,
@@ -90,7 +96,7 @@ pub(crate) fn kill_failed(
 /// Structured output-read failure describing the missing pipe.
 #[must_use]
 #[inline]
-pub(crate) fn output_pipe_error(
+pub(in crate::command_runner) fn output_pipe_error(
     command: &str,
     stream: OutputStream,
 ) -> CommandError {

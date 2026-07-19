@@ -12,7 +12,7 @@ use std::{
 
 /// Error reported by an output reader thread.
 #[derive(Debug)]
-pub(crate) enum OutputCaptureError {
+pub(in crate::command_runner) enum OutputCaptureError {
     /// Reading from the child pipe failed.
     Read(io::Error),
     /// Writing to a tee file failed.

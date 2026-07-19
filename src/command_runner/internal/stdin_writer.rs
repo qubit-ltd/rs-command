@@ -11,4 +11,5 @@ use std::{
 };
 
 /// Stdin writer thread result type.
-pub(crate) type StdinWriter = Option<thread::JoinHandle<io::Result<()>>>;
+pub(in crate::command_runner) type StdinWriter =
+    Option<thread::JoinHandle<io::Result<()>>>;

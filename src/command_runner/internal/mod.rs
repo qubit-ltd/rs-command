@@ -7,22 +7,22 @@
 // =============================================================================
 //! Private command-runner implementation details.
 
-pub(crate) mod captured_output;
-pub(crate) mod command_io;
-pub(crate) mod error_mapping;
-pub(crate) mod finished_command;
-pub(crate) mod io_files;
-pub(crate) mod managed_child_process;
-pub(crate) mod output_capture_error;
-pub(crate) mod output_capture_options;
-pub(crate) mod output_collector;
-pub(crate) mod output_reader;
-pub(crate) mod output_tee;
-pub(crate) mod prepared_command;
-pub(crate) mod process_launcher;
-pub(crate) mod process_setup;
-pub(crate) mod running_command;
-pub(crate) mod starting_command;
-pub(crate) mod stdin_pipe;
-pub(crate) mod stdin_writer;
-pub(crate) mod wait_policy;
+pub(in crate::command_runner) mod captured_output;
+pub(in crate::command_runner) mod command_io;
+pub(in crate::command_runner) mod error_mapping;
+pub(in crate::command_runner) mod finished_command;
+pub(in crate::command_runner) mod io_files;
+pub(in crate::command_runner) mod managed_child_process;
+pub(in crate::command_runner) mod output_capture_error;
+pub(in crate::command_runner) mod output_capture_options;
+pub(in crate::command_runner) mod output_collector;
+pub(in crate::command_runner) mod output_reader;
+pub(in crate::command_runner) mod output_tee;
+pub(in crate::command_runner) mod prepared_command;
+pub(in crate::command_runner) mod process_launcher;
+pub(in crate::command_runner) mod process_setup;
+pub(in crate::command_runner) mod running_command;
+pub(in crate::command_runner) mod starting_command;
+pub(in crate::command_runner) mod stdin_pipe;
+pub(in crate::command_runner) mod stdin_writer;
+pub(in crate::command_runner) mod wait_policy;

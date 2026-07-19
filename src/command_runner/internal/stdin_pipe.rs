@@ -35,7 +35,7 @@ use crate::CommandError;
 /// Returns [`CommandError::WriteInputFailed`] when the configured pipe is
 /// missing, or [`CommandError::StartInputThreadFailed`] when the writer thread
 /// cannot be created.
-pub(crate) fn write_stdin_bytes(
+pub(in crate::command_runner) fn write_stdin_bytes(
     command: &str,
     child: &mut dyn ChildWrapper,
     stdin_bytes: Option<Vec<u8>>,
@@ -77,7 +77,7 @@ pub(crate) fn write_stdin_bytes(
 ///
 /// Returns [`CommandError::WriteInputFailed`] for non-broken-pipe write errors
 /// or a writer-thread panic.
-pub(crate) fn join_stdin_writer(
+pub(in crate::command_runner) fn join_stdin_writer(
     command: &str,
     writer: StdinWriter,
 ) -> Result<(), CommandError> {

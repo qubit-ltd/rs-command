@@ -19,7 +19,7 @@ use crate::{
 
 /// Output and stdin helper threads for one running command.
 #[must_use = "dropping command I/O detaches its helper threads"]
-pub(crate) struct CommandIo {
+pub(in crate::command_runner) struct CommandIo {
     /// Reader thread draining stdout.
     stdout_reader: OutputReader,
     /// Reader thread draining stderr.
@@ -41,7 +41,7 @@ impl CommandIo {
     ///
     /// I/O helper bundle consumed when output is collected or drained.
     #[inline]
-    pub(crate) fn new(
+    pub(in crate::command_runner) fn new(
         stdout_reader: OutputReader,
         stderr_reader: OutputReader,
         stdin_writer: StdinWriter,
@@ -61,7 +61,7 @@ impl CommandIo {
     /// without blocking.
     #[must_use]
     #[inline]
-    pub(crate) fn is_finished(&self) -> bool {
+    pub(in crate::command_runner) fn is_finished(&self) -> bool {
         self.stdout_reader.is_finished()
             && self.stderr_reader.is_finished()
             && self
@@ -86,7 +86,7 @@ impl CommandIo {
     ///
     /// Returns [`CommandError`] if stream collection or stdin writing fails.
     #[inline(always)]
-    pub(crate) fn collect(
+    pub(in crate::command_runner) fn collect(
         self,
         command: &str,
         status: std::process::ExitStatus,

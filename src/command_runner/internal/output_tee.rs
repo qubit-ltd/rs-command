@@ -11,9 +11,9 @@ use std::{
 };
 
 /// Streaming destination for captured output.
-pub(crate) struct OutputTee {
+pub(in crate::command_runner) struct OutputTee {
     /// Writer receiving all emitted bytes.
-    pub(crate) writer: Box<dyn Write + Send>,
+    pub(in crate::command_runner) writer: Box<dyn Write + Send>,
     /// Path used for diagnostics if writes fail.
-    pub(crate) path: PathBuf,
+    pub(in crate::command_runner) path: PathBuf,
 }

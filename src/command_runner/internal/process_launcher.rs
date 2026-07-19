@@ -34,7 +34,7 @@ use super::managed_child_process::ManagedChildProcess;
 ///
 /// Returns the operating-system spawn error, including failures to configure
 /// the process group or Job Object.
-pub(crate) fn spawn_child(
+pub(in crate::command_runner) fn spawn_child(
     process_command: ProcessCommand,
     manage_process_tree: bool,
 ) -> io::Result<ManagedChildProcess> {

@@ -25,7 +25,7 @@ use qubit_sanitize::{
     SensitivityLevel,
 };
 
-pub(crate) mod internal;
+mod internal;
 
 use internal::error_mapping::{
     output_pipe_error,
