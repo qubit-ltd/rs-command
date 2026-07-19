@@ -37,6 +37,8 @@ clear error values.
 `CommandRunner::new()` enforces `DEFAULT_COMMAND_TIMEOUT` (currently ten
 seconds). Use `timeout(Duration)` when a command needs a different bound, or
 `without_timeout()` only when the absence of a timeout is deliberate.
+The timeout clock starts after the child process has been spawned; time spent
+preparing and spawning a command is not included.
 
 When a timeout is configured, the runner attempts to terminate the process tree:
 Unix commands are spawned in a new process group and Windows commands are spawned
@@ -163,7 +165,9 @@ bytes with `�`.
 If the captured stdout or stderr contains invalid UTF-8, `stdout_text()` /
 `stderr_text()` return `Err(str::Utf8Error)` from `str::from_utf8`. The bytes are
 still stored on the returned `CommandOutput`; use `stdout()` / `stderr()` to read
-the raw output and decode or handle it yourself.
+the retained raw output and decode or handle it yourself. When a capture limit
+truncates a stream in the middle of a multi-byte sequence, strict decoding can
+fail even if the complete process output was valid UTF-8.
 
 ```rust
 use qubit_command::{Command, CommandRunner};

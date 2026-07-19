@@ -156,7 +156,10 @@ impl CommandOutput {
     ///
     /// # Returns
     ///
-    /// A borrowed slice containing stdout exactly as emitted by the process.
+    /// A borrowed slice containing stdout exactly as retained by the runner.
+    ///
+    /// Check [`Self::stdout_truncated`] to determine whether retained bytes are
+    /// only a prefix of the process output.
     #[must_use]
     #[inline(always)]
     pub fn stdout(&self) -> &[u8] {
@@ -167,7 +170,10 @@ impl CommandOutput {
     ///
     /// # Returns
     ///
-    /// A borrowed slice containing stderr exactly as emitted by the process.
+    /// A borrowed slice containing stderr exactly as retained by the runner.
+    ///
+    /// Check [`Self::stderr_truncated`] to determine whether retained bytes are
+    /// only a prefix of the process output.
     #[must_use]
     #[inline(always)]
     pub fn stderr(&self) -> &[u8] {
@@ -182,7 +188,9 @@ impl CommandOutput {
     ///
     /// # Errors
     ///
-    /// Returns [`str::Utf8Error`] when stdout contains invalid UTF-8.
+    /// Returns [`str::Utf8Error`] when retained stdout contains invalid UTF-8.
+    /// A capture limit can retain only part of a multi-byte sequence, so this
+    /// error does not necessarily mean the process emitted invalid UTF-8.
     #[inline(always)]
     pub fn stdout_text(&self) -> Result<&str, str::Utf8Error> {
         str::from_utf8(&self.stdout)
@@ -196,7 +204,9 @@ impl CommandOutput {
     ///
     /// # Errors
     ///
-    /// Returns [`str::Utf8Error`] when stderr contains invalid UTF-8.
+    /// Returns [`str::Utf8Error`] when retained stderr contains invalid UTF-8.
+    /// A capture limit can retain only part of a multi-byte sequence, so this
+    /// error does not necessarily mean the process emitted invalid UTF-8.
     #[inline(always)]
     pub fn stderr_text(&self) -> Result<&str, str::Utf8Error> {
         str::from_utf8(&self.stderr)
