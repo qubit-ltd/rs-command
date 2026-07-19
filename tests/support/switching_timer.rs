@@ -7,9 +7,12 @@
 // =============================================================================
 //! Timer that changes clock domains after its first clock observation.
 
-use std::sync::atomic::{
-    AtomicUsize,
-    Ordering,
+use std::{
+    io,
+    sync::atomic::{
+        AtomicUsize,
+        Ordering,
+    },
 };
 
 use qubit_clock::{
@@ -19,7 +22,7 @@ use qubit_clock::{
     TimeError,
     Timer,
     TimerFuture,
-    TimerUnavailableReason,
+    TimerUnavailableError,
 };
 
 pub(crate) struct SwitchingTimer {
@@ -60,7 +63,12 @@ impl Timer for SwitchingTimer {
         _deadline: MonotonicInstant,
     ) -> Result<TimerFuture, TimeError> {
         Err(TimeError::TimerUnavailable {
-            reason: TimerUnavailableReason::BackendUnavailable,
+            source: TimerUnavailableError::BackendUnavailable {
+                backend: "test",
+                source: Box::new(io::Error::other(
+                    "test timer backend unavailable",
+                )),
+            },
         })
     }
 }

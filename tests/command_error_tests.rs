@@ -17,7 +17,7 @@ use std::{
 
 use qubit_clock::{
     TimeError,
-    TimerUnavailableReason,
+    TimerUnavailableError,
 };
 use qubit_command::{
     Command,
@@ -141,7 +141,12 @@ fn test_command_error_accessors_for_preparation_and_time_errors() {
     let time = CommandError::TimeFailed {
         command: "time".to_owned(),
         source: TimeError::TimerUnavailable {
-            reason: TimerUnavailableReason::BackendUnavailable,
+            source: TimerUnavailableError::BackendUnavailable {
+                backend: "test",
+                source: Box::new(io::Error::other(
+                    "test timer backend unavailable",
+                )),
+            },
         },
     };
     assert_eq!(time.command(), "time");

@@ -33,7 +33,7 @@ doctest = true
 [dependencies]
 log = "0.4"
 process-wrap = { version = "9.1", default-features = false, features = ["std", "process-group", "job-object"] }
-qubit-clock = { version = "0.9", path = "../rs-clock" }
+qubit-clock = { version = "0.10", path = "../rs-clock" }
 qubit-sanitize = { version = "0.3", path = "../rs-sanitize", default-features = false }
 same-file = "1.0"
 thiserror = "2.0"
