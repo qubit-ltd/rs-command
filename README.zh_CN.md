@@ -31,6 +31,7 @@ Qubit Command 提供一个小而明确的结构化 API，用于运行外部程�
 `CommandRunner::new()` 默认应用 `DEFAULT_COMMAND_TIMEOUT`（当前为十秒）。需要
 不同的命令时长限制时，请调用 `timeout(Duration)`；只有确实需要无限等待时才调用
 `without_timeout()`。
+超时从子进程成功启动后开始计时，命令准备与启动过程耗费的时间不计入该上限。
 
 设置超时后，runner 会尝试终止整个进程树：Unix 平台把命令放入新的
 process group，Windows 平台把命令放入 Job Object。
@@ -148,7 +149,9 @@ Runner 上追加的字段只影响 runner 日志和 `CommandError::command()`。
 若实际捕获的 stdout 或 stderr 中含有非法 UTF-8 序列，则 `stdout_text()` /
 `stderr_text()` 会分别返回 `Err(str::Utf8Error)`（内部对保留字节执行
 `str::from_utf8` 失败），无法得到 `&str`；此时输出仍已完整保留在
-`CommandOutput` 中，可改用 `stdout()` / `stderr()` 取得原始字节并自行处理。
+`CommandOutput` 中，可改用 `stdout()` / `stderr()` 取得保留的原始字节并自行处理。
+配置捕获上限时，若截断位置恰好落在多字节 UTF-8 序列中间，即使进程的完整输出本身
+是有效 UTF-8，严格解码也可能失败。
 
 ```rust
 use qubit_command::{Command, CommandRunner};

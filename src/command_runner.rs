@@ -49,7 +49,7 @@ use crate::{
 
 const REDACTED_PATH: &str = "<redacted path>";
 
-/// Default ten-second timeout applied by [`CommandRunner::new`].
+/// Default ten-second post-spawn timeout applied by [`CommandRunner::new`].
 ///
 /// Use [`CommandRunner::timeout`] to select a different command limit or
 /// [`CommandRunner::without_timeout`] to opt out of timeout handling.
@@ -58,7 +58,8 @@ pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 /// Runs external commands and captures their output.
 ///
 /// `CommandRunner` runs one [`Command`] synchronously on the caller thread and
-/// returns captured process output. The runner always preserves raw output
+/// returns captured process output. The configured timeout begins after the
+/// child process is spawned. The runner always preserves raw output
 /// bytes up to the configured per-stream limits. Use
 /// [`CommandOutput::stdout_text`] and [`CommandOutput::stderr_text`] for strict
 /// UTF-8 text, or [`CommandOutput::stdout_lossy_text`] and
@@ -185,7 +186,7 @@ impl CommandRunner {
     ///
     /// # Parameters
     ///
-    /// * `timeout` - Maximum duration allowed for each command.
+    /// * `timeout` - Maximum duration allowed after the child process starts.
     ///
     /// # Returns
     ///
@@ -571,14 +572,14 @@ impl CommandRunner {
     /// Runs a command and captures stdout and stderr.
     ///
     /// This method blocks the caller thread until the command exits and its I/O
-    /// helpers finish, or until the configured timeout is reached. When a
-    /// timeout is configured, Unix children run as leaders of new process
-    /// groups and Windows children run in Job Objects. This lets timeout
-    /// killing target the process tree instead of only the direct child
-    /// process, including cases where the direct child exits but descendants
-    /// keep inherited stdout or stderr pipes open. Without a configured
-    /// timeout, commands use the platform's normal process-spawning
-    /// behavior.
+    /// helpers finish, or until the configured post-spawn timeout is reached.
+    /// When a timeout is configured, Unix children run as leaders of new
+    /// process groups and Windows children run in Job Objects. This lets
+    /// timeout killing target the process tree instead of only the direct
+    /// child process, including cases where the direct child exits but
+    /// descendants keep inherited stdout or stderr pipes open. Without a
+    /// configured timeout, commands use the platform's normal
+    /// process-spawning behavior.
     ///
     /// Captured output is retained as raw bytes up to the configured per-stream
     /// limits. Reader threads still drain complete streams so the child is not
