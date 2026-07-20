@@ -20,10 +20,7 @@ use qubit_clock::{
     StdMonotonicClock,
     Timer,
 };
-use qubit_sanitize::{
-    FieldSanitizer,
-    SensitivityLevel,
-};
+use qubit_redact::RedactionPolicy;
 
 mod internal;
 
@@ -92,8 +89,8 @@ pub struct CommandRunner {
     disable_logging: bool,
     /// Whether successful commands fail when captured output is truncated.
     fail_on_output_truncation: bool,
-    /// Field sanitizer used for command diagnostics and logs.
-    diagnostic_sanitizer: FieldSanitizer,
+    /// Immutable redaction policy used for command diagnostics and logs.
+    diagnostic_redaction_policy: RedactionPolicy,
     /// Maximum stdout bytes retained in memory.
     max_stdout_bytes: Option<usize>,
     /// Maximum stderr bytes retained in memory.
@@ -126,7 +123,10 @@ impl fmt::Debug for CommandRunner {
             .field("success_exit_codes", &self.success_exit_codes)
             .field("disable_logging", &self.disable_logging)
             .field("fail_on_output_truncation", &self.fail_on_output_truncation)
-            .field("diagnostic_sanitizer", &self.diagnostic_sanitizer)
+            .field(
+                "diagnostic_redaction_policy",
+                &self.diagnostic_redaction_policy,
+            )
             .field("max_stdout_bytes", &self.max_stdout_bytes)
             .field("max_stderr_bytes", &self.max_stderr_bytes)
             .field(
@@ -159,7 +159,7 @@ impl Default for CommandRunner {
             success_exit_codes: vec![0],
             disable_logging: false,
             fail_on_output_truncation: false,
-            diagnostic_sanitizer: FieldSanitizer::default(),
+            diagnostic_redaction_policy: RedactionPolicy::default(),
             max_stdout_bytes: None,
             max_stderr_bytes: None,
             stdout_file: None,
@@ -387,99 +387,38 @@ impl CommandRunner {
         self
     }
 
-    /// Adds one sensitive field name for command diagnostics.
+    /// Returns the immutable policy used for command diagnostics and logs.
     ///
-    /// The field is appended to the default `qubit-sanitize` policy used for
-    /// command text in runner logs and [`CommandError::command`]. `Command`'s
-    /// standalone [`Debug`](std::fmt::Debug) output has no runner context and
-    /// uses the default policy only. Matching uses
-    /// [`NameMatchMode::ExactOrSuffix`](qubit_sanitize::NameMatchMode::ExactOrSuffix),
-    /// so contextual names such as `TENANT_OPTION` match `tenant_option`.
+    /// # Returns
+    ///
+    /// The complete configured diagnostic redaction policy.
+    #[inline(always)]
+    pub const fn configured_diagnostic_redaction_policy(
+        &self,
+    ) -> &RedactionPolicy {
+        &self.diagnostic_redaction_policy
+    }
+
+    /// Replaces the complete policy used for command diagnostics and logs.
+    ///
+    /// The policy affects runner lifecycle logs and
+    /// [`CommandError::command`]. Standalone [`Command`](crate::Command)
+    /// [`Debug`](std::fmt::Debug) output uses the global default policy because
+    /// it has no runner context.
     ///
     /// # Parameters
     ///
-    /// * `field` - Field or option name that should be treated as sensitive.
-    /// * `level` - Sensitivity level controlling how values are masked.
+    /// * `policy` - Immutable policy snapshot used for diagnostic redaction.
     ///
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline]
-    pub fn sensitive_field(
+    #[inline(always)]
+    pub fn diagnostic_redaction_policy(
         mut self,
-        field: &str,
-        level: SensitivityLevel,
+        policy: RedactionPolicy,
     ) -> Self {
-        self.diagnostic_sanitizer
-            .insert_sensitive_field(field, level);
-        self
-    }
-
-    /// Adds multiple sensitive field names for command diagnostics.
-    ///
-    /// This is the batch form of [`Self::sensitive_field`]. The fields extend
-    /// the default `qubit-sanitize` policy used by runner logs and
-    /// [`CommandError::command`]; standalone [`Command`](crate::Command)
-    /// [`Debug`](std::fmt::Debug) output still uses only the built-in default
-    /// policy because it has no runner context.
-    ///
-    /// # Parameters
-    ///
-    /// * `fields` - Field or option names that should be treated as sensitive.
-    /// * `level` - Sensitivity level applied to every provided field.
-    ///
-    /// # Returns
-    ///
-    /// The updated command runner.
-    #[inline]
-    pub fn sensitive_fields(
-        mut self,
-        fields: &[&str],
-        level: SensitivityLevel,
-    ) -> Self {
-        self.diagnostic_sanitizer
-            .extend_sensitive_fields(fields.iter().copied(), level);
-        self
-    }
-
-    /// Excludes one field from command diagnostic sanitization.
-    ///
-    /// This can remove a built-in sensitive field. The matching command-line
-    /// argument or environment value may then appear verbatim in logs and
-    /// [`CommandError::command`]. Use this only for a known false positive
-    /// whose exposure is acceptable in the caller's diagnostic context.
-    ///
-    /// # Parameters
-    ///
-    /// * `field` - Field or option name to stop treating as sensitive.
-    ///
-    /// # Returns
-    ///
-    /// The updated command runner.
-    #[inline]
-    pub fn exclude_sensitive_field(mut self, field: &str) -> Self {
-        self.diagnostic_sanitizer.exclude_sensitive_field(field);
-        self
-    }
-
-    /// Excludes multiple fields from command diagnostic sanitization.
-    ///
-    /// This is the batch form of [`Self::exclude_sensitive_field`]. Removed
-    /// built-in fields may be rendered verbatim in logs and
-    /// [`CommandError::command`], so callers must review every exclusion as a
-    /// deliberate disclosure decision.
-    ///
-    /// # Parameters
-    ///
-    /// * `fields` - Field or option names to stop treating as sensitive.
-    ///
-    /// # Returns
-    ///
-    /// The updated command runner.
-    pub fn exclude_sensitive_fields(mut self, fields: &[&str]) -> Self {
-        for field in fields {
-            self.diagnostic_sanitizer.exclude_sensitive_field(field);
-        }
+        self.diagnostic_redaction_policy = policy;
         self
     }
 
@@ -679,7 +618,7 @@ impl CommandRunner {
             stderr_file_path,
         } = PreparedCommand::prepare(
             command,
-            &self.diagnostic_sanitizer,
+            &self.diagnostic_redaction_policy,
             self.working_directory.as_deref(),
             self.stdout_file.as_deref(),
             self.stderr_file.as_deref(),

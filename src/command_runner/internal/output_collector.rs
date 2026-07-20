@@ -132,7 +132,7 @@ pub(in crate::command_runner) fn read_output(
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text used in errors.
+/// * `command` - Redacted command text used in errors.
 /// * `status` - Child exit status.
 /// * `elapsed` - Observed command duration.
 /// * `stdout_reader` - Helper draining stdout.
@@ -179,7 +179,7 @@ pub(in crate::command_runner) fn collect_output(
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text used in errors.
+/// * `command` - Redacted command text used in errors.
 /// * `stream` - Stream drained by the helper.
 /// * `reader` - Reader-thread join handle.
 ///

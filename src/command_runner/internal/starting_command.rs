@@ -22,7 +22,7 @@ use super::{
 /// joins already-started helpers after the child is confirmed stopped.
 #[must_use = "dropping an unfinished command guard terminates the child"]
 pub(in crate::command_runner) struct StartingCommand<'a> {
-    /// Sanitized command text used in cleanup logs.
+    /// Redacted command text used in cleanup logs.
     command: &'a str,
     /// Spawned child process, moved out only after successful initialization.
     child_process: Option<ManagedChildProcess>,
@@ -39,7 +39,7 @@ impl<'a> StartingCommand<'a> {
     ///
     /// # Parameters
     ///
-    /// * `command` - Sanitized command text used in cleanup logs.
+    /// * `command` - Redacted command text used in cleanup logs.
     /// * `child_process` - Newly spawned child process.
     ///
     /// # Returns

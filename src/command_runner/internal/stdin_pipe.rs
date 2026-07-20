@@ -22,7 +22,7 @@ use crate::CommandError;
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text used in errors.
+/// * `command` - Redacted command text used in errors.
 /// * `child` - Spawned child whose stdin pipe may be taken.
 /// * `stdin_bytes` - Optional byte buffer to write and then close.
 ///
@@ -66,7 +66,7 @@ pub(in crate::command_runner) fn write_stdin_bytes(
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text used in errors.
+/// * `command` - Redacted command text used in errors.
 /// * `writer` - Optional writer-thread join handle.
 ///
 /// # Returns

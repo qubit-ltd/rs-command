@@ -26,7 +26,10 @@ use qubit_command::{
     CommandRunner,
     DEFAULT_COMMAND_TIMEOUT,
 };
-use qubit_sanitize::SensitivityLevel;
+use qubit_redact::{
+    RedactionPolicy,
+    Sensitivity,
+};
 
 mod command_runner;
 mod support;
@@ -42,7 +45,8 @@ mod unix {
         Instant,
         OutputStream,
         PathBuf,
-        SensitivityLevel,
+        RedactionPolicy,
+        Sensitivity,
         SystemTime,
         UNIX_EPOCH,
         fs,
@@ -76,6 +80,19 @@ mod unix {
         assert_eq!(runner.configured_max_stderr_bytes(), None);
         assert!(runner.configured_stdout_file().is_none());
         assert!(runner.configured_stderr_file().is_none());
+    }
+
+    #[test]
+    fn test_runner_accepts_a_complete_diagnostic_redaction_policy() {
+        let policy = RedactionPolicy::builder()
+            .raise("tenant_option", Sensitivity::Secret)
+            .allow_exact("username")
+            .build()
+            .expect("the diagnostic redaction policy should be valid");
+        let runner =
+            CommandRunner::new().diagnostic_redaction_policy(policy.clone());
+
+        assert_eq!(runner.configured_diagnostic_redaction_policy(), &policy,);
     }
 
     #[test]
@@ -543,8 +560,8 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_run_logs_sanitized_command_text() {
-        const MARKER: &str = "qubit-command-log-sanitized-marker";
+    fn test_command_runner_run_logs_redacted_command_text() {
+        const MARKER: &str = "qubit-command-log-redacted-marker";
         const SECRET: &str = "command-log-secret";
         initialize_captured_logger();
 
@@ -855,7 +872,7 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_error_sanitizes_sensitive_argv_values() {
+    fn test_command_runner_error_redacts_sensitive_argv_values() {
         let error = CommandRunner::new()
             .run(
                 Command::new("__qubit_command_missing_executable__")
@@ -883,12 +900,12 @@ mod unix {
             .run(Command::shell("printf ignored; printf hunter2 >&2; exit 9"))
             .expect_err("non-success shell command should fail");
 
-        assert_eq!(error.command(), r#"["sh", "-c", "<shell command>"]"#);
+        assert_eq!(error.command(), r#"["sh", "-c", "<redacted>"]"#);
         assert!(!error.command().contains("hunter2"));
     }
 
     #[test]
-    fn test_command_runner_error_sanitizes_environment_display() {
+    fn test_command_runner_error_redacts_environment_display() {
         let error = CommandRunner::new()
             .run(
                 Command::new("__qubit_command_missing_executable__")
@@ -906,7 +923,7 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_error_sanitizes_default_database_credentials() {
+    fn test_command_runner_error_redacts_default_database_credentials() {
         let error = CommandRunner::new()
             .run(
                 Command::new("__qubit_command_missing_executable__")
@@ -925,9 +942,13 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_error_sanitizes_configured_sensitive_fields() {
+    fn test_command_runner_error_redacts_configured_sensitive_field() {
+        let policy = RedactionPolicy::builder()
+            .raise("tenant_option", Sensitivity::Secret)
+            .build()
+            .expect("the diagnostic redaction policy should be valid");
         let error = CommandRunner::new()
-            .sensitive_field("tenant_option", SensitivityLevel::Secret)
+            .diagnostic_redaction_policy(policy)
             .run(
                 Command::new("__qubit_command_missing_executable__")
                     .arg("--tenant-option")
@@ -945,13 +966,15 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_error_sanitizes_multiple_configured_sensitive_fields()
-     {
+    fn test_command_runner_error_redacts_multiple_configured_sensitive_fields()
+    {
+        let policy = RedactionPolicy::builder()
+            .raise("tenant_option", Sensitivity::Secret)
+            .raise("tenant_env", Sensitivity::Secret)
+            .build()
+            .expect("the diagnostic redaction policy should be valid");
         let error = CommandRunner::new()
-            .sensitive_fields(
-                &["tenant_option", "tenant_env"],
-                SensitivityLevel::Secret,
-            )
+            .diagnostic_redaction_policy(policy)
             .run(
                 Command::new("__qubit_command_missing_executable__")
                     .arg("--tenant-option")
@@ -969,10 +992,14 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_can_exclude_default_sensitive_fields() {
+    fn test_command_runner_can_allow_exact_default_sensitive_fields() {
+        let policy = RedactionPolicy::builder()
+            .allow_exact("sig")
+            .allow_exact("signature")
+            .build()
+            .expect("the diagnostic redaction policy should be valid");
         let error = CommandRunner::new()
-            .exclude_sensitive_field("sig")
-            .exclude_sensitive_fields(&["signature"])
+            .diagnostic_redaction_policy(policy)
             .run(
                 Command::new("__qubit_command_missing_executable__")
                     .arg("--sig")
@@ -986,9 +1013,13 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_exclusion_wins_over_sensitive_suffix() {
+    fn test_command_runner_suffix_allow_wins_over_sensitive_suffix() {
+        let policy = RedactionPolicy::builder()
+            .allow_suffix("access_token")
+            .build()
+            .expect("the diagnostic redaction policy should be valid");
         let error = CommandRunner::new()
-            .exclude_sensitive_field("access_token")
+            .diagnostic_redaction_policy(policy)
             .run(
                 Command::new("__qubit_command_missing_executable__")
                     .arg("--openai-access-token")

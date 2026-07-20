@@ -51,7 +51,7 @@ impl IoFiles {
     ///
     /// # Parameters
     ///
-    /// * `command` - Sanitized command text used in errors.
+    /// * `command` - Redacted command text used in errors.
     /// * `stdin` - Requested stdin configuration.
     /// * `stdout_path` - Optional stdout tee path.
     /// * `stderr_path` - Optional stderr tee path.
@@ -120,7 +120,7 @@ impl IoFiles {
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text used in errors.
+/// * `command` - Redacted command text used in errors.
 /// * `stdin` - Requested stdin configuration.
 /// * `process_command` - Process command receiving non-file configuration.
 ///
@@ -167,7 +167,7 @@ fn open_input(
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text used in errors.
+/// * `command` - Redacted command text used in errors.
 /// * `stream` - Output stream receiving the file.
 /// * `path` - Optional tee path.
 ///
@@ -203,7 +203,7 @@ fn open_output(
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text used in errors.
+/// * `command` - Redacted command text used in errors.
 /// * `stdin_path` - Optional configured stdin path.
 /// * `stdout_path` - Optional configured stdout tee path.
 /// * `stderr_path` - Optional configured stderr tee path.
@@ -267,7 +267,7 @@ fn validate_normalized_paths(
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text used in errors.
+/// * `command` - Redacted command text used in errors.
 /// * `path` - Optional configured I/O path.
 ///
 /// # Returns
@@ -329,7 +329,7 @@ fn normalize_lexically(path: &Path) -> PathBuf {
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text used in errors.
+/// * `command` - Redacted command text used in errors.
 /// * `stdin` - Optional stdin path and file.
 /// * `stdout` - Optional stdout path and file.
 /// * `stderr` - Optional stderr path and file.
@@ -400,7 +400,7 @@ fn validate_file_identities(
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text used in errors.
+/// * `command` - Redacted command text used in errors.
 /// * `file` - Optional configured path and open file.
 ///
 /// # Returns
@@ -429,7 +429,7 @@ fn file_handle(
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text used in errors.
+/// * `command` - Redacted command text used in errors.
 /// * `stream` - Output stream receiving the file.
 /// * `path` - Optional configured path.
 /// * `file` - Optional open output file.
@@ -478,7 +478,7 @@ fn truncate_output(
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text used in errors.
+/// * `command` - Redacted command text used in errors.
 /// * `input_path` - Configured stdin path.
 /// * `output_stream` - Output stream whose tee path conflicts with stdin.
 /// * `output_path` - Conflicting output tee path.
@@ -506,7 +506,7 @@ fn input_output_conflict(
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text used in errors.
+/// * `command` - Redacted command text used in errors.
 /// * `stdout_path` - Configured stdout tee path.
 /// * `stderr_path` - Conflicting stderr tee path.
 ///
@@ -531,7 +531,7 @@ fn output_files_conflict(
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text used in errors.
+/// * `command` - Redacted command text used in errors.
 /// * `path` - Configured path that could not be inspected.
 /// * `source` - Underlying filesystem error.
 ///

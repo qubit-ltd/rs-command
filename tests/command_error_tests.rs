@@ -187,7 +187,7 @@ fn test_command_error_accessors_for_errors_with_output() {
         .run(Command::shell("printf output"))
         .expect_err("truncated output should be rejected");
     assert!(matches!(truncated, CommandError::OutputTruncated { .. }));
-    assert_eq!(truncated.command(), r#"["sh", "-c", "<shell command>"]"#);
+    assert_eq!(truncated.command(), r#"["sh", "-c", "<redacted>"]"#);
     assert_eq!(
         truncated
             .output()
@@ -199,7 +199,7 @@ fn test_command_error_accessors_for_errors_with_output() {
     let unexpected = CommandRunner::new()
         .run(Command::shell("printf output; exit 9"))
         .expect_err("non-success exit code should be rejected");
-    assert_eq!(unexpected.command(), r#"["sh", "-c", "<shell command>"]"#);
+    assert_eq!(unexpected.command(), r#"["sh", "-c", "<redacted>"]"#);
     assert_eq!(
         unexpected
             .output()
@@ -213,7 +213,7 @@ fn test_command_error_accessors_for_errors_with_output() {
         .timeout(Duration::from_millis(500))
         .run(Command::shell("printf before-timeout; sleep 2"))
         .expect_err("long-running command should time out");
-    assert_eq!(timed_out.command(), r#"["sh", "-c", "<shell command>"]"#);
+    assert_eq!(timed_out.command(), r#"["sh", "-c", "<redacted>"]"#);
     assert_eq!(
         timed_out
             .output()

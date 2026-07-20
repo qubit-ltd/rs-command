@@ -122,19 +122,23 @@ assert_eq!(output.stdout_text()?, "HELLO");
 ## 诊断脱敏
 
 Runner 日志、`CommandError::command()` 和 `Command` 的 `Debug` 输出都会通过
-`qubit-sanitize` 生成脱敏命令文本。类似 `--password secret`、
+`qubit-redact` 生成遮盖后的命令文本。类似 `--password secret`、
 `--access-token=...`、`OPENAI_API_KEY=...` 的结构化 argv 值会被遮蔽；显式设置的
-环境变量覆盖也只展示脱敏后的 `KEY=value`。`Command::shell` 的脚本体不做 shell
-语法解析，统一作为不透明脚本显示为 `<shell command>`。
+环境变量覆盖也只展示遮盖后的 `KEY=value`。`Command::shell` 的脚本体不做 shell
+语法解析，统一作为不透明 secret 遮盖。
 
-当默认敏感字段不够时，可以在 runner 上追加业务字段：
+当默认策略不够时，可以向 runner 注入完整的不可变策略：
 
 ```rust
 use qubit_command::{Command, CommandRunner};
-use qubit_sanitize::SensitivityLevel;
+use qubit_redact::{RedactionPolicy, Sensitivity};
 
+let policy = RedactionPolicy::builder()
+    .raise("tenant_option", Sensitivity::Secret)
+    .allow_exact("username")
+    .build()?;
 let error = CommandRunner::new()
-    .sensitive_field("tenant_option", SensitivityLevel::Secret)
+    .diagnostic_redaction_policy(policy)
     .run(Command::new("__missing__").arg("--tenant-option").arg("secret"))
     .expect_err("sample command should fail");
 
@@ -148,11 +152,12 @@ assert_eq!(
 `Command::sensitive_arg_os`。原值仍会不加修改地传给子进程，但诊断中只显示配置的
 秘密掩码。
 
-Runner 上追加的字段只影响 runner 日志和 `CommandError::command()`。
-独立的 `Command` `Debug` 输出没有 runner 上下文，只使用内置默认字段。对于确认过的
-误报，runner 可以调用 `exclude_sensitive_field` 或 `exclude_sensitive_fields` 排除默认
-字段。这会让匹配的 argv 或环境变量值原样出现在 runner 日志和
-`CommandError::command()` 中，因此每个排除项都应经过安全审阅。
+Runner 策略只影响 runner 日志和 `CommandError::command()`。
+独立的 `Command` `Debug` 输出没有 runner 上下文；每次格式化时都会取得进程级全局
+默认策略的快照，只有尚未安装全局默认策略时才使用标准策略。对于确认过的精确字段名
+误报，可使用 `allow_exact`；只有在明确接受更宽泛的后缀放行时才使用
+`allow_suffix`。放行会让匹配的 argv 或环境变量值原样出现在诊断中，因此每条规则都应
+经过安全审阅。
 
 命令生命周期日志使用 `debug` 级别。调用 `disable_logging(true)` 会抑制这些日志；
 无法通过 `CommandError` 返回的清理失败仍可能使用 `error` 级别记录。

@@ -29,7 +29,7 @@ clear error values.
 - Optional failure policy for successful commands whose captured output is
   truncated
 - Input and output file conflict detection before any tee file is truncated
-- Sanitized command diagnostics for sensitive argv values, explicit
+- Redacted command diagnostics for sensitive argv values, explicit
   environment overrides, shell payloads, and caller-defined sensitive fields
 - Typed errors for spawn failures, timeouts, failed output reads, and unexpected
   exit codes
@@ -132,24 +132,27 @@ assert_eq!(output.stdout_text()?, "HELLO");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-## Sanitized Diagnostics
+## Redacted Diagnostics
 
 Command strings used in runner logs, `CommandError::command()`, and
-`Command`'s `Debug` output are sanitized with `qubit-sanitize`.
+`Command`'s `Debug` output are redacted with `qubit-redact`.
 Sensitive structured argv values such as `--password secret`,
 `--access-token=...`, and `OPENAI_API_KEY=...` are masked. Explicit
-environment overrides are shown only in sanitized form. `Command::shell`
-payloads are treated as opaque shell scripts and displayed as
-`<shell command>` instead of being parsed.
+environment overrides are shown only in redacted form. `Command::shell`
+payloads are treated as opaque secrets and are never parsed.
 
-Add application-specific fields on the runner when the defaults are not enough:
+Inject a complete immutable policy when the defaults are not enough:
 
 ```rust
 use qubit_command::{Command, CommandRunner};
-use qubit_sanitize::SensitivityLevel;
+use qubit_redact::{RedactionPolicy, Sensitivity};
 
+let policy = RedactionPolicy::builder()
+    .raise("tenant_option", Sensitivity::Secret)
+    .allow_exact("username")
+    .build()?;
 let error = CommandRunner::new()
-    .sensitive_field("tenant_option", SensitivityLevel::Secret)
+    .diagnostic_redaction_policy(policy)
     .run(Command::new("__missing__").arg("--tenant-option").arg("secret"))
     .expect_err("sample command should fail");
 
@@ -163,12 +166,13 @@ Use `Command::sensitive_arg` or `Command::sensitive_arg_os` for positional
 values such as customer file paths. The original value is passed unchanged to
 the child process, while diagnostics display the configured secret mask.
 
-Runner-specific fields affect runner logs and `CommandError::command()`.
-Standalone `Command` `Debug` output has no runner context and uses the built-in
-defaults only. A runner can call `exclude_sensitive_field` or
-`exclude_sensitive_fields` for a verified false positive. This deliberately
-allows matching argv or environment values to appear unchanged in runner logs
-and `CommandError::command()`, so every exclusion should be security-reviewed.
+The runner policy affects runner logs and `CommandError::command()`.
+Standalone `Command` `Debug` output has no runner context. Each formatting call
+snapshots the process-wide global default policy; when no global default has
+been installed, it uses the standard policy. Use `allow_exact` for a verified
+exact-name false positive, or `allow_suffix` only when the broader disclosure is
+intentional. Every allow rule should be security-reviewed because matching argv
+or environment values can then appear unchanged in diagnostics.
 
 Command lifecycle records are emitted at `debug` level. Calling
 `disable_logging(true)` suppresses those records. Cleanup failures that cannot

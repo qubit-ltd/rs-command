@@ -10,7 +10,7 @@ use std::ffi::{
     OsString,
 };
 
-use qubit_sanitize::SensitivityLevel;
+use qubit_redact::Sensitivity;
 
 /// One raw command argument and its diagnostic sensitivity.
 #[derive(Clone, PartialEq, Eq)]
@@ -18,7 +18,7 @@ pub(crate) struct CommandArgument {
     /// Raw value passed to the child process.
     value: OsString,
     /// Optional sensitivity applied only to diagnostic rendering.
-    sensitivity: Option<SensitivityLevel>,
+    sensitivity: Option<Sensitivity>,
 }
 
 impl CommandArgument {
@@ -52,7 +52,7 @@ impl CommandArgument {
     pub(crate) const fn sensitive(value: OsString) -> Self {
         Self {
             value,
-            sensitivity: Some(SensitivityLevel::Secret),
+            sensitivity: Some(Sensitivity::Secret),
         }
     }
 
@@ -72,7 +72,7 @@ impl CommandArgument {
     ///
     /// Explicit sensitivity for diagnostic rendering, if configured.
     #[inline(always)]
-    pub(crate) const fn sensitivity(&self) -> Option<SensitivityLevel> {
+    pub(crate) const fn sensitivity(&self) -> Option<Sensitivity> {
         self.sensitivity
     }
 }
