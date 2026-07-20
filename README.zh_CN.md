@@ -39,6 +39,8 @@ process group，Windows 平台把命令放入 Job Object。
 
 超时测量和休眠使用可注入的 `qubit-clock` timer，因此单元测试可以用手动单调时钟
 驱动超时逻辑。未设置超时时，runner 会直接等待进程结束，不进行轮询。
+由于命令执行会同步等待 timer，timer 后端必须能在调用线程阻塞时独立推进。Tokio
+timer 不应依赖仅由同一调用线程驱动的 current-thread runtime。
 
 ## 大输出
 

@@ -66,6 +66,8 @@ pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 /// [`CommandOutput::stdout_text`] and [`CommandOutput::stderr_text`] for strict
 /// UTF-8 text, or [`CommandOutput::stdout_lossy_text`] and
 /// [`CommandOutput::stderr_lossy_text`] when invalid UTF-8 should be replaced.
+/// Timeout handling uses a blocking timer adapter, so the configured timer
+/// backend must keep progressing while this thread is parked.
 ///
 /// # Examples
 ///
@@ -228,6 +230,11 @@ impl CommandRunner {
     }
 
     /// Replaces the monotonic timer used for timeout handling.
+    ///
+    /// Command execution waits on this timer synchronously. Its backend must
+    /// therefore make progress independently of the caller thread. In
+    /// particular, do not use a Tokio timer whose only driver is the same
+    /// current-thread runtime that calls [`Self::run`].
     ///
     /// # Parameters
     ///
@@ -637,6 +644,12 @@ impl CommandRunner {
     /// [`CommandOutput::stdout_lossy_text`] and
     /// [`CommandOutput::stderr_lossy_text`] when invalid UTF-8 should be
     /// replaced.
+    ///
+    /// # Blocking
+    ///
+    /// This method parks the caller while waiting for command completion and
+    /// timeout ticks. A configured timer backend must continue progressing
+    /// independently during that wait.
     ///
     /// # Parameters
     ///

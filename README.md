@@ -49,6 +49,9 @@ in a Job Object.
 Timeout measurement and sleeping use an injectable `qubit-clock` timer. This
 lets tests drive timeout behavior with a manual monotonic clock. Without a
 timeout, the runner waits directly for process completion instead of polling.
+Because command execution waits on the timer synchronously, the timer backend
+must keep progressing independently of the caller thread. A Tokio timer must
+not rely on a current-thread runtime that is driven only by that same thread.
 
 ## Large Output
 
