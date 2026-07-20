@@ -14,13 +14,19 @@ use qubit_command::{
     CommandRunner,
     OutputStream,
 };
-use qubit_sanitize::SensitivityLevel;
+use qubit_redact::{
+    RedactionPolicy,
+    Sensitivity,
+};
 
 #[test]
 fn test_lib_exports_public_api() {
     let command = Command::new("printf").arg("hello");
-    let runner = CommandRunner::new()
-        .sensitive_field("tenant_option", SensitivityLevel::Secret);
+    let policy = RedactionPolicy::builder()
+        .raise("tenant_option", Sensitivity::Secret)
+        .build()
+        .expect("the diagnostic redaction policy should be valid");
+    let runner = CommandRunner::new().diagnostic_redaction_policy(policy);
     let stream = OutputStream::Stdout;
 
     assert_eq!(command.program().to_string_lossy(), "printf");

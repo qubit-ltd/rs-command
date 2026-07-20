@@ -14,7 +14,7 @@ use std::{
     process::Command as ProcessCommand,
 };
 
-use qubit_sanitize::FieldSanitizer;
+use qubit_redact::RedactionPolicy;
 
 use super::io_files::IoFiles;
 use super::process_setup::configure_environment;
@@ -47,7 +47,8 @@ impl PreparedCommand {
     /// # Parameters
     ///
     /// * `command` - Structured command to prepare.
-    /// * `field_sanitizer` - Sanitizer used to build diagnostic command text.
+    /// * `redaction_policy` - Immutable policy used to build diagnostic command
+    ///   text.
     /// * `default_working_directory` - Runner working directory used when the
     ///   command has no override.
     /// * `stdout_file_path` - Optional stdout tee path.
@@ -55,7 +56,7 @@ impl PreparedCommand {
     ///
     /// # Returns
     ///
-    /// Process builder, sanitized diagnostics, and validated I/O resources.
+    /// Process builder, redacted diagnostics, and validated I/O resources.
     ///
     /// # Errors
     ///
@@ -63,12 +64,12 @@ impl PreparedCommand {
     /// or when configured input and output files conflict.
     pub(in crate::command_runner) fn prepare(
         command: Command,
-        field_sanitizer: &FieldSanitizer,
+        redaction_policy: &RedactionPolicy,
         default_working_directory: Option<&Path>,
         stdout_file_path: Option<&Path>,
         stderr_file_path: Option<&Path>,
     ) -> Result<Self, CommandError> {
-        let command_text = command.display_command(field_sanitizer);
+        let command_text = command.display_command(redaction_policy);
         let mut process_command = ProcessCommand::new(command.program());
         process_command.args(command.arguments());
         process_command.stdout(std::process::Stdio::piped());

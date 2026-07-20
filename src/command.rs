@@ -17,20 +17,22 @@ use std::{
     },
 };
 
-use qubit_sanitize::{
-    ArgvSanitizer,
-    EnvSanitizer,
-    FieldSanitizer,
-    NameMatchMode,
-    SensitivityLevel,
+use qubit_redact::{
+    ArgvRedactor,
+    EnvRedactor,
+    RedactionPolicy,
+    Redactor,
+    Sensitivity,
+    argv::{
+        ArgvItem,
+        RedactedArgv,
+    },
 };
 
 use crate::command_argument::CommandArgument;
 use crate::command_env::env_key_eq;
 use crate::command_stdin::CommandStdin;
 
-const COMMAND_LOG_MATCH_MODE: NameMatchMode = NameMatchMode::ExactOrSuffix;
-const SHELL_COMMAND_REPLACEMENT: &str = "<shell command>";
 const REDACTED_PATH: &str = "<redacted path>";
 
 /// Structured description of an external command to run.
@@ -76,21 +78,21 @@ impl fmt::Debug for Command {
     ///
     /// # Returns
     ///
-    /// Formatting result after rendering sanitized command metadata.
+    /// Formatting result after rendering redacted command metadata.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let field_sanitizer = FieldSanitizer::default();
+        let redactor = Redactor::default();
+        let argv_redactor = ArgvRedactor::new(redactor.clone());
+        let env_redactor = EnvRedactor::new(redactor);
+        let argv = self.redacted_argv(&argv_redactor);
         formatter
             .debug_struct("Command")
-            .field("argv", &self.sanitized_argv(&field_sanitizer))
+            .field("argv", &format_args!("{argv}"))
             .field(
                 "working_directory",
                 &self.working_directory.as_ref().map(|_| REDACTED_PATH),
             )
             .field("clear_environment", &self.clear_environment)
-            .field(
-                "env",
-                &self.sanitized_environment_assignments(&field_sanitizer),
-            )
+            .field("env", &self.redacted_environment_assignments(&env_redactor))
             .field("unset", &self.removed_environment_names())
             .field("stdin", &self.stdin)
             .finish()
@@ -540,51 +542,56 @@ impl Command {
     ///
     /// # Returns
     ///
-    /// A sanitized command string suitable for logs and errors.
+    /// A redacted command string suitable for logs and errors.
     #[must_use]
-    pub(crate) fn display_command(
-        &self,
-        field_sanitizer: &FieldSanitizer,
-    ) -> String {
-        let argv = self.sanitized_argv(field_sanitizer);
+    pub(crate) fn display_command(&self, policy: &RedactionPolicy) -> String {
+        let redactor = Redactor::new(policy.clone());
+        let argv_redactor = ArgvRedactor::new(redactor.clone());
+        let env_redactor = EnvRedactor::new(redactor);
+        let argv = self.redacted_argv(&argv_redactor);
         if self.envs.is_empty() && self.removed_envs.is_empty() {
-            return format!("{argv:?}");
+            return argv.to_string();
         }
 
-        let env = self.sanitized_environment_assignments(field_sanitizer);
+        let env = self.redacted_environment_assignments(&env_redactor);
         let unset = self.removed_environment_names();
-        format!("Command {{ env: {env:?}, unset: {unset:?}, argv: {argv:?} }}")
+        format!("Command {{ env: {env:?}, unset: {unset:?}, argv: {argv} }}")
     }
 
-    /// Builds sanitized argv tokens for diagnostics.
+    /// Builds redacted argv tokens for diagnostics.
+    ///
+    /// # Parameters
+    ///
+    /// * `redactor` - Immutable adapter used for explicit and heuristic argv
+    ///   redaction.
     ///
     /// # Returns
     ///
-    /// Sanitized argv tokens with secret-looking values masked.
-    #[must_use]
-    fn sanitized_argv(&self, field_sanitizer: &FieldSanitizer) -> Vec<String> {
-        ArgvSanitizer::new(field_sanitizer.clone())
-            .sanitize_argv_with_sensitivity(
-                self.argv_for_display(),
-                COMMAND_LOG_MATCH_MODE,
-            )
+    /// Redacted argv tokens with secret-looking values masked.
+    fn redacted_argv(&self, redactor: &ArgvRedactor) -> RedactedArgv {
+        redactor.redact_heuristically(self.argv_for_display())
     }
 
     /// Builds argv tokens with opaque shell payloads hidden.
     ///
     /// # Returns
     ///
-    /// Owned argv tokens suitable for structured sanitization.
+    /// Borrowed argv items suitable for structured redaction.
     #[must_use]
-    fn argv_for_display(&self) -> Vec<(OsString, Option<SensitivityLevel>)> {
+    fn argv_for_display(&self) -> Vec<ArgvItem<'_>> {
         let shell_payload_index = self.shell_payload_arg_index();
         let mut argv = Vec::with_capacity(self.args.len() + 1);
-        argv.push((self.program.clone(), None));
+        argv.push(ArgvItem::plain(self.program.as_os_str()));
         for (index, arg) in self.args.iter().enumerate() {
             if Some(index) == shell_payload_index {
-                argv.push((OsString::from(SHELL_COMMAND_REPLACEMENT), None));
+                argv.push(ArgvItem::sensitive(
+                    arg.value(),
+                    Sensitivity::Secret,
+                ));
+            } else if let Some(sensitivity) = arg.sensitivity() {
+                argv.push(ArgvItem::sensitive(arg.value(), sensitivity));
             } else {
-                argv.push((arg.value().to_owned(), arg.sensitivity()));
+                argv.push(ArgvItem::plain(arg.value()));
             }
         }
         argv
@@ -618,26 +625,26 @@ impl Command {
         None
     }
 
-    /// Builds sanitized environment assignments for diagnostics.
+    /// Builds redacted environment assignments for diagnostics.
+    ///
+    /// # Parameters
+    ///
+    /// * `redactor` - Immutable adapter used to classify and redact values.
     ///
     /// # Returns
     ///
-    /// Sanitized `KEY=value` entries for explicit environment overrides.
+    /// Redacted `KEY=value` entries for explicit environment overrides.
     #[must_use]
-    fn sanitized_environment_assignments(
+    fn redacted_environment_assignments(
         &self,
-        field_sanitizer: &FieldSanitizer,
+        redactor: &EnvRedactor,
     ) -> Vec<String> {
-        let sanitizer = EnvSanitizer::new(field_sanitizer.clone());
         self.envs
             .iter()
             .map(|(key, value)| {
-                let (key, value) = sanitizer.sanitize_os_pair(
-                    key,
-                    value,
-                    COMMAND_LOG_MATCH_MODE,
-                );
-                format!("{key}={value}")
+                redactor
+                    .redact_os_pair(key.as_os_str(), value.as_os_str())
+                    .to_string()
             })
             .collect()
     }

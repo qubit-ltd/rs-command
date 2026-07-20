@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 
-use qubit_sanitize::redacted_debug;
+use qubit_redact::redacted_debug;
 
 /// Captured output and status information from a finished command.
 ///

@@ -7,6 +7,12 @@
 // =============================================================================
 //! Tests for [`Command`](qubit_command::Command).
 
+#[cfg(unix)]
+use std::{
+    ffi::OsString,
+    os::unix::ffi::OsStringExt,
+};
+
 use qubit_command::Command;
 
 #[test]
@@ -168,7 +174,7 @@ fn test_command_env_clear_clears_prior_environment_changes() {
 }
 
 #[test]
-fn test_command_debug_sanitizes_sensitive_display_values() {
+fn test_command_debug_redacts_sensitive_display_values() {
     let command = Command::new("docker")
         .arg("login")
         .arg("--password")
@@ -191,7 +197,34 @@ fn test_command_debug_sanitizes_sensitive_display_values() {
 }
 
 #[test]
-fn test_command_debug_sanitizes_credential_containers() {
+fn test_command_shell_payload_and_explicit_sensitive_argument_never_leak() {
+    let shell = format!("{:?}", Command::shell("echo raw-shell-secret"));
+    let explicit =
+        format!("{:?}", Command::new("tool").sensitive_arg("raw-arg-secret"));
+
+    assert!(!shell.contains("raw-shell-secret"));
+    assert!(!explicit.contains("raw-arg-secret"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_command_debug_fails_closed_for_non_utf8_argument_and_environment() {
+    let argument = OsString::from_vec(b"argument-secret-\xFF-suffix".to_vec());
+    let environment =
+        OsString::from_vec(b"environment-secret-\xFF-suffix".to_vec());
+    let command = Command::new("tool")
+        .arg_os(&argument)
+        .env_os("MODE", &environment);
+
+    let debug = format!("{command:?}");
+
+    assert!(!debug.contains("argument-secret"));
+    assert!(!debug.contains("environment-secret"));
+    assert!(!debug.contains("suffix"));
+}
+
+#[test]
+fn test_command_debug_redacts_credential_containers() {
     let command = Command::new("worker")
         .arg("--redis-url")
         .arg("redis://:argv-password@example.com")
@@ -215,7 +248,7 @@ fn test_command_debug_redacts_cmd_shell_payload() {
 
     let debug = format!("{command:?}");
 
-    assert!(debug.contains(r#"argv: ["cmd", "/C", "<shell command>"]"#));
+    assert!(debug.contains(r#"argv: ["cmd", "/C", "<redacted>"]"#));
     assert!(!debug.contains("hunter2"));
 }
 

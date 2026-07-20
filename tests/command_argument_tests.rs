@@ -8,6 +8,11 @@
 //! Tests for command arguments carrying explicit diagnostic sensitivity.
 
 use std::ffi::OsStr;
+#[cfg(unix)]
+use std::{
+    ffi::OsString,
+    os::unix::ffi::OsStringExt,
+};
 
 use qubit_command::Command;
 
@@ -36,4 +41,23 @@ fn test_command_sensitive_os_arg_preserves_raw_value_and_redacts_debug() {
         path,
     );
     assert!(!format!("{command:?}").contains("/private/customer/video.mp4"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_command_sensitive_non_utf8_argument_never_leaks_lossy_fragments() {
+    let value = OsString::from_vec(b"prefix-secret-\xFF-suffix".to_vec());
+    let command = Command::new("tool").sensitive_arg_os(&value);
+
+    let debug = format!("{command:?}");
+
+    assert!(!debug.contains("prefix-secret"));
+    assert!(!debug.contains("suffix"));
+    assert_eq!(
+        command
+            .arguments()
+            .next()
+            .expect("the sensitive argument should be retained"),
+        value,
+    );
 }

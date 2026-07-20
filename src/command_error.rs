@@ -243,7 +243,7 @@ impl fmt::Debug for CommandError {
     ///
     /// # Returns
     ///
-    /// Formatting result after rendering the sanitized error message.
+    /// Formatting result after rendering the redacted error message.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CommandError")

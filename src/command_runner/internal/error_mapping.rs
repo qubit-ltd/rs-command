@@ -19,7 +19,7 @@ use crate::{
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text.
+/// * `command` - Redacted command text.
 /// * `source` - Process-spawn error.
 ///
 /// # Returns
@@ -41,7 +41,7 @@ pub(in crate::command_runner) fn spawn_failed(
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text.
+/// * `command` - Redacted command text.
 /// * `source` - Process-wait error.
 ///
 /// # Returns
@@ -63,7 +63,7 @@ pub(in crate::command_runner) fn wait_failed(
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text.
+/// * `command` - Redacted command text.
 /// * `timeout` - Timeout exceeded by the command.
 /// * `source` - Process-termination error.
 ///
@@ -88,7 +88,7 @@ pub(in crate::command_runner) fn kill_failed(
 ///
 /// # Parameters
 ///
-/// * `command` - Sanitized command text.
+/// * `command` - Redacted command text.
 /// * `stream` - Missing child output stream.
 ///
 /// # Returns
