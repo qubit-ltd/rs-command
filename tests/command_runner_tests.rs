@@ -547,12 +547,7 @@ mod unix {
 
         let error = CommandRunner::new()
             .disable_logging(true)
-            .run(
-                Command::new("sh")
-                    .arg("-c")
-                    .arg("exit 8")
-                    .arg(MARKER),
-            )
+            .run(Command::new("sh").arg("-c").arg("exit 8").arg(MARKER))
             .expect_err("unexpected exit should still be reported when logging is disabled");
 
         assert!(matches!(error, CommandError::UnexpectedExit { .. }));
@@ -892,6 +887,24 @@ mod unix {
         assert!(!error.command().contains("secret"));
         assert!(!error.command().contains("abcdef"));
         assert!(!error.command().contains("uvwxyz"));
+    }
+
+    #[test]
+    fn test_command_runner_error_masks_sensitive_option_after_double_dash() {
+        let error =
+            CommandRunner::new()
+                .run(
+                    Command::new("__qubit_command_missing_executable__")
+                        .args(&["--", "child", "--password", "raw-secret"]),
+                )
+                .expect_err("missing executable should fail to spawn");
+
+        let display = error.to_string();
+        let debug = format!("{error:?}");
+        for rendering in [error.command(), display.as_str(), debug.as_str()] {
+            assert!(!rendering.contains("raw-secret"));
+            assert!(rendering.contains("<redacted>"));
+        }
     }
 
     #[test]

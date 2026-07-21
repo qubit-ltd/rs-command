@@ -197,6 +197,21 @@ fn test_command_debug_redacts_sensitive_display_values() {
 }
 
 #[test]
+fn test_command_debug_masks_sensitive_option_after_double_dash() {
+    let command = Command::new("wrapper").args(&[
+        "--",
+        "child",
+        "--password",
+        "raw-secret",
+    ]);
+
+    let debug = format!("{command:?}");
+
+    assert!(!debug.contains("raw-secret"));
+    assert!(debug.contains(r#"--password", "<redacted>"#));
+}
+
+#[test]
 fn test_command_shell_payload_and_explicit_sensitive_argument_never_leak() {
     let shell = format!("{:?}", Command::shell("echo raw-shell-secret"));
     let explicit =
