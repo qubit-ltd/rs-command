@@ -23,6 +23,18 @@ pub(crate) struct FailingTimer {
     clock: ManualMonotonicClock,
 }
 
+pub(crate) struct CompletionFailingTimer {
+    clock: ManualMonotonicClock,
+}
+
+impl CompletionFailingTimer {
+    pub(crate) fn new() -> Self {
+        Self {
+            clock: ManualMonotonicClock::new(),
+        }
+    }
+}
+
 impl FailingTimer {
     pub(crate) fn new() -> Self {
         Self {
@@ -48,5 +60,27 @@ impl Timer for FailingTimer {
                 )),
             },
         })
+    }
+}
+
+impl Timer for CompletionFailingTimer {
+    fn clock(&self) -> &dyn MonotonicClock {
+        &self.clock
+    }
+
+    fn at(
+        &self,
+        _deadline: MonotonicInstant,
+    ) -> Result<TimerFuture, TimeError> {
+        Ok(Box::pin(std::future::ready(Err(
+            TimeError::TimerUnavailable {
+                source: TimerUnavailableError::BackendUnavailable {
+                    backend: "test",
+                    source: Box::new(io::Error::other(
+                        "test timer completion failed",
+                    )),
+                },
+            },
+        ))))
     }
 }
