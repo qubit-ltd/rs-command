@@ -16,8 +16,7 @@ use std::{
 };
 
 use qubit_clock::{
-    MonotonicClock,
-    StdMonotonicClock,
+    StdTimer,
     Timer,
 };
 use qubit_redact::RedactionPolicy;
@@ -154,7 +153,7 @@ impl Default for CommandRunner {
     fn default() -> Self {
         Self {
             timeout: Some(DEFAULT_COMMAND_TIMEOUT),
-            timer: StdMonotonicClock::new().new_timer(),
+            timer: Arc::new(StdTimer::new()),
             working_directory: None,
             success_exit_codes: vec![0],
             disable_logging: false,
