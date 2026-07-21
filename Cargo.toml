@@ -34,6 +34,6 @@ doctest = true
 log = "0.4"
 process-wrap = { version = "9.1", default-features = false, features = ["std", "process-group", "job-object"] }
 qubit-clock = { version = "0.10", path = "../rs-clock" }
-qubit-redact = { version = "0.1", path = "../rs-sanitize", default-features = false }
+qubit-redact = { version = "0.3", path = "../rs-redact", default-features = false }
 same-file = "1.0"
 thiserror = "2.0"
