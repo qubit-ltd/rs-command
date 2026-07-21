@@ -20,6 +20,7 @@ use qubit_command::{
 
 #[cfg(not(windows))]
 use crate::support::{
+    CompletionFailingTimer,
     FailingTimer,
     SwitchingTimer,
 };
@@ -32,6 +33,18 @@ fn test_running_command_completes_before_timeout() {
         .expect("short command should finish before timeout");
 
     assert!(output.stdout().starts_with(b"rustc "));
+}
+
+#[cfg(not(windows))]
+#[test]
+fn test_running_command_reports_injected_timer_completion_failure() {
+    let error = CommandRunner::new()
+        .timeout(Duration::from_secs(30))
+        .timer(std::sync::Arc::new(CompletionFailingTimer::new()))
+        .run(Command::shell("sleep 60"))
+        .expect_err("timer completion failure should stop the command");
+
+    assert!(matches!(error, CommandError::TimeFailed { .. }));
 }
 
 #[cfg(not(windows))]

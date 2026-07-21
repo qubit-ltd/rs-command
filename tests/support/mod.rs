@@ -17,5 +17,8 @@ pub(crate) use captured_logger::{
     captured_log_records_containing,
     initialize_captured_logger,
 };
-pub(crate) use failing_timer::FailingTimer;
+pub(crate) use failing_timer::{
+    CompletionFailingTimer,
+    FailingTimer,
+};
 pub(crate) use switching_timer::SwitchingTimer;
