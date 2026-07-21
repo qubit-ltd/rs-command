@@ -7,14 +7,11 @@
 // =============================================================================
 //! Tests for [`CommandRunner`](qubit_command::CommandRunner).
 
-use std::time::Instant;
 use std::{
     fs,
-    path::PathBuf,
     time::{
         Duration,
-        SystemTime,
-        UNIX_EPOCH,
+        Instant,
     },
 };
 
@@ -26,6 +23,7 @@ use qubit_command::{
     CommandRunner,
     DEFAULT_COMMAND_TIMEOUT,
 };
+use qubit_local_files::LocalTempDir;
 use qubit_redact::{
     RedactionPolicy,
     Sensitivity,
@@ -43,29 +41,16 @@ mod unix {
         DEFAULT_COMMAND_TIMEOUT,
         Duration,
         Instant,
+        LocalTempDir,
         OutputStream,
-        PathBuf,
         RedactionPolicy,
         Sensitivity,
-        SystemTime,
-        UNIX_EPOCH,
         fs,
         support::{
             captured_log_records_containing,
             initialize_captured_logger,
         },
     };
-
-    fn unique_temp_path(name: &str) -> PathBuf {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time should be after Unix epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "qubit-command-{name}-{}-{suffix}",
-            std::process::id(),
-        ))
-    }
 
     #[test]
     fn test_command_runner_default_configuration() {
@@ -403,7 +388,9 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_reads_stdin_file() {
-        let path = unique_temp_path("stdin.txt");
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temp directory should be created");
+        let path = temp_dir.path().join("stdin.txt");
         fs::write(&path, b"stdin-file")
             .expect("stdin fixture should be written");
 
@@ -415,7 +402,6 @@ mod unix {
             output.stdout_text().expect("stdout should be valid UTF-8"),
             "stdin-file",
         );
-        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -432,7 +418,9 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_reports_missing_stdin_file() {
-        let path = unique_temp_path("missing-stdin.txt");
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temp directory should be created");
+        let path = temp_dir.path().join("missing-stdin.txt");
         let error = CommandRunner::new()
             .run(Command::shell("cat").stdin_file(path.clone()))
             .expect_err("missing stdin file should be reported");
@@ -470,8 +458,10 @@ mod unix {
 
     #[test]
     fn test_command_runner_output_file_updates_configuration() {
-        let stdout_path = unique_temp_path("stdout-config.txt");
-        let stderr_path = unique_temp_path("stderr-config.txt");
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temp directory should be created");
+        let stdout_path = temp_dir.path().join("stdout-config.txt");
+        let stderr_path = temp_dir.path().join("stderr-config.txt");
         let runner = CommandRunner::new()
             .tee_stdout_to_file(stdout_path.clone())
             .tee_stderr_to_file(stderr_path.clone());
@@ -630,8 +620,10 @@ mod unix {
             MonotonicClock,
         };
 
-        let signal_path = unique_temp_path("deadline-signal");
-        let completion_path = unique_temp_path("deadline-completion");
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temp directory should be created");
+        let signal_path = temp_dir.path().join("deadline-signal");
+        let completion_path = temp_dir.path().join("deadline-completion");
         let script = "while [ ! -e \"$1\" ]; do sleep 0.01; done; : > \"$2\"";
         let clock = ManualMonotonicClock::new_shared();
         let timeout = Duration::from_secs(30);
@@ -665,8 +657,6 @@ mod unix {
         clock.advance(timeout).expect("manual time should advance");
 
         let result = worker.join().expect("runner thread should not panic");
-        let _ = fs::remove_file(&signal_path);
-        let _ = fs::remove_file(&completion_path);
         let error = result.expect_err(
             "a child that exits after the deadline must still be timed out",
         );
@@ -775,8 +765,10 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_tees_output_to_files() {
-        let stdout_path = unique_temp_path("stdout.txt");
-        let stderr_path = unique_temp_path("stderr.txt");
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temp directory should be created");
+        let stdout_path = temp_dir.path().join("stdout.txt");
+        let stderr_path = temp_dir.path().join("stderr.txt");
 
         let output = CommandRunner::new()
             .max_output_bytes(3)
@@ -795,14 +787,13 @@ mod unix {
             fs::read(&stderr_path).expect("stderr tee file should be readable"),
             b"wxyz",
         );
-
-        let _ = fs::remove_file(stdout_path);
-        let _ = fs::remove_file(stderr_path);
     }
 
     #[test]
     fn test_command_runner_run_reports_output_file_open_failure() {
-        let path = unique_temp_path("missing-dir").join("stdout.txt");
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temp directory should be created");
+        let path = temp_dir.path().join("missing-dir").join("stdout.txt");
         let error = CommandRunner::new()
             .tee_stdout_to_file(path.clone())
             .run(Command::shell("printf ignored"))
@@ -823,7 +814,9 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_reports_stderr_file_open_failure() {
-        let path = unique_temp_path("missing-dir").join("stderr.txt");
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temp directory should be created");
+        let path = temp_dir.path().join("missing-dir").join("stderr.txt");
         let error = CommandRunner::new()
             .tee_stderr_to_file(path.clone())
             .run(Command::shell("printf ignored"))
@@ -1054,9 +1047,7 @@ mod windows {
         CommandRunner,
         Duration,
         Instant,
-        PathBuf,
-        SystemTime,
-        UNIX_EPOCH,
+        LocalTempDir,
         fs,
     };
 
@@ -1071,26 +1062,6 @@ mod windows {
     /// Output text without trailing CR/LF characters.
     fn trim_windows_line_endings(text: &str) -> &str {
         text.trim_end_matches(['\r', '\n'])
-    }
-
-    /// Creates a unique temporary file path for one test run.
-    ///
-    /// # Parameters
-    ///
-    /// * `name` - Human-readable filename component.
-    ///
-    /// # Returns
-    ///
-    /// Path inside the platform temporary directory.
-    fn unique_windows_temp_path(name: &str) -> PathBuf {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time should be after Unix epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "qubit-command-windows-{name}-{}-{suffix}",
-            std::process::id(),
-        ))
     }
 
     #[test]
@@ -1151,7 +1122,9 @@ mod windows {
 
     #[test]
     fn test_command_runner_windows_tees_output_to_file() {
-        let stdout_path = unique_windows_temp_path("stdout.txt");
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-windows-")
+            .expect("command test temp directory should be created");
+        let stdout_path = temp_dir.path().join("stdout.txt");
         let output = CommandRunner::new()
             .max_stdout_bytes(3)
             .tee_stdout_to_file(stdout_path.clone())
@@ -1170,7 +1143,5 @@ mod windows {
             ),
             "abcdef",
         );
-
-        let _ = fs::remove_file(stdout_path);
     }
 }

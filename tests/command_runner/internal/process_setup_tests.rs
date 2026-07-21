@@ -13,14 +13,15 @@ use qubit_command::{
     CommandError,
     CommandRunner,
 };
+#[cfg(not(windows))]
+use qubit_local_files::LocalTempDir;
 
 #[cfg(not(windows))]
 #[test]
 fn test_process_setup_reports_missing_stdin_file_before_spawn() {
-    let missing = std::env::temp_dir().join(format!(
-        "qubit-command-missing-stdin-{}",
-        std::process::id(),
-    ));
+    let temp_dir = LocalTempDir::with_prefix("qubit-command-process-setup-")
+        .expect("process setup temp directory should be created");
+    let missing = temp_dir.path().join("missing-stdin");
 
     let error = CommandRunner::new()
         .run(Command::new("cat").stdin_file(missing.clone()))
