@@ -13,6 +13,8 @@ use qubit_command::{
     CommandError,
     CommandRunner,
 };
+#[cfg(not(windows))]
+use qubit_local_files::LocalTempDir;
 
 #[cfg(not(windows))]
 #[test]
@@ -38,10 +40,9 @@ fn test_error_mapping_preserves_unexpected_exit_output() {
 #[cfg(not(windows))]
 #[test]
 fn test_error_mapping_redacts_io_paths_in_diagnostics() {
-    let path = std::env::temp_dir().join(format!(
-        "qubit-command-private-input-{}",
-        std::process::id(),
-    ));
+    let temp_dir = LocalTempDir::with_prefix("qubit-command-error-mapping-")
+        .expect("error mapping temp directory should be created");
+    let path = temp_dir.path().join("private-input");
     let error = CommandRunner::new()
         .run(Command::new("cat").stdin_file(&path))
         .expect_err("missing private stdin file should fail");

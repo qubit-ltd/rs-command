@@ -7,34 +7,19 @@
 // =============================================================================
 //! Tests for output tee behavior.
 
-use std::{
-    fs,
-    path::PathBuf,
-    time::{
-        SystemTime,
-        UNIX_EPOCH,
-    },
-};
+use std::fs;
 
 use qubit_command::{
     Command,
     CommandRunner,
 };
-
-fn unique_temp_path(name: &str) -> PathBuf {
-    let suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time should be after Unix epoch")
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "qubit-command-{name}-{}-{suffix}",
-        std::process::id(),
-    ))
-}
+use qubit_local_files::LocalTempDir;
 
 #[test]
 fn test_output_tee_streams_stderr_to_file() {
-    let path = unique_temp_path("stderr-tee.txt");
+    let temp_dir = LocalTempDir::with_prefix("qubit-command-output-tee-")
+        .expect("output tee temp directory should be created");
+    let path = temp_dir.path().join("stderr-tee.txt");
     let output = CommandRunner::new()
         .max_stderr_bytes(5)
         .tee_stderr_to_file(path.clone())
@@ -45,6 +30,4 @@ fn test_output_tee_streams_stderr_to_file() {
     assert_eq!(output.stderr().len(), 5);
     assert!(output.stderr_truncated());
     assert!(file_bytes.starts_with(b"rustc "));
-
-    let _ = fs::remove_file(path);
 }

@@ -10,10 +10,6 @@
 use std::{
     fs,
     path::PathBuf,
-    time::{
-        SystemTime,
-        UNIX_EPOCH,
-    },
 };
 
 #[cfg(target_os = "linux")]
@@ -22,6 +18,10 @@ use qubit_command::{
     Command,
     CommandError,
     CommandRunner,
+};
+use qubit_local_files::{
+    LocalFiles,
+    LocalTempDir,
 };
 
 /// Creates a command that conflict tests must reject before spawning.
@@ -33,29 +33,20 @@ fn unspawnable_command() -> Command {
     Command::new("__qubit_command_should_not_spawn__")
 }
 
-/// Creates a unique temporary file path for one test run.
-///
-/// # Parameters
-///
-/// * `name` - Human-readable filename component.
+/// Creates a temporary directory for one test run.
 ///
 /// # Returns
 ///
-/// Path inside the platform temporary directory.
-fn unique_temp_path(name: &str) -> PathBuf {
-    let suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time should be after Unix epoch")
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "qubit-command-{name}-{}-{suffix}",
-        std::process::id(),
-    ))
+/// An armed temporary-directory guard.
+fn temp_dir() -> LocalTempDir {
+    LocalTempDir::with_prefix("qubit-command-io-files-")
+        .expect("command I/O test temp directory should be created")
 }
 
 #[test]
 fn test_runner_rejects_stdin_stdout_conflict_without_truncating_input() {
-    let path = unique_temp_path("stdin-stdout-conflict");
+    let temp_dir = temp_dir();
+    let path = temp_dir.path().join("stdin-stdout-conflict");
     fs::write(&path, b"preserve-me").expect("stdin fixture should be written");
 
     let error = CommandRunner::new()
@@ -68,12 +59,12 @@ fn test_runner_rejects_stdin_stdout_conflict_without_truncating_input() {
         fs::read(&path).expect("stdin fixture should remain readable"),
         b"preserve-me",
     );
-    fs::remove_file(path).expect("stdin fixture should be removed");
 }
 
 #[test]
 fn test_runner_rejects_stdin_stderr_conflict_without_truncating_input() {
-    let path = unique_temp_path("stdin-stderr-conflict");
+    let temp_dir = temp_dir();
+    let path = temp_dir.path().join("stdin-stderr-conflict");
     fs::write(&path, b"preserve-me").expect("stdin fixture should be written");
 
     let error = CommandRunner::new()
@@ -86,12 +77,12 @@ fn test_runner_rejects_stdin_stderr_conflict_without_truncating_input() {
         fs::read(&path).expect("stdin fixture should remain readable"),
         b"preserve-me",
     );
-    fs::remove_file(path).expect("stdin fixture should be removed");
 }
 
 #[test]
 fn test_runner_rejects_stdout_stderr_conflict_before_creating_file() {
-    let path = unique_temp_path("stdout-stderr-conflict");
+    let temp_dir = temp_dir();
+    let path = temp_dir.path().join("stdout-stderr-conflict");
 
     let error = CommandRunner::new()
         .tee_stdout_to_file(&path)
@@ -106,8 +97,9 @@ fn test_runner_rejects_stdout_stderr_conflict_before_creating_file() {
 #[cfg(unix)]
 #[test]
 fn test_runner_rejects_symlinked_input_output_conflict() {
-    let input_path = unique_temp_path("symlink-conflict-input");
-    let output_path = unique_temp_path("symlink-conflict-output");
+    let temp_dir = temp_dir();
+    let input_path = temp_dir.path().join("symlink-conflict-input");
+    let output_path = temp_dir.path().join("symlink-conflict-output");
     fs::write(&input_path, b"preserve-me")
         .expect("stdin fixture should be written");
     std::os::unix::fs::symlink(&input_path, &output_path)
@@ -123,14 +115,13 @@ fn test_runner_rejects_symlinked_input_output_conflict() {
         fs::read(&input_path).expect("stdin fixture should remain readable"),
         b"preserve-me",
     );
-    fs::remove_file(output_path).expect("symlink should be removed");
-    fs::remove_file(input_path).expect("stdin fixture should be removed");
 }
 
 #[test]
 fn test_runner_rejects_hard_linked_input_output_conflict() {
-    let input_path = unique_temp_path("hard-link-conflict-input");
-    let output_path = unique_temp_path("hard-link-conflict-output");
+    let temp_dir = temp_dir();
+    let input_path = temp_dir.path().join("hard-link-conflict-input");
+    let output_path = temp_dir.path().join("hard-link-conflict-output");
     fs::write(&input_path, b"preserve-me")
         .expect("stdin fixture should be written");
     fs::hard_link(&input_path, &output_path)
@@ -146,14 +137,13 @@ fn test_runner_rejects_hard_linked_input_output_conflict() {
         fs::read(&input_path).expect("stdin fixture should remain readable"),
         b"preserve-me",
     );
-    fs::remove_file(output_path).expect("hard link should be removed");
-    fs::remove_file(input_path).expect("stdin fixture should be removed");
 }
 
 #[test]
 fn test_runner_rejects_hard_linked_input_stderr_conflict() {
-    let input_path = unique_temp_path("hard-link-stderr-input");
-    let output_path = unique_temp_path("hard-link-stderr-output");
+    let temp_dir = temp_dir();
+    let input_path = temp_dir.path().join("hard-link-stderr-input");
+    let output_path = temp_dir.path().join("hard-link-stderr-output");
     fs::write(&input_path, b"preserve-me")
         .expect("stdin fixture should be written");
     fs::hard_link(&input_path, &output_path)
@@ -169,14 +159,13 @@ fn test_runner_rejects_hard_linked_input_stderr_conflict() {
         fs::read(&input_path).expect("stdin fixture should remain readable"),
         b"preserve-me",
     );
-    fs::remove_file(output_path).expect("hard link should be removed");
-    fs::remove_file(input_path).expect("stdin fixture should be removed");
 }
 
 #[test]
 fn test_runner_rejects_hard_linked_output_files() {
-    let stdout_path = unique_temp_path("hard-link-stdout");
-    let stderr_path = unique_temp_path("hard-link-stderr");
+    let temp_dir = temp_dir();
+    let stdout_path = temp_dir.path().join("hard-link-stdout");
+    let stderr_path = temp_dir.path().join("hard-link-stderr");
     fs::write(&stdout_path, b"preserve-me")
         .expect("stdout fixture should be written");
     fs::hard_link(&stdout_path, &stderr_path)
@@ -193,22 +182,28 @@ fn test_runner_rejects_hard_linked_output_files() {
         fs::read(&stdout_path).expect("fixture should remain readable"),
         b"preserve-me",
     );
-    fs::remove_file(stderr_path).expect("hard link should be removed");
-    fs::remove_file(stdout_path).expect("stdout fixture should be removed");
 }
 
 #[cfg(not(windows))]
 #[test]
 fn test_runner_normalizes_relative_output_path_components() {
-    let file_name = unique_temp_path("relative-output")
+    let temp_dir = LocalTempDir::in_dir(
+        "target",
+        Some("qubit-command-relative-output-"),
+        LocalFiles::DEFAULT_TEMP_ENTRY_RETRIES,
+    )
+    .expect("relative output temp directory should be created");
+    let dir_name = temp_dir
+        .path()
         .file_name()
-        .expect("temporary path should have a file name")
+        .expect("temporary directory should have a file name")
         .to_owned();
     let path = PathBuf::from(".")
         .join("target")
+        .join(&dir_name)
         .join("..")
-        .join("target")
-        .join(file_name);
+        .join(dir_name)
+        .join("relative-output");
 
     let output = CommandRunner::new()
         .tee_stdout_to_file(&path)
@@ -220,14 +215,14 @@ fn test_runner_normalizes_relative_output_path_components() {
         fs::read(&path).expect("relative output should be readable"),
         b"relative",
     );
-    fs::remove_file(path).expect("relative output should be removed");
 }
 
 #[cfg(unix)]
 #[test]
 fn test_runner_reports_symlink_loop_during_path_inspection() {
-    let first = unique_temp_path("symlink-loop-first");
-    let second = unique_temp_path("symlink-loop-second");
+    let temp_dir = temp_dir();
+    let first = temp_dir.path().join("symlink-loop-first");
+    let second = temp_dir.path().join("symlink-loop-second");
     std::os::unix::fs::symlink(&second, &first)
         .expect("first symlink should be created");
     std::os::unix::fs::symlink(&first, &second)
@@ -239,8 +234,6 @@ fn test_runner_reports_symlink_loop_during_path_inspection() {
         .expect_err("symlink loop should fail path inspection");
 
     assert!(matches!(error, CommandError::InspectIoFileFailed { .. }));
-    fs::remove_file(first).expect("first symlink should be removed");
-    fs::remove_file(second).expect("second symlink should be removed");
 }
 
 #[cfg(target_os = "linux")]

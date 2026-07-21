@@ -13,11 +13,13 @@ use qubit_command::{
     CommandRunner,
     OutputStream,
 };
+use qubit_local_files::LocalTempDir;
 
 #[test]
 fn test_output_capture_error_reports_unopenable_stdout_file() {
-    let missing_directory =
-        std::env::temp_dir().join("qubit-command-missing-output-directory");
+    let temp_dir = LocalTempDir::with_prefix("qubit-command-output-error-")
+        .expect("output error temp directory should be created");
+    let missing_directory = temp_dir.path().join("missing-output-directory");
     let path = missing_directory.join("stdout.txt");
     let error = CommandRunner::new()
         .tee_stdout_to_file(path)
