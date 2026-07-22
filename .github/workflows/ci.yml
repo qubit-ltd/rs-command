@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   pull-requests: write
   pages: write
@@ -20,3 +21,71 @@ jobs:
       run_windows_tests: true
       run_macos_tests: true
     secrets: inherit
+
+  coverage-threshold:
+    name: Enforce coverage thresholds
+    needs:
+      - rust-ci
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download coverage reports
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-reports
+          path: coverage-reports
+
+      - name: Enforce per-source coverage thresholds
+        env:
+          MIN_FUNCTION_COVERAGE: "100"
+          MIN_LINE_COVERAGE: "95"
+          MIN_REGION_COVERAGE: "95"
+        run: |
+          set -euo pipefail
+
+          coverage_json="coverage-reports/coverage.json"
+          if [ ! -f "$coverage_json" ]; then
+            echo "error: coverage JSON not found: $coverage_json" >&2
+            exit 1
+          fi
+
+          source_count=$(jq '
+            [
+              .data[].files[]
+              | select(.filename | contains("/src/"))
+            ]
+            | length
+          ' "$coverage_json")
+          if [ "$source_count" -eq 0 ]; then
+            echo "error: coverage JSON contains no source files" >&2
+            exit 1
+          fi
+
+          failures=$(jq -r \
+            --argjson min_functions "$MIN_FUNCTION_COVERAGE" \
+            --argjson min_lines "$MIN_LINE_COVERAGE" \
+            --argjson min_regions "$MIN_REGION_COVERAGE" \
+            '
+            .data[].files[]
+            | select(.filename | contains("/src/"))
+            | .filename as $file
+            | .summary as $summary
+            | select(
+                (($summary.functions.count > 0)
+                  and ($summary.functions.percent < $min_functions))
+                or (($summary.lines.count > 0)
+                  and ($summary.lines.percent <= $min_lines))
+                or (($summary.regions.count > 0)
+                  and ($summary.regions.percent <= $min_regions))
+              )
+            | "\($file): functions=\($summary.functions.percent)%, lines=\($summary.lines.percent)%, regions=\($summary.regions.percent)%"
+            ' "$coverage_json")
+
+          if [ -n "$failures" ]; then
+            echo "error: per-source coverage thresholds failed" >&2
+            echo "$failures" >&2
+            echo "required: functions >= 100%, lines > 95%, regions > 95%" >&2
+            exit 1
+          fi
+
+          echo "Coverage thresholds satisfied: functions >= 100%, lines > 95%, regions > 95%"
