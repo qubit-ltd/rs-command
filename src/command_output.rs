@@ -240,7 +240,9 @@ impl CommandOutput {
     ///
     /// # Returns
     ///
-    /// Duration from process spawn to observed termination.
+    /// Duration from process spawn until final output collection. This may
+    /// include time spent draining inherited output pipes after the direct
+    /// child process exits.
     #[must_use]
     #[inline(always)]
     pub const fn elapsed(&self) -> Duration {

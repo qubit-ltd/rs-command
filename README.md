@@ -42,6 +42,14 @@ seconds). Use `timeout(Duration)` when a command needs a different bound, or
 The timeout clock starts after the child process has been spawned; time spent
 preparing and spawning a command is not included.
 
+Each polling step checks the direct child before checking the deadline. After
+an observed child exit, output collection remains bounded by the same timeout.
+Reaching the timeout starts process-tree termination and cleanup; it is not a
+hard upper bound on when `run()` returns. Platform termination and I/O helper
+cleanup can take additional time. A descendant that escapes the managed Unix
+process group or Windows Job Object while retaining an inherited output pipe
+can delay return until that pipe closes.
+
 When a timeout is configured, the runner attempts to terminate the process tree:
 Unix commands are spawned in a new process group and Windows commands are spawned
 in a Job Object.
@@ -142,6 +150,9 @@ environment overrides are shown only in redacted form. `Command::shell`
 payloads are treated as opaque secrets and are never parsed.
 
 Inject a complete immutable policy when the defaults are not enough:
+
+The example below requires a direct `qubit-redact = "0.3"` dependency because
+`qubit-command` does not re-export types owned by `qubit-redact`.
 
 ```rust
 use qubit_command::{Command, CommandRunner};
