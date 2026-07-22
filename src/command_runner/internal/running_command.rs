@@ -111,27 +111,6 @@ impl RunningCommand {
         };
 
         loop {
-            let elapsed = match self.elapsed() {
-                Ok(elapsed) => elapsed,
-                Err(source) => {
-                    return Err(self.clean_up_after_time_error(source));
-                }
-            };
-            if elapsed >= timeout {
-                let status = match self.child_process.try_wait() {
-                    Ok(status) => status,
-                    Err(source) => {
-                        let error = wait_failed(&self.command_text, source);
-                        return Err(self.clean_up_after_wait_error(error));
-                    }
-                };
-                return match status {
-                    Some(status) => {
-                        self.handle_exited_after_timeout(status, timeout)
-                    }
-                    None => self.handle_timeout(timeout),
-                };
-            }
             let maybe_status = match self.child_process.try_wait() {
                 Ok(status) => status,
                 Err(source) => {
@@ -142,6 +121,15 @@ impl RunningCommand {
             if let Some(status) = maybe_status {
                 return self.complete_after_exit(status, Some(timeout));
             }
+            let elapsed = match self.elapsed() {
+                Ok(elapsed) => elapsed,
+                Err(source) => {
+                    return Err(self.clean_up_after_time_error(source));
+                }
+            };
+            if elapsed >= timeout {
+                return self.handle_timeout(timeout);
+            }
             let sleep = next_sleep(timeout, elapsed);
             if let Err(source) =
                 BlockingSleeper::new(Arc::clone(&self.timer)).sleep_for(sleep)
@@ -149,35 +137,6 @@ impl RunningCommand {
                 return Err(self.clean_up_after_time_error(source));
             }
         }
-    }
-
-    /// Reports timeout after observing that the direct child exited late.
-    ///
-    /// # Parameters
-    ///
-    /// * `status` - Exit status reported after the configured deadline.
-    /// * `timeout` - Deadline that the command exceeded.
-    ///
-    /// # Returns
-    ///
-    /// This method always returns an error after collecting available output.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CommandError::TimedOut`] when output collection succeeds, or
-    /// propagates the collection error that prevents timeout diagnostics from
-    /// being assembled.
-    fn handle_exited_after_timeout(
-        self,
-        status: ExitStatus,
-        timeout: Duration,
-    ) -> Result<FinishedCommand, CommandError> {
-        let finished = self.complete_after_exit(status, Some(timeout))?;
-        Err(CommandError::TimedOut {
-            command: finished.command_text,
-            timeout,
-            output: Box::new(finished.output),
-        })
     }
 
     /// Completes a command after the direct child exits.
@@ -353,7 +312,7 @@ impl RunningCommand {
     /// Returns [`TimeError`] if the timer violates the retained clock domain or
     /// monotonic ordering.
     fn elapsed(&self) -> Result<Duration, TimeError> {
-        self.timer.clock().now().duration_since(self.started_at)
+        self.timer.now().duration_since(self.started_at)
     }
 
     /// Terminates a running child after timer handling fails.

@@ -193,6 +193,11 @@ impl CommandRunner {
 
     /// Sets the command timeout.
     ///
+    /// The timeout is a post-spawn deadline for observing process and output
+    /// completion. Reaching it starts process-tree termination and cleanup; it
+    /// is not a hard upper bound on when [`Self::run`] returns because platform
+    /// process cleanup and helper-thread joins may take additional time.
+    ///
     /// # Parameters
     ///
     /// * `timeout` - Maximum duration allowed after the child process starts.
@@ -566,7 +571,9 @@ impl CommandRunner {
     /// Runs a command and captures stdout and stderr.
     ///
     /// This method blocks the caller thread until the command exits and its I/O
-    /// helpers finish, or until the configured post-spawn timeout is reached.
+    /// helpers finish, or until the configured post-spawn timeout starts
+    /// termination and cleanup. Each poll checks the direct child first; after
+    /// an observed exit, output collection remains bounded by the same timeout.
     /// When a timeout is configured, Unix children run as leaders of new
     /// process groups and Windows children run in Job Objects. This lets
     /// timeout killing target the process tree instead of only the direct
@@ -574,6 +581,13 @@ impl CommandRunner {
     /// descendants keep inherited stdout or stderr pipes open. Without a
     /// configured timeout, commands use the platform's normal
     /// process-spawning behavior.
+    ///
+    /// A timeout is not a hard upper bound on this method's wall-clock return
+    /// time. Platform termination, waiting, and I/O helper cleanup can take
+    /// additional time. In particular, a descendant that escapes the managed
+    /// Unix process group or Windows Job Object while retaining an inherited
+    /// output pipe can delay the final helper-thread join until it closes that
+    /// pipe.
     ///
     /// Captured output is retained as raw bytes up to the configured per-stream
     /// limits. Reader threads still drain complete streams so the child is not
@@ -587,7 +601,9 @@ impl CommandRunner {
     ///
     /// This method parks the caller while waiting for command completion and
     /// timeout ticks. A configured timer backend must continue progressing
-    /// independently during that wait.
+    /// independently during that wait. Process-tree termination and I/O helper
+    /// cleanup after a timeout may extend the blocking duration beyond the
+    /// configured value.
     ///
     /// # Parameters
     ///
@@ -634,7 +650,7 @@ impl CommandRunner {
             };
         let mut starting_command =
             StartingCommand::new(&command_text, child_process);
-        let started_at = self.timer.clock().now();
+        let started_at = self.timer.now();
 
         let stdin_writer = write_stdin_bytes(
             &command_text,
@@ -689,8 +705,7 @@ impl CommandRunner {
             source,
         })?;
         starting_command.set_stderr_reader(stderr_reader);
-        if let Err(source) = self.timer.clock().now().duration_since(started_at)
-        {
+        if let Err(source) = self.timer.now().duration_since(started_at) {
             return Err(CommandError::TimeFailed {
                 command: command_text.clone(),
                 source,
