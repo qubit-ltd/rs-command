@@ -12,6 +12,11 @@ use std::time::{
     Instant,
 };
 
+#[cfg(not(windows))]
+use qubit_clock::test_util::{
+    FaultInjectingTimer,
+    TimerFailurePoint,
+};
 use qubit_command::{
     Command,
     CommandError,
@@ -19,11 +24,7 @@ use qubit_command::{
 };
 
 #[cfg(not(windows))]
-use crate::support::{
-    CompletionFailingTimer,
-    FailingTimer,
-    SwitchingTimer,
-};
+use crate::support::SwitchingTimer;
 
 #[test]
 fn test_running_command_completes_before_timeout() {
@@ -40,7 +41,13 @@ fn test_running_command_completes_before_timeout() {
 fn test_running_command_reports_injected_timer_completion_failure() {
     let error = CommandRunner::new()
         .timeout(Duration::from_secs(30))
-        .timer(std::sync::Arc::new(CompletionFailingTimer::new()))
+        .timer(std::sync::Arc::new(
+            FaultInjectingTimer::backend_unavailable(
+                TimerFailurePoint::Completion,
+                "test",
+                "test timer completion failed",
+            ),
+        ))
         .run(Command::shell("sleep 60"))
         .expect_err("timer completion failure should stop the command");
 
@@ -52,7 +59,13 @@ fn test_running_command_reports_injected_timer_completion_failure() {
 fn test_running_command_reports_injected_timer_registration_failure() {
     let error = CommandRunner::new()
         .timeout(Duration::from_secs(30))
-        .timer(std::sync::Arc::new(FailingTimer::new()))
+        .timer(std::sync::Arc::new(
+            FaultInjectingTimer::backend_unavailable(
+                TimerFailurePoint::Registration,
+                "test",
+                "test timer backend unavailable",
+            ),
+        ))
         .run(Command::shell("sleep 60"))
         .expect_err("timer registration failure should stop the command");
 

@@ -39,4 +39,5 @@ same-file = "1.0"
 thiserror = "2.0"
 
 [dev-dependencies]
+qubit-clock = { version = "0.10", path = "../rs-clock", features = ["test-util"] }
 qubit-local-files = { path = "../rs-local-files", version = "0.7" }
