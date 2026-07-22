@@ -34,6 +34,12 @@ Qubit Command 提供一个小而明确的结构化 API，用于运行外部程�
 `without_timeout()`。
 超时从子进程成功启动后开始计时，命令准备与启动过程耗费的时间不计入该上限。
 
+每次轮询会先检查直接子进程，再检查 deadline；观察到子进程退出后，输出收集仍受同一
+timeout 限制。达到超时会启动进程树终止和清理，但不保证 `run()` 在该墙钟时长内返回；
+平台终止操作和 I/O 辅助线程清理可能需要额外时间。如果后代进程脱离了受管的 Unix
+process group 或 Windows Job Object，同时仍持有继承的输出管道，runner 可能要等到
+该管道关闭后才能返回。
+
 设置超时后，runner 会尝试终止整个进程树：Unix 平台把命令放入新的
 process group，Windows 平台把命令放入 Job Object。
 
@@ -128,6 +134,9 @@ Runner 日志、`CommandError::command()` 和 `Command` 的 `Debug` 输出都会
 语法解析，统一作为不透明 secret 遮盖。
 
 当默认策略不够时，可以向 runner 注入完整的不可变策略：
+
+下面的示例需要直接声明 `qubit-redact = "0.3"` 依赖，因为 `qubit-command` 不会
+重导出属于 `qubit-redact` 的类型。
 
 ```rust
 use qubit_command::{Command, CommandRunner};

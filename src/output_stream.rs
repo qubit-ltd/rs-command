@@ -7,7 +7,7 @@
 // =============================================================================
 use std::fmt;
 
-/// Output stream whose reader failed.
+/// Standard output or error stream identified in command diagnostics.
 ///
 /// ```compile_fail
 /// #![deny(unused_must_use)]
