@@ -12,16 +12,13 @@ use std::{
     path::PathBuf,
 };
 
+use crate::support::LocalTempDir;
 #[cfg(target_os = "linux")]
 use qubit_command::OutputStream;
 use qubit_command::{
     Command,
     CommandError,
     CommandRunner,
-};
-use qubit_local_files::{
-    LocalFiles,
-    LocalTempDir,
 };
 
 /// Creates a command that conflict tests must reject before spawning.
@@ -190,7 +187,7 @@ fn test_runner_normalizes_relative_output_path_components() {
     let temp_dir = LocalTempDir::in_dir(
         "target",
         Some("qubit-command-relative-output-"),
-        LocalFiles::DEFAULT_TEMP_ENTRY_RETRIES,
+        128,
     )
     .expect("relative output temp directory should be created");
     let dir_name = temp_dir

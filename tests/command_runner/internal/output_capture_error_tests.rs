@@ -7,13 +7,13 @@
 // =============================================================================
 //! Tests for output capture error mapping.
 
+use crate::support::LocalTempDir;
 use qubit_command::{
     Command,
     CommandError,
     CommandRunner,
     OutputStream,
 };
-use qubit_local_files::LocalTempDir;
 
 #[test]
 fn test_output_capture_error_reports_unopenable_stdout_file() {

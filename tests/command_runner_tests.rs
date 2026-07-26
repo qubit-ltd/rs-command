@@ -23,7 +23,6 @@ use qubit_command::{
     CommandRunner,
     DEFAULT_COMMAND_TIMEOUT,
 };
-use qubit_local_files::LocalTempDir;
 use qubit_redact::{
     RedactionPolicy,
     Sensitivity,
@@ -31,6 +30,7 @@ use qubit_redact::{
 
 mod command_runner;
 mod support;
+use support::LocalTempDir;
 
 #[cfg(not(windows))]
 mod unix {
