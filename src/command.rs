@@ -20,6 +20,7 @@ use std::{
 use qubit_redact::{
     ArgvRedactor,
     EnvRedactor,
+    LogOutputLimit,
     RedactionPolicy,
     Redactor,
     Sensitivity,
@@ -549,13 +550,20 @@ impl Command {
         let argv_redactor = ArgvRedactor::new(redactor.clone());
         let env_redactor = EnvRedactor::new(redactor);
         let argv = self.redacted_argv(&argv_redactor);
-        if self.envs.is_empty() && self.removed_envs.is_empty() {
-            return argv.to_string();
-        }
-
-        let env = self.redacted_environment_assignments(&env_redactor);
-        let unset = self.removed_environment_names();
-        format!("Command {{ env: {env:?}, unset: {unset:?}, argv: {argv} }}")
+        let text = if self.envs.is_empty() && self.removed_envs.is_empty() {
+            argv.to_string()
+        } else {
+            let env = self.redacted_environment_assignments(&env_redactor);
+            let unset = self.removed_environment_names();
+            format!("Command {{ env: {env:?}, unset: {unset:?}, argv: {argv} }}")
+        };
+        let limit = LogOutputLimit::new(policy.diagnostic_budget().max_output_bytes())
+            .expect("diagnostic budgets always satisfy the log output minimum");
+        Redactor::new(policy.clone())
+            .redact("command_diagnostic", &text)
+            .escape_for_log()
+            .with_output_limit(limit)
+            .to_string()
     }
 
     /// Builds redacted argv tokens for diagnostics.
