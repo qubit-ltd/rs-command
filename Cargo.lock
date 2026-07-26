@@ -101,7 +101,15 @@ dependencies = [
 name = "qubit-clock"
 version = "0.10.0"
 dependencies = [
+ "qubit-collections",
  "thiserror",
+]
+
+[[package]]
+name = "qubit-collections"
+version = "0.1.0"
+dependencies = [
+ "hashbrown",
 ]
 
 [[package]]
