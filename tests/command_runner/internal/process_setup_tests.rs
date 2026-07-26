@@ -8,13 +8,13 @@
 //! Tests for process setup behavior.
 
 #[cfg(not(windows))]
+use crate::support::LocalTempDir;
+#[cfg(not(windows))]
 use qubit_command::{
     Command,
     CommandError,
     CommandRunner,
 };
-#[cfg(not(windows))]
-use qubit_local_files::LocalTempDir;
 
 #[cfg(not(windows))]
 #[test]

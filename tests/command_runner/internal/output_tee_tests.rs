@@ -9,11 +9,11 @@
 
 use std::fs;
 
+use crate::support::LocalTempDir;
 use qubit_command::{
     Command,
     CommandRunner,
 };
-use qubit_local_files::LocalTempDir;
 
 #[test]
 fn test_output_tee_streams_stderr_to_file() {

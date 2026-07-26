@@ -555,10 +555,15 @@ impl Command {
         } else {
             let env = self.redacted_environment_assignments(&env_redactor);
             let unset = self.removed_environment_names();
-            format!("Command {{ env: {env:?}, unset: {unset:?}, argv: {argv} }}")
+            format!(
+                "Command {{ env: {env:?}, unset: {unset:?}, argv: {argv} }}"
+            )
         };
-        let limit = LogOutputLimit::new(policy.diagnostic_budget().max_output_bytes())
-            .expect("diagnostic budgets always satisfy the log output minimum");
+        let limit =
+            LogOutputLimit::new(policy.diagnostic_budget().max_output_bytes())
+                .expect(
+                    "diagnostic budgets always satisfy the log output minimum",
+                );
         Redactor::new(policy.clone())
             .redact("command_diagnostic", &text)
             .escape_for_log()
