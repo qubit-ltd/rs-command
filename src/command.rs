@@ -21,6 +21,7 @@ use qubit_redact::{
     ArgvRedactor,
     EnvRedactor,
     LogOutputLimit,
+    LogSafeText,
     RedactionPolicy,
     Redactor,
     Sensitivity,
@@ -93,8 +94,16 @@ impl fmt::Debug for Command {
                 &self.working_directory.as_ref().map(|_| REDACTED_PATH),
             )
             .field("clear_environment", &self.clear_environment)
-            .field("env", &self.redacted_environment_assignments(&env_redactor))
-            .field("unset", &self.removed_environment_names())
+            .field(
+                "env",
+                &format_args!("{}", self.redacted_environment_assignments(&env_redactor)),
+            )
+            .field(
+                "unset",
+                &self.removed_environment_names(
+                    argv_redactor.redactor().policy().diagnostic_budget(),
+                ),
+            )
             .field("stdin", &self.stdin)
             .finish()
     }
@@ -550,20 +559,16 @@ impl Command {
         let argv_redactor = ArgvRedactor::new(redactor.clone());
         let env_redactor = EnvRedactor::new(redactor);
         let argv = self.redacted_argv(&argv_redactor);
+        let budget = policy.diagnostic_budget();
         let text = if self.envs.is_empty() && self.removed_envs.is_empty() {
             argv.to_string()
         } else {
             let env = self.redacted_environment_assignments(&env_redactor);
-            let unset = self.removed_environment_names();
-            format!(
-                "Command {{ env: {env:?}, unset: {unset:?}, argv: {argv} }}"
-            )
+            let unset = self.removed_environment_names(budget);
+            format!("Command {{ env: {env}, unset: {unset:?}, argv: {argv} }}")
         };
-        let limit =
-            LogOutputLimit::new(policy.diagnostic_budget().max_output_bytes())
-                .expect(
-                    "diagnostic budgets always satisfy the log output minimum",
-                );
+        let limit = LogOutputLimit::new(budget.max_output_bytes())
+            .expect("diagnostic budgets always satisfy the log output minimum");
         Redactor::new(policy.clone())
             .redact("command_diagnostic", &text)
             .escape_for_log()
@@ -647,19 +652,12 @@ impl Command {
     /// # Returns
     ///
     /// Redacted `KEY=value` entries for explicit environment overrides.
-    #[must_use]
-    fn redacted_environment_assignments(
-        &self,
-        redactor: &EnvRedactor,
-    ) -> Vec<String> {
-        self.envs
-            .iter()
-            .map(|(key, value)| {
-                redactor
-                    .redact_os_pair(key.as_os_str(), value.as_os_str())
-                    .to_string()
-            })
-            .collect()
+    fn redacted_environment_assignments(&self, redactor: &EnvRedactor) -> LogSafeText<'static> {
+        redactor.redact_os_pairs(
+            self.envs
+                .iter()
+                .map(|(key, value)| (key.as_os_str(), value.as_os_str())),
+        )
     }
 
     /// Builds display names for removed environment variables.
@@ -668,10 +666,18 @@ impl Command {
     ///
     /// Environment variable names rendered lossily for diagnostics.
     #[must_use]
-    fn removed_environment_names(&self) -> Vec<String> {
-        self.removed_envs
-            .iter()
-            .map(|key| key.to_string_lossy().into_owned())
-            .collect()
+    fn removed_environment_names(&self, budget: qubit_redact::DiagnosticBudget) -> Vec<String> {
+        let mut remaining_input_bytes = budget.max_input_bytes();
+        let mut names = Vec::new();
+        for key in &self.removed_envs {
+            let byte_len = key.as_encoded_bytes().len();
+            if byte_len > remaining_input_bytes {
+                names.push("<truncated>".to_owned());
+                break;
+            }
+            remaining_input_bytes -= byte_len;
+            names.push(key.to_string_lossy().into_owned());
+        }
+        names
     }
 }
