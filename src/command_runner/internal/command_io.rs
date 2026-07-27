@@ -7,6 +7,8 @@
 // =============================================================================
 use std::time::Duration;
 
+use qubit_clock::TimeError;
+
 use super::{
     output_collector::collect_output,
     output_reader::OutputReader,
@@ -76,7 +78,8 @@ impl CommandIo {
     ///
     /// * `command` - Human-readable command text for diagnostics.
     /// * `status` - Process exit status.
-    /// * `elapsed` - Observed command duration.
+    /// * `elapsed` - Callback that samples command duration after all helper
+    ///   threads have finished.
     ///
     /// # Returns
     ///
@@ -86,12 +89,15 @@ impl CommandIo {
     ///
     /// Returns [`CommandError`] if stream collection or stdin writing fails.
     #[inline(always)]
-    pub(in crate::command_runner) fn collect(
+    pub(in crate::command_runner) fn collect<F>(
         self,
         command: &str,
         status: std::process::ExitStatus,
-        elapsed: Duration,
-    ) -> Result<CommandOutput, CommandError> {
+        elapsed: F,
+    ) -> Result<CommandOutput, CommandError>
+    where
+        F: FnOnce() -> Result<Duration, TimeError>,
+    {
         collect_output(
             command,
             status,

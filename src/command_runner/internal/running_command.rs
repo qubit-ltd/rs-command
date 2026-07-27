@@ -280,25 +280,22 @@ impl RunningCommand {
         self,
         status: ExitStatus,
     ) -> Result<FinishedCommand, CommandError> {
-        let elapsed = self.elapsed();
-        let output = self.io.collect(
-            &self.command_text,
+        let Self {
+            command_text,
+            io,
+            started_at,
+            timer,
+            ..
+        } = self;
+        let output = io.collect(
+            &command_text,
             status,
-            elapsed.as_ref().copied().unwrap_or_default(),
-        );
-        match elapsed {
-            Ok(_) => Ok(FinishedCommand {
-                command_text: self.command_text,
-                output: output?,
-            }),
-            Err(source) => {
-                let _ = output;
-                Err(CommandError::TimeFailed {
-                    command: self.command_text,
-                    source,
-                })
-            }
-        }
+            move || timer.now().duration_since(started_at),
+        )?;
+        Ok(FinishedCommand {
+            command_text,
+            output,
+        })
     }
 
     /// Returns elapsed time in the injected timer's clock domain.
@@ -335,7 +332,11 @@ impl RunningCommand {
             Err(_) => self.child_process.try_wait().ok().flatten(),
         };
         if let Some(status) = status {
-            let _ = self.io.collect(&self.command_text, status, Duration::ZERO);
+            let _ = self.io.collect(
+                &self.command_text,
+                status,
+                || Ok::<Duration, TimeError>(Duration::ZERO),
+            );
         }
         error
     }
@@ -364,7 +365,11 @@ impl RunningCommand {
             source,
         };
         let _ = self.child_process.start_kill();
-        let _ = self.io.collect(&self.command_text, status, Duration::ZERO);
+        let _ = self.io.collect(
+            &self.command_text,
+            status,
+            || Ok::<Duration, TimeError>(Duration::ZERO),
+        );
         Err(error)
     }
 

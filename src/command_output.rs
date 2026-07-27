@@ -55,7 +55,7 @@ pub struct CommandOutput {
     stdout_truncated: bool,
     /// Whether stderr was truncated by the configured capture limit.
     stderr_truncated: bool,
-    /// Duration from process spawn to observed termination.
+    /// Duration from process spawn until output collection completes.
     elapsed: Duration,
 }
 
