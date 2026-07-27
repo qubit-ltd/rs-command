@@ -45,6 +45,11 @@ const REDACTED_PATH: &str = "<redacted path>";
 /// injection. Use [`Self::shell`] only when shell parsing, redirection,
 /// expansion, or pipes are intentionally required.
 ///
+/// Arguments are passed unchanged to the target program. This does not disable
+/// program-specific option parsing: when a path or other value may begin with
+/// `-`, callers must follow that program's argument rules, such as placing it
+/// after a supported `--` option terminator.
+///
 /// # Examples
 ///
 /// ```compile_fail
