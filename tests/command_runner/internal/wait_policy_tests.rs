@@ -8,8 +8,16 @@
 //! Tests for wait policy behavior.
 
 #[cfg(not(windows))]
-use std::time::Duration;
+use std::{
+    thread,
+    time::Duration,
+};
 
+#[cfg(not(windows))]
+use qubit_clock::{
+    ManualMonotonicClock,
+    MonotonicClock,
+};
 #[cfg(not(windows))]
 use qubit_command::{
     Command,
@@ -32,4 +40,34 @@ fn test_wait_policy_enforces_configured_timeout() {
         } => assert_eq!(actual, timeout),
         other => panic!("expected timeout, got {other:?}"),
     }
+}
+
+#[cfg(not(windows))]
+#[test]
+fn test_wait_policy_starts_timeout_polling_with_short_interval() {
+    let clock = ManualMonotonicClock::new_shared();
+    let runner = CommandRunner::new()
+        .timeout(Duration::from_secs(30))
+        .timer(clock.new_timer());
+    let worker = thread::spawn(move || runner.run(Command::shell("sleep 60")));
+
+    assert!(clock.wait_for_waiters(1, Duration::from_secs(2)));
+    let deadline = clock
+        .next_deadline()
+        .expect("timeout polling should register a deadline");
+    assert_eq!(
+        Duration::from_millis(1),
+        deadline
+            .duration_since(clock.now())
+            .expect("deadline should use the same clock domain"),
+    );
+
+    clock
+        .advance(Duration::from_secs(30))
+        .expect("manual clock should advance to the timeout");
+    let error = worker
+        .join()
+        .expect("runner thread should not panic")
+        .expect_err("long-running command should time out");
+    assert!(matches!(error, CommandError::TimedOut { .. }));
 }

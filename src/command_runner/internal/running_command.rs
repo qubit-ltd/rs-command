@@ -124,6 +124,7 @@ impl RunningCommand {
             return self.complete_after_exit(status, None);
         }
 
+        let mut timeout_poll_count = 0;
         loop {
             let maybe_status = match self.child_process.try_wait() {
                 Ok(status) => status,
@@ -153,7 +154,10 @@ impl RunningCommand {
                     if elapsed >= timeout {
                         return self.handle_timeout(timeout);
                     }
-                    next_sleep(timeout, elapsed)
+                    let sleep =
+                        next_sleep(timeout, elapsed, timeout_poll_count);
+                    timeout_poll_count = timeout_poll_count.saturating_add(1);
+                    sleep
                 }
                 None => CANCELLATION_POLL_INTERVAL,
             };
@@ -188,6 +192,7 @@ impl RunningCommand {
         timeout: Option<Duration>,
     ) -> Result<FinishedCommand, CommandError> {
         if timeout.is_some() || self.cancellation_token.is_some() {
+            let mut timeout_poll_count = 0;
             while !self.io.is_finished() {
                 if self
                     .cancellation_token
@@ -211,7 +216,11 @@ impl RunningCommand {
                                 status, timeout,
                             );
                         }
-                        next_sleep(timeout, elapsed)
+                        let sleep =
+                            next_sleep(timeout, elapsed, timeout_poll_count);
+                        timeout_poll_count =
+                            timeout_poll_count.saturating_add(1);
+                        sleep
                     }
                     None => CANCELLATION_POLL_INTERVAL,
                 };

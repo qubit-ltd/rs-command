@@ -30,6 +30,10 @@ include = [
 name = "qubit_command"
 doctest = true
 
+[[bench]]
+name = "command_runner"
+harness = false
+
 [dependencies]
 log = "0.4"
 process-wrap = { version = "9.1", default-features = false, features = ["std", "process-group", "job-object"] }
@@ -42,5 +46,6 @@ thiserror = "2.0"
 libc = "0.2"
 
 [dev-dependencies]
+criterion = { version = "0.8", default-features = false }
 qubit-clock = { version = "0.10", features = ["test-util"] }
 tempfile = "3.27"
