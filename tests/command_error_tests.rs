@@ -44,6 +44,17 @@ fn test_command_error_accessors_for_errors_without_output() {
     assert!(wait.output().is_none());
     assert!(wait.to_string().contains("failed to wait"));
 
+    let cancelled_before_start = CommandError::CancelledBeforeStart {
+        command: "cancelled-before-start".to_owned(),
+    };
+    assert_eq!(cancelled_before_start.command(), "cancelled-before-start");
+    assert!(cancelled_before_start.output().is_none());
+    assert!(
+        cancelled_before_start
+            .to_string()
+            .contains("cancelled before it started")
+    );
+
     let kill = CommandError::KillFailed {
         command: "kill".to_owned(),
         timeout: Duration::from_secs(1),

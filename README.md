@@ -69,9 +69,11 @@ thread.
 
 `CommandCancellation` is a one-shot handle for applications that already own
 their shutdown or terminal-signal policy. Clone it into a runner, then call
-`cancel()` from that policy. The runner terminates its managed process tree and
-returns `CommandError::Cancelled` with retained output. The crate deliberately
-does not install a global signal handler.
+`cancel()` from that policy. A request observed before a run starts returns
+`CommandError::CancelledBeforeStart` without preparing or spawning the command.
+Otherwise, the runner terminates its managed process tree and returns
+`CommandError::Cancelled` with retained output. The crate deliberately does not
+install a global signal handler.
 
 Configuring cancellation also enables process-tree management for a runner that
 uses `without_timeout()`. Cancellation-aware waiting polls the configured timer;

@@ -23,8 +23,8 @@ use super::managed_child_process::ManagedChildProcess;
 /// # Parameters
 ///
 /// * `process_command` - Fully prepared standard-library process command.
-/// * `manage_process_tree` - Whether timeout handling must own the child
-///   process tree.
+/// * `manage_process_tree` - Whether timeout or cancellation handling must own
+///   the child process tree.
 ///
 /// # Returns
 ///

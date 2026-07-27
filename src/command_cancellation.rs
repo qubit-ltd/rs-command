@@ -18,9 +18,12 @@ use std::sync::{
 ///
 /// Clone this handle before passing it to
 /// [`CommandRunner::cancellation_token`](crate::CommandRunner::cancellation_token).
-/// Calling [`Self::cancel`] makes the runner terminate its managed process tree
-/// and return [`CommandError::Cancelled`](crate::CommandError::Cancelled). The
-/// handle is intentionally one-shot and cannot be reset.
+/// Calling [`Self::cancel`] before a run starts makes the runner return
+/// [`CommandError::CancelledBeforeStart`](crate::CommandError::CancelledBeforeStart)
+/// without preparing or spawning the command. Otherwise it makes the runner
+/// terminate its managed process tree and return
+/// [`CommandError::Cancelled`](crate::CommandError::Cancelled). The handle is
+/// intentionally one-shot and cannot be reset.
 #[derive(Clone, Debug, Default)]
 #[must_use]
 pub struct CommandCancellation {
