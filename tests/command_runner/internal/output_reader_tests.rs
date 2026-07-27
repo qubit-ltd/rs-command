@@ -16,6 +16,7 @@ use qubit_command::{
 fn test_output_reader_drains_stderr_even_when_stdout_is_limited() {
     let output = CommandRunner::new()
         .max_stdout_bytes(1)
+        .fail_on_output_truncation(false)
         .run(Command::shell("rustc --version && rustc --version 1>&2"))
         .expect("shell command should run successfully");
 

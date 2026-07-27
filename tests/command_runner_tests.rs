@@ -22,8 +22,13 @@ use qubit_command::{
     CommandCancellation,
     CommandError,
     CommandRunner,
-    DEFAULT_COMMAND_TIMEOUT,
 };
+#[cfg(not(windows))]
+use qubit_command::{
+    DEFAULT_COMMAND_TIMEOUT,
+    DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
+};
+#[cfg(not(windows))]
 use qubit_redact::{
     DiagnosticBudget,
     RedactionPolicy,
@@ -60,6 +65,7 @@ mod unix {
         CommandError,
         CommandRunner,
         DEFAULT_COMMAND_TIMEOUT,
+        DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
         DiagnosticBudget,
         Duration,
         Instant,
@@ -83,11 +89,51 @@ mod unix {
         assert_eq!(runner.configured_success_exit_codes(), &[0]);
         assert!(runner.configured_working_directory().is_none());
         assert!(!runner.is_logging_disabled());
-        assert!(!runner.is_output_truncation_failure_enabled());
-        assert_eq!(runner.configured_max_stdout_bytes(), None);
-        assert_eq!(runner.configured_max_stderr_bytes(), None);
+        assert!(runner.is_output_truncation_failure_enabled());
+        assert_eq!(
+            runner.configured_max_stdout_bytes(),
+            Some(DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM),
+        );
+        assert_eq!(
+            runner.configured_max_stderr_bytes(),
+            Some(DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM),
+        );
         assert!(runner.configured_stdout_file().is_none());
         assert!(runner.configured_stderr_file().is_none());
+    }
+
+    #[test]
+    fn test_command_runner_default_rejects_output_beyond_safe_limit() {
+        let error = CommandRunner::new()
+            .run(Command::shell("head -c 1048577 /dev/zero"))
+            .expect_err("default runner should reject output beyond 1 MiB");
+
+        assert!(matches!(error, CommandError::OutputTruncated { .. }));
+        let output = error
+            .output()
+            .expect("output truncation error should retain bounded output");
+        assert_eq!(output.stdout().len(), DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,);
+        assert!(output.stdout_truncated());
+    }
+
+    #[test]
+    fn test_command_runner_unbounded_output_disables_safe_limit() {
+        let runner = CommandRunner::new().unbounded_output();
+
+        assert_eq!(runner.configured_max_stdout_bytes(), None);
+        assert_eq!(runner.configured_max_stderr_bytes(), None);
+        assert!(!runner.is_output_truncation_failure_enabled());
+
+        let output = runner
+            .run(Command::shell("head -c 1048577 /dev/zero"))
+            .expect(
+                "explicitly unbounded output should retain the full stream",
+            );
+        assert_eq!(
+            output.stdout().len(),
+            DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM + 1,
+        );
+        assert!(!output.stdout_truncated());
     }
 
     #[test]
@@ -537,10 +583,10 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_fail_on_output_truncation_updates_configuration() {
-        let runner = CommandRunner::new().fail_on_output_truncation(true);
+    fn test_command_runner_can_accept_output_truncation() {
+        let runner = CommandRunner::new().fail_on_output_truncation(false);
 
-        assert!(runner.is_output_truncation_failure_enabled());
+        assert!(!runner.is_output_truncation_failure_enabled());
     }
 
     #[test]
@@ -824,6 +870,7 @@ mod unix {
         let output = CommandRunner::new()
             .max_stdout_bytes(3)
             .max_stderr_bytes(2)
+            .fail_on_output_truncation(false)
             .run(Command::shell("printf abcdef; printf wxyz >&2"))
             .expect("command should run successfully");
 
@@ -893,6 +940,7 @@ mod unix {
 
         let output = CommandRunner::new()
             .max_output_bytes(3)
+            .fail_on_output_truncation(false)
             .tee_stdout_to_file(stdout_path.clone())
             .tee_stderr_to_file(stderr_path.clone())
             .run(Command::shell("printf abcdef; printf wxyz >&2"))
@@ -1248,6 +1296,7 @@ mod windows {
         let stdout_path = temp_dir.path().join("stdout.txt");
         let output = CommandRunner::new()
             .max_stdout_bytes(3)
+            .fail_on_output_truncation(false)
             .tee_stdout_to_file(stdout_path.clone())
             .run(Command::shell("echo abcdef"))
             .expect("Windows shell command should run successfully");

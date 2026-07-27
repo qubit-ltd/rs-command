@@ -22,6 +22,7 @@ fn test_output_capture_options_keep_full_tee_with_limited_memory() {
     let path = temp_dir.path().join("stdout-capture-options.txt");
     let output = CommandRunner::new()
         .max_stdout_bytes(5)
+        .fail_on_output_truncation(false)
         .tee_stdout_to_file(path.clone())
         .run(Command::new("rustc").arg("--version"))
         .expect("rustc version command should run successfully");

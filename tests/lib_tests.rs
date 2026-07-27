@@ -12,6 +12,7 @@ use qubit_command::{
     CommandError,
     CommandOutput,
     CommandRunner,
+    DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
     OutputStream,
 };
 use qubit_redact::{
@@ -31,6 +32,7 @@ fn test_lib_exports_public_api() {
 
     assert_eq!(command.program().to_string_lossy(), "printf");
     assert_eq!(runner.configured_success_exit_codes(), &[0]);
+    assert_eq!(DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM, 1024 * 1024);
     assert_eq!(stream.as_str(), "stdout");
 }
 

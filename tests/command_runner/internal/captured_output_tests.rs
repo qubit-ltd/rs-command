@@ -16,6 +16,7 @@ use qubit_command::{
 fn test_captured_output_records_stdout_truncation() {
     let output = CommandRunner::new()
         .max_stdout_bytes(5)
+        .fail_on_output_truncation(false)
         .run(Command::new("rustc").arg("--version"))
         .expect("rustc version command should run successfully");
 
@@ -27,6 +28,7 @@ fn test_captured_output_records_stdout_truncation() {
 fn test_captured_output_can_keep_zero_stdout() {
     let output = CommandRunner::new()
         .max_stdout_bytes(0)
+        .fail_on_output_truncation(false)
         .run(Command::new("rustc").arg("--version"))
         .expect("rustc version command should run successfully");
 

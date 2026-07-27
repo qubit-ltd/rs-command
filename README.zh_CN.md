@@ -33,7 +33,9 @@ Qubit Command 提供一个小而明确的结构化 API，用于运行外部程�
 `CommandRunner::new()` 默认应用 `DEFAULT_COMMAND_TIMEOUT`（当前为十秒）。需要
 不同的命令时长限制时，请调用 `timeout(Duration)`；只有确实需要无限等待时才调用
 `without_timeout()`。
-超时从子进程成功启动后开始计时，命令准备与启动过程耗费的时间不计入该上限。
+超时从子进程成功启动后开始计时，命令准备与启动过程耗费的时间不计入该上限。准备阶段会
+打开配置的 stdin 和 tee 路径；打开 FIFO、设备或其他特殊文件时，可能要等待外部对端或
+设备就绪，并且该等待不受命令 timeout 限制。
 
 每次轮询会先检查直接子进程，再检查 deadline；观察到子进程退出后，输出收集仍受同一
 timeout 限制。达到超时会启动进程树终止和清理，但不保证 `run()` 在该墙钟时长内返回；
@@ -62,14 +64,17 @@ timer；请选择能独立于调用线程持续推进的 timer 后端。
 
 ## 大输出
 
-默认情况下 stdout 和 stderr 的内存捕获不设字节上限。如果命令可能输出大量日志，
-可以同时设置捕获上限和 tee 文件：
+默认情况下，stdout 和 stderr 每个流最多保留
+`DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM`（当前为 1 MiB）；如果成功命令的保留输出发生
+截断，runner 会返回 `CommandError::OutputTruncated`。如果命令可能输出大量日志，可以
+降低内存上限并把完整输出 tee 到文件：
 
 ```rust
 use qubit_command::{Command, CommandRunner};
 
 let output = CommandRunner::new()
-    .bounded_output(64 * 1024)
+    .max_output_bytes(64 * 1024)
+    .fail_on_output_truncation(false)
     .tee_stdout_to_file("stdout.log")
     .tee_stderr_to_file("stderr.log")
     .run(Command::new("cargo").arg("test"))?;
@@ -80,17 +85,15 @@ if output.stdout_truncated() {
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-默认情况下，截断只通过 `CommandOutput` 报告，成功命令仍返回 `Ok`。
-`bounded_output(max_bytes)` 是安全的显式预设：它限制两个流并拒绝不完整的内存输出。
-需要分别控制策略时，可组合 `max_output_bytes(max_bytes)` 与
-`fail_on_output_truncation(true)`：
+`bounded_output(max_bytes)` 会为两个流设置新的上限，并保留默认的截断拒绝策略。如果允许
+只保留部分内存输出，可组合 `max_output_bytes(max_bytes)` 与
+`fail_on_output_truncation(false)`。只有确认输出量有限的可信命令才应显式取消限制：
 
 ```rust
 use qubit_command::{Command, CommandRunner};
 
 let output = CommandRunner::new()
-    .max_output_bytes(64 * 1024)
-    .fail_on_output_truncation(true)
+    .unbounded_output()
     .run(Command::new("cargo").arg("test"))?;
 
 assert!(!output.stdout_truncated());

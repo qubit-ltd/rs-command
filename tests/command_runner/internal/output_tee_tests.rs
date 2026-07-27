@@ -22,6 +22,7 @@ fn test_output_tee_streams_stderr_to_file() {
     let path = temp_dir.path().join("stderr-tee.txt");
     let output = CommandRunner::new()
         .max_stderr_bytes(5)
+        .fail_on_output_truncation(false)
         .tee_stderr_to_file(path.clone())
         .run(Command::shell("rustc --version 1>&2"))
         .expect("shell command should run successfully");
