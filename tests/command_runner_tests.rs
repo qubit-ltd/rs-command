@@ -1052,6 +1052,22 @@ mod unix {
     }
 
     #[test]
+    fn test_command_runner_error_redacts_sensitive_jvm_property() {
+        let error = CommandRunner::new()
+            .run(
+                Command::new("__qubit_command_missing_executable__")
+                    .arg("-Dpassword=jvm-secret"),
+            )
+            .expect_err("missing executable should fail to spawn");
+
+        assert_eq!(
+            error.command(),
+            r#"["__qubit_command_missing_executable__", "-Dpassword=<redacted>"]"#,
+        );
+        assert!(!error.command().contains("jvm-secret"));
+    }
+
+    #[test]
     fn test_command_runner_error_masks_sensitive_option_after_double_dash() {
         let error =
             CommandRunner::new()
