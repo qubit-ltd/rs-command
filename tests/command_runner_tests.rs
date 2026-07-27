@@ -1210,8 +1210,11 @@ mod unix {
 
 #[cfg(windows)]
 mod windows {
+    use std::thread;
+
     use super::{
         Command,
+        CommandCancellation,
         CommandError,
         CommandRunner,
         Duration,
@@ -1269,6 +1272,32 @@ mod windows {
             .expect_err("long-running Windows command should time out");
 
         assert!(matches!(error, CommandError::TimedOut { .. }));
+    }
+
+    #[test]
+    fn test_command_runner_windows_cancels_running_command() {
+        let cancellation = CommandCancellation::new();
+        let cancellation_request = cancellation.clone();
+        let canceller = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            cancellation_request.cancel();
+        });
+        let started = Instant::now();
+
+        let error = CommandRunner::new()
+            .without_timeout()
+            .cancellation_token(cancellation)
+            .run(Command::shell("ping -n 30 127.0.0.1 >NUL"))
+            .expect_err("long-running Windows command should be cancelled");
+        canceller
+            .join()
+            .expect("Windows cancellation thread should finish");
+
+        assert!(matches!(error, CommandError::Cancelled { .. }));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "cancellation should not wait for the command to exit normally",
+        );
     }
 
     #[test]
