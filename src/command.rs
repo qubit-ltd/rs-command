@@ -531,6 +531,10 @@ impl Command {
 
     /// Reads child process stdin from a file.
     ///
+    /// The runner opens this path before spawning the child and before starting
+    /// its timeout clock. Opening a FIFO, device, or other special file may
+    /// block until an external peer or device becomes ready.
+    ///
     /// # Parameters
     ///
     /// * `path` - File path to open and connect to stdin.

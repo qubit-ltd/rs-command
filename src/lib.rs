@@ -26,5 +26,6 @@ pub use command_output::CommandOutput;
 pub use command_runner::{
     CommandRunner,
     DEFAULT_COMMAND_TIMEOUT,
+    DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
 };
 pub use output_stream::OutputStream;

@@ -52,14 +52,22 @@ const REDACTED_PATH: &str = "<redacted path>";
 /// [`CommandRunner::without_timeout`] to opt out of timeout handling.
 pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Default one-mebibyte in-memory capture limit applied to each output stream.
+///
+/// Use [`CommandRunner::max_output_bytes`] to select a different per-stream
+/// limit or [`CommandRunner::unbounded_output`] to opt out explicitly.
+pub const DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM: usize = 1024 * 1024;
+
 /// Runs external commands and captures their output.
 ///
 /// `CommandRunner` runs one [`Command`] synchronously on the caller thread and
 /// returns captured process output. The configured timeout begins after the
 /// child process is spawned. The runner always preserves raw output bytes up
-/// to the configured per-stream limits. By default, truncation is reported on
-/// [`CommandOutput`]; use [`CommandRunner::fail_on_output_truncation`] when
-/// successful commands with truncated output must be rejected. Use
+/// to the configured per-stream limits. By default, each stream is limited to
+/// [`DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM`] and successful commands with
+/// truncated output are rejected. Use
+/// [`CommandRunner::fail_on_output_truncation`] to accept truncated output or
+/// [`CommandRunner::unbounded_output`] to remove both limits explicitly. Use
 /// [`CommandOutput::stdout_text`] and [`CommandOutput::stderr_text`] for strict
 /// UTF-8 text, or [`CommandOutput::stdout_lossy_text`] and
 /// [`CommandOutput::stderr_lossy_text`] when invalid UTF-8 should be replaced.
@@ -154,8 +162,8 @@ impl Default for CommandRunner {
     ///
     /// A runner with the default timeout, a standard monotonic timer, no
     /// cancellation handle, inherited working directory, success exit code
-    /// `0`, enabled logging, unlimited in-memory output capture, allowed output
-    /// truncation, and no output tee files.
+    /// `0`, enabled logging, one mebibyte of in-memory capture per output
+    /// stream, rejected output truncation, and no output tee files.
     #[inline]
     fn default() -> Self {
         Self {
@@ -165,10 +173,10 @@ impl Default for CommandRunner {
             working_directory: None,
             success_exit_codes: vec![0],
             disable_logging: false,
-            fail_on_output_truncation: false,
+            fail_on_output_truncation: true,
             diagnostic_redaction_policy: RedactionPolicy::default(),
-            max_stdout_bytes: None,
-            max_stderr_bytes: None,
+            max_stdout_bytes: Some(DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM),
+            max_stderr_bytes: Some(DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM),
             stdout_file: None,
             stderr_file: None,
         }
@@ -182,8 +190,8 @@ impl CommandRunner {
     ///
     /// A runner with the default timeout, a standard monotonic timer, no
     /// cancellation handle, inherited working directory, success exit code
-    /// `0`, enabled logging, unlimited in-memory output capture, allowed output
-    /// truncation, and no output tee files.
+    /// `0`, enabled logging, one mebibyte of in-memory capture per output
+    /// stream, rejected output truncation, and no output tee files.
     #[inline(always)]
     pub fn new() -> Self {
         Self::default()
@@ -205,6 +213,9 @@ impl CommandRunner {
     /// completion. Reaching it starts process-tree termination and cleanup; it
     /// is not a hard upper bound on when [`Self::run`] returns because platform
     /// process cleanup and helper-thread joins may take additional time.
+    /// Command preparation is excluded: opening configured stdin or tee paths
+    /// can block before this timeout starts, particularly for FIFOs and device
+    /// files.
     ///
     /// # Parameters
     ///
@@ -555,10 +566,6 @@ impl CommandRunner {
 
     /// Limits both captured streams and rejects any truncated result.
     ///
-    /// This is the safe opt-in preset for commands whose output volume is not
-    /// trusted. It preserves the existing default runner behavior, which
-    /// captures both streams without an in-memory limit.
-    ///
     /// # Parameters
     ///
     /// * `max_bytes` - Maximum number of retained bytes for each stream.
@@ -571,6 +578,23 @@ impl CommandRunner {
         self.max_stdout_bytes = Some(max_bytes);
         self.max_stderr_bytes = Some(max_bytes);
         self.fail_on_output_truncation = true;
+        self
+    }
+
+    /// Removes both in-memory capture limits and accepts complete output.
+    ///
+    /// This explicit opt-out may allow a child process to consume unbounded
+    /// memory through stdout or stderr. Prefer the default finite limits or
+    /// [`Self::bounded_output`] unless the command's output volume is trusted.
+    ///
+    /// # Returns
+    ///
+    /// The updated command runner.
+    #[inline(always)]
+    pub const fn unbounded_output(mut self) -> Self {
+        self.max_stdout_bytes = None;
+        self.max_stderr_bytes = None;
+        self.fail_on_output_truncation = false;
         self
     }
 
@@ -588,11 +612,13 @@ impl CommandRunner {
     ///
     /// Before spawning, the file is opened without truncation and checked for
     /// identity conflicts with configured stdin and stderr files. It is
-    /// truncated only after all checks pass. Combine this with
-    /// [`Self::max_stdout_bytes`] to avoid unbounded memory use for large
-    /// stdout streams. Reusing the same runner concurrently with the same tee
-    /// path is not supported because each run truncates that file after its own
-    /// validation completes.
+    /// truncated only after all checks pass. Opening a FIFO, device, or other
+    /// special file may block before the child is spawned and before its
+    /// timeout clock starts. The default capture limit remains in effect;
+    /// use [`Self::max_stdout_bytes`] to select a different limit. Reusing
+    /// the same runner concurrently with the same tee path is not supported
+    /// because each run truncates that file after its own validation
+    /// completes.
     ///
     /// # Parameters
     ///
@@ -624,11 +650,13 @@ impl CommandRunner {
     ///
     /// Before spawning, the file is opened without truncation and checked for
     /// identity conflicts with configured stdin and stdout files. It is
-    /// truncated only after all checks pass. Combine this with
-    /// [`Self::max_stderr_bytes`] to avoid unbounded memory use for large
-    /// stderr streams. Reusing the same runner concurrently with the same tee
-    /// path is not supported because each run truncates that file after its own
-    /// validation completes.
+    /// truncated only after all checks pass. Opening a FIFO, device, or other
+    /// special file may block before the child is spawned and before its
+    /// timeout clock starts. The default capture limit remains in effect;
+    /// use [`Self::max_stderr_bytes`] to select a different limit. Reusing
+    /// the same runner concurrently with the same tee path is not supported
+    /// because each run truncates that file after its own validation
+    /// completes.
     ///
     /// # Parameters
     ///
@@ -677,11 +705,13 @@ impl CommandRunner {
     ///
     /// # Blocking
     ///
-    /// This method parks the caller while waiting for command completion and
-    /// timeout ticks. A configured timer backend must continue progressing
-    /// independently during that wait. Process-tree termination and I/O helper
-    /// cleanup after a timeout may extend the blocking duration beyond the
-    /// configured value.
+    /// Before spawning, this method opens configured stdin and tee paths.
+    /// Opening FIFOs, devices, or other special files may block independently
+    /// of the command timeout. After spawning, this method parks the caller
+    /// while waiting for command completion and timeout ticks. A configured
+    /// timer backend must continue progressing independently during that wait.
+    /// Process-tree termination and I/O helper cleanup after a timeout may
+    /// extend the blocking duration beyond the configured value.
     ///
     /// # Parameters
     ///

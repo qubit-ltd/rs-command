@@ -42,7 +42,10 @@ clear error values.
 seconds). Use `timeout(Duration)` when a command needs a different bound, or
 `without_timeout()` only when the absence of a timeout is deliberate.
 The timeout clock starts after the child process has been spawned; time spent
-preparing and spawning a command is not included.
+preparing and spawning a command is not included. Preparation opens configured
+stdin and tee paths. Opening a FIFO, device, or other special file may block
+until an external peer or device becomes ready, independently of the command
+timeout.
 
 Each polling step checks the direct child before checking the deadline. After
 an observed child exit, output collection remains bounded by the same timeout.
@@ -82,14 +85,18 @@ thread.
 
 ## Large Output
 
-By default stdout and stderr are captured without an in-memory byte limit. For
-commands that can emit large logs, configure capture limits and tee files:
+By default, stdout and stderr are each limited to
+`DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM` (currently 1 MiB), and a successful
+command whose retained output is truncated returns
+`CommandError::OutputTruncated`. For commands that can emit large logs, lower
+the memory limit and tee the complete streams to files:
 
 ```rust
 use qubit_command::{Command, CommandRunner};
 
 let output = CommandRunner::new()
-    .bounded_output(64 * 1024)
+    .max_output_bytes(64 * 1024)
+    .fail_on_output_truncation(false)
     .tee_stdout_to_file("stdout.log")
     .tee_stderr_to_file("stderr.log")
     .run(Command::new("cargo").arg("test"))?;
@@ -100,18 +107,16 @@ if output.stdout_truncated() {
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-By default, truncation is reported through `CommandOutput` and the successful
-command still returns `Ok`. `bounded_output(max_bytes)` is the safe opt-in
-preset: it limits both streams and rejects partial in-memory output. Use the
-separate `max_output_bytes(max_bytes)` and `fail_on_output_truncation(true)`
-methods when those policies must be controlled independently:
+`bounded_output(max_bytes)` selects a different limit for both streams and
+retains the default rejection policy. Use `max_output_bytes(max_bytes)` and
+`fail_on_output_truncation(false)` when partial retained output is acceptable.
+Only trusted commands whose output is known to remain finite should opt out:
 
 ```rust
 use qubit_command::{Command, CommandRunner};
 
 let output = CommandRunner::new()
-    .max_output_bytes(64 * 1024)
-    .fail_on_output_truncation(true)
+    .unbounded_output()
     .run(Command::new("cargo").arg("test"))?;
 
 assert!(!output.stdout_truncated());
