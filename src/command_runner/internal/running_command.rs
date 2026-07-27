@@ -6,6 +6,7 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 use std::{
+    io,
     process::ExitStatus,
     sync::Arc,
     time::Duration,
@@ -246,7 +247,9 @@ impl RunningCommand {
         status: ExitStatus,
         timeout: Duration,
     ) -> Result<FinishedCommand, CommandError> {
-        if let Err(source) = self.child_process.start_kill() {
+        if let Err(source) = self.child_process.start_kill()
+            && !Self::process_tree_already_exited(&source)
+        {
             return Err(kill_failed(
                 self.command_text.clone(),
                 timeout,
@@ -275,7 +278,9 @@ impl RunningCommand {
         mut self,
         status: ExitStatus,
     ) -> Result<FinishedCommand, CommandError> {
-        if let Err(source) = self.child_process.start_kill() {
+        if let Err(source) = self.child_process.start_kill()
+            && !Self::process_tree_already_exited(&source)
+        {
             return Err(CommandError::CancelFailed {
                 command: self.command_text.clone(),
                 source,
@@ -294,18 +299,23 @@ impl RunningCommand {
     ///
     /// Always returns a cancellation or process-control error after cleanup.
     fn handle_cancellation(mut self) -> Result<FinishedCommand, CommandError> {
-        if let Err(source) = self.child_process.start_kill() {
-            return Err(CommandError::CancelFailed {
-                command: self.command_text.clone(),
-                source,
-            });
-        }
-        let status = match self.child_process.wait() {
-            Ok(status) => status,
-            Err(source) => {
-                let error = wait_failed(&self.command_text, source);
-                return Err(self.collect_if_child_exited(error));
-            }
+        let status = match self.child_process.start_kill() {
+            Ok(()) => match self.child_process.wait() {
+                Ok(status) => status,
+                Err(source) => {
+                    let error = wait_failed(&self.command_text, source);
+                    return Err(self.collect_if_child_exited(error));
+                }
+            },
+            Err(source) => match self.status_after_kill_failure(&source) {
+                Ok(Some(status)) => status,
+                Ok(None) | Err(_) => {
+                    return Err(CommandError::CancelFailed {
+                        command: self.command_text.clone(),
+                        source,
+                    });
+                }
+            },
         };
         let finished = self.complete(status)?;
         Err(CommandError::Cancelled {
@@ -336,16 +346,22 @@ impl RunningCommand {
         mut self,
         timeout: Duration,
     ) -> Result<FinishedCommand, CommandError> {
-        if let Err(source) = self.child_process.start_kill() {
-            let error = kill_failed(self.command_text.clone(), timeout, source);
-            return Err(self.collect_if_child_exited(error));
-        }
-        let exit_status = match self.child_process.wait() {
-            Ok(status) => status,
-            Err(source) => {
-                let error = wait_failed(&self.command_text, source);
-                return Err(self.collect_if_child_exited(error));
-            }
+        let exit_status = match self.child_process.start_kill() {
+            Ok(()) => match self.child_process.wait() {
+                Ok(status) => status,
+                Err(source) => {
+                    let error = wait_failed(&self.command_text, source);
+                    return Err(self.collect_if_child_exited(error));
+                }
+            },
+            Err(source) => match self.status_after_kill_failure(&source) {
+                Ok(Some(status)) => status,
+                Ok(None) | Err(_) => {
+                    let error =
+                        kill_failed(self.command_text.clone(), timeout, source);
+                    return Err(self.collect_if_child_exited(error));
+                }
+            },
         };
         let finished = self.complete(exit_status)?;
         Err(CommandError::TimedOut {
@@ -400,6 +416,53 @@ impl RunningCommand {
     /// monotonic ordering.
     fn elapsed(&self) -> Result<Duration, TimeError> {
         self.timer.now().duration_since(self.started_at)
+    }
+
+    /// Resolves the direct-child status after process-tree termination fails.
+    ///
+    /// # Parameters
+    ///
+    /// * `source` - Process-tree termination error.
+    ///
+    /// # Returns
+    ///
+    /// The completed direct-child status when it can be observed, or `None`
+    /// when the child remains running.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating-system wait error when the final child status
+    /// cannot be observed.
+    fn status_after_kill_failure(
+        &mut self,
+        source: &io::Error,
+    ) -> io::Result<Option<ExitStatus>> {
+        if Self::process_tree_already_exited(source) {
+            let status = self.child_process.wait();
+            return status.map(Some);
+        }
+        self.child_process.try_wait()
+    }
+
+    /// Reports whether a process-tree termination error means the tree ended.
+    ///
+    /// # Parameters
+    ///
+    /// * `source` - Process-tree termination error.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the platform reports that the managed process tree no
+    /// longer exists, otherwise `false`.
+    fn process_tree_already_exited(source: &io::Error) -> bool {
+        #[cfg(unix)]
+        {
+            source.raw_os_error() == Some(libc::ESRCH)
+        }
+        #[cfg(not(unix))]
+        {
+            source.kind() == io::ErrorKind::NotFound
+        }
     }
 
     /// Terminates a running child after timer handling fails.

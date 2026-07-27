@@ -48,6 +48,13 @@ pub enum CommandError {
         source: io::Error,
     },
 
+    /// Cancellation was requested before the command was prepared or started.
+    #[error("command `{command}` was cancelled before it started")]
+    CancelledBeforeStart {
+        /// Human-readable command representation.
+        command: String,
+    },
+
     /// The process could not be killed after exceeding the configured timeout.
     #[error(
         "failed to kill timed-out command `{command}` after {timeout:?}: {source}"
@@ -340,6 +347,7 @@ impl CommandError {
         match self {
             Self::SpawnFailed { command, .. }
             | Self::WaitFailed { command, .. }
+            | Self::CancelledBeforeStart { command, .. }
             | Self::KillFailed { command, .. }
             | Self::CancelFailed { command, .. }
             | Self::ReadOutputFailed { command, .. }

@@ -148,6 +148,7 @@ dependencies = [
 name = "qubit-command"
 version = "0.6.0"
 dependencies = [
+ "libc",
  "log",
  "process-wrap",
  "qubit-clock",

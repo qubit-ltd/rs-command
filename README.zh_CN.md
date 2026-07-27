@@ -52,8 +52,10 @@ process group，Windows 平台把命令放入 Job Object。
 ## 取消
 
 `CommandCancellation` 是供已经拥有关闭或终端信号策略的应用使用的一次性句柄。将其 clone
-后配置给 runner，再从该策略中调用 `cancel()`。runner 会终止受管进程树，并以
-`CommandError::Cancelled` 返回保留输出。本 crate 刻意不安装全局信号处理器。
+后配置给 runner，再从该策略中调用 `cancel()`。如果在一次运行开始前已观察到取消请求，
+runner 不会准备或启动命令，而是返回 `CommandError::CancelledBeforeStart`；否则 runner
+会终止受管进程树，并以 `CommandError::Cancelled` 返回保留输出。本 crate 刻意不安装
+全局信号处理器。
 
 即使调用 `without_timeout()`，配置取消句柄也会启用进程树管理。支持取消的等待会轮询所配置的
 timer；请选择能独立于调用线程持续推进的 timer 后端。

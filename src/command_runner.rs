@@ -248,11 +248,14 @@ impl CommandRunner {
 
     /// Configures a one-shot cancellation handle for command runs.
     ///
-    /// When cancellation is requested, the runner terminates its managed
-    /// process tree and returns [`CommandError::Cancelled`]. A cancellation
-    /// handle also enables process-tree management when timeout handling is
-    /// disabled. Applications that handle terminal signals can call
-    /// [`CommandCancellation::cancel`] from their signal-handling path.
+    /// When cancellation is already requested before [`Self::run`], the
+    /// runner returns [`CommandError::CancelledBeforeStart`] without
+    /// preparing or spawning the command. A request observed after startup
+    /// terminates the managed process tree and returns
+    /// [`CommandError::Cancelled`]. A cancellation handle also enables
+    /// process-tree management when timeout handling is disabled. Applications
+    /// that handle terminal signals can call [`CommandCancellation::cancel`]
+    /// from their signal-handling path.
     ///
     /// # Parameters
     ///
@@ -690,15 +693,27 @@ impl CommandRunner {
     ///
     /// # Errors
     ///
-    /// Returns [`CommandError`] if I/O paths conflict or cannot be prepared,
-    /// the process or an I/O helper cannot be started, waiting or injected time
-    /// handling fails, the timeout expires, cancellation is requested,
-    /// process-tree termination fails, captured output or configured stdin
-    /// cannot be transferred, or the child exits with a code not configured as
-    /// successful. Also returns
+    /// Returns [`CommandError::CancelledBeforeStart`] without preparing or
+    /// starting the command when its configured cancellation handle was already
+    /// cancelled. Otherwise returns [`CommandError`] if I/O paths conflict or
+    /// cannot be prepared, the process or an I/O helper cannot be started,
+    /// waiting or injected time handling fails, the timeout expires,
+    /// cancellation is requested, process-tree termination fails, captured
+    /// output or configured stdin cannot be transferred, or the child exits
+    /// with a code not configured as successful. Also returns
     /// [`CommandError::OutputTruncated`] when the child succeeds, either stream
     /// is truncated, and [`Self::fail_on_output_truncation`] is enabled.
     pub fn run(&self, command: Command) -> Result<CommandOutput, CommandError> {
+        if self
+            .cancellation_token
+            .as_ref()
+            .is_some_and(CommandCancellation::is_cancelled)
+        {
+            return Err(CommandError::CancelledBeforeStart {
+                command: command
+                    .display_command(&self.diagnostic_redaction_policy),
+            });
+        }
         let PreparedCommand {
             command_text,
             process_command,

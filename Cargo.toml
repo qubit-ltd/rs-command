@@ -38,6 +38,9 @@ qubit-redact = { version = "0.3", path = "../rs-redact", default-features = fals
 same-file = "1.0"
 thiserror = "2.0"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 qubit-clock = { version = "0.10", features = ["test-util"] }
 tempfile = "3.27"

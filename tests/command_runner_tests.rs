@@ -15,16 +15,14 @@ use std::{
     },
 };
 
+#[cfg(not(windows))]
+use qubit_command::OutputStream;
 use qubit_command::{
     Command,
+    CommandCancellation,
     CommandError,
     CommandRunner,
     DEFAULT_COMMAND_TIMEOUT,
-};
-#[cfg(not(windows))]
-use qubit_command::{
-    CommandCancellation,
-    OutputStream,
 };
 use qubit_redact::{
     DiagnosticBudget,
@@ -35,6 +33,24 @@ use qubit_redact::{
 mod command_runner;
 mod support;
 use support::LocalTempDir;
+
+#[test]
+fn test_runner_pre_cancelled_command_does_not_prepare_output_file() {
+    let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+        .expect("command test temporary directory should be created");
+    let stdout_path = temp_dir.path().join("stdout.log");
+    let cancellation = CommandCancellation::new();
+    cancellation.cancel();
+
+    let error = CommandRunner::new()
+        .cancellation_token(cancellation)
+        .tee_stdout_to_file(&stdout_path)
+        .run(Command::new("__qubit_command_must_not_start__"))
+        .expect_err("pre-cancelled command should not be prepared or started");
+
+    assert!(matches!(error, CommandError::CancelledBeforeStart { .. }));
+    assert!(!stdout_path.exists());
+}
 
 #[cfg(not(windows))]
 mod unix {
@@ -656,6 +672,26 @@ mod unix {
                 assert!(output.elapsed() >= Duration::from_millis(50));
             }
             other => panic!("expected timeout error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_runner_zero_timeout_does_not_report_kill_failure_after_exit() {
+        for _ in 0..10_000 {
+            match CommandRunner::new()
+                .timeout(Duration::ZERO)
+                .run(Command::new("true"))
+            {
+                Ok(_) | Err(CommandError::TimedOut { .. }) => {}
+                Err(CommandError::KillFailed { source, .. }) => {
+                    panic!(
+                        "an exited command must not report a kill failure: {source}"
+                    );
+                }
+                Err(other) => {
+                    panic!("unexpected zero-timeout result: {other:?}");
+                }
+            }
         }
     }
 
