@@ -213,6 +213,8 @@ impl CommandRunner {
     /// completion. Reaching it starts process-tree termination and cleanup; it
     /// is not a hard upper bound on when [`Self::run`] returns because platform
     /// process cleanup and helper-thread joins may take additional time.
+    /// A zero duration still permits success when a completion check observes
+    /// the child has already exited before timeout handling begins.
     /// Command preparation is excluded: opening configured stdin or tee paths
     /// can block before this timeout starts, particularly for FIFOs and device
     /// files.
@@ -693,7 +695,10 @@ impl CommandRunner {
     /// additional time. In particular, a descendant that escapes the managed
     /// Unix process group or Windows Job Object while retaining an inherited
     /// I/O pipe can delay the final helper-thread join until it closes that
-    /// pipe.
+    /// pipe. A tee destination that blocks an output helper on write or flush,
+    /// such as a FIFO, device, or stalled filesystem, can likewise delay that
+    /// final join. Use regular files for tee destinations when timely return is
+    /// required.
     ///
     /// Captured output is retained as raw bytes up to the configured per-stream
     /// limits. Reader threads still drain complete streams so the child is not
