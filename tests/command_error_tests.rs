@@ -225,6 +225,19 @@ fn test_command_error_accessors_for_errors_with_output() {
 }
 
 #[test]
+fn test_command_error_into_output_moves_retained_output() {
+    let error = CommandRunner::new()
+        .run(Command::shell("printf output; exit 9"))
+        .expect_err("non-success exit code should be rejected");
+
+    let output = error
+        .into_output()
+        .expect("unexpected exit should move retained output");
+
+    assert_eq!(output.into_stdout(), b"output");
+}
+
+#[test]
 fn test_command_error_reports_unexpected_exit_signal() {
     let error = CommandRunner::new()
         .run(Command::shell("kill -TERM $$"))

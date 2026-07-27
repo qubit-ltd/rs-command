@@ -166,6 +166,18 @@ impl CommandOutput {
         &self.stdout
     }
 
+    /// Consumes this output and returns captured standard output bytes.
+    ///
+    /// # Returns
+    ///
+    /// Owned stdout bytes exactly as retained by the runner. This avoids a
+    /// copy when the caller no longer needs the remaining output metadata.
+    #[must_use]
+    #[inline(always)]
+    pub fn into_stdout(self) -> Vec<u8> {
+        self.stdout
+    }
+
     /// Returns captured standard error bytes.
     ///
     /// # Returns
@@ -178,6 +190,18 @@ impl CommandOutput {
     #[inline(always)]
     pub fn stderr(&self) -> &[u8] {
         &self.stderr
+    }
+
+    /// Consumes this output and returns captured standard error bytes.
+    ///
+    /// # Returns
+    ///
+    /// Owned stderr bytes exactly as retained by the runner. This avoids a
+    /// copy when the caller no longer needs the remaining output metadata.
+    #[must_use]
+    #[inline(always)]
+    pub fn into_stderr(self) -> Vec<u8> {
+        self.stderr
     }
 
     /// Returns captured standard output as strict UTF-8 text.

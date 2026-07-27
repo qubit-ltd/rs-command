@@ -207,6 +207,24 @@ pub enum CommandError {
         output: Box<CommandOutput>,
     },
 
+    /// The command was cancelled and its managed process tree was terminated.
+    #[error("command `{command}` was cancelled")]
+    Cancelled {
+        /// Human-readable command representation.
+        command: String,
+        /// Captured output available after terminating the child process.
+        output: Box<CommandOutput>,
+    },
+
+    /// Cancelling the managed process tree failed.
+    #[error("failed to cancel command `{command}`: {source}")]
+    CancelFailed {
+        /// Human-readable command representation.
+        command: String,
+        /// I/O error reported while terminating the child process tree.
+        source: io::Error,
+    },
+
     /// The command succeeded, but its captured output was truncated.
     #[error(
         "command `{command}` completed successfully, but captured output was truncated"
@@ -280,14 +298,33 @@ impl CommandError {
     ///
     /// # Returns
     ///
-    /// `Some(output)` for timeout, output-truncation, and unexpected-exit
-    /// errors, otherwise `None`.
+    /// `Some(output)` for timeout, cancellation, output-truncation, and
+    /// unexpected-exit errors, otherwise `None`.
     #[inline(always)]
     pub const fn output(&self) -> Option<&CommandOutput> {
         match self {
             Self::TimedOut { output, .. }
+            | Self::Cancelled { output, .. }
             | Self::OutputTruncated { output, .. }
             | Self::UnexpectedExit { output, .. } => Some(output),
+            _ => None,
+        }
+    }
+
+    /// Consumes this error and returns captured output when it is available.
+    ///
+    /// # Returns
+    ///
+    /// `Some(output)` for timeout, cancellation, output-truncation, and
+    /// unexpected-exit errors, otherwise `None`.
+    #[must_use]
+    #[inline(always)]
+    pub fn into_output(self) -> Option<CommandOutput> {
+        match self {
+            Self::TimedOut { output, .. }
+            | Self::Cancelled { output, .. }
+            | Self::OutputTruncated { output, .. }
+            | Self::UnexpectedExit { output, .. } => Some(*output),
             _ => None,
         }
     }
@@ -304,6 +341,7 @@ impl CommandError {
             Self::SpawnFailed { command, .. }
             | Self::WaitFailed { command, .. }
             | Self::KillFailed { command, .. }
+            | Self::CancelFailed { command, .. }
             | Self::ReadOutputFailed { command, .. }
             | Self::OpenInputFailed { command, .. }
             | Self::OpenOutputFailed { command, .. }
@@ -316,6 +354,7 @@ impl CommandError {
             | Self::WriteInputFailed { command, .. }
             | Self::WriteOutputFailed { command, .. }
             | Self::TimedOut { command, .. }
+            | Self::Cancelled { command, .. }
             | Self::OutputTruncated { command, .. }
             | Self::UnexpectedExit { command, .. } => command,
         }

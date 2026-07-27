@@ -28,7 +28,13 @@ use super::{
     managed_child_process::ManagedChildProcess,
     wait_policy::next_sleep,
 };
-use crate::CommandError;
+use crate::{
+    CommandCancellation,
+    CommandError,
+};
+
+/// Maximum delay before a cancellation-aware wait observes cancellation.
+const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Running command state that owns process and I/O helper lifetimes.
 #[must_use = "a running command must be waited on to collect its process and I/O"]
@@ -43,6 +49,8 @@ pub(in crate::command_runner) struct RunningCommand {
     started_at: MonotonicInstant,
     /// Timer sharing the same monotonic domain as the start instant.
     timer: Arc<dyn Timer>,
+    /// Optional shared cancellation handle.
+    cancellation_token: Option<CommandCancellation>,
 }
 
 impl RunningCommand {
@@ -55,6 +63,7 @@ impl RunningCommand {
     /// * `io` - Output readers and optional stdin writer.
     /// * `started_at` - Monotonic instant sampled immediately after spawning.
     /// * `timer` - Timer in the same clock domain as `started_at`.
+    /// * `cancellation_token` - Optional shared cancellation handle.
     ///
     /// # Returns
     ///
@@ -66,6 +75,7 @@ impl RunningCommand {
         io: CommandIo,
         started_at: MonotonicInstant,
         timer: Arc<dyn Timer>,
+        cancellation_token: Option<CommandCancellation>,
     ) -> Self {
         Self {
             command_text,
@@ -73,13 +83,15 @@ impl RunningCommand {
             io,
             started_at,
             timer,
+            cancellation_token,
         }
     }
 
-    /// Waits for the child process to complete or time out.
+    /// Waits for the child process to complete, time out, or be cancelled.
     ///
-    /// This method blocks the current thread. Without a timeout it delegates
-    /// directly to the child process's blocking wait operation.
+    /// This method blocks the current thread. Without a timeout or a
+    /// cancellation handle it delegates directly to the child process's
+    /// blocking wait operation.
     ///
     /// # Parameters
     ///
@@ -91,15 +103,15 @@ impl RunningCommand {
     ///
     /// # Errors
     ///
-    /// Returns [`CommandError`] if waiting fails, timeout handling fails,
-    /// output collection fails, or stdin writing fails. Wait-error cleanup
-    /// only joins I/O helpers after a non-blocking check confirms the child
-    /// has exited.
+    /// Returns [`CommandError`] if waiting, timeout handling, cancellation,
+    /// output collection, or stdin writing fails. Wait-error cleanup only
+    /// joins I/O helpers after a non-blocking check confirms the child has
+    /// exited.
     pub(in crate::command_runner) fn wait_for_completion(
         mut self,
         timeout: Option<Duration>,
     ) -> Result<FinishedCommand, CommandError> {
-        let Some(timeout) = timeout else {
+        if timeout.is_none() && self.cancellation_token.is_none() {
             let status = match self.child_process.wait() {
                 Ok(status) => status,
                 Err(source) => {
@@ -108,7 +120,7 @@ impl RunningCommand {
                 }
             };
             return self.complete_after_exit(status, None);
-        };
+        }
 
         loop {
             let maybe_status = match self.child_process.try_wait() {
@@ -119,18 +131,30 @@ impl RunningCommand {
                 }
             };
             if let Some(status) = maybe_status {
-                return self.complete_after_exit(status, Some(timeout));
+                return self.complete_after_exit(status, timeout);
             }
-            let elapsed = match self.elapsed() {
-                Ok(elapsed) => elapsed,
-                Err(source) => {
-                    return Err(self.clean_up_after_time_error(source));
+            if self
+                .cancellation_token
+                .as_ref()
+                .is_some_and(CommandCancellation::is_cancelled)
+            {
+                return self.handle_cancellation();
+            }
+            let sleep = match timeout {
+                Some(timeout) => {
+                    let elapsed = match self.elapsed() {
+                        Ok(elapsed) => elapsed,
+                        Err(source) => {
+                            return Err(self.clean_up_after_time_error(source));
+                        }
+                    };
+                    if elapsed >= timeout {
+                        return self.handle_timeout(timeout);
+                    }
+                    next_sleep(timeout, elapsed)
                 }
+                None => CANCELLATION_POLL_INTERVAL,
             };
-            if elapsed >= timeout {
-                return self.handle_timeout(timeout);
-            }
-            let sleep = next_sleep(timeout, elapsed);
             if let Err(source) =
                 BlockingSleeper::new(Arc::clone(&self.timer)).sleep_for(sleep)
             {
@@ -148,32 +172,47 @@ impl RunningCommand {
     ///
     /// # Returns
     ///
-    /// Finished command output when all I/O helpers finish before the timeout.
+    /// Finished command output when all I/O helpers finish before timeout or
+    /// cancellation.
     ///
     /// # Errors
     ///
-    /// Returns [`CommandError::TimedOut`] if inherited output pipes keep I/O
-    /// helpers alive beyond the configured timeout, or another [`CommandError`]
-    /// if cleanup or output collection fails.
+    /// Returns [`CommandError::TimedOut`] or [`CommandError::Cancelled`] when
+    /// inherited I/O pipes keep helpers alive after the corresponding request,
+    /// or another [`CommandError`] if cleanup or output collection fails.
     fn complete_after_exit(
         self,
         status: ExitStatus,
         timeout: Option<Duration>,
     ) -> Result<FinishedCommand, CommandError> {
-        if let Some(timeout) = timeout {
+        if timeout.is_some() || self.cancellation_token.is_some() {
             while !self.io.is_finished() {
-                let elapsed = match self.elapsed() {
-                    Ok(elapsed) => elapsed,
-                    Err(source) => {
-                        return self
-                            .handle_time_error_after_exit(status, source);
-                    }
-                };
-                if elapsed >= timeout {
-                    return self
-                        .handle_output_collection_timeout(status, timeout);
+                if self
+                    .cancellation_token
+                    .as_ref()
+                    .is_some_and(CommandCancellation::is_cancelled)
+                {
+                    return self.handle_output_collection_cancellation(status);
                 }
-                let sleep = next_sleep(timeout, elapsed);
+                let sleep = match timeout {
+                    Some(timeout) => {
+                        let elapsed = match self.elapsed() {
+                            Ok(elapsed) => elapsed,
+                            Err(source) => {
+                                return self.handle_time_error_after_exit(
+                                    status, source,
+                                );
+                            }
+                        };
+                        if elapsed >= timeout {
+                            return self.handle_output_collection_timeout(
+                                status, timeout,
+                            );
+                        }
+                        next_sleep(timeout, elapsed)
+                    }
+                    None => CANCELLATION_POLL_INTERVAL,
+                };
                 if let Err(source) =
                     BlockingSleeper::new(Arc::clone(&self.timer))
                         .sleep_for(sleep)
@@ -218,6 +257,59 @@ impl RunningCommand {
         Err(CommandError::TimedOut {
             command: finished.command_text,
             timeout,
+            output: Box::new(finished.output),
+        })
+    }
+
+    /// Cancels descendants that keep inherited I/O pipes open after the
+    /// direct child has exited.
+    ///
+    /// # Parameters
+    ///
+    /// * `status` - Exit status reported for the direct child.
+    ///
+    /// # Returns
+    ///
+    /// Always returns a cancellation or process-control error after cleanup.
+    fn handle_output_collection_cancellation(
+        mut self,
+        status: ExitStatus,
+    ) -> Result<FinishedCommand, CommandError> {
+        if let Err(source) = self.child_process.start_kill() {
+            return Err(CommandError::CancelFailed {
+                command: self.command_text.clone(),
+                source,
+            });
+        }
+        let finished = self.complete(status)?;
+        Err(CommandError::Cancelled {
+            command: finished.command_text,
+            output: Box::new(finished.output),
+        })
+    }
+
+    /// Cancels a running process tree and collects its final output.
+    ///
+    /// # Returns
+    ///
+    /// Always returns a cancellation or process-control error after cleanup.
+    fn handle_cancellation(mut self) -> Result<FinishedCommand, CommandError> {
+        if let Err(source) = self.child_process.start_kill() {
+            return Err(CommandError::CancelFailed {
+                command: self.command_text.clone(),
+                source,
+            });
+        }
+        let status = match self.child_process.wait() {
+            Ok(status) => status,
+            Err(source) => {
+                let error = wait_failed(&self.command_text, source);
+                return Err(self.collect_if_child_exited(error));
+            }
+        };
+        let finished = self.complete(status)?;
+        Err(CommandError::Cancelled {
+            command: finished.command_text,
             output: Box::new(finished.output),
         })
     }
@@ -287,11 +379,9 @@ impl RunningCommand {
             timer,
             ..
         } = self;
-        let output = io.collect(
-            &command_text,
-            status,
-            move || timer.now().duration_since(started_at),
-        )?;
+        let output = io.collect(&command_text, status, move || {
+            timer.now().duration_since(started_at)
+        })?;
         Ok(FinishedCommand {
             command_text,
             output,
@@ -332,11 +422,9 @@ impl RunningCommand {
             Err(_) => self.child_process.try_wait().ok().flatten(),
         };
         if let Some(status) = status {
-            let _ = self.io.collect(
-                &self.command_text,
-                status,
-                || Ok::<Duration, TimeError>(Duration::ZERO),
-            );
+            let _ = self.io.collect(&self.command_text, status, || {
+                Ok::<Duration, TimeError>(Duration::ZERO)
+            });
         }
         error
     }
@@ -365,11 +453,9 @@ impl RunningCommand {
             source,
         };
         let _ = self.child_process.start_kill();
-        let _ = self.io.collect(
-            &self.command_text,
-            status,
-            || Ok::<Duration, TimeError>(Duration::ZERO),
-        );
+        let _ = self.io.collect(&self.command_text, status, || {
+            Ok::<Duration, TimeError>(Duration::ZERO)
+        });
         Err(error)
     }
 

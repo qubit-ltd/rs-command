@@ -15,13 +15,16 @@ use std::{
     },
 };
 
-#[cfg(not(windows))]
-use qubit_command::OutputStream;
 use qubit_command::{
     Command,
     CommandError,
     CommandRunner,
     DEFAULT_COMMAND_TIMEOUT,
+};
+#[cfg(not(windows))]
+use qubit_command::{
+    CommandCancellation,
+    OutputStream,
 };
 use qubit_redact::{
     DiagnosticBudget,
@@ -37,6 +40,7 @@ use support::LocalTempDir;
 mod unix {
     use super::{
         Command,
+        CommandCancellation,
         CommandError,
         CommandRunner,
         DEFAULT_COMMAND_TIMEOUT,
@@ -59,6 +63,7 @@ mod unix {
         let runner = CommandRunner::new();
 
         assert_eq!(runner.configured_timeout(), Some(DEFAULT_COMMAND_TIMEOUT),);
+        assert!(runner.configured_cancellation_token().is_none());
         assert_eq!(runner.configured_success_exit_codes(), &[0]);
         assert!(runner.configured_working_directory().is_none());
         assert!(!runner.is_logging_disabled());
@@ -162,6 +167,51 @@ mod unix {
             process_groups[0], process_groups[1],
             "a command without timeout must remain in its parent's process group",
         );
+    }
+
+    #[test]
+    fn test_runner_cancellation_without_timeout_terminates_running_command() {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temp directory should be created");
+        let started_path = temp_dir.path().join("started");
+        let script = format!(
+            "printf started; : > '{}'; while :; do sleep 1; done",
+            started_path.display(),
+        );
+        let cancellation = CommandCancellation::new();
+        let runner = CommandRunner::new()
+            .without_timeout()
+            .cancellation_token(cancellation.clone());
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let result = runner.run(Command::shell(&script));
+            sender
+                .send(result)
+                .expect("test receiver should remain connected");
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !started_path.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            started_path.exists(),
+            "command should start before cancellation"
+        );
+
+        cancellation.cancel();
+        let error = receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("cancelled runner should return promptly")
+            .expect_err("cancelled command should return an error");
+        worker.join().expect("runner thread should not panic");
+
+        match error {
+            CommandError::Cancelled { output, .. } => {
+                assert_eq!(output.stdout(), b"started");
+            }
+            other => panic!("expected cancelled command error, got {other:?}"),
+        }
     }
 
     #[test]
@@ -764,6 +814,21 @@ mod unix {
         assert_eq!(output.stderr(), b"wx");
         assert!(output.stdout_truncated());
         assert!(output.stderr_truncated());
+    }
+
+    #[test]
+    fn test_command_runner_bounded_output_limits_streams_and_rejects_truncation()
+     {
+        let runner = CommandRunner::new().bounded_output(3);
+
+        assert_eq!(runner.configured_max_stdout_bytes(), Some(3));
+        assert_eq!(runner.configured_max_stderr_bytes(), Some(3));
+        assert!(runner.is_output_truncation_failure_enabled());
+
+        let error = runner
+            .run(Command::shell("printf abcdef; printf wxyz >&2"))
+            .expect_err("bounded output should reject truncation");
+        assert!(matches!(error, CommandError::OutputTruncated { .. }));
     }
 
     #[test]
