@@ -173,14 +173,16 @@ where
             command: command.to_owned(),
             source,
         }),
-        (Ok(elapsed), Ok(stdout), Ok(stderr), Ok(())) => Ok(CommandOutput::new(
-            status,
-            stdout.bytes,
-            stderr.bytes,
-            stdout.truncated,
-            stderr.truncated,
-            elapsed,
-        )),
+        (Ok(elapsed), Ok(stdout), Ok(stderr), Ok(())) => {
+            Ok(CommandOutput::new(
+                status,
+                stdout.bytes,
+                stderr.bytes,
+                stdout.truncated,
+                stderr.truncated,
+                elapsed,
+            ))
+        }
         (Ok(_), Err(error), _, _)
         | (Ok(_), _, Err(error), _)
         | (Ok(_), _, _, Err(error)) => Err(error),
