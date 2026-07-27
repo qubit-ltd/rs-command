@@ -27,6 +27,7 @@ use super::{
     },
     finished_command::FinishedCommand,
     managed_child_process::ManagedChildProcess,
+    process_termination_error::ProcessTerminationError,
     wait_policy::next_sleep,
 };
 use crate::{
@@ -299,23 +300,18 @@ impl RunningCommand {
     ///
     /// Always returns a cancellation or process-control error after cleanup.
     fn handle_cancellation(mut self) -> Result<FinishedCommand, CommandError> {
-        let status = match self.child_process.start_kill() {
-            Ok(()) => match self.child_process.wait() {
-                Ok(status) => status,
-                Err(source) => {
-                    let error = wait_failed(&self.command_text, source);
-                    return Err(self.collect_if_child_exited(error));
-                }
-            },
-            Err(source) => match self.status_after_kill_failure(&source) {
-                Ok(Some(status)) => status,
-                Ok(None) | Err(_) => {
-                    return Err(CommandError::CancelFailed {
-                        command: self.command_text.clone(),
-                        source,
-                    });
-                }
-            },
+        let status = match self.terminate_child() {
+            Ok(status) => status,
+            Err(ProcessTerminationError::Wait(source)) => {
+                let error = wait_failed(&self.command_text, source);
+                return Err(self.collect_if_child_exited(error));
+            }
+            Err(ProcessTerminationError::Kill(source)) => {
+                return Err(CommandError::CancelFailed {
+                    command: self.command_text.clone(),
+                    source,
+                });
+            }
         };
         let finished = self.complete(status)?;
         Err(CommandError::Cancelled {
@@ -346,22 +342,17 @@ impl RunningCommand {
         mut self,
         timeout: Duration,
     ) -> Result<FinishedCommand, CommandError> {
-        let exit_status = match self.child_process.start_kill() {
-            Ok(()) => match self.child_process.wait() {
-                Ok(status) => status,
-                Err(source) => {
-                    let error = wait_failed(&self.command_text, source);
-                    return Err(self.collect_if_child_exited(error));
-                }
-            },
-            Err(source) => match self.status_after_kill_failure(&source) {
-                Ok(Some(status)) => status,
-                Ok(None) | Err(_) => {
-                    let error =
-                        kill_failed(self.command_text.clone(), timeout, source);
-                    return Err(self.collect_if_child_exited(error));
-                }
-            },
+        let exit_status = match self.terminate_child() {
+            Ok(status) => status,
+            Err(ProcessTerminationError::Wait(source)) => {
+                let error = wait_failed(&self.command_text, source);
+                return Err(self.collect_if_child_exited(error));
+            }
+            Err(ProcessTerminationError::Kill(source)) => {
+                let error =
+                    kill_failed(self.command_text.clone(), timeout, source);
+                return Err(self.collect_if_child_exited(error));
+            }
         };
         let finished = self.complete(exit_status)?;
         Err(CommandError::TimedOut {
@@ -416,6 +407,36 @@ impl RunningCommand {
     /// monotonic ordering.
     fn elapsed(&self) -> Result<Duration, TimeError> {
         self.timer.now().duration_since(self.started_at)
+    }
+
+    /// Terminates the managed process tree and waits for the direct child.
+    ///
+    /// A failed termination request is treated as successful when the direct
+    /// child is concurrently observed to have exited.
+    ///
+    /// # Returns
+    ///
+    /// Final direct-child status after termination or a concurrent exit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessTerminationError::Wait`] when waiting after a
+    /// successful termination request fails. Returns
+    /// [`ProcessTerminationError::Kill`] when termination fails and the child
+    /// cannot be confirmed exited.
+    fn terminate_child(
+        &mut self,
+    ) -> Result<ExitStatus, ProcessTerminationError> {
+        match self.child_process.start_kill() {
+            Ok(()) => self
+                .child_process
+                .wait()
+                .map_err(ProcessTerminationError::Wait),
+            Err(source) => match self.status_after_kill_failure(&source) {
+                Ok(Some(status)) => Ok(status),
+                Ok(None) | Err(_) => Err(ProcessTerminationError::Kill(source)),
+            },
+        }
     }
 
     /// Resolves the direct-child status after process-tree termination fails.

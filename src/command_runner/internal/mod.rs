@@ -21,6 +21,7 @@ pub(in crate::command_runner) mod output_tee;
 pub(in crate::command_runner) mod prepared_command;
 pub(in crate::command_runner) mod process_launcher;
 pub(in crate::command_runner) mod process_setup;
+pub(in crate::command_runner) mod process_termination_error;
 pub(in crate::command_runner) mod running_command;
 pub(in crate::command_runner) mod starting_command;
 pub(in crate::command_runner) mod stdin_pipe;

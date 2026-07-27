@@ -21,6 +21,7 @@ mod output_tee_tests;
 mod prepared_command_tests;
 mod process_launcher_tests;
 mod process_setup_tests;
+mod process_termination_error_tests;
 mod running_command_tests;
 mod starting_command_tests;
 mod stdin_pipe_tests;
