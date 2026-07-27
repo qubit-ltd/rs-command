@@ -38,6 +38,7 @@ use internal::stdin_pipe::write_stdin_bytes;
 
 use crate::{
     Command,
+    CommandCancellation,
     CommandError,
     CommandOutput,
     OutputStream,
@@ -62,8 +63,8 @@ pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 /// [`CommandOutput::stdout_text`] and [`CommandOutput::stderr_text`] for strict
 /// UTF-8 text, or [`CommandOutput::stdout_lossy_text`] and
 /// [`CommandOutput::stderr_lossy_text`] when invalid UTF-8 should be replaced.
-/// Timeout handling uses a blocking timer adapter, so the configured timer
-/// backend must keep progressing while this thread is parked.
+/// Timeout and cancellation handling use a blocking timer adapter, so the
+/// configured timer backend must keep progressing while this thread is parked.
 ///
 /// # Examples
 ///
@@ -80,6 +81,8 @@ pub struct CommandRunner {
     timeout: Option<Duration>,
     /// Monotonic timer used for timeout measurement and blocking sleeps.
     timer: Arc<dyn Timer>,
+    /// Optional one-shot cancellation handle shared with command runs.
+    cancellation_token: Option<CommandCancellation>,
     /// Default working directory used when a command does not override it.
     working_directory: Option<PathBuf>,
     /// Exit codes treated as successful.
@@ -116,6 +119,10 @@ impl fmt::Debug for CommandRunner {
             .field("timeout", &self.timeout)
             .field("timer", &"<dyn Timer>")
             .field(
+                "cancellation_configured",
+                &self.cancellation_token.is_some(),
+            )
+            .field(
                 "working_directory",
                 &self.working_directory.as_ref().map(|_| REDACTED_PATH),
             )
@@ -145,15 +152,16 @@ impl Default for CommandRunner {
     ///
     /// # Returns
     ///
-    /// A runner with the default timeout, a standard monotonic timer, inherited
-    /// working directory, success exit code `0`, enabled logging, unlimited
-    /// in-memory output capture, allowed output truncation, and no output tee
-    /// files.
+    /// A runner with the default timeout, a standard monotonic timer, no
+    /// cancellation handle, inherited working directory, success exit code
+    /// `0`, enabled logging, unlimited in-memory output capture, allowed output
+    /// truncation, and no output tee files.
     #[inline]
     fn default() -> Self {
         Self {
             timeout: Some(DEFAULT_COMMAND_TIMEOUT),
             timer: Arc::new(StdTimer::new()),
+            cancellation_token: None,
             working_directory: None,
             success_exit_codes: vec![0],
             disable_logging: false,
@@ -172,10 +180,10 @@ impl CommandRunner {
     ///
     /// # Returns
     ///
-    /// A runner with the default timeout, a standard monotonic timer, inherited
-    /// working directory, success exit code `0`, enabled logging, unlimited
-    /// in-memory output capture, allowed output truncation, and no output tee
-    /// files.
+    /// A runner with the default timeout, a standard monotonic timer, no
+    /// cancellation handle, inherited working directory, success exit code
+    /// `0`, enabled logging, unlimited in-memory output capture, allowed output
+    /// truncation, and no output tee files.
     #[inline(always)]
     pub fn new() -> Self {
         Self::default()
@@ -213,6 +221,8 @@ impl CommandRunner {
 
     /// Disables timeout handling.
     ///
+    /// This does not disable an explicitly configured cancellation handle.
+    ///
     /// # Returns
     ///
     /// The updated command runner.
@@ -222,18 +232,58 @@ impl CommandRunner {
         self
     }
 
+    /// Returns the configured cancellation handle.
+    ///
+    /// # Returns
+    ///
+    /// `Some(handle)` when this runner observes explicit cancellation requests,
+    /// otherwise `None`.
+    #[must_use]
+    #[inline(always)]
+    pub fn configured_cancellation_token(
+        &self,
+    ) -> Option<&CommandCancellation> {
+        self.cancellation_token.as_ref()
+    }
+
+    /// Configures a one-shot cancellation handle for command runs.
+    ///
+    /// When cancellation is requested, the runner terminates its managed
+    /// process tree and returns [`CommandError::Cancelled`]. A cancellation
+    /// handle also enables process-tree management when timeout handling is
+    /// disabled. Applications that handle terminal signals can call
+    /// [`CommandCancellation::cancel`] from their signal-handling path.
+    ///
+    /// # Parameters
+    ///
+    /// * `cancellation_token` - Shared handle that can request cancellation.
+    ///
+    /// # Returns
+    ///
+    /// The updated command runner.
+    #[inline(always)]
+    pub fn cancellation_token(
+        mut self,
+        cancellation_token: CommandCancellation,
+    ) -> Self {
+        self.cancellation_token = Some(cancellation_token);
+        self
+    }
+
     /// Returns the configured monotonic timer.
     ///
     /// # Returns
     ///
-    /// Timer used for timeout measurement and blocking sleeps.
+    /// Timer used for elapsed measurement and blocking sleeps during timeout or
+    /// cancellation handling.
     #[must_use]
     #[inline(always)]
     pub fn configured_timer(&self) -> &dyn Timer {
         self.timer.as_ref()
     }
 
-    /// Replaces the monotonic timer used for timeout handling.
+    /// Replaces the monotonic timer used for elapsed measurement and blocking
+    /// sleeps during timeout or cancellation handling.
     ///
     /// Command execution waits on this timer synchronously. Its backend must
     /// therefore make progress independently of the caller thread. In
@@ -500,6 +550,27 @@ impl CommandRunner {
         self
     }
 
+    /// Limits both captured streams and rejects any truncated result.
+    ///
+    /// This is the safe opt-in preset for commands whose output volume is not
+    /// trusted. It preserves the existing default runner behavior, which
+    /// captures both streams without an in-memory limit.
+    ///
+    /// # Parameters
+    ///
+    /// * `max_bytes` - Maximum number of retained bytes for each stream.
+    ///
+    /// # Returns
+    ///
+    /// The updated command runner.
+    #[inline(always)]
+    pub const fn bounded_output(mut self, max_bytes: usize) -> Self {
+        self.max_stdout_bytes = Some(max_bytes);
+        self.max_stderr_bytes = Some(max_bytes);
+        self.fail_on_output_truncation = true;
+        self
+    }
+
     /// Returns the stdout tee file path.
     ///
     /// # Returns
@@ -516,7 +587,9 @@ impl CommandRunner {
     /// identity conflicts with configured stdin and stderr files. It is
     /// truncated only after all checks pass. Combine this with
     /// [`Self::max_stdout_bytes`] to avoid unbounded memory use for large
-    /// stdout streams.
+    /// stdout streams. Reusing the same runner concurrently with the same tee
+    /// path is not supported because each run truncates that file after its own
+    /// validation completes.
     ///
     /// # Parameters
     ///
@@ -550,7 +623,9 @@ impl CommandRunner {
     /// identity conflicts with configured stdin and stdout files. It is
     /// truncated only after all checks pass. Combine this with
     /// [`Self::max_stderr_bytes`] to avoid unbounded memory use for large
-    /// stderr streams.
+    /// stderr streams. Reusing the same runner concurrently with the same tee
+    /// path is not supported because each run truncates that file after its own
+    /// validation completes.
     ///
     /// # Parameters
     ///
@@ -574,19 +649,19 @@ impl CommandRunner {
     /// helpers finish, or until the configured post-spawn timeout starts
     /// termination and cleanup. Each poll checks the direct child first; after
     /// an observed exit, output collection remains bounded by the same timeout.
-    /// When a timeout is configured, Unix children run as leaders of new
-    /// process groups and Windows children run in Job Objects. This lets
-    /// timeout killing target the process tree instead of only the direct
-    /// child process, including cases where the direct child exits but
-    /// descendants keep inherited stdout or stderr pipes open. Without a
-    /// configured timeout, commands use the platform's normal
+    /// When a timeout or cancellation handle is configured, Unix children run
+    /// as leaders of new process groups and Windows children run in Job
+    /// Objects. This lets timeout or cancellation target the process tree
+    /// instead of only the direct child process, including cases where the
+    /// direct child exits but descendants keep inherited I/O pipes open.
+    /// Without either configuration, commands use the platform's normal
     /// process-spawning behavior.
     ///
     /// A timeout is not a hard upper bound on this method's wall-clock return
     /// time. Platform termination, waiting, and I/O helper cleanup can take
     /// additional time. In particular, a descendant that escapes the managed
     /// Unix process group or Windows Job Object while retaining an inherited
-    /// output pipe can delay the final helper-thread join until it closes that
+    /// I/O pipe can delay the final helper-thread join until it closes that
     /// pipe.
     ///
     /// Captured output is retained as raw bytes up to the configured per-stream
@@ -617,9 +692,10 @@ impl CommandRunner {
     ///
     /// Returns [`CommandError`] if I/O paths conflict or cannot be prepared,
     /// the process or an I/O helper cannot be started, waiting or injected time
-    /// handling fails, the timeout expires, process-tree termination fails,
-    /// captured output or configured stdin cannot be transferred, or the child
-    /// exits with a code not configured as successful. Also returns
+    /// handling fails, the timeout expires, cancellation is requested,
+    /// process-tree termination fails, captured output or configured stdin
+    /// cannot be transferred, or the child exits with a code not configured as
+    /// successful. Also returns
     /// [`CommandError::OutputTruncated`] when the child succeeds, either stream
     /// is truncated, and [`Self::fail_on_output_truncation`] is enabled.
     pub fn run(&self, command: Command) -> Result<CommandOutput, CommandError> {
@@ -643,8 +719,10 @@ impl CommandRunner {
             log::debug!("Running command: {command_text}");
         }
 
+        let manage_process_tree =
+            self.timeout.is_some() || self.cancellation_token.is_some();
         let child_process =
-            match spawn_child(process_command, self.timeout.is_some()) {
+            match spawn_child(process_command, manage_process_tree) {
                 Ok(child_process) => child_process,
                 Err(source) => return Err(spawn_failed(&command_text, source)),
             };
@@ -718,6 +796,7 @@ impl CommandRunner {
             command_io,
             started_at,
             Arc::clone(&self.timer),
+            self.cancellation_token.clone(),
         )
         .wait_for_completion(self.timeout)?;
         let FinishedCommand {

@@ -18,7 +18,8 @@ Qubit Command 提供一个小而明确的结构化 API，用于运行外部程�
 - 使用 program + args 的结构化命令执行方式。
 - 在确实需要 shell 解析时，提供显式 shell 命令支持。
 - 支持配置超时、工作目录、stdin、环境变量和成功退出码。
-- 超时时基于 Unix process group 和 Windows Job Object 尝试终止进程树。
+- 为已管理终端信号或关闭请求的应用提供显式、一次性的取消句柄。
+- 设置超时或取消句柄时，基于 Unix process group 和 Windows Job Object 尝试终止进程树。
 - 默认保留 stdout 和 stderr 的原始字节，同时提供严格和有损 UTF-8 文本访问方法。
 - 支持按流限制内存捕获字节数，并把完整输出流式写入文件。
 - 可选择在命令成功但内存输出被截断时返回错误。
@@ -37,16 +38,25 @@ Qubit Command 提供一个小而明确的结构化 API，用于运行外部程�
 每次轮询会先检查直接子进程，再检查 deadline；观察到子进程退出后，输出收集仍受同一
 timeout 限制。达到超时会启动进程树终止和清理，但不保证 `run()` 在该墙钟时长内返回；
 平台终止操作和 I/O 辅助线程清理可能需要额外时间。如果后代进程脱离了受管的 Unix
-process group 或 Windows Job Object，同时仍持有继承的输出管道，runner 可能要等到
+process group 或 Windows Job Object，同时仍持有继承的 I/O 管道，runner 可能要等到
 该管道关闭后才能返回。
 
-设置超时后，runner 会尝试终止整个进程树：Unix 平台把命令放入新的
+设置超时或取消句柄后，runner 会尝试终止整个进程树：Unix 平台把命令放入新的
 process group，Windows 平台把命令放入 Job Object。
 
 超时测量和休眠使用可注入的 `qubit-clock` timer，因此单元测试可以用手动单调时钟
-驱动超时逻辑。未设置超时时，runner 会直接等待进程结束，不进行轮询。
-由于命令执行会同步等待 timer，timer 后端必须能在调用线程阻塞时独立推进。Tokio
-timer 不应依赖仅由同一调用线程驱动的 current-thread runtime。
+驱动超时逻辑。未设置超时且未配置取消句柄时，runner 会直接等待进程结束，不进行轮询。
+设置超时或取消句柄时，命令执行会同步等待 timer，因此 timer 后端必须能在调用线程阻塞时
+独立推进。Tokio timer 不应依赖仅由同一调用线程驱动的 current-thread runtime。
+
+## 取消
+
+`CommandCancellation` 是供已经拥有关闭或终端信号策略的应用使用的一次性句柄。将其 clone
+后配置给 runner，再从该策略中调用 `cancel()`。runner 会终止受管进程树，并以
+`CommandError::Cancelled` 返回保留输出。本 crate 刻意不安装全局信号处理器。
+
+即使调用 `without_timeout()`，配置取消句柄也会启用进程树管理。支持取消的等待会轮询所配置的
+timer；请选择能独立于调用线程持续推进的 timer 后端。
 
 ## 大输出
 
@@ -57,7 +67,7 @@ timer 不应依赖仅由同一调用线程驱动的 current-thread runtime。
 use qubit_command::{Command, CommandRunner};
 
 let output = CommandRunner::new()
-    .max_output_bytes(64 * 1024)
+    .bounded_output(64 * 1024)
     .tee_stdout_to_file("stdout.log")
     .tee_stderr_to_file("stderr.log")
     .run(Command::new("cargo").arg("test"))?;
@@ -68,8 +78,10 @@ if output.stdout_truncated() {
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-默认情况下，截断只通过 `CommandOutput` 报告，成功命令仍返回 `Ok`。如果调用方不能
-接受不完整的内存输出，可启用 `fail_on_output_truncation(true)`：
+默认情况下，截断只通过 `CommandOutput` 报告，成功命令仍返回 `Ok`。
+`bounded_output(max_bytes)` 是安全的显式预设：它限制两个流并拒绝不完整的内存输出。
+需要分别控制策略时，可组合 `max_output_bytes(max_bytes)` 与
+`fail_on_output_truncation(true)`：
 
 ```rust
 use qubit_command::{Command, CommandRunner};
@@ -83,7 +95,7 @@ assert!(!output.stdout_truncated());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-即使保留输出发生截断，非预期退出或超时仍是优先错误。这三类错误都可以通过
+即使保留输出发生截断，非预期退出、超时或取消仍是优先错误。这四类错误都可以通过
 `CommandError::output()` 取得保留输出。
 
 ## 快速开始
@@ -194,6 +206,9 @@ Runner 策略只影响 runner 日志和 `CommandError::command()`。
 `CommandOutput` 中，可改用 `stdout()` / `stderr()` 取得保留的原始字节并自行处理。
 配置捕获上限时，若截断位置恰好落在多字节 UTF-8 序列中间，即使进程的完整输出本身
 是有效 UTF-8，严格解码也可能失败。
+
+不再需要其余元数据时，可以通过 `into_stdout()` 和 `into_stderr()` 无复制地取走保留字节；
+同样，`CommandError::into_output()` 可以从错误中取走保留输出。
 
 ```rust
 use qubit_command::{Command, CommandRunner};

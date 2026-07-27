@@ -21,8 +21,10 @@ clear error values.
 - Explicit shell command support for cases that require shell parsing
 - Configurable timeout, working directory, stdin, environment variables, and
   success exit codes
-- Process-tree termination on timeout using Unix process groups and Windows Job
-  Objects
+- Explicit one-shot cancellation handles for applications that manage terminal
+  signals or shutdown requests
+- Process-tree termination on timeout or cancellation using Unix process groups
+  and Windows Job Objects
 - UTF-8 stdout and stderr text accessors, with raw byte accessors for binary
   output
 - Optional per-stream capture limits plus streaming tee files for large output
@@ -47,19 +49,34 @@ an observed child exit, output collection remains bounded by the same timeout.
 Reaching the timeout starts process-tree termination and cleanup; it is not a
 hard upper bound on when `run()` returns. Platform termination and I/O helper
 cleanup can take additional time. A descendant that escapes the managed Unix
-process group or Windows Job Object while retaining an inherited output pipe
+process group or Windows Job Object while retaining an inherited I/O pipe
 can delay return until that pipe closes.
 
-When a timeout is configured, the runner attempts to terminate the process tree:
-Unix commands are spawned in a new process group and Windows commands are spawned
-in a Job Object.
+When a timeout or cancellation handle is configured, the runner attempts to
+terminate the process tree: Unix commands are spawned in a new process group
+and Windows commands are spawned in a Job Object.
 
 Timeout measurement and sleeping use an injectable `qubit-clock` timer. This
 lets tests drive timeout behavior with a manual monotonic clock. Without a
-timeout, the runner waits directly for process completion instead of polling.
-Because command execution waits on the timer synchronously, the timer backend
-must keep progressing independently of the caller thread. A Tokio timer must
-not rely on a current-thread runtime that is driven only by that same thread.
+timeout and without a cancellation handle, the runner waits directly for
+process completion instead of polling. Because command execution waits on the
+timer synchronously whenever timeout or cancellation is configured, the timer
+backend must keep progressing independently of the caller thread. A Tokio timer
+must not rely on a current-thread runtime that is driven only by that same
+thread.
+
+## Cancellation
+
+`CommandCancellation` is a one-shot handle for applications that already own
+their shutdown or terminal-signal policy. Clone it into a runner, then call
+`cancel()` from that policy. The runner terminates its managed process tree and
+returns `CommandError::Cancelled` with retained output. The crate deliberately
+does not install a global signal handler.
+
+Configuring cancellation also enables process-tree management for a runner that
+uses `without_timeout()`. Cancellation-aware waiting polls the configured timer;
+choose a timer backend that keeps progressing independently of the calling
+thread.
 
 ## Large Output
 
@@ -70,7 +87,7 @@ commands that can emit large logs, configure capture limits and tee files:
 use qubit_command::{Command, CommandRunner};
 
 let output = CommandRunner::new()
-    .max_output_bytes(64 * 1024)
+    .bounded_output(64 * 1024)
     .tee_stdout_to_file("stdout.log")
     .tee_stderr_to_file("stderr.log")
     .run(Command::new("cargo").arg("test"))?;
@@ -82,8 +99,10 @@ if output.stdout_truncated() {
 ```
 
 By default, truncation is reported through `CommandOutput` and the successful
-command still returns `Ok`. Enable `fail_on_output_truncation(true)` when a
-caller must reject partial in-memory output:
+command still returns `Ok`. `bounded_output(max_bytes)` is the safe opt-in
+preset: it limits both streams and rejects partial in-memory output. Use the
+separate `max_output_bytes(max_bytes)` and `fail_on_output_truncation(true)`
+methods when those policies must be controlled independently:
 
 ```rust
 use qubit_command::{Command, CommandRunner};
@@ -97,9 +116,9 @@ assert!(!output.stdout_truncated());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-An unexpected exit or timeout remains the primary error even when its retained
-output is truncated. All three error kinds expose retained output through
-`CommandError::output()`.
+An unexpected exit, timeout, or cancellation remains the primary error even
+when its retained output is truncated. All four error kinds expose retained
+output through `CommandError::output()`.
 
 ## Quick Start
 
@@ -217,6 +236,10 @@ still stored on the returned `CommandOutput`; use `stdout()` / `stderr()` to rea
 the retained raw output and decode or handle it yourself. When a capture limit
 truncates a stream in the middle of a multi-byte sequence, strict decoding can
 fail even if the complete process output was valid UTF-8.
+
+When the remaining metadata is no longer needed, `into_stdout()` and
+`into_stderr()` move retained bytes out without copying. Likewise,
+`CommandError::into_output()` moves retained output out of an error.
 
 ```rust
 use qubit_command::{Command, CommandRunner};

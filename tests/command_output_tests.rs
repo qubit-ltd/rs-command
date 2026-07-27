@@ -46,6 +46,21 @@ fn test_command_output_stderr_returns_bytes_and_text() {
 }
 
 #[test]
+fn test_command_output_consuming_stream_accessors_preserve_bytes() {
+    let stdout = CommandRunner::new()
+        .run(Command::shell("printf stdout"))
+        .expect("command should run successfully")
+        .into_stdout();
+    let stderr = CommandRunner::new()
+        .run(Command::shell("printf stderr >&2"))
+        .expect("command should run successfully")
+        .into_stderr();
+
+    assert_eq!(stdout, b"stdout");
+    assert_eq!(stderr, b"stderr");
+}
+
+#[test]
 fn test_command_output_rejects_invalid_utf8_for_strict_text() {
     let output = CommandRunner::new()
         .run(Command::shell("printf '\\377'; printf '\\377' >&2"))
