@@ -6,29 +6,15 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 use std::{
-    ffi::{
-        OsStr,
-        OsString,
-    },
+    ffi::{OsStr, OsString},
     fmt,
-    path::{
-        Path,
-        PathBuf,
-    },
+    path::{Path, PathBuf},
 };
 
 use qubit_redact::{
-    ArgvRedactor,
-    EnvRedactor,
-    LogOutputLimit,
-    LogSafeText,
-    RedactionPolicy,
-    Redactor,
-    Sensitivity,
-    argv::{
-        ArgvItem,
-        RedactedArgv,
-    },
+    ArgvRedactor, DiagnosticInputBudget, EnvRedactor, LogOutputLimit, LogSafeText, RedactionPolicy,
+    Redactor, Sensitivity,
+    argv::{ArgvItem, RedactedArgv},
 };
 
 use crate::command_argument::CommandArgument;
@@ -558,13 +544,17 @@ impl Command {
         let redactor = Redactor::new(policy.clone());
         let argv_redactor = ArgvRedactor::new(redactor.clone());
         let env_redactor = EnvRedactor::new(redactor);
-        let argv = self.redacted_argv(&argv_redactor);
         let budget = policy.diagnostic_budget();
+        let mut input_budget = budget.input_budget();
+        let argv = self.redacted_argv_with_input_budget(&argv_redactor, &mut input_budget);
         let text = if self.envs.is_empty() && self.removed_envs.is_empty() {
             argv.to_string()
         } else {
-            let env = self.redacted_environment_assignments(&env_redactor);
-            let unset = self.removed_environment_names(budget);
+            let env = self.redacted_environment_assignments_with_input_budget(
+                &env_redactor,
+                &mut input_budget,
+            );
+            let unset = self.removed_environment_names_with_input_budget(&mut input_budget);
             format!("Command {{ env: {env}, unset: {unset:?}, argv: {argv} }}")
         };
         let limit = LogOutputLimit::new(budget.max_output_bytes())
@@ -590,6 +580,25 @@ impl Command {
         redactor.redact_heuristically(self.argv_for_display())
     }
 
+    /// Builds redacted argv tokens with shared source-byte accounting.
+    ///
+    /// # Parameters
+    ///
+    /// * `redactor` - Immutable adapter used for argv redaction.
+    /// * `input_budget` - Shared source-byte accounting for this diagnostic.
+    ///
+    /// # Returns
+    ///
+    /// Redacted argv tokens that consume from `input_budget` before inspecting
+    /// source values.
+    fn redacted_argv_with_input_budget(
+        &self,
+        redactor: &ArgvRedactor,
+        input_budget: &mut DiagnosticInputBudget,
+    ) -> RedactedArgv {
+        redactor.redact_heuristically_with_input_budget(self.argv_for_display(), input_budget)
+    }
+
     /// Builds argv tokens with opaque shell payloads hidden.
     ///
     /// # Returns
@@ -602,10 +611,7 @@ impl Command {
         argv.push(ArgvItem::plain(self.program.as_os_str()));
         for (index, arg) in self.args.iter().enumerate() {
             if Some(index) == shell_payload_index {
-                argv.push(ArgvItem::sensitive(
-                    arg.value(),
-                    Sensitivity::Secret,
-                ));
+                argv.push(ArgvItem::sensitive(arg.value(), Sensitivity::Secret));
             } else if let Some(sensitivity) = arg.sensitivity() {
                 argv.push(ArgvItem::sensitive(arg.value(), sensitivity));
             } else {
@@ -626,16 +632,13 @@ impl Command {
             return None;
         }
         let first_arg = self.args.first()?.value();
-        if self.program.as_os_str() == OsStr::new("sh")
-            && first_arg == OsStr::new("-c")
-        {
+        if self.program.as_os_str() == OsStr::new("sh") && first_arg == OsStr::new("-c") {
             return Some(1);
         }
 
         let program = self.program.to_string_lossy();
         let first_arg = first_arg.to_string_lossy();
-        if (program.eq_ignore_ascii_case("cmd")
-            || program.eq_ignore_ascii_case("cmd.exe"))
+        if (program.eq_ignore_ascii_case("cmd") || program.eq_ignore_ascii_case("cmd.exe"))
             && first_arg.eq_ignore_ascii_case("/C")
         {
             return Some(1);
@@ -660,6 +663,30 @@ impl Command {
         )
     }
 
+    /// Builds redacted environment assignments with shared source-byte accounting.
+    ///
+    /// # Parameters
+    ///
+    /// * `redactor` - Immutable adapter used to classify and redact values.
+    /// * `input_budget` - Shared source-byte accounting for this diagnostic.
+    ///
+    /// # Returns
+    ///
+    /// Redacted `KEY=value` entries that consume from `input_budget` before
+    /// inspecting source values.
+    fn redacted_environment_assignments_with_input_budget(
+        &self,
+        redactor: &EnvRedactor,
+        input_budget: &mut DiagnosticInputBudget,
+    ) -> LogSafeText<'static> {
+        redactor.redact_os_pairs_with_input_budget(
+            self.envs
+                .iter()
+                .map(|(key, value)| (key.as_os_str(), value.as_os_str())),
+            input_budget,
+        )
+    }
+
     /// Builds display names for removed environment variables.
     ///
     /// # Returns
@@ -667,15 +694,32 @@ impl Command {
     /// Environment variable names rendered lossily for diagnostics.
     #[must_use]
     fn removed_environment_names(&self, budget: qubit_redact::DiagnosticBudget) -> Vec<String> {
-        let mut remaining_input_bytes = budget.max_input_bytes();
+        let mut input_budget = budget.input_budget();
+        self.removed_environment_names_with_input_budget(&mut input_budget)
+    }
+
+    /// Builds removed environment-variable names with shared source-byte accounting.
+    ///
+    /// # Parameters
+    ///
+    /// * `input_budget` - Shared source-byte accounting for this diagnostic.
+    ///
+    /// # Returns
+    ///
+    /// Lossy environment names that consume from `input_budget` before each
+    /// name is inspected.
+    #[must_use]
+    fn removed_environment_names_with_input_budget(
+        &self,
+        input_budget: &mut DiagnosticInputBudget,
+    ) -> Vec<String> {
         let mut names = Vec::new();
         for key in &self.removed_envs {
             let byte_len = key.as_encoded_bytes().len();
-            if byte_len > remaining_input_bytes {
+            if !input_budget.reserve(byte_len) {
                 names.push("<truncated>".to_owned());
                 break;
             }
-            remaining_input_bytes -= byte_len;
             names.push(key.to_string_lossy().into_owned());
         }
         names
