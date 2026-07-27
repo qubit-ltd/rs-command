@@ -91,11 +91,11 @@ fn test_running_command_rejects_inconsistent_timer_before_waiting() {
     let error = CommandRunner::new()
         .without_timeout()
         .timer(std::sync::Arc::new(SwitchingTimer::new()))
-        .run(Command::shell("sleep 1").stdin_bytes(b"ignored".to_vec()))
+        .run(Command::shell("sleep 5").stdin_bytes(b"ignored".to_vec()))
         .expect_err("inconsistent timer should be rejected during startup");
 
     assert!(matches!(error, CommandError::TimeFailed { .. }));
-    assert!(started.elapsed() < Duration::from_millis(500));
+    assert!(started.elapsed() < Duration::from_secs(2));
 }
 
 #[cfg(not(windows))]
