@@ -557,8 +557,7 @@ impl Command {
             let unset = self.removed_environment_names_with_input_budget(&mut input_budget);
             format!("Command {{ env: {env}, unset: {unset:?}, argv: {argv} }}")
         };
-        let limit = LogOutputLimit::new(budget.max_output_bytes())
-            .expect("diagnostic budgets always satisfy the log output minimum");
+        let limit = LogOutputLimit::from(budget);
         Redactor::new(policy.clone())
             .redact("command_diagnostic", &text)
             .escape_for_log()
