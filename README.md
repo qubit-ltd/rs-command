@@ -140,6 +140,11 @@ assert_eq!(output.stdout_text()?, "HELLO");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+Structured arguments prevent shell parsing, but the target program still
+interprets its own options. When a path or other value may start with `-`, use
+that program's supported end-of-options marker (commonly `--`) or otherwise
+follow its documented argument rules.
+
 ## Redacted Diagnostics
 
 Command strings used in runner logs, `CommandError::command()`, and

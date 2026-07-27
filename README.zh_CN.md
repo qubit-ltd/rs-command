@@ -125,6 +125,10 @@ assert_eq!(output.stdout_text()?, "HELLO");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+结构化参数会避免 shell 解析，但目标程序仍会按照自己的规则解析选项。当路径或其他值可能
+以 `-` 开头时，应使用该程序支持的选项终止符（通常是 `--`），或遵循其文档规定的参数
+传递方式。
+
 ## 诊断脱敏
 
 Runner 日志、`CommandError::command()` 和 `Command` 的 `Debug` 输出都会通过
