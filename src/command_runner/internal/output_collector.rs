@@ -16,6 +16,8 @@ use std::{
     time::Duration,
 };
 
+use qubit_clock::TimeError;
+
 use super::{
     captured_output::CapturedOutput,
     output_capture_error::OutputCaptureError,
@@ -134,7 +136,8 @@ pub(in crate::command_runner) fn read_output(
 ///
 /// * `command` - Redacted command text used in errors.
 /// * `status` - Child exit status.
-/// * `elapsed` - Observed command duration.
+/// * `elapsed` - Callback that samples command duration after every helper has
+///   been joined.
 /// * `stdout_reader` - Helper draining stdout.
 /// * `stderr_reader` - Helper draining stderr.
 /// * `stdin_writer` - Optional helper writing stdin.
@@ -145,23 +148,32 @@ pub(in crate::command_runner) fn read_output(
 ///
 /// # Errors
 ///
-/// Returns the first stdout, stderr, or stdin helper failure in that order.
-pub(in crate::command_runner) fn collect_output(
+/// Returns a time-handling failure after joining every helper, otherwise the
+/// first stdout, stderr, or stdin helper failure in that order.
+pub(in crate::command_runner) fn collect_output<F>(
     command: &str,
     status: ExitStatus,
-    elapsed: Duration,
+    elapsed: F,
     stdout_reader: OutputReader,
     stderr_reader: OutputReader,
     stdin_writer: StdinWriter,
-) -> Result<CommandOutput, CommandError> {
+) -> Result<CommandOutput, CommandError>
+where
+    F: FnOnce() -> Result<Duration, TimeError>,
+{
     let stdout_result =
         join_output_reader(command, OutputStream::Stdout, stdout_reader);
     let stderr_result =
         join_output_reader(command, OutputStream::Stderr, stderr_reader);
     let stdin_result = join_stdin_writer(command, stdin_writer);
+    let elapsed_result = elapsed();
 
-    match (stdout_result, stderr_result, stdin_result) {
-        (Ok(stdout), Ok(stderr), Ok(())) => Ok(CommandOutput::new(
+    match (elapsed_result, stdout_result, stderr_result, stdin_result) {
+        (Err(source), _, _, _) => Err(CommandError::TimeFailed {
+            command: command.to_owned(),
+            source,
+        }),
+        (Ok(elapsed), Ok(stdout), Ok(stderr), Ok(())) => Ok(CommandOutput::new(
             status,
             stdout.bytes,
             stderr.bytes,
@@ -169,9 +181,9 @@ pub(in crate::command_runner) fn collect_output(
             stderr.truncated,
             elapsed,
         )),
-        (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
-            Err(error)
-        }
+        (Ok(_), Err(error), _, _)
+        | (Ok(_), _, Err(error), _)
+        | (Ok(_), _, _, Err(error)) => Err(error),
     }
 }
 

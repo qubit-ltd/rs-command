@@ -218,9 +218,10 @@ pub enum CommandError {
         output: Box<CommandOutput>,
     },
 
-    /// The command completed with an exit code not configured as successful.
+    /// The command completed with a status not configured as successful.
     #[error(
-        "command `{command}` exited with code {exit_code:?}; expected one of {expected:?}"
+        "command `{command}` exited with {}; expected one of {expected:?}",
+        unexpected_exit_detail(.exit_code, .output.as_ref())
     )]
     UnexpectedExit {
         /// Human-readable command representation.
@@ -232,6 +233,28 @@ pub enum CommandError {
         /// Captured output from the failed command.
         output: Box<CommandOutput>,
     },
+}
+
+/// Formats the observed termination detail for an unexpected command exit.
+///
+/// # Parameters
+///
+/// * `exit_code` - Numeric exit code reported by the process, if available.
+/// * `output` - Captured command status and output metadata.
+///
+/// # Returns
+///
+/// A diagnostic that reports the Unix termination signal when available, or
+/// preserves the numeric exit-code representation on other platforms.
+fn unexpected_exit_detail(
+    exit_code: &Option<i32>,
+    output: &CommandOutput,
+) -> String {
+    #[cfg(unix)]
+    if let Some(signal) = output.termination_signal() {
+        return format!("signal {signal}");
+    }
+    format!("code {exit_code:?}")
 }
 
 impl fmt::Debug for CommandError {

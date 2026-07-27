@@ -225,6 +225,16 @@ fn test_command_error_accessors_for_errors_with_output() {
 }
 
 #[test]
+fn test_command_error_reports_unexpected_exit_signal() {
+    let error = CommandRunner::new()
+        .run(Command::shell("kill -TERM $$"))
+        .expect_err("signal-terminated command should be rejected");
+
+    assert!(matches!(error, CommandError::UnexpectedExit { .. }));
+    assert!(error.to_string().contains("signal 15"));
+}
+
+#[test]
 fn test_command_error_debug_does_not_expose_captured_streams() {
     let error = CommandRunner::new()
         .run(Command::shell(

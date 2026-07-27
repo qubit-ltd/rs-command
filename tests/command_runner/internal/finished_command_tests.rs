@@ -22,3 +22,14 @@ fn test_finished_command_preserves_elapsed_time() {
 
     assert!(output.elapsed() >= Duration::ZERO);
 }
+
+#[cfg(not(windows))]
+#[test]
+fn test_finished_command_elapsed_includes_inherited_output_drain() {
+    let output = CommandRunner::new()
+        .without_timeout()
+        .run(Command::shell("sleep 1 &"))
+        .expect("background child should finish successfully");
+
+    assert!(output.elapsed() >= Duration::from_millis(750));
+}
