@@ -38,7 +38,7 @@ harness = false
 log = "0.4"
 process-wrap = { version = "9.1", default-features = false, features = ["std", "process-group", "job-object"] }
 qubit-clock = "0.12"
-qubit-redact = { version = "0.3", path = "../rs-redact", default-features = false }
+qubit-redact = { version = "0.3", default-features = false }
 same-file = "1.0"
 thiserror = "2.0"
 
