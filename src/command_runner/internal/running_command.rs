@@ -396,7 +396,7 @@ impl RunningCommand {
             ..
         } = self;
         let output = io.collect(&command_text, status, move || {
-            timer.now().duration_since(started_at)
+            timer.clock().now().duration_since(started_at)
         })?;
         Ok(FinishedCommand {
             command_text,
@@ -415,7 +415,7 @@ impl RunningCommand {
     /// Returns [`TimeError`] if the timer violates the retained clock domain or
     /// monotonic ordering.
     fn elapsed(&self) -> Result<Duration, TimeError> {
-        self.timer.now().duration_since(self.started_at)
+        self.timer.clock().now().duration_since(self.started_at)
     }
 
     /// Terminates the managed process tree and waits for the direct child.

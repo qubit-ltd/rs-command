@@ -339,31 +339,10 @@ dependencies = [
 
 [[package]]
 name = "qubit-clock"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "936d7d12df99b080bccf6999a2e16d5ef44874d897a18b42a85551861e7f393e"
+version = "0.12.0"
 dependencies = [
- "qubit-collections 0.1.0",
+ "qubit-collections",
  "thiserror",
-]
-
-[[package]]
-name = "qubit-clock"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3725afc6c33cda605769dd735d6e2c7b5278f08e071848f1b1bf30519aaefd2e"
-dependencies = [
- "qubit-collections 0.2.0",
- "thiserror",
-]
-
-[[package]]
-name = "qubit-collections"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e52fb7b0bbadb0b5ab1227d527c8ab46922338fbc9cdd71480dbdb83cfd472af"
-dependencies = [
- "hashbrown",
 ]
 
 [[package]]
@@ -383,8 +362,7 @@ dependencies = [
  "libc",
  "log",
  "process-wrap",
- "qubit-clock 0.10.0",
- "qubit-clock 0.11.0",
+ "qubit-clock",
  "qubit-redact",
  "same-file",
  "tempfile",
