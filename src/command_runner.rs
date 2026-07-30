@@ -778,7 +778,7 @@ impl CommandRunner {
             };
         let mut starting_command =
             StartingCommand::new(&command_text, child_process);
-        let started_at = self.timer.now();
+        let started_at = self.timer.clock().now();
 
         let stdin_writer = write_stdin_bytes(
             &command_text,
@@ -833,7 +833,8 @@ impl CommandRunner {
             source,
         })?;
         starting_command.set_stderr_reader(stderr_reader);
-        if let Err(source) = self.timer.now().duration_since(started_at) {
+        if let Err(source) = self.timer.clock().now().duration_since(started_at)
+        {
             return Err(CommandError::TimeFailed {
                 command: command_text.clone(),
                 source,
