@@ -138,8 +138,7 @@ mod unix {
 
     #[test]
     fn test_runner_accepts_a_complete_diagnostic_redaction_policy() {
-        let policy = RedactionPolicy::builder()
-            .load_default()
+        let policy = RedactionPolicy::builder_from_default()
             .raise("tenant_option", Sensitivity::Secret)
             .allow_exact("username")
             .build()
@@ -154,8 +153,7 @@ mod unix {
     fn test_command_runner_shares_configured_diagnostic_input_budget() {
         let budget = DiagnosticBudget::new(3, 128)
             .expect("the small diagnostic budget should be valid");
-        let policy = RedactionPolicy::builder()
-            .load_default()
+        let policy = RedactionPolicy::builder_from_default()
             .diagnostic_budget(budget)
             .build()
             .expect("the diagnostic redaction policy should be valid");
@@ -1136,8 +1134,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_error_redacts_configured_sensitive_field() {
-        let policy = RedactionPolicy::builder()
-            .load_default()
+        let policy = RedactionPolicy::builder_from_default()
             .raise("tenant_option", Sensitivity::Secret)
             .build()
             .expect("the diagnostic redaction policy should be valid");
@@ -1162,8 +1159,7 @@ mod unix {
     #[test]
     fn test_command_runner_error_redacts_multiple_configured_sensitive_fields()
     {
-        let policy = RedactionPolicy::builder()
-            .load_default()
+        let policy = RedactionPolicy::builder_from_default()
             .raise("tenant_option", Sensitivity::Secret)
             .raise("tenant_env", Sensitivity::Secret)
             .build()
@@ -1188,8 +1184,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_can_allow_exact_default_sensitive_fields() {
-        let policy = RedactionPolicy::builder()
-            .load_default()
+        let policy = RedactionPolicy::builder_from_default()
             .allow_exact("sig")
             .allow_exact("signature")
             .build()
@@ -1210,8 +1205,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_suffix_allow_wins_over_sensitive_suffix() {
-        let policy = RedactionPolicy::builder()
-            .load_default()
+        let policy = RedactionPolicy::builder_from_default()
             .allow_suffix("access_token")
             .build()
             .expect("the diagnostic redaction policy should be valid");

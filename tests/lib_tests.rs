@@ -23,8 +23,7 @@ use qubit_redact::{
 #[test]
 fn test_lib_exports_public_api() {
     let command = Command::new("printf").arg("hello");
-    let policy = RedactionPolicy::builder()
-        .load_default()
+    let policy = RedactionPolicy::builder_from_default()
         .raise("tenant_option", Sensitivity::Secret)
         .build()
         .expect("the diagnostic redaction policy should be valid");
