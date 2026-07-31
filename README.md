@@ -189,7 +189,7 @@ The example below requires a direct `qubit-redact = "0.3"` dependency because
 use qubit_command::{Command, CommandRunner};
 use qubit_redact::{RedactionPolicy, Sensitivity};
 
-let policy = RedactionPolicy::builder()
+let policy = RedactionPolicy::builder_from_default()
     .raise("tenant_option", Sensitivity::Secret)
     .allow_exact("username")
     .build()?;

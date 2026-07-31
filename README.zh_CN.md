@@ -163,7 +163,7 @@ Runner 日志、`CommandError::command()` 和 `Command` 的 `Debug` 输出都会
 use qubit_command::{Command, CommandRunner};
 use qubit_redact::{RedactionPolicy, Sensitivity};
 
-let policy = RedactionPolicy::builder()
+let policy = RedactionPolicy::builder_from_default()
     .raise("tenant_option", Sensitivity::Secret)
     .allow_exact("username")
     .build()?;
