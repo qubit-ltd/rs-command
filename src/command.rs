@@ -20,8 +20,8 @@ use std::{
 use qubit_redact::{
     ArgvRedactor,
     DiagnosticInputBudget,
+    DiagnosticLogBuilder,
     EnvRedactor,
-    LogOutputLimit,
     LogSafeText,
     RedactionPolicy,
     Redactor,
@@ -572,26 +572,34 @@ impl Command {
         let argv_redactor = ArgvRedactor::new(redactor.clone());
         let env_redactor = EnvRedactor::new(redactor);
         let budget = policy.diagnostic_budget();
-        let mut input_budget = budget.input_budget();
-        let argv = self
-            .redacted_argv_with_input_budget(&argv_redactor, &mut input_budget);
-        let text = if self.envs.is_empty() && self.removed_envs.is_empty() {
-            argv.to_string()
-        } else {
-            let env = self.redacted_environment_assignments_with_input_budget(
-                &env_redactor,
-                &mut input_budget,
+        let mut builder = DiagnosticLogBuilder::new(budget);
+        if self.envs.is_empty() && self.removed_envs.is_empty() {
+            let argv = self.redacted_argv_with_input_budget(
+                &argv_redactor,
+                builder.input_budget(),
             );
-            let unset = self
-                .removed_environment_names_with_input_budget(&mut input_budget);
-            format!("Command {{ env: {env}, unset: {unset:?}, argv: {argv} }}")
-        };
-        let limit = LogOutputLimit::from(budget);
-        Redactor::new(policy.clone())
-            .redact("command_diagnostic", &text)
-            .escape_for_log()
-            .with_output_limit(limit)
-            .to_string()
+            let _ = builder.push_fmt(format_args!("{argv}"));
+        } else {
+            let (argv, env, unset) = {
+                let input_budget = builder.input_budget();
+                let argv = self.redacted_argv_with_input_budget(
+                    &argv_redactor,
+                    input_budget,
+                );
+                let env = self
+                    .redacted_environment_assignments_with_input_budget(
+                        &env_redactor,
+                        input_budget,
+                    );
+                let unset = self
+                    .removed_environment_names_with_input_budget(input_budget);
+                (argv, env, unset)
+            };
+            let _ = builder.push_fmt(format_args!(
+                "Command {{ env: {env}, unset: {unset:?}, argv: {argv} }}"
+            ));
+        }
+        builder.finish().into_owned()
     }
 
     /// Builds redacted argv tokens for diagnostics.
