@@ -169,6 +169,27 @@ mod unix {
     }
 
     #[test]
+    fn test_command_runner_applies_one_output_budget_to_full_diagnostic() {
+        let budget = DiagnosticBudget::new(512, 48)
+            .expect("the small diagnostic budget should be valid");
+        let policy = RedactionPolicy::builder_from_default()
+            .diagnostic_budget(budget)
+            .build()
+            .expect("the diagnostic redaction policy should be valid");
+        let error =
+            CommandRunner::new()
+                .diagnostic_redaction_policy(policy)
+                .run(Command::new("xxx").env("VISIBLE", "value").arg(
+                    "argument-that-forces-the-full-diagnostic-to-truncate",
+                ))
+                .expect_err("the missing executable should fail to spawn");
+
+        assert!(error.command().len() <= budget.max_output_bytes());
+        assert!(error.command().ends_with("<truncated>"));
+        assert!(!error.command().contains("argument-that-forces"));
+    }
+
+    #[test]
     fn test_command_runner_debug_describes_configuration() {
         let debug = format!("{:?}", CommandRunner::new());
 
