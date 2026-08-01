@@ -140,7 +140,7 @@ mod unix {
     fn test_runner_accepts_a_complete_diagnostic_redaction_policy() {
         let policy = RedactionPolicy::builder_from_default()
             .raise("tenant_option", Sensitivity::Secret)
-            .allow_exact("username")
+            .allow_canonical_exact("username")
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let runner =
@@ -1206,8 +1206,8 @@ mod unix {
     #[test]
     fn test_command_runner_can_allow_exact_default_sensitive_fields() {
         let policy = RedactionPolicy::builder_from_default()
-            .allow_exact("sig")
-            .allow_exact("signature")
+            .allow_canonical_exact("sig")
+            .allow_canonical_exact("signature")
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let error = CommandRunner::new()
