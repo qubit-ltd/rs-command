@@ -156,7 +156,7 @@ Runner 日志、`CommandError::command()` 和 `Command` 的 `Debug` 输出都会
 
 当默认策略不够时，可以向 runner 注入完整的不可变策略：
 
-下面的示例需要直接声明 `qubit-redact = "0.3"` 依赖，因为 `qubit-command` 不会
+下面的示例需要直接声明 `qubit-redact = "0.4"` 依赖，因为 `qubit-command` 不会
 重导出属于 `qubit-redact` 的类型。
 
 ```rust
