@@ -182,7 +182,7 @@ payloads are treated as opaque secrets and are never parsed.
 
 Inject a complete immutable policy when the defaults are not enough:
 
-The example below requires a direct `qubit-redact = "0.3"` dependency because
+The example below requires a direct `qubit-redact = "0.4"` dependency because
 `qubit-command` does not re-export types owned by `qubit-redact`.
 
 ```rust
