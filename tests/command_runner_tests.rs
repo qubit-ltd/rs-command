@@ -1204,7 +1204,8 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_can_allow_exact_default_sensitive_fields() {
+    fn test_command_runner_floor_overrides_exact_allow_for_default_sensitive_fields()
+     {
         let policy = RedactionPolicy::builder_from_default()
             .allow_canonical_exact("sig")
             .allow_canonical_exact("signature")
@@ -1220,12 +1221,13 @@ mod unix {
             )
             .expect_err("missing executable should fail to spawn");
 
-        assert!(error.command().contains("known-false-positive"));
-        assert!(error.command().contains("known-env-false-positive"));
+        assert!(!error.command().contains("known-false-positive"));
+        assert!(!error.command().contains("known-env-false-positive"));
     }
 
     #[test]
-    fn test_command_runner_suffix_allow_wins_over_sensitive_suffix() {
+    fn test_command_runner_floor_overrides_suffix_allow_for_default_sensitive_fields()
+     {
         let policy = RedactionPolicy::builder_from_default()
             .allow_suffix("access_token")
             .build()
@@ -1240,8 +1242,8 @@ mod unix {
             )
             .expect_err("missing executable should fail to spawn");
 
-        assert!(error.command().contains("known-argv-false-positive"));
-        assert!(error.command().contains("known-env-false-positive"));
+        assert!(!error.command().contains("known-argv-false-positive"));
+        assert!(!error.command().contains("known-env-false-positive"));
     }
 }
 
