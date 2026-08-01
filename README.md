@@ -191,7 +191,7 @@ use qubit_redact::{RedactionPolicy, Sensitivity};
 
 let policy = RedactionPolicy::builder_from_default()
     .raise("tenant_option", Sensitivity::Secret)
-    .allow_exact("username")
+    .allow_canonical_exact("username")
     .build()?;
 let error = CommandRunner::new()
     .diagnostic_redaction_policy(policy)
