@@ -473,8 +473,8 @@ impl CommandRunner {
     ///
     /// The policy affects runner lifecycle logs and
     /// [`CommandError::command`]. Standalone [`Command`](crate::Command)
-    /// [`Debug`](std::fmt::Debug) output uses the global default policy because
-    /// it has no runner context.
+    /// [`Debug`](std::fmt::Debug) output uses the process-wide global redaction
+    /// configuration because it has no runner context.
     ///
     /// # Parameters
     ///

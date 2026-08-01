@@ -588,7 +588,7 @@ impl Command {
         };
         let limit = LogOutputLimit::from(budget);
         Redactor::new(policy.clone())
-            .redact("command_diagnostic", &text)
+            .redact_field("command_diagnostic", &text)
             .escape_for_log()
             .with_output_limit(limit)
             .to_string()
