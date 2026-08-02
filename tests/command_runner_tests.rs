@@ -9,16 +9,31 @@
 
 use std::{
     fs,
-    time::{Duration, Instant},
+    time::{
+        Duration,
+        Instant,
+    },
 };
 
 #[cfg(not(windows))]
 use qubit_command::OutputStream;
-use qubit_command::{Command, CommandCancellation, CommandError, CommandRunner};
+use qubit_command::{
+    Command,
+    CommandCancellation,
+    CommandError,
+    CommandRunner,
+};
 #[cfg(not(windows))]
-use qubit_command::{DEFAULT_COMMAND_TIMEOUT, DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM};
+use qubit_command::{
+    DEFAULT_COMMAND_TIMEOUT,
+    DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
+};
 #[cfg(not(windows))]
-use qubit_redact::{DiagnosticBudget, RedactionPolicy, Sensitivity};
+use qubit_redact::{
+    DiagnosticBudget,
+    RedactionPolicy,
+    Sensitivity,
+};
 
 mod command_runner;
 mod support;
@@ -45,10 +60,24 @@ fn test_runner_pre_cancelled_command_does_not_prepare_output_file() {
 #[cfg(not(windows))]
 mod unix {
     use super::{
-        Command, CommandCancellation, CommandError, CommandRunner, DEFAULT_COMMAND_TIMEOUT,
-        DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM, DiagnosticBudget, Duration, Instant, LocalTempDir,
-        OutputStream, RedactionPolicy, Sensitivity, fs,
-        support::{captured_log_records_containing, initialize_captured_logger},
+        Command,
+        CommandCancellation,
+        CommandError,
+        CommandRunner,
+        DEFAULT_COMMAND_TIMEOUT,
+        DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
+        DiagnosticBudget,
+        Duration,
+        Instant,
+        LocalTempDir,
+        OutputStream,
+        RedactionPolicy,
+        Sensitivity,
+        fs,
+        support::{
+            captured_log_records_containing,
+            initialize_captured_logger,
+        },
     };
 
     #[test]
@@ -97,7 +126,9 @@ mod unix {
 
         let output = runner
             .run(Command::shell("head -c 1048577 /dev/zero"))
-            .expect("explicitly unbounded output should retain the full stream");
+            .expect(
+                "explicitly unbounded output should retain the full stream",
+            );
         assert_eq!(
             output.stdout().len(),
             DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM + 1,
@@ -115,15 +146,16 @@ mod unix {
             .expect("the test policy field must be valid")
             .build()
             .expect("the diagnostic redaction policy should be valid");
-        let runner = CommandRunner::new().diagnostic_redaction_policy(policy.clone());
+        let runner =
+            CommandRunner::new().diagnostic_redaction_policy(policy.clone());
 
         assert_eq!(runner.configured_diagnostic_redaction_policy(), &policy,);
     }
 
     #[test]
     fn test_command_runner_shares_configured_diagnostic_input_budget() {
-        let budget =
-            DiagnosticBudget::new(3, 128).expect("the small diagnostic budget should be valid");
+        let budget = DiagnosticBudget::new(3, 128)
+            .expect("the small diagnostic budget should be valid");
         let policy = RedactionPolicy::default()
             .to_builder()
             .diagnostic_budget(budget)
@@ -213,7 +245,9 @@ mod unix {
             .stdout_text()
             .expect("process groups should be valid UTF-8")
             .split_whitespace()
-            .map(|value| value.parse().expect("process group should be numeric"))
+            .map(|value| {
+                value.parse().expect("process group should be numeric")
+            })
             .collect();
 
         assert_eq!(process_groups.len(), 2);
@@ -320,7 +354,9 @@ mod unix {
                     .env_clear()
                     .env("QUBIT_COMMAND_TEST", "after-clear"),
             )
-            .expect("command should run with cleared environment plus explicit set");
+            .expect(
+                "command should run with cleared environment plus explicit set",
+            );
 
         assert_eq!(
             output.stdout_text().expect("stdout should be valid UTF-8"),
@@ -425,7 +461,10 @@ mod unix {
 
     #[test]
     fn test_runner_without_timeout_does_not_wait_on_injected_timer() {
-        use qubit_clock::{ManualMonotonicClock, MonotonicClock};
+        use qubit_clock::{
+            ManualMonotonicClock,
+            MonotonicClock,
+        };
 
         let clock = ManualMonotonicClock::new_shared();
         let runner = CommandRunner::new()
@@ -489,7 +528,9 @@ mod unix {
         let input = vec![b'x'; 1024 * 1024];
         let error = CommandRunner::new()
             .run(Command::shell("exit 7").stdin_bytes(input))
-            .expect_err("non-success exit should remain visible after stdin closes");
+            .expect_err(
+                "non-success exit should remain visible after stdin closes",
+            );
 
         match error {
             CommandError::UnexpectedExit {
@@ -509,7 +550,8 @@ mod unix {
         let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
             .expect("command test temp directory should be created");
         let path = temp_dir.path().join("stdin.txt");
-        fs::write(&path, b"stdin-file").expect("stdin fixture should be written");
+        fs::write(&path, b"stdin-file")
+            .expect("stdin fixture should be written");
 
         let output = CommandRunner::new()
             .run(Command::shell("cat").stdin_file(path.clone()))
@@ -559,7 +601,8 @@ mod unix {
 
     #[test]
     fn test_command_runner_output_limit_updates_configuration() {
-        let runner = CommandRunner::new().max_stdout_bytes(3).max_stderr_bytes(4);
+        let runner =
+            CommandRunner::new().max_stdout_bytes(3).max_stderr_bytes(4);
 
         assert_eq!(runner.configured_max_stdout_bytes(), Some(3));
         assert_eq!(runner.configured_max_stderr_bytes(), Some(4));
@@ -582,8 +625,14 @@ mod unix {
             .tee_stdout_to_file(stdout_path.clone())
             .tee_stderr_to_file(stderr_path.clone());
 
-        assert_eq!(runner.configured_stdout_file(), Some(stdout_path.as_path()));
-        assert_eq!(runner.configured_stderr_file(), Some(stderr_path.as_path()));
+        assert_eq!(
+            runner.configured_stdout_file(),
+            Some(stdout_path.as_path())
+        );
+        assert_eq!(
+            runner.configured_stderr_file(),
+            Some(stderr_path.as_path())
+        );
     }
 
     #[test]
@@ -707,7 +756,9 @@ mod unix {
             {
                 Ok(_) | Err(CommandError::TimedOut { .. }) => {}
                 Err(CommandError::KillFailed { source, .. }) => {
-                    panic!("an exited command must not report a kill failure: {source}");
+                    panic!(
+                        "an exited command must not report a kill failure: {source}"
+                    );
                 }
                 Err(other) => {
                     panic!("unexpected zero-timeout result: {other:?}");
@@ -718,13 +769,17 @@ mod unix {
 
     #[test]
     fn test_runner_timeout_uses_injected_manual_timer() {
-        use qubit_clock::{ManualMonotonicClock, MonotonicClock};
+        use qubit_clock::{
+            ManualMonotonicClock,
+            MonotonicClock,
+        };
 
         let clock = ManualMonotonicClock::new_shared();
         let runner = CommandRunner::new()
             .timeout(Duration::from_secs(30))
             .timer(clock.new_timer());
-        let worker = std::thread::spawn(move || runner.run(Command::shell("sleep 60")));
+        let worker =
+            std::thread::spawn(move || runner.run(Command::shell("sleep 60")));
 
         assert!(clock.wait_for_waiters(1, Duration::from_secs(2)));
         clock
@@ -739,7 +794,10 @@ mod unix {
 
     #[test]
     fn test_runner_timeout_accepts_child_that_exits_before_deadline() {
-        use qubit_clock::{ManualMonotonicClock, MonotonicClock};
+        use qubit_clock::{
+            ManualMonotonicClock,
+            MonotonicClock,
+        };
 
         let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
             .expect("command test temp directory should be created");
@@ -765,7 +823,8 @@ mod unix {
         });
 
         assert!(clock.wait_for_waiters(1, Duration::from_secs(2)));
-        fs::write(&signal_path, b"release").expect("signal file should release child command");
+        fs::write(&signal_path, b"release")
+            .expect("signal file should release child command");
         let completed_before_deadline = Instant::now() + Duration::from_secs(2);
         while !completion_path.exists() {
             assert!(
@@ -778,12 +837,17 @@ mod unix {
         clock.advance(timeout).expect("manual time should advance");
 
         let result = worker.join().expect("runner thread should not panic");
-        let _ = result.expect("a child that exits before the deadline should complete normally");
+        let _ = result.expect(
+            "a child that exits before the deadline should complete normally",
+        );
     }
 
     #[test]
     fn test_command_runner_timer_updates_configuration() {
-        use qubit_clock::{ManualMonotonicClock, MonotonicClock};
+        use qubit_clock::{
+            ManualMonotonicClock,
+            MonotonicClock,
+        };
 
         let clock = ManualMonotonicClock::new_shared();
         let runner = CommandRunner::new().timer(clock.new_timer());
@@ -810,12 +874,15 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_run_times_out_when_background_child_inherits_output() {
+    fn test_command_runner_run_times_out_when_background_child_inherits_output()
+    {
         let start = Instant::now();
         let error = CommandRunner::new()
             .timeout(Duration::from_millis(50))
             .run(Command::shell("sleep 2 &"))
-            .expect_err("background child with inherited output pipes should time out");
+            .expect_err(
+                "background child with inherited output pipes should time out",
+            );
 
         assert!(matches!(error, CommandError::TimedOut { .. }));
         assert!(
@@ -859,7 +926,8 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_bounded_output_limits_streams_and_rejects_truncation() {
+    fn test_command_runner_bounded_output_limits_streams_and_rejects_truncation()
+     {
         let runner = CommandRunner::new().bounded_output(3);
 
         assert_eq!(runner.configured_max_stdout_bytes(), Some(3));
@@ -974,7 +1042,10 @@ mod unix {
     #[test]
     fn test_command_runner_error_uses_argv_style_command_text() {
         let error = CommandRunner::new()
-            .run(Command::new("__qubit_command_missing_executable__").arg("two words"))
+            .run(
+                Command::new("__qubit_command_missing_executable__")
+                    .arg("two words"),
+            )
             .expect_err("missing executable should fail to spawn");
 
         assert_eq!(
@@ -1009,7 +1080,10 @@ mod unix {
     #[test]
     fn test_command_runner_error_redacts_sensitive_jvm_property() {
         let error = CommandRunner::new()
-            .run(Command::new("__qubit_command_missing_executable__").arg("-Dpassword=jvm-secret"))
+            .run(
+                Command::new("__qubit_command_missing_executable__")
+                    .arg("-Dpassword=jvm-secret"),
+            )
             .expect_err("missing executable should fail to spawn");
 
         assert_eq!(
@@ -1021,14 +1095,13 @@ mod unix {
 
     #[test]
     fn test_command_runner_error_masks_sensitive_option_after_double_dash() {
-        let error = CommandRunner::new()
-            .run(Command::new("__qubit_command_missing_executable__").args(&[
-                "--",
-                "child",
-                "--password",
-                "raw-secret",
-            ]))
-            .expect_err("missing executable should fail to spawn");
+        let error =
+            CommandRunner::new()
+                .run(
+                    Command::new("__qubit_command_missing_executable__")
+                        .args(&["--", "child", "--password", "raw-secret"]),
+                )
+                .expect_err("missing executable should fail to spawn");
 
         let display = error.to_string();
         let debug = format!("{error:?}");
@@ -1112,7 +1185,8 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_error_redacts_multiple_configured_sensitive_fields() {
+    fn test_command_runner_error_redacts_multiple_configured_sensitive_fields()
+    {
         let policy = RedactionPolicy::default()
             .to_builder()
             .raise("tenant_option", Sensitivity::Secret)
@@ -1140,7 +1214,8 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_floor_overrides_exact_allow_for_default_sensitive_fields() {
+    fn test_command_runner_floor_overrides_exact_allow_for_default_sensitive_fields()
+     {
         let policy = RedactionPolicy::default()
             .to_builder()
             .allow_canonical_exact("sig")
@@ -1164,7 +1239,8 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_floor_overrides_suffix_allow_for_default_sensitive_fields() {
+    fn test_command_runner_floor_overrides_suffix_allow_for_default_sensitive_fields()
+     {
         let policy = RedactionPolicy::default()
             .to_builder()
             .allow_suffix("access_token")
@@ -1191,7 +1267,13 @@ mod windows {
     use std::thread;
 
     use super::{
-        Command, CommandCancellation, CommandError, CommandRunner, Duration, Instant, LocalTempDir,
+        Command,
+        CommandCancellation,
+        CommandError,
+        CommandRunner,
+        Duration,
+        Instant,
+        LocalTempDir,
         fs,
     };
 
@@ -1215,7 +1297,9 @@ mod windows {
             .expect("Windows shell command should run successfully");
 
         assert_eq!(
-            trim_windows_line_endings(output.stdout_text().expect("stdout should be UTF-8")),
+            trim_windows_line_endings(
+                output.stdout_text().expect("stdout should be UTF-8")
+            ),
             "command-out",
         );
     }
@@ -1227,7 +1311,9 @@ mod windows {
             .expect("Windows shell command should run successfully");
 
         assert_eq!(
-            trim_windows_line_endings(output.stderr_text().expect("stderr should be UTF-8")),
+            trim_windows_line_endings(
+                output.stderr_text().expect("stderr should be UTF-8")
+            ),
             "command-error",
         );
     }
@@ -1269,12 +1355,15 @@ mod windows {
     }
 
     #[test]
-    fn test_command_runner_windows_times_out_when_background_child_inherits_output() {
+    fn test_command_runner_windows_times_out_when_background_child_inherits_output()
+     {
         let started = Instant::now();
         let error = CommandRunner::new()
             .timeout(Duration::from_millis(250))
             .run(Command::shell("start \"\" /B ping -n 6 127.0.0.1"))
-            .expect_err("background child with inherited output should time out");
+            .expect_err(
+                "background child with inherited output should time out",
+            );
 
         assert!(matches!(error, CommandError::TimedOut { .. }));
         assert!(
@@ -1299,8 +1388,11 @@ mod windows {
         assert!(output.stdout_truncated());
         assert_eq!(
             trim_windows_line_endings(
-                std::str::from_utf8(&fs::read(&stdout_path).expect("tee file should be readable"))
-                    .expect("tee file should contain UTF-8"),
+                std::str::from_utf8(
+                    &fs::read(&stdout_path)
+                        .expect("tee file should be readable")
+                )
+                .expect("tee file should contain UTF-8"),
             ),
             "abcdef",
         );
