@@ -6,30 +6,15 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 use std::{
-    ffi::{
-        OsStr,
-        OsString,
-    },
+    ffi::{OsStr, OsString},
     fmt,
-    path::{
-        Path,
-        PathBuf,
-    },
+    path::{Path, PathBuf},
 };
 
 use qubit_redact::{
-    ArgvRedactor,
-    DiagnosticInputBudget,
-    EnvRedactor,
-    LogOutputLimit,
-    LogSafeText,
-    RedactionPolicy,
-    Redactor,
-    Sensitivity,
-    argv::{
-        ArgvItem,
-        RedactedArgv,
-    },
+    ArgvRedactor, DiagnosticInputBudget, DiagnosticLogBuilder, EnvRedactor, LogOutputLimit,
+    LogSafeText, RedactionPolicy, Redactor, Sensitivity,
+    argv::{ArgvItem, RedactedArgv},
 };
 
 use crate::command_argument::CommandArgument;
@@ -102,10 +87,7 @@ impl fmt::Debug for Command {
             .field("clear_environment", &self.clear_environment)
             .field(
                 "env",
-                &format_args!(
-                    "{}",
-                    self.redacted_environment_assignments(&env_redactor)
-                ),
+                &format_args!("{}", self.redacted_environment_assignments(&env_redactor)),
             )
             .field(
                 "unset",
@@ -572,23 +554,32 @@ impl Command {
         let argv_redactor = ArgvRedactor::new(redactor.clone());
         let env_redactor = EnvRedactor::new(redactor);
         let budget = policy.diagnostic_budget();
-        let mut input_budget = budget.input_budget();
-        let argv = self
-            .redacted_argv_with_input_budget(&argv_redactor, &mut input_budget);
-        let text = if self.envs.is_empty() && self.removed_envs.is_empty() {
-            argv.to_string()
+        let mut builder = DiagnosticLogBuilder::new(budget);
+        let argv = self.redacted_argv_with_input_budget(&argv_redactor, builder.input_budget());
+        if self.envs.is_empty() && self.removed_envs.is_empty() {
+            let _ = builder.push_safe(argv.as_log_safe_text());
         } else {
             let env = self.redacted_environment_assignments_with_input_budget(
                 &env_redactor,
-                &mut input_budget,
+                builder.input_budget(),
             );
-            let unset = self
-                .removed_environment_names_with_input_budget(&mut input_budget);
-            format!("Command {{ env: {env}, unset: {unset:?}, argv: {argv} }}")
-        };
+            let unset = self.removed_environment_names_with_input_budget(builder.input_budget());
+            builder
+                .push_fmt(format_args!("Command {{ env: "))
+                .expect("fixed command diagnostic prefix must format");
+            let _ = builder.push_safe(&env);
+            builder
+                .push_fmt(format_args!(", unset: {unset:?}, argv: "))
+                .expect("fixed command diagnostic separator must format");
+            let _ = builder.push_safe(argv.as_log_safe_text());
+            builder
+                .push_fmt(format_args!(" }}"))
+                .expect("fixed command diagnostic suffix must format");
+        }
+        let text = builder.finish();
         let limit = LogOutputLimit::from(budget);
         Redactor::new(policy.clone())
-            .redact_field("command_diagnostic", &text)
+            .redact_field("command_diagnostic", text.as_str())
             .escape_for_log()
             .with_output_limit(limit)
             .to_string()
@@ -624,10 +615,7 @@ impl Command {
         redactor: &ArgvRedactor,
         input_budget: &mut DiagnosticInputBudget,
     ) -> RedactedArgv {
-        redactor.redact_heuristically_with_input_budget(
-            self.argv_for_display(),
-            input_budget,
-        )
+        redactor.redact_heuristically_with_input_budget(self.argv_for_display(), input_budget)
     }
 
     /// Builds argv tokens with opaque shell payloads hidden.
@@ -661,16 +649,13 @@ impl Command {
             return None;
         }
         let first_arg = self.args.first()?.value();
-        if self.program.as_os_str() == OsStr::new("sh")
-            && first_arg == OsStr::new("-c")
-        {
+        if self.program.as_os_str() == OsStr::new("sh") && first_arg == OsStr::new("-c") {
             return Some(1);
         }
 
         let program = self.program.to_string_lossy();
         let first_arg = first_arg.to_string_lossy();
-        if (program.eq_ignore_ascii_case("cmd")
-            || program.eq_ignore_ascii_case("cmd.exe"))
+        if (program.eq_ignore_ascii_case("cmd") || program.eq_ignore_ascii_case("cmd.exe"))
             && first_arg.eq_ignore_ascii_case("/C")
         {
             return Some(1);
@@ -687,10 +672,7 @@ impl Command {
     /// # Returns
     ///
     /// Redacted `KEY=value` entries for explicit environment overrides.
-    fn redacted_environment_assignments(
-        &self,
-        redactor: &EnvRedactor,
-    ) -> LogSafeText<'static> {
+    fn redacted_environment_assignments(&self, redactor: &EnvRedactor) -> LogSafeText<'static> {
         redactor.redact_os_pairs(
             self.envs
                 .iter()
@@ -729,10 +711,7 @@ impl Command {
     ///
     /// Environment variable names rendered lossily for diagnostics.
     #[must_use]
-    fn removed_environment_names(
-        &self,
-        budget: qubit_redact::DiagnosticBudget,
-    ) -> Vec<String> {
+    fn removed_environment_names(&self, budget: qubit_redact::DiagnosticBudget) -> Vec<String> {
         let mut input_budget = budget.input_budget();
         self.removed_environment_names_with_input_budget(&mut input_budget)
     }
