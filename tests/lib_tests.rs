@@ -8,10 +8,17 @@
 //! Tests for crate-level exports.
 
 use qubit_command::{
-    Command, CommandError, CommandOutput, CommandRunner, DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
+    Command,
+    CommandError,
+    CommandOutput,
+    CommandRunner,
+    DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
     OutputStream,
 };
-use qubit_redact::{RedactionPolicy, Sensitivity};
+use qubit_redact::{
+    RedactionPolicy,
+    Sensitivity,
+};
 
 #[test]
 fn test_lib_exports_public_api() {
