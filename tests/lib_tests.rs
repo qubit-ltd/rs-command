@@ -8,23 +8,18 @@
 //! Tests for crate-level exports.
 
 use qubit_command::{
-    Command,
-    CommandError,
-    CommandOutput,
-    CommandRunner,
-    DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
+    Command, CommandError, CommandOutput, CommandRunner, DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
     OutputStream,
 };
-use qubit_redact::{
-    RedactionPolicy,
-    Sensitivity,
-};
+use qubit_redact::{RedactionPolicy, Sensitivity};
 
 #[test]
 fn test_lib_exports_public_api() {
     let command = Command::new("printf").arg("hello");
-    let policy = RedactionPolicy::builder_from_default()
+    let policy = RedactionPolicy::default()
+        .to_builder()
         .raise("tenant_option", Sensitivity::Secret)
+        .expect("the test policy field must be valid")
         .build()
         .expect("the diagnostic redaction policy should be valid");
     let runner = CommandRunner::new().diagnostic_redaction_policy(policy);
