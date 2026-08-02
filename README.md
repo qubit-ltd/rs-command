@@ -182,14 +182,14 @@ payloads are treated as opaque secrets and are never parsed.
 
 Inject a complete immutable policy when the defaults are not enough:
 
-The example below requires a direct `qubit-redact = "0.4"` dependency because
+The example below requires a direct `qubit-redact = "0.5"` dependency because
 `qubit-command` does not re-export types owned by `qubit-redact`.
 
 ```rust
 use qubit_command::{Command, CommandRunner};
 use qubit_redact::{RedactionPolicy, Sensitivity};
 
-let policy = RedactionPolicy::builder_from_default()
+let policy = RedactionPolicy::default().to_builder()
     .raise("tenant_option", Sensitivity::Secret)
     .allow_canonical_exact("username")
     .build()?;
@@ -210,8 +210,8 @@ the child process, while diagnostics display the configured secret mask.
 
 The runner policy affects runner logs and `CommandError::command()`.
 Standalone `Command` `Debug` output has no runner context. Each formatting call
-snapshots the process-wide global default policy; when no global default has
-been installed, it uses the standard policy. Use `allow_exact` for a verified
+snapshots the process-wide global redaction configuration; when no configuration
+has been installed, it uses the standard policy. Use `allow_exact` for a verified
 exact-name false positive, or `allow_suffix` only when the broader disclosure is
 intentional. Every allow rule should be security-reviewed because matching argv
 or environment values can then appear unchanged in diagnostics.
