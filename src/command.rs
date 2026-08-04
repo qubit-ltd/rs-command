@@ -19,7 +19,6 @@ use std::{
 
 use qubit_redact::{
     ArgvRedactor,
-    DiagnosticInputBudget,
     DiagnosticLogBuilder,
     EnvRedactor,
     LogSafeText,
@@ -571,21 +570,17 @@ impl Command {
         let argv_redactor = ArgvRedactor::new(redactor.clone());
         let env_redactor = EnvRedactor::new(redactor);
         let budget = policy.limits().diagnostic_event();
+        let session = RedactionSession::diagnostic(policy);
         let mut builder = DiagnosticLogBuilder::new(budget);
-        let argv = self.redacted_argv_with_input_budget(
-            &argv_redactor,
-            builder.input_budget(),
-        );
+        let argv = self.redacted_argv_with_session(&argv_redactor, &session);
         if self.envs.is_empty() && self.removed_envs.is_empty() {
             let _ = builder.push_safe(argv.as_log_safe_text());
         } else {
-            let env = self.redacted_environment_assignments_with_input_budget(
+            let env = self.redacted_environment_assignments_with_session(
                 &env_redactor,
-                builder.input_budget(),
+                &session,
             );
-            let unset = self.removed_environment_names_with_input_budget(
-                builder.input_budget(),
-            );
+            let unset = self.removed_environment_names_with_session(&session);
             builder
                 .push_fmt(format_args!("Command {{ env: "))
                 .expect("fixed command diagnostic prefix must format");
@@ -609,28 +604,6 @@ impl Command {
     ) -> RedactedArgv {
         redactor
             .redact_heuristically_with_session(self.argv_for_display(), session)
-    }
-
-    /// Builds redacted argv tokens with shared source-byte accounting.
-    ///
-    /// # Parameters
-    ///
-    /// * `redactor` - Immutable adapter used for argv redaction.
-    /// * `input_budget` - Shared source-byte accounting for this diagnostic.
-    ///
-    /// # Returns
-    ///
-    /// Redacted argv tokens that consume from `input_budget` before inspecting
-    /// source values.
-    fn redacted_argv_with_input_budget(
-        &self,
-        redactor: &ArgvRedactor,
-        input_budget: &mut DiagnosticInputBudget,
-    ) -> RedactedArgv {
-        redactor.redact_heuristically_with_input_budget(
-            self.argv_for_display(),
-            input_budget,
-        )
     }
 
     /// Builds argv tokens with opaque shell payloads hidden.
@@ -695,31 +668,6 @@ impl Command {
         )
     }
 
-    /// Builds redacted environment assignments with shared source-byte
-    /// accounting.
-    ///
-    /// # Parameters
-    ///
-    /// * `redactor` - Immutable adapter used to classify and redact values.
-    /// * `input_budget` - Shared source-byte accounting for this diagnostic.
-    ///
-    /// # Returns
-    ///
-    /// Redacted `KEY=value` entries that consume from `input_budget` before
-    /// inspecting source values.
-    fn redacted_environment_assignments_with_input_budget(
-        &self,
-        redactor: &EnvRedactor,
-        input_budget: &mut DiagnosticInputBudget,
-    ) -> LogSafeText<'static> {
-        redactor.redact_os_pairs_with_input_budget(
-            self.envs
-                .iter()
-                .map(|(key, value)| (key.as_os_str(), value.as_os_str())),
-            input_budget,
-        )
-    }
-
     /// Builds removed environment-variable names through one diagnostic
     /// session.
     #[must_use]
@@ -738,31 +686,4 @@ impl Command {
         names
     }
 
-    /// Builds removed environment-variable names with shared source-byte
-    /// accounting.
-    ///
-    /// # Parameters
-    ///
-    /// * `input_budget` - Shared source-byte accounting for this diagnostic.
-    ///
-    /// # Returns
-    ///
-    /// Lossy environment names that consume from `input_budget` before each
-    /// name is inspected.
-    #[must_use]
-    fn removed_environment_names_with_input_budget(
-        &self,
-        input_budget: &mut DiagnosticInputBudget,
-    ) -> Vec<String> {
-        let mut names = Vec::new();
-        for key in &self.removed_envs {
-            let byte_len = key.as_encoded_bytes().len();
-            if !input_budget.reserve(byte_len) {
-                names.push("<truncated>".to_owned());
-                break;
-            }
-            names.push(key.to_string_lossy().into_owned());
-        }
-        names
-    }
 }
