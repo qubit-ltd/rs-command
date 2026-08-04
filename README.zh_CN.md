@@ -163,10 +163,12 @@ Runner 日志、`CommandError::command()` 和 `Command` 的 `Debug` 输出都会
 use qubit_command::{Command, CommandRunner};
 use qubit_redact::{RedactionPolicy, Sensitivity};
 
-let policy = RedactionPolicy::default().to_builder()
-    .raise("tenant_option", Sensitivity::Secret)
-    .allow_canonical_exact("username")
-    .build()?;
+let mut builder = RedactionPolicy::default().to_builder();
+builder
+    .fields()
+    .raise("tenant_option", Sensitivity::Secret)?
+    .allow_exact("username")?;
+let policy = builder.build()?;
 let error = CommandRunner::new()
     .diagnostic_redaction_policy(policy)
     .run(Command::new("__missing__").arg("--tenant-option").arg("secret"))
@@ -184,7 +186,7 @@ assert_eq!(
 
 Runner 策略只影响 runner 日志和 `CommandError::command()`。
 独立的 `Command` `Debug` 输出没有 runner 上下文；每次格式化时都会取得进程级全局
-默认策略的快照，只有尚未安装全局默认策略时才使用标准策略。对于确认过的精确字段名
+`RedactionPolicy` 快照，只有尚未安装全局策略时才使用标准策略。对于确认过的精确字段名
 误报，可使用 `allow_exact`；只有在明确接受更宽泛的后缀放行时才使用
 `allow_suffix`。放行会让匹配的 argv 或环境变量值原样出现在诊断中，因此每条规则都应
 经过安全审阅。
