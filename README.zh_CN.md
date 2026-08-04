@@ -154,9 +154,10 @@ Runner 日志、`CommandError::command()` 和 `Command` 的 `Debug` 输出都会
 环境变量覆盖也只展示遮盖后的 `KEY=value`。`Command::shell` 的脚本体不做 shell
 语法解析，统一作为不透明 secret 遮盖。
 
-当默认策略不够时，可以向 runner 注入完整的不可变策略：
+`CommandRunner::new()` 默认使用固定标准策略；应用需要不同规则时，可以向 runner 注入完整的
+不可变策略：
 
-下面的示例需要直接声明 `qubit-redact = "0.6"` 依赖，因为 `qubit-command` 不会
+下面的示例需要直接声明 `qubit-redact = "0.4"` 依赖，因为 `qubit-command` 不会
 重导出属于 `qubit-redact` 的类型。
 
 ```rust
