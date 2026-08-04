@@ -174,11 +174,11 @@ mod unix {
 
     #[test]
     fn test_command_runner_applies_one_output_budget_to_full_diagnostic() {
-        let budget = DiagnosticBudget::new(512, 48)
+        let budget = InputOutputLimit::new(512, 48)
             .expect("the small diagnostic budget should be valid");
         let policy = RedactionPolicy::default()
             .to_builder()
-            .diagnostic_budget(budget)
+            .diagnostic_event(budget)
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let error =
