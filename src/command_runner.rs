@@ -174,7 +174,7 @@ impl Default for CommandRunner {
             success_exit_codes: vec![0],
             disable_logging: false,
             fail_on_output_truncation: true,
-            diagnostic_redaction_policy: RedactionPolicy::standard(),
+            diagnostic_redaction_policy: RedactionPolicy::default(),
             max_stdout_bytes: Some(DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM),
             max_stderr_bytes: Some(DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM),
             stdout_file: None,

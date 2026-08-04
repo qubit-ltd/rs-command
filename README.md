@@ -180,8 +180,9 @@ Sensitive structured argv values such as `--password secret`,
 environment overrides are shown only in redacted form. `Command::shell`
 payloads are treated as opaque secrets and are never parsed.
 
-`CommandRunner::new()` starts with the fixed standard policy. Inject a complete
-immutable policy when the application needs different rules:
+`CommandRunner::new()` snapshots the current process-wide default policy.
+Install the application policy before constructing the runner, or inject a
+complete immutable policy when that runner needs different rules:
 
 The example below requires a direct `qubit-redact = "0.4"` dependency because
 `qubit-command` does not re-export types owned by `qubit-redact`.
