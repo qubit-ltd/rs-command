@@ -30,7 +30,7 @@ use qubit_command::{
 };
 #[cfg(not(windows))]
 use qubit_redact::{
-    DiagnosticBudget,
+    InputOutputLimit,
     RedactionPolicy,
     Sensitivity,
 };
@@ -66,8 +66,8 @@ mod unix {
         CommandRunner,
         DEFAULT_COMMAND_TIMEOUT,
         DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
-        DiagnosticBudget,
         Duration,
+        InputOutputLimit,
         Instant,
         LocalTempDir,
         OutputStream,
@@ -154,11 +154,11 @@ mod unix {
 
     #[test]
     fn test_command_runner_shares_configured_diagnostic_input_budget() {
-        let budget = DiagnosticBudget::new(3, 128)
+        let budget = InputOutputLimit::new(3, 128)
             .expect("the small diagnostic budget should be valid");
         let policy = RedactionPolicy::default()
             .to_builder()
-            .diagnostic_budget(budget)
+            .diagnostic_event(budget)
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let error = CommandRunner::new()
