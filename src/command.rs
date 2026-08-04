@@ -24,6 +24,7 @@ use qubit_redact::{
     EnvRedactor,
     LogSafeText,
     RedactionPolicy,
+    RedactionSession,
     Redactor,
     Sensitivity,
     argv::{
@@ -91,7 +92,13 @@ impl fmt::Debug for Command {
         let redactor = Redactor::default();
         let argv_redactor = ArgvRedactor::new(redactor.clone());
         let env_redactor = EnvRedactor::new(redactor);
-        let argv = self.redacted_argv(&argv_redactor);
+        let session =
+            RedactionSession::diagnostic(argv_redactor.redactor().policy());
+        let argv = self.redacted_argv_with_session(&argv_redactor, &session);
+        let env = self.redacted_environment_assignments_with_session(
+            &env_redactor,
+            &session,
+        );
         formatter
             .debug_struct("Command")
             .field("argv", &format_args!("{argv}"))
@@ -100,18 +107,10 @@ impl fmt::Debug for Command {
                 &self.working_directory.as_ref().map(|_| REDACTED_PATH),
             )
             .field("clear_environment", &self.clear_environment)
-            .field(
-                "env",
-                &format_args!(
-                    "{}",
-                    self.redacted_environment_assignments(&env_redactor)
-                ),
-            )
+            .field("env", &format_args!("{env}"))
             .field(
                 "unset",
-                &self.removed_environment_names(
-                    argv_redactor.redactor().policy().diagnostic_budget(),
-                ),
+                &self.removed_environment_names_with_session(&session),
             )
             .field("stdin", &self.stdin)
             .finish()
@@ -571,7 +570,7 @@ impl Command {
         let redactor = Redactor::new(policy.clone());
         let argv_redactor = ArgvRedactor::new(redactor.clone());
         let env_redactor = EnvRedactor::new(redactor);
-        let budget = policy.diagnostic_budget();
+        let budget = policy.limits().diagnostic_event();
         let mut builder = DiagnosticLogBuilder::new(budget);
         let argv = self.redacted_argv_with_input_budget(
             &argv_redactor,
@@ -602,18 +601,14 @@ impl Command {
         builder.finish().to_string()
     }
 
-    /// Builds redacted argv tokens for diagnostics.
-    ///
-    /// # Parameters
-    ///
-    /// * `redactor` - Immutable adapter used for explicit and heuristic argv
-    ///   redaction.
-    ///
-    /// # Returns
-    ///
-    /// Redacted argv tokens with secret-looking values masked.
-    fn redacted_argv(&self, redactor: &ArgvRedactor) -> RedactedArgv {
-        redactor.redact_heuristically(self.argv_for_display())
+    /// Builds redacted argv tokens through one diagnostic session.
+    fn redacted_argv_with_session(
+        &self,
+        redactor: &ArgvRedactor,
+        session: &RedactionSession<'_>,
+    ) -> RedactedArgv {
+        redactor
+            .redact_heuristically_with_session(self.argv_for_display(), session)
     }
 
     /// Builds redacted argv tokens with shared source-byte accounting.
@@ -686,23 +681,17 @@ impl Command {
         None
     }
 
-    /// Builds redacted environment assignments for diagnostics.
-    ///
-    /// # Parameters
-    ///
-    /// * `redactor` - Immutable adapter used to classify and redact values.
-    ///
-    /// # Returns
-    ///
-    /// Redacted `KEY=value` entries for explicit environment overrides.
-    fn redacted_environment_assignments(
+    /// Builds redacted environment assignments through one diagnostic session.
+    fn redacted_environment_assignments_with_session(
         &self,
         redactor: &EnvRedactor,
+        session: &RedactionSession<'_>,
     ) -> LogSafeText<'static> {
-        redactor.redact_os_pairs(
+        redactor.redact_os_pairs_with_session(
             self.envs
                 .iter()
                 .map(|(key, value)| (key.as_os_str(), value.as_os_str())),
+            session,
         )
     }
 
@@ -731,18 +720,22 @@ impl Command {
         )
     }
 
-    /// Builds display names for removed environment variables.
-    ///
-    /// # Returns
-    ///
-    /// Environment variable names rendered lossily for diagnostics.
+    /// Builds removed environment-variable names through one diagnostic
+    /// session.
     #[must_use]
-    fn removed_environment_names(
+    fn removed_environment_names_with_session(
         &self,
-        budget: qubit_redact::DiagnosticBudget,
+        session: &RedactionSession<'_>,
     ) -> Vec<String> {
-        let mut input_budget = budget.input_budget();
-        self.removed_environment_names_with_input_budget(&mut input_budget)
+        let mut names = Vec::new();
+        for key in &self.removed_envs {
+            if !session.consume_input(key.as_encoded_bytes().len()) {
+                names.push("<truncated>".to_owned());
+                break;
+            }
+            names.push(key.to_string_lossy().into_owned());
+        }
+        names
     }
 
     /// Builds removed environment-variable names with shared source-byte

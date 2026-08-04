@@ -189,10 +189,12 @@ The example below requires a direct `qubit-redact = "0.6"` dependency because
 use qubit_command::{Command, CommandRunner};
 use qubit_redact::{RedactionPolicy, Sensitivity};
 
-let policy = RedactionPolicy::default().to_builder()
-    .raise("tenant_option", Sensitivity::Secret)
-    .allow_canonical_exact("username")
-    .build()?;
+let mut builder = RedactionPolicy::default().to_builder();
+builder
+    .fields()
+    .raise("tenant_option", Sensitivity::Secret)?
+    .allow_exact("username")?;
+let policy = builder.build()?;
 let error = CommandRunner::new()
     .diagnostic_redaction_policy(policy)
     .run(Command::new("__missing__").arg("--tenant-option").arg("secret"))
@@ -210,8 +212,8 @@ the child process, while diagnostics display the configured secret mask.
 
 The runner policy affects runner logs and `CommandError::command()`.
 Standalone `Command` `Debug` output has no runner context. Each formatting call
-snapshots the process-wide global redaction configuration; when no configuration
-has been installed, it uses the standard policy. Use `allow_exact` for a verified
+snapshots the process-wide global `RedactionPolicy`; when no policy has been
+installed, it uses the standard policy. Use `allow_exact` for a verified
 exact-name false positive, or `allow_suffix` only when the broader disclosure is
 intentional. Every allow rule should be security-reviewed because matching argv
 or environment values can then appear unchanged in diagnostics.
