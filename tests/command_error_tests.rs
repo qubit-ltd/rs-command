@@ -109,6 +109,7 @@ fn test_command_error_accessors_for_errors_without_output() {
         stream: OutputStream::Stdout,
         path: PathBuf::from("stdout.txt"),
         source: io::Error::other("write output failed"),
+        output: None,
     };
     assert_eq!(write_output.command(), "write-output");
     assert!(write_output.output().is_none());

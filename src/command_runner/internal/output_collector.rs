@@ -84,8 +84,10 @@ pub(in crate::command_runner) fn read_output(
     let mut write_error = None;
     let mut buffer = [0_u8; 8 * 1024];
     loop {
-        let read =
-            reader.read(&mut buffer).map_err(OutputCaptureError::Read)?;
+        let read = match reader.read(&mut buffer) {
+            Ok(read) => read,
+            Err(source) => return Err(OutputCaptureError::Read(source)),
+        };
         if read == 0 {
             break;
         }
@@ -97,6 +99,10 @@ pub(in crate::command_runner) fn read_output(
             write_error = Some(OutputCaptureError::Write {
                 path: tee.path.clone(),
                 source,
+                output: CapturedOutput {
+                    bytes: bytes.clone(),
+                    truncated,
+                },
             });
             options.tee = None;
         }
@@ -113,6 +119,12 @@ pub(in crate::command_runner) fn read_output(
             }
             None => bytes.extend_from_slice(chunk),
         }
+        if let Some(OutputCaptureError::Write { output, .. }) =
+            write_error.as_mut()
+        {
+            output.bytes.clone_from(&bytes);
+            output.truncated = truncated;
+        }
     }
     if write_error.is_none()
         && let Some(tee) = options.tee.as_mut()
@@ -121,6 +133,10 @@ pub(in crate::command_runner) fn read_output(
         write_error = Some(OutputCaptureError::Write {
             path: tee.path.clone(),
             source,
+            output: CapturedOutput {
+                bytes: bytes.clone(),
+                truncated,
+            },
         });
     }
     if let Some(error) = write_error {
@@ -161,10 +177,8 @@ pub(in crate::command_runner) fn collect_output<F>(
 where
     F: FnOnce() -> Result<Duration, TimeError>,
 {
-    let stdout_result =
-        join_output_reader(command, OutputStream::Stdout, stdout_reader);
-    let stderr_result =
-        join_output_reader(command, OutputStream::Stderr, stderr_reader);
+    let stdout_result = join_output_reader(stdout_reader);
+    let stderr_result = join_output_reader(stderr_reader);
     let stdin_result = join_stdin_writer(command, stdin_writer);
     let elapsed_result = elapsed();
 
@@ -183,9 +197,71 @@ where
                 elapsed,
             ))
         }
-        (Ok(_), Err(error), _, _)
-        | (Ok(_), _, Err(error), _)
-        | (Ok(_), _, _, Err(error)) => Err(error),
+        (Ok(elapsed), Err(error), _, _) => Err(map_output_reader_error(
+            command,
+            status,
+            elapsed,
+            OutputStream::Stdout,
+            error,
+            None,
+        )),
+        (Ok(elapsed), Ok(stdout), Err(error), _) => {
+            Err(map_output_reader_error(
+                command,
+                status,
+                elapsed,
+                OutputStream::Stderr,
+                error,
+                Some(stdout),
+            ))
+        }
+        (Ok(_), _, _, Err(error)) => Err(error),
+    }
+}
+
+/// Maps a reader result while retaining output from a failed tee write.
+fn map_output_reader_error(
+    command: &str,
+    status: ExitStatus,
+    elapsed: Duration,
+    stream: OutputStream,
+    error: OutputCaptureError,
+    other_output: Option<CapturedOutput>,
+) -> CommandError {
+    match error {
+        OutputCaptureError::Read(source) => CommandError::ReadOutputFailed {
+            command: command.to_owned(),
+            stream,
+            source,
+        },
+        OutputCaptureError::Write {
+            path,
+            source,
+            output,
+        } => {
+            let (stdout, stderr) = match stream {
+                OutputStream::Stdout => {
+                    (output, other_output.unwrap_or_default())
+                }
+                OutputStream::Stderr => {
+                    (other_output.unwrap_or_default(), output)
+                }
+            };
+            CommandError::WriteOutputFailed {
+                command: command.to_owned(),
+                stream,
+                path,
+                source,
+                output: Some(Box::new(CommandOutput::new(
+                    status,
+                    stdout.bytes,
+                    stderr.bytes,
+                    stdout.truncated,
+                    stderr.truncated,
+                    elapsed,
+                ))),
+            }
+        }
     }
 }
 
@@ -193,8 +269,6 @@ where
 ///
 /// # Parameters
 ///
-/// * `command` - Redacted command text used in errors.
-/// * `stream` - Stream drained by the helper.
 /// * `reader` - Reader-thread join handle.
 ///
 /// # Returns
@@ -206,31 +280,13 @@ where
 /// Returns [`CommandError::ReadOutputFailed`] for read failures or thread
 /// panics, and [`CommandError::WriteOutputFailed`] for tee failures.
 pub(in crate::command_runner) fn join_output_reader(
-    command: &str,
-    stream: OutputStream,
     reader: OutputReader,
-) -> Result<CapturedOutput, CommandError> {
+) -> Result<CapturedOutput, OutputCaptureError> {
     match reader.join() {
         Ok(Ok(output)) => Ok(output),
-        Ok(Err(OutputCaptureError::Read(source))) => {
-            Err(CommandError::ReadOutputFailed {
-                command: command.to_owned(),
-                stream,
-                source,
-            })
-        }
-        Ok(Err(OutputCaptureError::Write { path, source })) => {
-            Err(CommandError::WriteOutputFailed {
-                command: command.to_owned(),
-                stream,
-                path,
-                source,
-            })
-        }
-        Err(_) => Err(CommandError::ReadOutputFailed {
-            command: command.to_owned(),
-            stream,
-            source: io::Error::other("output reader thread panicked"),
-        }),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Err(OutputCaptureError::Read(io::Error::other(
+            "output reader thread panicked",
+        ))),
     }
 }

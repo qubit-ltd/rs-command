@@ -242,12 +242,16 @@ fn test_runner_reports_output_device_write_failure() {
         .expect_err("full output device should reject writes");
 
     assert!(matches!(
-        error,
+        &error,
         CommandError::WriteOutputFailed {
             stream: OutputStream::Stdout,
             ..
         }
     ));
+    let output = error
+        .output()
+        .expect("output write failures should retain captured output");
+    assert_eq!(output.stdout(), b"ignored");
 }
 
 #[cfg(target_os = "linux")]

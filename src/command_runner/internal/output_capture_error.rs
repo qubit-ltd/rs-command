@@ -10,6 +10,8 @@ use std::{
     path::PathBuf,
 };
 
+use super::captured_output::CapturedOutput;
+
 /// Error reported by an output reader thread.
 #[derive(Debug)]
 pub(in crate::command_runner) enum OutputCaptureError {
@@ -21,5 +23,7 @@ pub(in crate::command_runner) enum OutputCaptureError {
         path: PathBuf,
         /// I/O error reported by the writer.
         source: io::Error,
+        /// Bytes retained before the tee write failed.
+        output: CapturedOutput,
     },
 }
