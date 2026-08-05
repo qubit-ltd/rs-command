@@ -201,6 +201,8 @@ pub enum CommandError {
         path: PathBuf,
         /// I/O error reported while writing the file.
         source: io::Error,
+        /// Output retained before the tee writer failed, when available.
+        output: Option<Box<CommandOutput>>,
     },
 
     /// The command exceeded the configured timeout and was terminated.
@@ -305,8 +307,9 @@ impl CommandError {
     ///
     /// # Returns
     ///
-    /// `Some(output)` for timeout, cancellation, output-truncation, and
-    /// unexpected-exit errors, otherwise `None`.
+    /// `Some(output)` for timeout, cancellation, output-truncation,
+    /// unexpected-exit, and tee write errors that retained output; otherwise
+    /// `None`.
     #[inline(always)]
     pub const fn output(&self) -> Option<&CommandOutput> {
         match self {
@@ -314,6 +317,10 @@ impl CommandError {
             | Self::Cancelled { output, .. }
             | Self::OutputTruncated { output, .. }
             | Self::UnexpectedExit { output, .. } => Some(output),
+            Self::WriteOutputFailed {
+                output: Some(output),
+                ..
+            } => Some(output),
             _ => None,
         }
     }
@@ -322,8 +329,9 @@ impl CommandError {
     ///
     /// # Returns
     ///
-    /// `Some(output)` for timeout, cancellation, output-truncation, and
-    /// unexpected-exit errors, otherwise `None`.
+    /// `Some(output)` for timeout, cancellation, output-truncation,
+    /// unexpected-exit, and tee write errors that retained output; otherwise
+    /// `None`.
     #[must_use]
     #[inline(always)]
     pub fn into_output(self) -> Option<CommandOutput> {
@@ -332,6 +340,10 @@ impl CommandError {
             | Self::Cancelled { output, .. }
             | Self::OutputTruncated { output, .. }
             | Self::UnexpectedExit { output, .. } => Some(*output),
+            Self::WriteOutputFailed {
+                output: Some(output),
+                ..
+            } => Some(*output),
             _ => None,
         }
     }

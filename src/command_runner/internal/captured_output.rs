@@ -6,7 +6,7 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 /// Captured output bytes plus truncation metadata.
-#[derive(Debug)]
+#[derive(Debug, Clone, Default)]
 pub(in crate::command_runner) struct CapturedOutput {
     /// Bytes retained in memory.
     pub(in crate::command_runner) bytes: Vec<u8>,
