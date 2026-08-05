@@ -622,6 +622,11 @@ impl CommandRunner {
     /// because each run truncates that file after its own validation
     /// completes.
     ///
+    /// # TODO
+    ///
+    /// Move tee destinations into per-run options so concurrent executions can
+    /// choose independent files without sharing runner-level truncation state.
+    ///
     /// # Parameters
     ///
     /// * `path` - Destination file path for stdout bytes.
@@ -659,6 +664,11 @@ impl CommandRunner {
     /// the same runner concurrently with the same tee path is not supported
     /// because each run truncates that file after its own validation
     /// completes.
+    ///
+    /// # TODO
+    ///
+    /// Move tee destinations into per-run options so concurrent executions can
+    /// choose independent files without sharing runner-level truncation state.
     ///
     /// # Parameters
     ///
