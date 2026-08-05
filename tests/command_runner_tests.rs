@@ -749,6 +749,8 @@ mod unix {
 
     #[test]
     fn test_runner_zero_timeout_does_not_report_kill_failure_after_exit() {
+        // Exercise the short-lived child/killpg race repeatedly because the
+        // process-group error can arrive just before the child becomes waitable.
         for _ in 0..10_000 {
             match CommandRunner::new()
                 .timeout(Duration::ZERO)
