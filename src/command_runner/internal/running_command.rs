@@ -9,6 +9,7 @@ use std::{
     io,
     process::ExitStatus,
     sync::Arc,
+    thread,
     time::Duration,
 };
 
@@ -37,6 +38,10 @@ use crate::{
 
 /// Maximum delay before a cancellation-aware wait observes cancellation.
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
+/// Bounded confirmation window for a child racing process-tree termination.
+const KILL_FAILURE_EXIT_CHECK_ATTEMPTS: usize = 8;
+/// Delay between bounded exit checks after a failed process-tree kill.
+const KILL_FAILURE_EXIT_CHECK_DELAY: Duration = Duration::from_micros(50);
 
 /// Running command state that owns process and I/O helper lifetimes.
 #[must_use = "a running command must be waited on to collect its process and I/O"]
@@ -471,7 +476,15 @@ impl RunningCommand {
             let status = self.child_process.wait();
             return status.map(Some);
         }
-        self.child_process.try_wait()
+        for attempt in 0..KILL_FAILURE_EXIT_CHECK_ATTEMPTS {
+            if let Some(status) = self.child_process.try_wait()? {
+                return Ok(Some(status));
+            }
+            if attempt + 1 < KILL_FAILURE_EXIT_CHECK_ATTEMPTS {
+                thread::sleep(KILL_FAILURE_EXIT_CHECK_DELAY);
+            }
+        }
+        Ok(None)
     }
 
     /// Reports whether a process-tree termination error means the tree ended.
