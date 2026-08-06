@@ -5,8 +5,10 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+// qubit-style: allow coverage-cfg
 use std::{
     fmt,
+    io,
     path::{
         Path,
         PathBuf,
@@ -21,7 +23,11 @@ use qubit_clock::{
 };
 use qubit_redact::RedactionPolicy;
 
+#[cfg(coverage)]
+mod coverage;
 mod internal;
+#[cfg(coverage)]
+pub use coverage::__coverage_internal;
 
 use internal::error_mapping::{
     output_pipe_error,
@@ -30,6 +36,7 @@ use internal::error_mapping::{
 use internal::finished_command::FinishedCommand;
 use internal::output_capture_options::OutputCaptureOptions;
 use internal::output_collector::read_output_stream;
+use internal::output_reader::OutputReader;
 use internal::prepared_command::PreparedCommand;
 use internal::process_launcher::spawn_child;
 use internal::running_command::RunningCommand;
@@ -45,6 +52,30 @@ use crate::{
 };
 
 const REDACTED_PATH: &str = "<redacted path>";
+
+/// Takes a prepared child output pipe and maps an absent pipe to a runner
+/// error.
+fn take_output_pipe<T>(
+    command: &str,
+    stream: OutputStream,
+    take: impl FnOnce() -> Option<T>,
+) -> Result<T, CommandError> {
+    take().ok_or_else(|| output_pipe_error(command, stream))
+}
+
+/// Starts one output reader and annotates thread-start failures with its
+/// stream.
+fn start_output_reader(
+    command: &str,
+    stream: OutputStream,
+    start: impl FnOnce() -> io::Result<OutputReader>,
+) -> Result<OutputReader, CommandError> {
+    start().map_err(|source| CommandError::StartOutputThreadFailed {
+        command: command.to_owned(),
+        stream,
+        source,
+    })
+}
 
 /// Default ten-second post-spawn timeout applied by [`CommandRunner::new`].
 ///
@@ -797,51 +828,37 @@ impl CommandRunner {
         )?;
         starting_command.set_stdin_writer(stdin_writer);
 
-        let stdout = match starting_command.child_process().stdout().take() {
-            Some(stdout) => stdout,
-            None => {
-                return Err(output_pipe_error(
-                    &command_text,
-                    OutputStream::Stdout,
-                ));
-            }
-        };
-        let stderr = match starting_command.child_process().stderr().take() {
-            Some(stderr) => stderr,
-            None => {
-                return Err(output_pipe_error(
-                    &command_text,
-                    OutputStream::Stderr,
-                ));
-            }
-        };
-        let stdout_reader = read_output_stream(
-            Box::new(stdout),
-            OutputCaptureOptions::new(
-                self.max_stdout_bytes,
-                stdout_file,
-                stdout_file_path,
-            ),
-        )
-        .map_err(|source| CommandError::StartOutputThreadFailed {
-            command: command_text.clone(),
-            stream: OutputStream::Stdout,
-            source,
-        })?;
+        let stdout =
+            take_output_pipe(&command_text, OutputStream::Stdout, || {
+                starting_command.child_process().stdout().take()
+            })?;
+        let stderr =
+            take_output_pipe(&command_text, OutputStream::Stderr, || {
+                starting_command.child_process().stderr().take()
+            })?;
+        let stdout_reader =
+            start_output_reader(&command_text, OutputStream::Stdout, || {
+                read_output_stream(
+                    Box::new(stdout),
+                    OutputCaptureOptions::new(
+                        self.max_stdout_bytes,
+                        stdout_file,
+                        stdout_file_path,
+                    ),
+                )
+            })?;
         starting_command.set_stdout_reader(stdout_reader);
-        let stderr_reader = read_output_stream(
-            Box::new(stderr),
-            OutputCaptureOptions::new(
-                self.max_stderr_bytes,
-                stderr_file,
-                stderr_file_path,
-            ),
-        )
-        .map_err(|source| CommandError::StartOutputThreadFailed {
-            command: command_text.clone(),
-            stream: OutputStream::Stderr,
-            source,
-        })?;
+        let stderr_reader =
+            start_output_reader(&command_text, OutputStream::Stderr, || {
+                read_output_stream(
+                    Box::new(stderr),
+                    OutputCaptureOptions::new(
+                        self.max_stderr_bytes,
+                        stderr_file,
+                        stderr_file_path,
+                    ),
+                )
+            })?;
         starting_command.set_stderr_reader(stderr_reader);
         if let Err(source) = self.timer.clock().now().duration_since(started_at)
         {
