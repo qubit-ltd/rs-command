@@ -25,6 +25,7 @@ pub use command_cancellation::CommandCancellation;
 pub use command_error::CommandError;
 pub use command_output::CommandOutput;
 #[cfg(coverage)]
+#[doc(hidden)]
 pub use command_runner::__coverage_internal;
 pub use command_runner::{
     CommandRunner,

@@ -13,7 +13,6 @@ use std::{
     io::{
         self,
         Cursor,
-        Read,
         Write,
     },
     path::Path,
@@ -62,38 +61,12 @@ use crate::{
     CommandError,
     OutputStream,
 };
+use internal::{
+    FailingReader,
+    FailingWriter,
+};
 
-#[derive(Debug)]
-struct FailingReader;
-
-impl Read for FailingReader {
-    fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
-        Err(io::Error::other("coverage reader failure"))
-    }
-}
-
-#[derive(Debug)]
-struct FailingWriter {
-    fail_write: bool,
-}
-
-impl Write for FailingWriter {
-    fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
-        if self.fail_write {
-            Err(io::Error::other("coverage writer failure"))
-        } else {
-            Ok(_buffer.len())
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        if self.fail_write {
-            Ok(())
-        } else {
-            Err(io::Error::other("coverage flush failure"))
-        }
-    }
-}
+mod internal;
 
 fn status() -> std::process::ExitStatus {
     ProcessCommand::new("rustc")
@@ -116,6 +89,7 @@ fn spawn_rustc_child() -> Box<dyn process_wrap::std::ChildWrapper> {
 }
 
 /// Executes deterministic coverage probes for internal error and I/O paths.
+#[doc(hidden)]
 pub fn __coverage_internal() {
     let spawn = spawn_failed("spawn", io::Error::other("spawn source"));
     assert!(matches!(spawn, CommandError::SpawnFailed { .. }));
