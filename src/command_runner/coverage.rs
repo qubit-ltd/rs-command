@@ -16,7 +16,10 @@ use std::{
         Write,
     },
     path::Path,
-    process::Command as ProcessCommand,
+    process::{
+        Command as ProcessCommand,
+        Stdio,
+    },
     sync::{
         Arc,
         atomic::AtomicBool,
@@ -45,6 +48,7 @@ use super::internal::{
         collect_output,
         join_output_reader,
         read_output,
+        read_output_stream,
     },
     output_reader::OutputReader,
     output_tee::OutputTee,
@@ -215,6 +219,44 @@ pub fn __coverage_internal() {
             ..
         }
     ));
+
+    let mut output_child = ProcessCommand::new("rustc")
+        .arg("--version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("coverage output child should spawn");
+    let stdout_reader = read_output_stream(
+        output_child
+            .stdout
+            .take()
+            .expect("coverage stdout pipe should exist"),
+        OutputCaptureOptions {
+            max_bytes: None,
+            tee: None,
+        },
+    )
+    .expect("coverage stdout reader should start");
+    let error_reader = read_output_stream(
+        output_child
+            .stderr
+            .take()
+            .expect("coverage stderr pipe should exist"),
+        OutputCaptureOptions {
+            max_bytes: None,
+            tee: None,
+        },
+    )
+    .expect("coverage stderr reader should start");
+    let captured_stdout = join_output_reader(stdout_reader)
+        .expect("coverage stdout reader should join");
+    let captured_stderr = join_output_reader(error_reader)
+        .expect("coverage stderr reader should join");
+    output_child
+        .wait()
+        .expect("coverage output child should be waitable");
+    assert!(captured_stdout.complete);
+    assert!(captured_stderr.complete);
 
     let read_error = read_output(
         &mut FailingReader,
