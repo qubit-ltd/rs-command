@@ -213,7 +213,9 @@ pub enum CommandError {
         command: String,
         /// Timeout that was exceeded.
         timeout: Duration,
-        /// Captured output available after terminating the child process.
+        /// Output captured before the terminated process and I/O cleanup
+        /// cutoff. It can omit bytes held by escaped descendants or blocked
+        /// output helpers.
         output: Box<CommandOutput>,
     },
 
@@ -222,7 +224,9 @@ pub enum CommandError {
     Cancelled {
         /// Human-readable command representation.
         command: String,
-        /// Captured output available after terminating the child process.
+        /// Output captured before the terminated process and I/O cleanup
+        /// cutoff. It can omit bytes held by escaped descendants or blocked
+        /// output helpers.
         output: Box<CommandOutput>,
     },
 

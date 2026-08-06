@@ -271,7 +271,7 @@ impl RunningCommand {
                 source,
             ));
         }
-        let finished = self.complete(status)?;
+        let finished = self.complete_ready(status)?;
         Err(CommandError::TimedOut {
             command: finished.command_text,
             timeout,
@@ -301,7 +301,7 @@ impl RunningCommand {
                 source,
             });
         }
-        let finished = self.complete(status)?;
+        let finished = self.complete_ready(status)?;
         Err(CommandError::Cancelled {
             command: finished.command_text,
             output: Box::new(finished.output),
@@ -327,7 +327,7 @@ impl RunningCommand {
                 });
             }
         };
-        let finished = self.complete(status)?;
+        let finished = self.complete_ready(status)?;
         Err(CommandError::Cancelled {
             command: finished.command_text,
             output: Box::new(finished.output),
@@ -368,7 +368,7 @@ impl RunningCommand {
                 return Err(self.collect_if_child_exited(error));
             }
         };
-        let finished = self.complete(exit_status)?;
+        let finished = self.complete_ready(exit_status)?;
         Err(CommandError::TimedOut {
             command: finished.command_text,
             timeout,
@@ -401,6 +401,41 @@ impl RunningCommand {
             ..
         } = self;
         let output = io.collect(&command_text, status, move || {
+            timer.clock().now().duration_since(started_at)
+        })?;
+        Ok(FinishedCommand {
+            command_text,
+            output,
+        })
+    }
+
+    /// Completes a terminated command without waiting for blocked I/O helpers.
+    ///
+    /// # Parameters
+    ///
+    /// * `status` - Exit status reported by the child process.
+    ///
+    /// # Returns
+    ///
+    /// Finished command output containing only helpers completed before the
+    /// cleanup cutoff.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError`] if a completed helper or elapsed-time sampling
+    /// fails.
+    fn complete_ready(
+        self,
+        status: ExitStatus,
+    ) -> Result<FinishedCommand, CommandError> {
+        let Self {
+            command_text,
+            io,
+            started_at,
+            timer,
+            ..
+        } = self;
+        let output = io.collect_ready(&command_text, status, move || {
             timer.clock().now().duration_since(started_at)
         })?;
         Ok(FinishedCommand {
@@ -528,7 +563,7 @@ impl RunningCommand {
             Err(_) => self.child_process.try_wait().ok().flatten(),
         };
         if let Some(status) = status {
-            let _ = self.io.collect(&self.command_text, status, || {
+            let _ = self.io.collect_ready(&self.command_text, status, || {
                 Ok::<Duration, TimeError>(Duration::ZERO)
             });
         }
@@ -559,7 +594,7 @@ impl RunningCommand {
             source,
         };
         let _ = self.child_process.start_kill();
-        let _ = self.io.collect(&self.command_text, status, || {
+        let _ = self.io.collect_ready(&self.command_text, status, || {
             Ok::<Duration, TimeError>(Duration::ZERO)
         });
         Err(error)
