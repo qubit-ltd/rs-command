@@ -165,6 +165,7 @@ fn open_input(
             Ok((None, None, Some(bytes)))
         }
         CommandStdin::File(path) => {
+            ensure_regular_input(command, &path)?;
             let file = File::open(&path).map_err(|source| {
                 CommandError::OpenInputFailed {
                     command: command.to_owned(),
@@ -198,6 +199,7 @@ fn open_output(
     path: Option<&Path>,
 ) -> Result<Option<File>, CommandError> {
     path.map(|path| {
+        ensure_regular_output(command, stream, path)?;
         OpenOptions::new()
             .create(true)
             .write(true)
@@ -211,6 +213,93 @@ fn open_output(
             })
     })
     .transpose()
+}
+
+/// Ensures that a configured stdin path identifies an ordinary file.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used in errors.
+/// * `path` - Configured stdin path.
+///
+/// # Returns
+///
+/// `Ok(())` when `path` exists and is an ordinary file.
+///
+/// # Errors
+///
+/// Returns [`CommandError::OpenInputFailed`] when metadata cannot be read, or
+/// [`CommandError::NonRegularInputFile`] when the path identifies another file
+/// type.
+fn ensure_regular_input(
+    command: &str,
+    path: &Path,
+) -> Result<(), CommandError> {
+    let metadata =
+        fs::metadata(path).map_err(|source| CommandError::OpenInputFailed {
+            command: command.to_owned(),
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if metadata.file_type().is_file() {
+        Ok(())
+    } else {
+        Err(CommandError::NonRegularInputFile {
+            command: command.to_owned(),
+            path: path.to_path_buf(),
+        })
+    }
+}
+
+/// Ensures that a configured output path is or will become an ordinary file.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used in errors.
+/// * `stream` - Output stream receiving the tee.
+/// * `path` - Configured output path.
+///
+/// # Returns
+///
+/// `Ok(())` when an existing path is an ordinary file or the path does not yet
+/// exist and may be created by [`open_output`].
+///
+/// # Errors
+///
+/// Returns [`CommandError::NonRegularOutputFile`] when an existing path is not
+/// an ordinary file, or [`CommandError::InspectIoFileFailed`] when metadata
+/// inspection fails for a reason other than absence.
+fn ensure_regular_output(
+    command: &str,
+    stream: OutputStream,
+    path: &Path,
+) -> Result<(), CommandError> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(()),
+        Ok(_) => Err(CommandError::NonRegularOutputFile {
+            command: command.to_owned(),
+            stream,
+            path: path.to_path_buf(),
+        }),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            match fs::symlink_metadata(path) {
+                Ok(_) => Err(CommandError::NonRegularOutputFile {
+                    command: command.to_owned(),
+                    stream,
+                    path: path.to_path_buf(),
+                }),
+                Err(link_source)
+                    if link_source.kind() == io::ErrorKind::NotFound =>
+                {
+                    Ok(())
+                }
+                Err(link_source) => {
+                    Err(inspect_error(command, path, link_source))
+                }
+            }
+        }
+        Err(source) => Err(inspect_error(command, path, source)),
+    }
 }
 
 /// Rejects paths that normalize to the same filesystem location.
@@ -450,8 +539,7 @@ fn file_handle(
 ///
 /// # Returns
 ///
-/// `Ok(())` after a configured regular file has been truncated. Special files
-/// such as devices are left intact and receive output through normal writes.
+/// `Ok(())` after a configured regular file has been truncated.
 ///
 /// # Errors
 ///
@@ -474,27 +562,31 @@ pub(in crate::command_runner) fn truncate_output(
             .metadata()
             .map_err(|source| inspect_error(command, path, source))?
             .file_type();
-        if file_type.is_file() {
-            #[cfg(coverage)]
-            if COVERAGE_FAIL_TRUNCATE.load(Ordering::Relaxed) {
-                return Err(CommandError::OpenOutputFailed {
-                    command: command.to_owned(),
-                    stream,
-                    path: path.to_path_buf(),
-                    source: io::Error::other(
-                        "coverage-injected output truncation failure",
-                    ),
-                });
-            }
-            file.set_len(0).map_err(|source| {
-                CommandError::OpenOutputFailed {
-                    command: command.to_owned(),
-                    stream,
-                    path: path.to_path_buf(),
-                    source,
-                }
-            })?;
+        if !file_type.is_file() {
+            return Err(CommandError::NonRegularOutputFile {
+                command: command.to_owned(),
+                stream,
+                path: path.to_path_buf(),
+            });
         }
+        #[cfg(coverage)]
+        if COVERAGE_FAIL_TRUNCATE.load(Ordering::Relaxed) {
+            return Err(CommandError::OpenOutputFailed {
+                command: command.to_owned(),
+                stream,
+                path: path.to_path_buf(),
+                source: io::Error::other(
+                    "coverage-injected output truncation failure",
+                ),
+            });
+        }
+        file.set_len(0)
+            .map_err(|source| CommandError::OpenOutputFailed {
+                command: command.to_owned(),
+                stream,
+                path: path.to_path_buf(),
+                source,
+            })?;
     }
     Ok(())
 }

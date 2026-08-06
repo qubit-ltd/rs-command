@@ -529,9 +529,15 @@ impl Command {
 
     /// Reads child process stdin from a file.
     ///
-    /// The runner opens this path before spawning the child and before starting
-    /// its timeout clock. Opening a FIFO, device, or other special file may
-    /// block until an external peer or device becomes ready.
+    /// The path must identify an ordinary file (a regular filesystem file).
+    /// Directories, FIFOs, devices, sockets, and other special files are
+    /// rejected before the child is spawned. The runner opens this path before
+    /// spawning the child and before starting its timeout clock.
+    ///
+    /// # Warning
+    ///
+    /// `path` must be an ordinary file. Special files are rejected rather than
+    /// opened as command input.
     ///
     /// # Parameters
     ///

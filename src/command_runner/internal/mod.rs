@@ -7,6 +7,8 @@
 // =============================================================================
 //! Private command-runner implementation details.
 
+pub(in crate::command_runner) mod cancel;
+pub(in crate::command_runner) mod cancellable_reader;
 pub(in crate::command_runner) mod captured_output;
 pub(in crate::command_runner) mod command_io;
 pub(in crate::command_runner) mod error_mapping;

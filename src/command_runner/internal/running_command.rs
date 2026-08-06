@@ -271,7 +271,7 @@ impl RunningCommand {
                 source,
             ));
         }
-        let finished = self.complete_ready(status)?;
+        let finished = self.complete_after_termination(status)?;
         Err(CommandError::TimedOut {
             command: finished.command_text,
             timeout,
@@ -301,7 +301,7 @@ impl RunningCommand {
                 source,
             });
         }
-        let finished = self.complete_ready(status)?;
+        let finished = self.complete_after_termination(status)?;
         Err(CommandError::Cancelled {
             command: finished.command_text,
             output: Box::new(finished.output),
@@ -327,7 +327,7 @@ impl RunningCommand {
                 });
             }
         };
-        let finished = self.complete_ready(status)?;
+        let finished = self.complete_after_termination(status)?;
         Err(CommandError::Cancelled {
             command: finished.command_text,
             output: Box::new(finished.output),
@@ -368,7 +368,7 @@ impl RunningCommand {
                 return Err(self.collect_if_child_exited(error));
             }
         };
-        let finished = self.complete_ready(exit_status)?;
+        let finished = self.complete_after_termination(exit_status)?;
         Err(CommandError::TimedOut {
             command: finished.command_text,
             timeout,
@@ -409,7 +409,7 @@ impl RunningCommand {
         })
     }
 
-    /// Completes a terminated command without waiting for blocked I/O helpers.
+    /// Completes a terminated command after cancelling and joining I/O helpers.
     ///
     /// # Parameters
     ///
@@ -417,14 +417,14 @@ impl RunningCommand {
     ///
     /// # Returns
     ///
-    /// Finished command output containing only helpers completed before the
-    /// cleanup cutoff.
+    /// Finished command output after all helpers have been cancelled and
+    /// joined.
     ///
     /// # Errors
     ///
     /// Returns [`CommandError`] if a completed helper or elapsed-time sampling
     /// fails.
-    fn complete_ready(
+    fn complete_after_termination(
         self,
         status: ExitStatus,
     ) -> Result<FinishedCommand, CommandError> {
@@ -435,9 +435,10 @@ impl RunningCommand {
             timer,
             ..
         } = self;
-        let output = io.collect_ready(&command_text, status, move || {
-            timer.clock().now().duration_since(started_at)
-        })?;
+        let output =
+            io.cancel_and_collect(&command_text, status, move || {
+                timer.clock().now().duration_since(started_at)
+            })?;
         Ok(FinishedCommand {
             command_text,
             output,
@@ -563,9 +564,10 @@ impl RunningCommand {
             Err(_) => self.child_process.try_wait().ok().flatten(),
         };
         if let Some(status) = status {
-            let _ = self.io.collect_ready(&self.command_text, status, || {
-                Ok::<Duration, TimeError>(Duration::ZERO)
-            });
+            let _ =
+                self.io.cancel_and_collect(&self.command_text, status, || {
+                    Ok::<Duration, TimeError>(Duration::ZERO)
+                });
         }
         error
     }
@@ -594,7 +596,7 @@ impl RunningCommand {
             source,
         };
         let _ = self.child_process.start_kill();
-        let _ = self.io.collect_ready(&self.command_text, status, || {
+        let _ = self.io.cancel_and_collect(&self.command_text, status, || {
             Ok::<Duration, TimeError>(Duration::ZERO)
         });
         Err(error)

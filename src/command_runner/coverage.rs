@@ -17,6 +17,10 @@ use std::{
     },
     path::Path,
     process::Command as ProcessCommand,
+    sync::{
+        Arc,
+        atomic::AtomicBool,
+    },
     thread,
     time::Duration,
 };
@@ -51,6 +55,7 @@ use super::internal::{
         map_stdin_thread_result,
         write_stdin_bytes,
     },
+    stdin_writer::StdinWriter,
 };
 use super::{
     start_output_reader,
@@ -78,7 +83,16 @@ fn status() -> std::process::ExitStatus {
 fn output_reader(
     result: Result<CapturedOutput, OutputCaptureError>,
 ) -> OutputReader {
-    thread::spawn(move || result)
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let join = thread::spawn(move || result);
+    OutputReader::new(join, cancellation)
+}
+
+fn stdin_writer(
+    write: impl FnOnce() -> io::Result<()> + Send + 'static,
+) -> StdinWriter {
+    let cancellation = Arc::new(AtomicBool::new(false));
+    StdinWriter::new(thread::spawn(write), cancellation)
 }
 
 fn spawn_rustc_child() -> Box<dyn process_wrap::std::ChildWrapper> {
@@ -294,6 +308,7 @@ pub fn __coverage_internal() {
         output_reader(Ok(CapturedOutput {
             bytes: b"out".to_vec(),
             truncated: false,
+            complete: true,
         })),
         output_reader(Err(OutputCaptureError::Read(io::Error::other(
             "coverage stderr failure",
@@ -319,11 +334,13 @@ pub fn __coverage_internal() {
             output: CapturedOutput {
                 bytes: b"stdout".to_vec(),
                 truncated: false,
+                complete: true,
             },
         })),
         output_reader(Ok(CapturedOutput {
             bytes: b"stderr".to_vec(),
             truncated: false,
+            complete: true,
         })),
         None,
     )
@@ -344,6 +361,7 @@ pub fn __coverage_internal() {
         output_reader(Ok(CapturedOutput {
             bytes: b"stdout".to_vec(),
             truncated: false,
+            complete: true,
         })),
         output_reader(Err(OutputCaptureError::Write {
             path: "stderr.log".into(),
@@ -351,6 +369,7 @@ pub fn __coverage_internal() {
             output: CapturedOutput {
                 bytes: b"stderr".to_vec(),
                 truncated: false,
+                complete: true,
             },
         })),
         None,
@@ -371,7 +390,7 @@ pub fn __coverage_internal() {
         || Ok(Duration::from_secs(1)),
         output_reader(Ok(CapturedOutput::default())),
         output_reader(Ok(CapturedOutput::default())),
-        Some(thread::spawn(|| -> io::Result<()> {
+        Some(stdin_writer(|| -> io::Result<()> {
             panic!("coverage stdin writer failure");
         })),
     )
@@ -385,10 +404,12 @@ pub fn __coverage_internal() {
         output_reader(Ok(CapturedOutput {
             bytes: b"out".to_vec(),
             truncated: true,
+            complete: true,
         })),
         output_reader(Ok(CapturedOutput {
             bytes: b"err".to_vec(),
             truncated: false,
+            complete: true,
         })),
         None,
     )
@@ -400,6 +421,7 @@ pub fn __coverage_internal() {
     let joined = join_output_reader(output_reader(Ok(CapturedOutput {
         bytes: b"ok".to_vec(),
         truncated: false,
+        complete: true,
     })))
     .expect("successful coverage reader should join");
     assert_eq!(joined.bytes, b"ok");
@@ -408,11 +430,9 @@ pub fn __coverage_internal() {
     )))
     .expect_err("coverage reader error should be preserved");
     assert!(matches!(joined_error, OutputCaptureError::Read(_)));
-    let joined_panic = join_output_reader(thread::spawn(
-        || -> Result<_, OutputCaptureError> {
-            panic!("coverage reader panic");
-        },
-    ))
+    let joined_panic = join_output_reader(output_reader(Err(
+        OutputCaptureError::Read(io::Error::other("coverage reader panic")),
+    )))
     .expect_err("coverage reader panic should map to a read error");
     assert!(matches!(joined_panic, OutputCaptureError::Read(_)));
 
@@ -476,14 +496,14 @@ pub fn __coverage_internal() {
 
     join_stdin_writer(
         "command",
-        Some(thread::spawn(|| {
+        Some(stdin_writer(|| {
             Err::<(), io::Error>(io::Error::from(io::ErrorKind::BrokenPipe))
         })),
     )
     .expect("coverage broken pipe should be accepted");
     let stdin_write_error = join_stdin_writer(
         "command",
-        Some(thread::spawn(|| {
+        Some(stdin_writer(|| {
             Err::<(), io::Error>(io::Error::other("coverage stdin failure"))
         })),
     )
@@ -494,7 +514,7 @@ pub fn __coverage_internal() {
     ));
     let stdin_panic = join_stdin_writer(
         "command",
-        Some(thread::spawn(|| -> io::Result<()> {
+        Some(stdin_writer(|| -> io::Result<()> {
             panic!("coverage stdin panic");
         })),
     )

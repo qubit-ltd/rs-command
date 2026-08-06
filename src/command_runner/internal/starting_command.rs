@@ -13,7 +13,7 @@ use super::{
     command_io::CommandIo,
     managed_child_process::ManagedChildProcess,
     output_reader::OutputReader,
-    stdin_writer::StdinWriter,
+    stdin_writer::OptionalStdinWriter,
 };
 
 /// Guards a spawned child until all runner-side I/O helpers are ready.
@@ -31,7 +31,7 @@ pub(in crate::command_runner) struct StartingCommand<'a> {
     /// Started stderr reader, if initialization reached that stage.
     stderr_reader: Option<OutputReader>,
     /// Optional started stdin writer.
-    stdin_writer: StdinWriter,
+    stdin_writer: OptionalStdinWriter,
 }
 
 impl<'a> StartingCommand<'a> {
@@ -86,7 +86,7 @@ impl<'a> StartingCommand<'a> {
     #[inline(always)]
     pub(in crate::command_runner) fn set_stdin_writer(
         &mut self,
-        writer: StdinWriter,
+        writer: OptionalStdinWriter,
     ) {
         self.stdin_writer = writer;
     }
@@ -151,24 +151,18 @@ impl<'a> StartingCommand<'a> {
         )
     }
 
-    /// Joins helpers that have already completed after the child is stopped.
-    ///
-    /// Unfinished helpers are detached so a descendant that escaped process
-    /// management cannot block startup-error cleanup indefinitely.
+    /// Cancels and joins all helpers after the child is stopped.
     fn join_helpers(&mut self) {
-        if let Some(reader) = self.stdout_reader.take()
-            && reader.is_finished()
-        {
+        if let Some(reader) = self.stdout_reader.take() {
+            reader.cancel();
             let _ = reader.join();
         }
-        if let Some(reader) = self.stderr_reader.take()
-            && reader.is_finished()
-        {
+        if let Some(reader) = self.stderr_reader.take() {
+            reader.cancel();
             let _ = reader.join();
         }
-        if let Some(writer) = self.stdin_writer.take()
-            && writer.is_finished()
-        {
+        if let Some(writer) = self.stdin_writer.take() {
+            writer.cancel();
             let _ = writer.join();
         }
     }

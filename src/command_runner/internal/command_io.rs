@@ -17,7 +17,7 @@ use super::{
     },
     output_reader::OutputReader,
     stdin_pipe::join_stdin_writer,
-    stdin_writer::StdinWriter,
+    stdin_writer::OptionalStdinWriter,
 };
 use crate::{
     CommandError,
@@ -25,14 +25,14 @@ use crate::{
 };
 
 /// Output and stdin helper threads for one running command.
-#[must_use = "dropping command I/O detaches its helper threads"]
+#[must_use = "command I/O owns helper threads that must be collected"]
 pub(in crate::command_runner) struct CommandIo {
     /// Reader thread draining stdout.
     stdout_reader: OutputReader,
     /// Reader thread draining stderr.
     stderr_reader: OutputReader,
     /// Optional writer thread feeding stdin.
-    stdin_writer: StdinWriter,
+    stdin_writer: OptionalStdinWriter,
 }
 
 impl CommandIo {
@@ -51,7 +51,7 @@ impl CommandIo {
     pub(in crate::command_runner) fn new(
         stdout_reader: OutputReader,
         stderr_reader: OutputReader,
-        stdin_writer: StdinWriter,
+        stdin_writer: OptionalStdinWriter,
     ) -> Self {
         Self {
             stdout_reader,
@@ -74,7 +74,7 @@ impl CommandIo {
             && self
                 .stdin_writer
                 .as_ref()
-                .is_none_or(std::thread::JoinHandle::is_finished)
+                .is_none_or(|writer| writer.is_finished())
     }
 
     /// Collects output from all helper threads.
@@ -113,30 +113,25 @@ impl CommandIo {
         )
     }
 
-    /// Collects only helpers that have already finished.
-    ///
-    /// Unfinished helpers are detached when this method consumes the bundle.
-    /// This is used after process termination so an escaped descendant or a
-    /// blocked tee destination cannot indefinitely delay a timeout or
-    /// cancellation result. The returned output can therefore omit bytes from
-    /// streams whose helpers were still active.
+    /// Cancels and joins every helper after process termination.
     ///
     /// # Parameters
     ///
     /// * `command` - Human-readable command text for diagnostics.
     /// * `status` - Process exit status.
-    /// * `elapsed` - Callback that samples command duration without waiting for
-    ///   unfinished helpers.
+    /// * `elapsed` - Callback that samples command duration after helpers have
+    ///   been cancelled and joined.
     ///
     /// # Returns
     ///
-    /// Captured output from helpers that completed before the cleanup cutoff.
+    /// Captured output, including completeness metadata for interrupted
+    /// streams.
     ///
     /// # Errors
     ///
     /// Returns [`CommandError`] if a completed helper or elapsed-time sampling
     /// failed.
-    pub(in crate::command_runner) fn collect_ready<F>(
+    pub(in crate::command_runner) fn cancel_and_collect<F>(
         self,
         command: &str,
         status: std::process::ExitStatus,
@@ -150,22 +145,14 @@ impl CommandIo {
             stderr_reader,
             stdin_writer,
         } = self;
-        let stdout_result = if stdout_reader.is_finished() {
-            join_output_reader(stdout_reader)
-        } else {
-            Ok(Default::default())
-        };
-        let stderr_result = if stderr_reader.is_finished() {
-            join_output_reader(stderr_reader)
-        } else {
-            Ok(Default::default())
-        };
-        let stdin_result = match stdin_writer {
-            Some(writer) if writer.is_finished() => {
-                join_stdin_writer(command, Some(writer))
-            }
-            Some(_) | None => Ok(()),
-        };
+        stdout_reader.cancel();
+        stderr_reader.cancel();
+        if let Some(writer) = stdin_writer.as_ref() {
+            writer.cancel();
+        }
+        let stdout_result = join_output_reader(stdout_reader);
+        let stderr_result = join_output_reader(stderr_reader);
+        let stdin_result = join_stdin_writer(command, stdin_writer);
         collect_output_results(
             command,
             status,
