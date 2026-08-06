@@ -166,6 +166,44 @@ where
     let stdin_result = join_stdin_writer(command, stdin_writer);
     let elapsed_result = elapsed();
 
+    collect_output_results(
+        command,
+        status,
+        elapsed_result,
+        stdout_result,
+        stderr_result,
+        stdin_result,
+    )
+}
+
+/// Builds command output from completed helper results.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used in errors.
+/// * `status` - Child exit status.
+/// * `elapsed_result` - Sampled command duration.
+/// * `stdout_result` - Completed stdout helper result.
+/// * `stderr_result` - Completed stderr helper result.
+/// * `stdin_result` - Completed stdin helper result.
+///
+/// # Returns
+///
+/// Captured command output after mapping helper failures.
+///
+/// # Errors
+///
+/// Returns a time-handling failure, otherwise the first stdout, stderr, or
+/// stdin helper failure in that order.
+pub(in crate::command_runner) fn collect_output_results(
+    command: &str,
+    status: ExitStatus,
+    elapsed_result: Result<Duration, TimeError>,
+    stdout_result: Result<CapturedOutput, OutputCaptureError>,
+    stderr_result: Result<CapturedOutput, OutputCaptureError>,
+    stdin_result: Result<(), CommandError>,
+) -> Result<CommandOutput, CommandError> {
+
     match (elapsed_result, stdout_result, stderr_result, stdin_result) {
         (Err(source), _, _, _) => Err(CommandError::TimeFailed {
             command: command.to_owned(),

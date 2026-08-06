@@ -151,17 +151,24 @@ impl<'a> StartingCommand<'a> {
         )
     }
 
-    /// Joins all helper threads after the child is confirmed stopped.
+    /// Joins helpers that have already completed after the child is stopped.
     ///
-    /// This method blocks until every registered helper finishes.
+    /// Unfinished helpers are detached so a descendant that escaped process
+    /// management cannot block startup-error cleanup indefinitely.
     fn join_helpers(&mut self) {
-        if let Some(reader) = self.stdout_reader.take() {
+        if let Some(reader) = self.stdout_reader.take()
+            && reader.is_finished()
+        {
             let _ = reader.join();
         }
-        if let Some(reader) = self.stderr_reader.take() {
+        if let Some(reader) = self.stderr_reader.take()
+            && reader.is_finished()
+        {
             let _ = reader.join();
         }
-        if let Some(writer) = self.stdin_writer.take() {
+        if let Some(writer) = self.stdin_writer.take()
+            && writer.is_finished()
+        {
             let _ = writer.join();
         }
     }

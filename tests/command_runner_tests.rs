@@ -770,6 +770,44 @@ mod unix {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_command_runner_timeout_returns_when_descendant_escapes_process_group() {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temporary directory should be created");
+        let pid_path = temp_dir.path().join("escaped-child.pid");
+        let escaped_child = "setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" &";
+        let started = Instant::now();
+
+        let error = CommandRunner::new()
+            .timeout(Duration::from_millis(100))
+            .run(
+                Command::new("sh")
+                    .arg("-c")
+                    .arg(escaped_child)
+                    .arg("sh")
+                    .arg_os(&pid_path),
+            )
+            .expect_err("escaped descendant should keep the output pipe open");
+
+        let pid_deadline = Instant::now() + Duration::from_secs(1);
+        while !pid_path.exists() && Instant::now() < pid_deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if let Ok(pid) = fs::read_to_string(&pid_path) {
+            let _ = std::process::Command::new("kill")
+                .arg("-KILL")
+                .arg(pid.trim())
+                .status();
+        }
+
+        assert!(matches!(error, CommandError::TimedOut { .. }));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "timeout must not wait for an escaped descendant to close inherited output"
+        );
+    }
+
     #[test]
     fn test_runner_timeout_uses_injected_manual_timer() {
         use qubit_clock::{
