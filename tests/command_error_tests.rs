@@ -96,6 +96,23 @@ fn test_command_error_accessors_for_errors_without_output() {
             .contains("failed to open stderr file")
     );
 
+    let non_regular_input = CommandError::NonRegularInputFile {
+        command: "non-regular-input".to_owned(),
+        path: PathBuf::from("stdin.pipe"),
+    };
+    assert_eq!(non_regular_input.command(), "non-regular-input");
+    assert!(non_regular_input.output().is_none());
+    assert!(non_regular_input.to_string().contains("ordinary file"));
+
+    let non_regular_output = CommandError::NonRegularOutputFile {
+        command: "non-regular-output".to_owned(),
+        stream: OutputStream::Stdout,
+        path: PathBuf::from("stdout.pipe"),
+    };
+    assert_eq!(non_regular_output.command(), "non-regular-output");
+    assert!(non_regular_output.output().is_none());
+    assert!(non_regular_output.to_string().contains("ordinary file"));
+
     let write_input = CommandError::WriteInputFailed {
         command: "write-input".to_owned(),
         source: io::Error::other("write input failed"),
