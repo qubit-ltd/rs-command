@@ -30,7 +30,7 @@ use qubit_redact::redacted_debug;
 /// [`Self::stdout_lossy_text`] and [`Self::stderr_lossy_text`] to replace
 /// invalid byte sequences with the Unicode replacement character. Its
 /// [`fmt::Debug`] implementation redacts both captured streams and reports
-/// only their retained lengths and truncation flags.
+/// only their retained lengths, truncation flags, and completion flags.
 ///
 /// # Examples
 ///
