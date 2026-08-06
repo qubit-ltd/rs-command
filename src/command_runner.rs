@@ -27,6 +27,7 @@ use qubit_redact::RedactionPolicy;
 mod coverage;
 mod internal;
 #[cfg(coverage)]
+#[doc(hidden)]
 pub use coverage::__coverage_internal;
 
 use internal::error_mapping::{
