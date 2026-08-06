@@ -238,10 +238,11 @@ pub fn __coverage_internal() {
     .expect_err("coverage reader failure should be returned");
     assert!(matches!(read_error, OutputCaptureError::Read(_)));
 
+    let tee_input = vec![b'o'; 3 * 8 * 1024];
     let tee_error = read_output(
-        &mut Cursor::new(b"output".to_vec()),
+        &mut Cursor::new(tee_input),
         OutputCaptureOptions {
-            max_bytes: Some(3),
+            max_bytes: Some(2 * 8 * 1024),
             tee: Some(OutputTee {
                 writer: Box::new(FailingWriter { fail_write: true }),
                 path: "tee-write.log".into(),
@@ -249,7 +250,11 @@ pub fn __coverage_internal() {
         },
     )
     .expect_err("coverage tee write failure should be returned");
-    assert!(matches!(tee_error, OutputCaptureError::Write { .. }));
+    let OutputCaptureError::Write { output, .. } = tee_error else {
+        panic!("coverage tee write failure should retain output");
+    };
+    assert_eq!(output.bytes.len(), 2 * 8 * 1024);
+    assert!(output.truncated);
 
     let flush_error = read_output(
         &mut Cursor::new(b"output".to_vec()),
@@ -263,6 +268,10 @@ pub fn __coverage_internal() {
     )
     .expect_err("coverage tee flush failure should be returned");
     assert!(matches!(flush_error, OutputCaptureError::Write { .. }));
+
+    FailingWriter { fail_write: true }
+        .flush()
+        .expect("coverage write-failure fixture should flush successfully");
 
     let elapsed_error = collect_output(
         "command",

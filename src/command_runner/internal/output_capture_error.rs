@@ -23,7 +23,8 @@ pub(in crate::command_runner) enum OutputCaptureError {
         path: PathBuf,
         /// I/O error reported by the writer.
         source: io::Error,
-        /// Bytes retained before the tee write failed.
+        /// Bytes retained while draining the stream after the tee write
+        /// failed.
         output: CapturedOutput,
     },
 }
