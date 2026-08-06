@@ -35,26 +35,26 @@ qubit-command = "0.6"
 普通命令使用结构化参数。这样参数边界明确，也不会调用 shell：
 
 ```rust
-use qubit_command::{Command, CommandRunner};
+use qubit_command::{Command, CommandCancellation, CommandRunOptions, CommandRunner};
 
 fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
-    let output = CommandRunner::new()
+    let output = CommandRunner::new(std::time::Duration::from_secs(10))
         .run(Command::new("git").args(&["status", "--short"]))?;
 
     Ok(output.stdout_text()?.to_owned())
 }
 ```
 
-`CommandRunner::new()` 默认使用十秒超时，把退出码 `0` 视为成功，并在内存中为每个输出流最多保留 1 MiB。`run` 会同步等待命令成功，或返回 `CommandError`。
+`CommandRunner::new(std::time::Duration::from_secs(10))` 默认使用十秒超时，把退出码 `0` 视为成功，并在内存中为每个输出流最多保留 1 MiB。`run` 会同步等待命令成功，或返回 `CommandError`。
 
 ### 判断输出含义
 
 `stdout()` 和 `stderr()` 返回保留的原始字节。只有确实要求严格 UTF-8 时才使用 `stdout_text()` 或 `stderr_text()`；如果希望把非法字节替换为 `�`，使用 `stdout_lossy_text()` 或 `stderr_lossy_text()`。
 
 ```rust
-use qubit_command::{Command, CommandRunner};
+use qubit_command::{Command, CommandRunOptions, CommandRunner};
 
-let output = CommandRunner::new()
+let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::new("printf").arg("hello"))?;
 
 assert_eq!(output.stdout_text()?, "hello");
@@ -81,7 +81,7 @@ let command = Command::new("git")
 ### 只在明确需要时使用 shell
 
 ```rust
-let output = CommandRunner::new()
+let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::shell("printf hello | tr a-z A-Z"))?;
 assert_eq!(output.stdout_text()?, "HELLO");
 # Ok::<(), Box<dyn std::error::Error>>(())
@@ -96,7 +96,7 @@ assert_eq!(output.stdout_text()?, "HELLO");
 ```rust
 use qubit_command::{Command, CommandRunner};
 
-let output = CommandRunner::new().run(
+let output = CommandRunner::new(std::time::Duration::from_secs(10)).run(
     Command::new("cat")
         .stdin_bytes("input\n")
         .env("LANG", "C"),
@@ -113,7 +113,7 @@ assert_eq!(output.stdout_text()?, "input\n");
 默认只有退出码 `0` 表示成功。如果工具文档说明另一个状态也代表成功，应明确配置：
 
 ```rust
-let output = CommandRunner::new()
+let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .success_exit_codes(&[0, 2])
     .run(Command::new("tool"))?;
 # let _ = output;
@@ -125,14 +125,15 @@ let output = CommandRunner::new()
 
 ### 超时
 
-默认超时是 `DEFAULT_COMMAND_TIMEOUT`，当前为十秒。它从子进程启动后开始计时；准备和启动耗时不计入这个时长。
+每个 `CommandRunner` 实例都会用一个显式 timeout 构造。
+以下示例使用十秒超时。
+它从子进程启动后开始计时，因此准备和启动耗时不计入该时长。
 
 ```rust
 use std::time::Duration;
 use qubit_command::{Command, CommandRunner};
 
-let result = CommandRunner::new()
-    .timeout(Duration::from_secs(2))
+let result = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::new("long-running-tool"));
 ```
 
@@ -148,12 +149,19 @@ let result = CommandRunner::new()
 use qubit_command::{Command, CommandCancellation, CommandRunner};
 
 let cancellation = CommandCancellation::new();
-let runner = CommandRunner::new().cancellation_token(cancellation.clone());
+let runner = CommandRunner::new(std::time::Duration::from_secs(10));
+let result = runner.run_with(
+    Command::new("long-running-tool"),
+    CommandRunOptions::new().cancellation(cancellation.clone()),
+);
 
 // 在应用的关闭或终端信号策略中调用：
 cancellation.cancel();
 
-let result = runner.run(Command::new("long-running-tool"));
+let result = runner.run_with(
+    Command::new("long-running-tool"),
+    CommandRunOptions::new().cancellation(cancellation.clone()),
+);
 ```
 
 如果在准备开始前观察到取消请求，结果是 `CommandError::CancelledBeforeStart`。否则 runner 会终止受管进程树，并在可用时通过 `CommandError::Cancelled` 保留输出。句柄是一次性的；多次调用 `cancel()` 不会产生额外效果。
@@ -169,12 +177,15 @@ let result = runner.run(Command::new("long-running-tool"));
 ```rust
 use qubit_command::{Command, CommandRunner};
 
-let output = CommandRunner::new()
+let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .max_output_bytes(64 * 1024)
     .fail_on_output_truncation(false)
-    .tee_stdout_to_file("stdout.log")
-    .tee_stderr_to_file("stderr.log")
-    .run(Command::new("cargo").arg("test"))?;
+    .run_with(
+        Command::new("cargo").arg("test"),
+        CommandRunOptions::new()
+            .tee_stdout_to_file("stdout.log")
+            .tee_stderr_to_file("stderr.log"),
+    )?;
 
 if output.stdout_truncated() {
     eprintln!("stdout was truncated in memory; see stdout.log for the full stream");
@@ -198,7 +209,7 @@ let command = Command::new("uploader")
     .sensitive_arg("customer-report.csv");
 ```
 
-原值会不变地传给子进程，诊断渲染时则显示掩码。`CommandRunner::new()` 会取得进程级默认脱敏策略的快照。如果要构造 runner 专用策略，可以通过 `diagnostic_redaction_policy` 注入完整不可变策略；策略类型属于 `qubit-redact`，因此应用构造它时必须直接依赖该 crate。
+原值会不变地传给子进程，诊断渲染时则显示掩码。`CommandRunner::new(std::time::Duration::from_secs(10))` 会取得进程级默认脱敏策略的快照。如果要构造 runner 专用策略，可以通过 `diagnostic_redaction_policy` 注入完整不可变策略；策略类型属于 `qubit-redact`，因此应用构造它时必须直接依赖该 crate。
 
 `allow_exact` 和 `allow_suffix` 规则可能让值出现在诊断中，应先审阅其确切披露边界。`CommandOutput` 的 debug 输出会遮盖捕获流，只展示元数据；显式字节访问器和 tee 文件仍是原始进程输出。
 
@@ -221,7 +232,7 @@ let command = Command::new("uploader")
 ```rust
 use qubit_command::{Command, CommandError, CommandRunner};
 
-match CommandRunner::new().run(Command::new("tool")) {
+match CommandRunner::new(std::time::Duration::from_secs(10)).run(Command::new("tool")) {
     Ok(output) => println!("{}", output.stdout_lossy_text()),
     Err(error) => {
         eprintln!("{}", error);

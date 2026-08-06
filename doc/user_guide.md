@@ -38,14 +38,14 @@ Use structured arguments for ordinary commands. This keeps argument boundaries e
 use qubit_command::{Command, CommandRunner};
 
 fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
-    let output = CommandRunner::new()
+    let output = CommandRunner::new(std::time::Duration::from_secs(10))
         .run(Command::new("git").args(&["status", "--short"]))?;
 
     Ok(output.stdout_text()?.to_owned())
 }
 ```
 
-`CommandRunner::new()` uses a ten-second timeout, treats exit code `0` as successful, and retains up to 1 MiB per output stream in memory. `run` waits synchronously until the command succeeds or returns a `CommandError`.
+`CommandRunner::new(std::time::Duration::from_secs(10))` uses a ten-second timeout, treats exit code `0` as successful, and retains up to 1 MiB per output stream in memory. `run` waits synchronously until the command succeeds or returns a `CommandError`.
 
 ### Decide What Output Means
 
@@ -54,7 +54,7 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 ```rust
 use qubit_command::{Command, CommandRunner};
 
-let output = CommandRunner::new()
+let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::new("printf").arg("hello"))?;
 
 assert_eq!(output.stdout_text()?, "hello");
@@ -81,7 +81,7 @@ For non-UTF-8 program or argument values, use `new_os`, `arg_os`, `args_os`, `en
 ### Use a Shell Only Intentionally
 
 ```rust
-let output = CommandRunner::new()
+let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::shell("printf hello | tr a-z A-Z"))?;
 assert_eq!(output.stdout_text()?, "HELLO");
 # Ok::<(), Box<dyn std::error::Error>>(())
@@ -96,7 +96,7 @@ On Unix-like platforms `Command::shell` runs `sh -c`; on Windows it runs `cmd /C
 ```rust
 use qubit_command::{Command, CommandRunner};
 
-let output = CommandRunner::new().run(
+let output = CommandRunner::new(std::time::Duration::from_secs(10)).run(
     Command::new("cat")
         .stdin_bytes("input\n")
         .env("LANG", "C"),
@@ -113,7 +113,7 @@ assert_eq!(output.stdout_text()?, "input\n");
 Exit code `0` is successful by default. If a tool documents another successful status, configure it explicitly:
 
 ```rust
-let output = CommandRunner::new()
+let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .success_exit_codes(&[0, 2])
     .run(Command::new("tool"))?;
 # let _ = output;
@@ -125,14 +125,16 @@ An exit status outside the configured list returns `CommandError::UnexpectedExit
 
 ### Timeout
 
-The default timeout is `DEFAULT_COMMAND_TIMEOUT`, currently ten seconds. It starts after the child has been spawned; preparation and spawning time are outside that duration.
+Each `CommandRunner` instance is constructed with an explicit timeout value.
+The examples below use ten seconds.
+The timeout starts after the child has been spawned, so preparation and
+spawning time are outside that duration.
 
 ```rust
 use std::time::Duration;
-use qubit_command::{Command, CommandRunner};
+use qubit_command::{Command, CommandRunner, CommandRunOptions};
 
-let result = CommandRunner::new()
-    .timeout(Duration::from_secs(2))
+let result = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::new("long-running-tool"));
 ```
 
@@ -145,15 +147,22 @@ Use `without_timeout()` only when an unlimited wait is deliberate. If cancellati
 Create one cancellation handle, clone it into the runner, and call `cancel()` from the application's existing shutdown policy:
 
 ```rust
-use qubit_command::{Command, CommandCancellation, CommandRunner};
+use qubit_command::{Command, CommandCancellation, CommandRunOptions, CommandRunner};
 
 let cancellation = CommandCancellation::new();
-let runner = CommandRunner::new().cancellation_token(cancellation.clone());
+let runner = CommandRunner::new(std::time::Duration::from_secs(10));
+let result = runner.run_with(
+    Command::new("long-running-tool"),
+    CommandRunOptions::new().cancellation(cancellation.clone()),
+);
 
 // Call this from the application's shutdown or terminal-signal policy:
 cancellation.cancel();
 
-let result = runner.run(Command::new("long-running-tool"));
+let result = runner.run_with(
+    Command::new("long-running-tool"),
+    CommandRunOptions::new().cancellation(cancellation.clone()),
+);
 ```
 
 If cancellation is observed before preparation starts, the result is `CommandError::CancelledBeforeStart`. Otherwise the managed process tree is terminated and the result is `CommandError::Cancelled`, with retained output when available. The handle is one-shot; calling `cancel()` more than once has no additional effect.
@@ -167,14 +176,17 @@ Each stream is limited to `DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM`, currently 1 MiB
 For large logs, keep memory bounded and tee each stream to a file:
 
 ```rust
-use qubit_command::{Command, CommandRunner};
+use qubit_command::{Command, CommandRunOptions, CommandRunner};
 
-let output = CommandRunner::new()
+let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .max_output_bytes(64 * 1024)
     .fail_on_output_truncation(false)
-    .tee_stdout_to_file("stdout.log")
-    .tee_stderr_to_file("stderr.log")
-    .run(Command::new("cargo").arg("test"))?;
+    .run_with(
+        Command::new("cargo").arg("test"),
+        CommandRunOptions::new()
+            .tee_stdout_to_file("stdout.log")
+            .tee_stderr_to_file("stderr.log"),
+    )?;
 
 if output.stdout_truncated() {
     eprintln!("stdout was truncated in memory; see stdout.log for the full stream");
@@ -198,7 +210,7 @@ let command = Command::new("uploader")
     .sensitive_arg("customer-report.csv");
 ```
 
-The original value is passed to the child unchanged, while diagnostic rendering uses a mask. `CommandRunner::new()` snapshots the process-wide default redaction policy. A runner can instead receive a complete immutable policy through `diagnostic_redaction_policy`; the policy type belongs to `qubit-redact`, so applications must depend on that crate directly when constructing one.
+The original value is passed to the child unchanged, while diagnostic rendering uses a mask. `CommandRunner::new(std::time::Duration::from_secs(10))` snapshots the process-wide default redaction policy. A runner can instead receive a complete immutable policy through `diagnostic_redaction_policy`; the policy type belongs to `qubit-redact`, so applications must depend on that crate directly when constructing one.
 
 `allow_exact` and `allow_suffix` rules can expose values in diagnostics. Use them only after reviewing the exact disclosure boundary. `CommandOutput` debug output redacts captured streams and reports metadata; the explicit byte accessors and tee files remain raw process output.
 
@@ -222,7 +234,7 @@ For a policy error with output:
 ```rust
 use qubit_command::{Command, CommandError, CommandRunner};
 
-match CommandRunner::new().run(Command::new("tool")) {
+match CommandRunner::new(std::time::Duration::from_secs(10)).run(Command::new("tool")) {
     Ok(output) => println!("{}", output.stdout_lossy_text()),
     Err(error) => {
         eprintln!("{}", error);
