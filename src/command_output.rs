@@ -39,7 +39,9 @@ use qubit_redact::redacted_debug;
 /// use qubit_command::{Command, CommandOutput, CommandRunner};
 ///
 /// fn run_command() -> CommandOutput {
-///     CommandRunner::new().run(Command::new("true")).unwrap()
+///     CommandRunner::new(std::time::Duration::from_secs(10))
+///         .run(Command::new("true"))
+///         .unwrap()
 /// }
 ///
 /// run_command();

@@ -2,8 +2,6 @@
 //    Copyright (c) 2025 - 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
-//
-//    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 //! Owns a child process while its I/O helpers are being started.
 
@@ -19,7 +17,7 @@ use super::{
 /// Guards a spawned child until all runner-side I/O helpers are ready.
 ///
 /// Dropping an unfinished guard performs best-effort process termination and
-/// joins already-started helpers after the child is confirmed stopped.
+/// joins any helpers that were started.
 #[must_use = "dropping an unfinished command guard terminates the child"]
 pub(in crate::command_runner) struct StartingCommand<'a> {
     /// Redacted command text used in cleanup logs.
@@ -74,8 +72,9 @@ impl<'a> StartingCommand<'a> {
         &mut self,
     ) -> &mut dyn ChildWrapper {
         self.child_process
-            .as_deref_mut()
+            .as_mut()
             .expect("a starting command always owns its child")
+            .wrapper_mut()
     }
 
     /// Records the optional stdin writer started for this child.
@@ -151,7 +150,7 @@ impl<'a> StartingCommand<'a> {
         )
     }
 
-    /// Cancels and joins all helpers after the child is stopped.
+    /// Cancels and joins all started I/O helpers.
     fn join_helpers(&mut self) {
         if let Some(reader) = self.stdout_reader.take() {
             reader.cancel();
@@ -172,43 +171,38 @@ impl Drop for StartingCommand<'_> {
     /// Best-effort cleanup for initialization that returns early.
     fn drop(&mut self) {
         let Some(mut child_process) = self.child_process.take() else {
+            self.join_helpers();
             return;
         };
-        let child_stopped = match child_process.start_kill() {
-            Ok(()) => match child_process.wait() {
-                Ok(_) => true,
-                Err(source) => {
-                    log::error!(
-                        "Failed to wait for command '{}' during startup cleanup: {}",
-                        self.command,
-                        source,
-                    );
-                    false
+
+        let tree_managed = child_process.process_tree_managed();
+        if tree_managed {
+            if let Err(process_tree_source) = child_process.start_kill_tree() {
+                if child_process.try_wait().ok().flatten().is_none() {
+                    if let Err(child_source) = child_process.start_kill_child() {
+                        log::error!(
+                            "Failed to kill command '{}' during startup cleanup: process-tree: {process_tree_source}; child: {child_source}",
+                            self.command
+                        );
+                    }
                 }
-            },
-            Err(kill_source) => match child_process.try_wait() {
-                Ok(Some(_)) => true,
-                Ok(None) => {
-                    log::error!(
-                        "Failed to kill command '{}' during startup cleanup: {}",
-                        self.command,
-                        kill_source,
-                    );
-                    false
-                }
-                Err(wait_source) => {
-                    log::error!(
-                        "Failed to kill or inspect command '{}' during startup cleanup: {}; {}",
-                        self.command,
-                        kill_source,
-                        wait_source,
-                    );
-                    false
-                }
-            },
-        };
-        if child_stopped {
-            self.join_helpers();
+            }
+        } else {
+            if let Err(child_source) = child_process.start_kill_child() {
+                log::error!(
+                    "Failed to kill command '{}' during startup cleanup: {}",
+                    self.command,
+                    child_source,
+                );
+            }
         }
+        if let Err(wait_source) = child_process.wait() {
+            log::error!(
+                "Failed to wait for command '{}' during startup cleanup: {wait_source}",
+                self.command
+            );
+        }
+
+        self.join_helpers();
     }
 }

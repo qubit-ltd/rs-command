@@ -23,7 +23,7 @@ fn test_process_setup_reports_missing_stdin_file_before_spawn() {
         .expect("process setup temp directory should be created");
     let missing = temp_dir.path().join("missing-stdin");
 
-    let error = CommandRunner::new()
+    let error = CommandRunner::new(Duration::from_secs(10))
         .run(Command::new("cat").stdin_file(missing.clone()))
         .expect_err("missing stdin file should be reported");
 

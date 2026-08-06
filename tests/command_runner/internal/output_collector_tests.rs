@@ -16,7 +16,7 @@ use qubit_command::{
 #[cfg(not(windows))]
 #[test]
 fn test_output_collector_keeps_streams_separate() {
-    let output = CommandRunner::new()
+    let output = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell(
             "printf stdout-bytes; printf stderr-bytes >&2",
         ))

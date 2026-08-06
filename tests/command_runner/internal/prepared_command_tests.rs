@@ -21,7 +21,7 @@ use qubit_command::{
 fn test_prepared_command_applies_working_directory_override() {
     let working_directory =
         fs::canonicalize("/tmp").expect("/tmp should resolve");
-    let output = CommandRunner::new()
+    let output = CommandRunner::new(Duration::from_secs(10))
         .working_directory("/")
         .run(Command::shell("pwd").working_directory(&working_directory))
         .expect("command should run in per-command working directory");

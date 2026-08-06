@@ -14,7 +14,7 @@ use qubit_command::{
 
 #[test]
 fn test_command_io_collects_stdout_and_stderr() {
-    let output = CommandRunner::new()
+    let output = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell("rustc --version && rustc --version 1>&2"))
         .expect("shell command should run successfully");
 

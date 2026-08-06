@@ -8,6 +8,7 @@
 //! Benchmarks short-lived command execution with and without timeout handling.
 
 use std::hint::black_box;
+use std::time::Duration;
 
 use criterion::{
     Criterion,
@@ -50,8 +51,8 @@ fn verify_fixture(runner: &CommandRunner) {
 ///
 /// * `criterion` - Criterion benchmark registry receiving both scenarios.
 fn benchmark_short_lived_command_runner(criterion: &mut Criterion) {
-    let default_timeout_runner = CommandRunner::new();
-    let without_timeout_runner = CommandRunner::new().without_timeout();
+    let default_timeout_runner = CommandRunner::new(Duration::from_secs(10));
+    let without_timeout_runner = CommandRunner::without_timeout();
     verify_fixture(&default_timeout_runner);
     verify_fixture(&without_timeout_runner);
 

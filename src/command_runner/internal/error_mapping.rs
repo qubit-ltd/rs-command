@@ -75,12 +75,14 @@ pub(in crate::command_runner) fn wait_failed(
 pub(in crate::command_runner) fn kill_failed(
     command: String,
     timeout: Duration,
-    source: io::Error,
+    process_tree_source: io::Error,
+    child_source: io::Error,
 ) -> CommandError {
     CommandError::KillFailed {
         command,
         timeout,
-        source,
+        process_tree_source,
+        child_source,
     }
 }
 

@@ -50,6 +50,8 @@ use crate::{
     CommandError,
     CommandOutput,
     OutputStream,
+    CommandRunOptions,
+    command_run_options::CommandRunOptionsParts,
 };
 
 const REDACTED_PATH: &str = "<redacted path>";
@@ -78,12 +80,6 @@ fn start_output_reader(
     })
 }
 
-/// Default ten-second post-spawn timeout applied by [`CommandRunner::new`].
-///
-/// Use [`CommandRunner::timeout`] to select a different command limit or
-/// [`CommandRunner::without_timeout`] to opt out of timeout handling.
-pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// Default one-mebibyte in-memory capture limit applied to each output stream.
 ///
 /// Use [`CommandRunner::max_output_bytes`] to select a different per-stream
@@ -108,11 +104,13 @@ pub const DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM: usize = 1024 * 1024;
 ///
 /// # Examples
 ///
-/// ```compile_fail
+/// ```rust
 /// #![deny(unused_must_use)]
+/// use std::time::Duration;
 /// use qubit_command::CommandRunner;
 ///
-/// CommandRunner::new();
+/// let runner = CommandRunner::new(Duration::from_secs(10));
+/// let _ = runner;
 /// ```
 #[derive(Clone)]
 #[must_use]
@@ -121,8 +119,6 @@ pub struct CommandRunner {
     timeout: Option<Duration>,
     /// Monotonic timer used for timeout measurement and blocking sleeps.
     timer: Arc<dyn Timer>,
-    /// Optional one-shot cancellation handle shared with command runs.
-    cancellation_token: Option<CommandCancellation>,
     /// Default working directory used when a command does not override it.
     working_directory: Option<PathBuf>,
     /// Exit codes treated as successful.
@@ -137,10 +133,6 @@ pub struct CommandRunner {
     max_stdout_bytes: Option<usize>,
     /// Maximum stderr bytes retained in memory.
     max_stderr_bytes: Option<usize>,
-    /// File that receives a streaming copy of stdout.
-    stdout_file: Option<PathBuf>,
-    /// File that receives a streaming copy of stderr.
-    stderr_file: Option<PathBuf>,
 }
 
 impl fmt::Debug for CommandRunner {
@@ -159,10 +151,6 @@ impl fmt::Debug for CommandRunner {
             .field("timeout", &self.timeout)
             .field("timer", &"<dyn Timer>")
             .field(
-                "cancellation_configured",
-                &self.cancellation_token.is_some(),
-            )
-            .field(
                 "working_directory",
                 &self.working_directory.as_ref().map(|_| REDACTED_PATH),
             )
@@ -175,33 +163,18 @@ impl fmt::Debug for CommandRunner {
             )
             .field("max_stdout_bytes", &self.max_stdout_bytes)
             .field("max_stderr_bytes", &self.max_stderr_bytes)
-            .field(
-                "stdout_file",
-                &self.stdout_file.as_ref().map(|_| REDACTED_PATH),
-            )
-            .field(
-                "stderr_file",
-                &self.stderr_file.as_ref().map(|_| REDACTED_PATH),
-            )
             .finish()
     }
 }
 
-impl Default for CommandRunner {
-    /// Creates a command runner with the default exit-code policy.
-    ///
-    /// # Returns
-    ///
-    /// A runner with the default timeout, a standard monotonic timer, no
-    /// cancellation handle, inherited working directory, success exit code
-    /// `0`, enabled logging, one mebibyte of in-memory capture per output
-    /// stream, rejected output truncation, and no output tee files.
-    #[inline]
-    fn default() -> Self {
+impl CommandRunner {
+    /// Creates a command runner with explicit timeout handling configuration.
+
+    #[inline(always)]
+    fn with_optional_timeout(timeout: Option<Duration>) -> Self {
         Self {
-            timeout: Some(DEFAULT_COMMAND_TIMEOUT),
+            timeout,
             timer: Arc::new(StdTimer::new()),
-            cancellation_token: None,
             working_directory: None,
             success_exit_codes: vec![0],
             disable_logging: false,
@@ -209,24 +182,23 @@ impl Default for CommandRunner {
             diagnostic_redaction_policy: RedactionPolicy::default(),
             max_stdout_bytes: Some(DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM),
             max_stderr_bytes: Some(DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM),
-            stdout_file: None,
-            stderr_file: None,
         }
     }
-}
 
-impl CommandRunner {
-    /// Creates a command runner with default settings.
+    /// Creates a command runner with a post-spawn timeout.
     ///
     /// # Returns
     ///
-    /// A runner with the default timeout, a standard monotonic timer, no
-    /// cancellation handle, inherited working directory, success exit code
-    /// `0`, enabled logging, one mebibyte of in-memory capture per output
-    /// stream, rejected output truncation, and no output tee files.
+    /// A runner that uses a timeout and inherits default command policies.
     #[inline(always)]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(timeout: Duration) -> Self {
+        Self::with_optional_timeout(Some(timeout))
+    }
+
+    /// Creates a command runner with timeout handling disabled.
+    #[inline(always)]
+    pub fn without_timeout() -> Self {
+        Self::with_optional_timeout(None)
     }
 
     /// Returns the configured timeout.
@@ -239,83 +211,178 @@ impl CommandRunner {
         self.timeout
     }
 
-    /// Sets the command timeout.
-    ///
-    /// The timeout is a post-spawn deadline for observing process and output
-    /// completion. Reaching it starts process-tree termination and cleanup; it
-    /// is not a hard upper bound on when [`Self::run`] returns because platform
-    /// process cleanup and helper-thread joins may take additional time.
-    /// A zero duration still permits success when a completion check observes
-    /// the child has already exited before timeout handling begins.
-    /// Command preparation is excluded: configured stdin and tee paths must be
-    /// ordinary files and are validated before this timeout starts.
+    /// Runs a command with default per-run options.
     ///
     /// # Parameters
     ///
-    /// * `timeout` - Maximum duration allowed after the child process starts.
+    /// * `command` - Structured command to run.
     ///
     /// # Returns
     ///
-    /// The updated command runner.
-    #[inline(always)]
-    pub const fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
-        self
+    /// Captured output when the process exits with a configured success code.
+    pub fn run(&self, command: Command) -> Result<CommandOutput, CommandError> {
+        self.run_with(command, CommandRunOptions::new())
     }
 
-    /// Disables timeout handling.
+    /// Runs a command with explicit per-run options.
     ///
-    /// This does not disable an explicitly configured cancellation handle.
+    /// # Parameters
     ///
-    /// # Returns
-    ///
-    /// The updated command runner.
-    #[inline(always)]
-    pub const fn without_timeout(mut self) -> Self {
-        self.timeout = None;
-        self
-    }
-
-    /// Returns the configured cancellation handle.
+    /// * `command` - Structured command to run.
+    /// * `options` - Per-run cancellation and tee destinations.
     ///
     /// # Returns
     ///
-    /// `Some(handle)` when this runner observes explicit cancellation requests,
-    /// otherwise `None`.
-    #[must_use]
-    #[inline(always)]
-    pub fn configured_cancellation_token(
+    /// Captured output when the process exits with a configured success code.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError::CancelledBeforeStart`] when a configured
+    /// cancellation handle has already been requested before command preparation,
+    /// and maps all process, I/O, and timeout failures as described by
+    /// [`CommandRunner::run`].
+    pub fn run_with(
         &self,
-    ) -> Option<&CommandCancellation> {
-        self.cancellation_token.as_ref()
+        command: Command,
+        options: CommandRunOptions,
+    ) -> Result<CommandOutput, CommandError> {
+        let CommandRunOptionsParts {
+            cancellation,
+            stdout_file,
+            stderr_file,
+        } = options.into_parts();
+
+        let PreparedCommand {
+            command_text,
+            process_command,
+            stdin_bytes,
+            stdout_file,
+            stderr_file,
+            stdout_file_path,
+            stderr_file_path,
+        } = self.prepare_command_for_run(
+            command,
+            cancellation.as_ref(),
+            stdout_file.as_deref(),
+            stderr_file.as_deref(),
+        )?;
+
+        if !self.disable_logging {
+            log::debug!("Running command: {command_text}");
+        }
+
+        let manage_process_tree = self.timeout.is_some() || cancellation.is_some();
+        let child_process = match spawn_child(process_command, manage_process_tree) {
+            Ok(child_process) => child_process,
+            Err(source) => return Err(spawn_failed(&command_text, source)),
+        };
+        let mut starting_command = StartingCommand::new(&command_text, child_process);
+        let started_at = self.timer.clock().now();
+
+        let stdin_writer = write_stdin_bytes(
+            &command_text,
+            starting_command.child_process(),
+            stdin_bytes,
+        )?;
+        starting_command.set_stdin_writer(stdin_writer);
+
+        let stdout =
+            take_output_pipe(&command_text, OutputStream::Stdout, || {
+                starting_command.child_process().stdout().take()
+            })?;
+        let stderr =
+            take_output_pipe(&command_text, OutputStream::Stderr, || {
+                starting_command.child_process().stderr().take()
+            })?;
+        let stdout_reader =
+            start_output_reader(&command_text, OutputStream::Stdout, || {
+                read_output_stream(
+                    stdout,
+                    OutputCaptureOptions::new(
+                        self.max_stdout_bytes,
+                        stdout_file,
+                        stdout_file_path,
+                    ),
+                )
+            })?;
+        starting_command.set_stdout_reader(stdout_reader);
+        let stderr_reader =
+            start_output_reader(&command_text, OutputStream::Stderr, || {
+                read_output_stream(
+                    stderr,
+                    OutputCaptureOptions::new(
+                        self.max_stderr_bytes,
+                        stderr_file,
+                        stderr_file_path,
+                    ),
+                )
+            })?;
+        starting_command.set_stderr_reader(stderr_reader);
+        if let Err(source) = self.timer.clock().now().duration_since(started_at) {
+            return Err(CommandError::TimeFailed {
+                command: command_text.clone(),
+                source,
+            });
+        }
+
+        let (child_process, command_io) = starting_command.finish();
+        let finished = RunningCommand::new(
+            command_text,
+            child_process,
+            command_io,
+            started_at,
+            Arc::clone(&self.timer),
+            cancellation,
+        )
+        .wait_for_completion(self.timeout)?;
+        let FinishedCommand {
+            command_text,
+            output,
+        } = finished;
+
+        if output.exit_code().is_some_and(|exit_code| {
+            self.success_exit_codes.contains(&exit_code)
+        }) {
+            if self.fail_on_output_truncation
+                && (output.stdout_truncated() || output.stderr_truncated())
+            {
+                if !self.disable_logging {
+                    log::debug!(
+                        "Finished command `{}` with truncated output in {:?}.",
+                        command_text,
+                        output.elapsed()
+                    );
+                }
+                return Err(CommandError::OutputTruncated {
+                    command: command_text,
+                    output: Box::new(output),
+                });
+            }
+            if !self.disable_logging {
+                log::debug!(
+                    "Finished command `{}` in {:?}.",
+                    command_text,
+                    output.elapsed()
+                );
+            }
+            Ok(output)
+        } else {
+            if !self.disable_logging {
+                log::debug!(
+                    "Command `{}` exited with code {:?}.",
+                    command_text,
+                    output.exit_code()
+                );
+            }
+            Err(CommandError::UnexpectedExit {
+                command: command_text,
+                exit_code: output.exit_code(),
+                expected: self.success_exit_codes.clone(),
+                output: Box::new(output),
+            })
+        }
     }
 
-    /// Configures a one-shot cancellation handle for command runs.
-    ///
-    /// When cancellation is already requested before [`Self::run`], the
-    /// runner returns [`CommandError::CancelledBeforeStart`] without
-    /// preparing or spawning the command. A request observed after startup
-    /// terminates the managed process tree and returns
-    /// [`CommandError::Cancelled`]. A cancellation handle also enables
-    /// process-tree management when timeout handling is disabled. Applications
-    /// that handle terminal signals can call [`CommandCancellation::cancel`]
-    /// from their signal-handling path.
-    ///
-    /// # Parameters
-    ///
-    /// * `cancellation_token` - Shared handle that can request cancellation.
-    ///
-    /// # Returns
-    ///
-    /// The updated command runner.
-    #[inline(always)]
-    pub fn cancellation_token(
-        mut self,
-        cancellation_token: CommandCancellation,
-    ) -> Self {
-        self.cancellation_token = Some(cancellation_token);
-        self
-    }
 
     /// Returns the configured monotonic timer.
     ///
@@ -631,306 +698,24 @@ impl CommandRunner {
         self
     }
 
-    /// Returns the stdout tee file path.
-    ///
-    /// # Returns
-    ///
-    /// `Some(path)` when stdout is streamed to a file, otherwise `None`.
-    #[inline(always)]
-    pub fn configured_stdout_file(&self) -> Option<&Path> {
-        self.stdout_file.as_deref()
-    }
-
-    /// Streams stdout to a file while still capturing it in memory.
-    ///
-    /// The path must identify an ordinary file. Directories, FIFOs, devices,
-    /// sockets, and other special files are rejected before the child is
-    /// spawned. Before spawning, the file is opened without truncation and
-    /// checked for identity conflicts with configured stdin and stderr files.
-    /// It is truncated only after all checks pass. The default capture limit
-    /// remains in effect; use [`Self::max_stdout_bytes`] to select a
-    /// different limit. Reusing the same runner concurrently with the same
-    /// tee path is not supported because each run truncates that file after
-    /// its own validation completes.
-    ///
-    /// # Warning
-    ///
-    /// `path` must be an ordinary file. Special files are rejected rather than
-    /// used as tee destinations.
-    ///
-    /// # TODO
-    ///
-    /// Move tee destinations into per-run options so concurrent executions can
-    /// choose independent files without sharing runner-level truncation state.
-    ///
-    /// # Parameters
-    ///
-    /// * `path` - Destination file path for stdout bytes.
-    ///
-    /// # Returns
-    ///
-    /// The updated command runner.
-    #[inline(always)]
-    pub fn tee_stdout_to_file<P>(mut self, path: P) -> Self
-    where
-        P: Into<PathBuf>,
-    {
-        self.stdout_file = Some(path.into());
-        self
-    }
-
-    /// Returns the stderr tee file path.
-    ///
-    /// # Returns
-    ///
-    /// `Some(path)` when stderr is streamed to a file, otherwise `None`.
-    #[inline(always)]
-    pub fn configured_stderr_file(&self) -> Option<&Path> {
-        self.stderr_file.as_deref()
-    }
-
-    /// Streams stderr to a file while still capturing it in memory.
-    ///
-    /// The path must identify an ordinary file. Directories, FIFOs, devices,
-    /// sockets, and other special files are rejected before the child is
-    /// spawned. Before spawning, the file is opened without truncation and
-    /// checked for identity conflicts with configured stdin and stdout files.
-    /// It is truncated only after all checks pass. The default capture limit
-    /// remains in effect; use [`Self::max_stderr_bytes`] to select a
-    /// different limit. Reusing the same runner concurrently with the same
-    /// tee path is not supported because each run truncates that file after
-    /// its own validation completes.
-    ///
-    /// # Warning
-    ///
-    /// `path` must be an ordinary file. Special files are rejected rather than
-    /// used as tee destinations.
-    ///
-    /// # TODO
-    ///
-    /// Move tee destinations into per-run options so concurrent executions can
-    /// choose independent files without sharing runner-level truncation state.
-    ///
-    /// # Parameters
-    ///
-    /// * `path` - Destination file path for stderr bytes.
-    ///
-    /// # Returns
-    ///
-    /// The updated command runner.
-    #[inline(always)]
-    pub fn tee_stderr_to_file<P>(mut self, path: P) -> Self
-    where
-        P: Into<PathBuf>,
-    {
-        self.stderr_file = Some(path.into());
-        self
-    }
-
-    /// Runs a command and captures stdout and stderr.
-    ///
-    /// This method blocks the caller thread until the command exits and its I/O
-    /// helpers finish, or until the configured post-spawn timeout starts
-    /// termination and cleanup. Each poll checks the direct child first; after
-    /// an observed exit, output collection remains bounded by the same timeout.
-    /// When a timeout or cancellation handle is configured, Unix children run
-    /// as leaders of new process groups and Windows children run in Job
-    /// Objects. This lets timeout or cancellation target the process tree
-    /// instead of only the direct child process, including cases where the
-    /// direct child exits but descendants keep inherited I/O pipes open.
-    /// Without either configuration, commands use the platform's normal
-    /// process-spawning behavior.
-    ///
-    /// A timeout is not a hard upper bound on this method's wall-clock return
-    /// time. Platform termination, waiting, and I/O helper cleanup can take
-    /// additional time. After termination, every helper is cancelled and
-    /// joined; Unix pipe readers use nonblocking polling and Windows helpers
-    /// interrupt synchronous I/O. Timeout and cancellation output may be
-    /// partial, which is reported by [`CommandOutput::stdout_complete`] and
-    /// [`CommandOutput::stderr_complete`].
-    ///
-    /// Captured output is retained as raw bytes up to the configured per-stream
-    /// limits. Reader threads still drain complete streams so the child is not
-    /// blocked on full pipes. Use [`CommandOutput::stdout_text`] and
-    /// [`CommandOutput::stderr_text`] for strict UTF-8 text, or
-    /// [`CommandOutput::stdout_lossy_text`] and
-    /// [`CommandOutput::stderr_lossy_text`] when invalid UTF-8 should be
-    /// replaced.
-    ///
-    /// # Blocking
-    ///
-    /// Before spawning, this method opens configured stdin and tee paths.
-    /// These paths must identify ordinary files; FIFOs, devices, directories,
-    /// sockets, and other special files are rejected. After spawning, this
-    /// method parks the caller while waiting for command completion and
-    /// timeout ticks. A configured timer backend must continue progressing
-    /// independently during that wait. Process-tree termination and I/O
-    /// helper cleanup after a timeout may extend the blocking duration
-    /// beyond the configured value.
-    ///
-    /// # Parameters
-    ///
-    /// * `command` - Structured command to run.
-    ///
-    /// # Returns
-    ///
-    /// Captured output when the process exits with a configured success code.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CommandError::CancelledBeforeStart`] without preparing or
-    /// starting the command when its configured cancellation handle was already
-    /// cancelled. Otherwise returns [`CommandError`] if I/O paths conflict or
-    /// cannot be prepared, the process or an I/O helper cannot be started,
-    /// waiting or injected time handling fails, the timeout expires,
-    /// cancellation is requested, process-tree termination fails, captured
-    /// output or configured stdin cannot be transferred, or the child exits
-    /// with a code not configured as successful. Also returns
-    /// [`CommandError::OutputTruncated`] when the child succeeds, either stream
-    /// is truncated, and [`Self::fail_on_output_truncation`] is enabled.
-    pub fn run(&self, command: Command) -> Result<CommandOutput, CommandError> {
-        if self
-            .cancellation_token
-            .as_ref()
-            .is_some_and(CommandCancellation::is_cancelled)
-        {
+    fn prepare_command_for_run(
+        &self,
+        command: Command,
+        cancellation: Option<&CommandCancellation>,
+        stdout_file: Option<&Path>,
+        stderr_file: Option<&Path>,
+    ) -> Result<PreparedCommand, CommandError> {
+        if cancellation.is_some_and(CommandCancellation::is_cancelled) {
             return Err(CommandError::CancelledBeforeStart {
-                command: command
-                    .display_command(&self.diagnostic_redaction_policy),
+                command: command.display_command(&self.diagnostic_redaction_policy),
             });
         }
-        let PreparedCommand {
-            command_text,
-            process_command,
-            stdin_bytes,
-            stdout_file,
-            stderr_file,
-            stdout_file_path,
-            stderr_file_path,
-        } = PreparedCommand::prepare(
+        PreparedCommand::prepare(
             command,
             &self.diagnostic_redaction_policy,
             self.working_directory.as_deref(),
-            self.stdout_file.as_deref(),
-            self.stderr_file.as_deref(),
-        )?;
-
-        if !self.disable_logging {
-            log::debug!("Running command: {command_text}");
-        }
-
-        let manage_process_tree =
-            self.timeout.is_some() || self.cancellation_token.is_some();
-        let child_process =
-            match spawn_child(process_command, manage_process_tree) {
-                Ok(child_process) => child_process,
-                Err(source) => return Err(spawn_failed(&command_text, source)),
-            };
-        let mut starting_command =
-            StartingCommand::new(&command_text, child_process);
-        let started_at = self.timer.clock().now();
-
-        let stdin_writer = write_stdin_bytes(
-            &command_text,
-            starting_command.child_process(),
-            stdin_bytes,
-        )?;
-        starting_command.set_stdin_writer(stdin_writer);
-
-        let stdout =
-            take_output_pipe(&command_text, OutputStream::Stdout, || {
-                starting_command.child_process().stdout().take()
-            })?;
-        let stderr =
-            take_output_pipe(&command_text, OutputStream::Stderr, || {
-                starting_command.child_process().stderr().take()
-            })?;
-        let stdout_reader =
-            start_output_reader(&command_text, OutputStream::Stdout, || {
-                read_output_stream(
-                    stdout,
-                    OutputCaptureOptions::new(
-                        self.max_stdout_bytes,
-                        stdout_file,
-                        stdout_file_path,
-                    ),
-                )
-            })?;
-        starting_command.set_stdout_reader(stdout_reader);
-        let stderr_reader =
-            start_output_reader(&command_text, OutputStream::Stderr, || {
-                read_output_stream(
-                    stderr,
-                    OutputCaptureOptions::new(
-                        self.max_stderr_bytes,
-                        stderr_file,
-                        stderr_file_path,
-                    ),
-                )
-            })?;
-        starting_command.set_stderr_reader(stderr_reader);
-        if let Err(source) = self.timer.clock().now().duration_since(started_at)
-        {
-            return Err(CommandError::TimeFailed {
-                command: command_text.clone(),
-                source,
-            });
-        }
-        let (child_process, command_io) = starting_command.finish();
-        let finished = RunningCommand::new(
-            command_text,
-            child_process,
-            command_io,
-            started_at,
-            Arc::clone(&self.timer),
-            self.cancellation_token.clone(),
+            stdout_file,
+            stderr_file,
         )
-        .wait_for_completion(self.timeout)?;
-        let FinishedCommand {
-            command_text,
-            output,
-        } = finished;
-
-        if output.exit_code().is_some_and(|exit_code| {
-            self.success_exit_codes.contains(&exit_code)
-        }) {
-            if self.fail_on_output_truncation
-                && (output.stdout_truncated() || output.stderr_truncated())
-            {
-                if !self.disable_logging {
-                    log::debug!(
-                        "Finished command `{}` with truncated output in {:?}.",
-                        command_text,
-                        output.elapsed()
-                    );
-                }
-                return Err(CommandError::OutputTruncated {
-                    command: command_text,
-                    output: Box::new(output),
-                });
-            }
-            if !self.disable_logging {
-                log::debug!(
-                    "Finished command `{}` in {:?}.",
-                    command_text,
-                    output.elapsed()
-                );
-            }
-            Ok(output)
-        } else {
-            if !self.disable_logging {
-                log::debug!(
-                    "Command `{}` exited with code {:?}.",
-                    command_text,
-                    output.exit_code()
-                );
-            }
-            Err(CommandError::UnexpectedExit {
-                command: command_text,
-                exit_code: output.exit_code(),
-                expected: self.success_exit_codes.clone(),
-                output: Box::new(output),
-            })
-        }
     }
 }

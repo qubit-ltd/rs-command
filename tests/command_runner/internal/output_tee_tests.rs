@@ -12,6 +12,7 @@ use std::fs;
 use crate::support::LocalTempDir;
 use qubit_command::{
     Command,
+    CommandRunOptions,
     CommandRunner,
 };
 
@@ -20,11 +21,13 @@ fn test_output_tee_streams_stderr_to_file() {
     let temp_dir = LocalTempDir::with_prefix("qubit-command-output-tee-")
         .expect("output tee temp directory should be created");
     let path = temp_dir.path().join("stderr-tee.txt");
-    let output = CommandRunner::new()
+    let output = CommandRunner::new(Duration::from_secs(10))
         .max_stderr_bytes(5)
         .fail_on_output_truncation(false)
-        .tee_stderr_to_file(path.clone())
-        .run(Command::shell("rustc --version 1>&2"))
+        .run_with(
+            Command::shell("rustc --version 1>&2"),
+            CommandRunOptions::new().tee_stderr_to_file(path.clone()),
+        )
         .expect("shell command should run successfully");
 
     let file_bytes = fs::read(&path).expect("tee file should be readable");

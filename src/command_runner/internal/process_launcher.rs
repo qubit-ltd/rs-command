@@ -47,5 +47,9 @@ pub(in crate::command_runner) fn spawn_child(
     if manage_process_tree {
         command.wrap(JobObject);
     }
-    command.spawn()
+    let child_process = command.spawn()?;
+    Ok(ManagedChildProcess::new(
+        child_process,
+        manage_process_tree,
+    ))
 }

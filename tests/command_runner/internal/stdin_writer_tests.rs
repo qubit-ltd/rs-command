@@ -16,7 +16,7 @@ use qubit_command::{
 #[cfg(not(windows))]
 #[test]
 fn test_stdin_writer_sends_configured_bytes() {
-    let output = CommandRunner::new()
+    let output = CommandRunner::new(Duration::from_secs(10))
         .run(Command::new("cat").stdin_bytes(b"writer-input".to_vec()))
         .expect("stdin writer should send configured bytes");
 

@@ -16,7 +16,7 @@ use qubit_command::{
 
 #[test]
 fn test_finished_command_preserves_elapsed_time() {
-    let output = CommandRunner::new()
+    let output = CommandRunner::new(Duration::from_secs(10))
         .run(Command::new("rustc").arg("--version"))
         .expect("rustc version command should run successfully");
 
@@ -26,8 +26,7 @@ fn test_finished_command_preserves_elapsed_time() {
 #[cfg(not(windows))]
 #[test]
 fn test_finished_command_elapsed_includes_inherited_output_drain() {
-    let output = CommandRunner::new()
-        .without_timeout()
+    let output = CommandRunner::without_timeout()
         .run(Command::shell("sleep 1 &"))
         .expect("background child should finish successfully");
 

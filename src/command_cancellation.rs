@@ -17,10 +17,10 @@ use std::sync::{
 /// [`CommandRunner`](crate::CommandRunner).
 ///
 /// Clone this handle before passing it to
-/// [`CommandRunner::cancellation_token`](crate::CommandRunner::cancellation_token).
+/// [`CommandRunOptions::cancellation`](crate::CommandRunOptions::cancellation).
 /// Calling [`Self::cancel`] before a run starts makes the runner return
 /// [`CommandError::CancelledBeforeStart`](crate::CommandError::CancelledBeforeStart)
-/// without preparing or spawning the command. Otherwise it makes the runner
+/// without preparing or spawning the command. Otherwise it makes the run
 /// terminate its managed process tree and return
 /// [`CommandError::Cancelled`](crate::CommandError::Cancelled). The handle is
 /// intentionally one-shot and cannot be reset.

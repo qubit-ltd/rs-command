@@ -57,15 +57,17 @@ pub enum CommandError {
 
     /// The process could not be killed after exceeding the configured timeout.
     #[error(
-        "failed to kill timed-out command `{command}` after {timeout:?}: {source}"
+        "failed to terminate timed-out command `{command}` after {timeout:?}; process-tree source: {process_tree_source}; child source: {child_source}"
     )]
     KillFailed {
         /// Human-readable command representation.
         command: String,
         /// Timeout that was exceeded.
         timeout: Duration,
-        /// I/O error reported while killing the child process.
-        source: io::Error,
+        /// I/O error reported while killing the process tree.
+        process_tree_source: io::Error,
+        /// I/O error reported while killing the direct child process.
+        child_source: io::Error,
     },
 
     /// Reading one of the captured output streams failed.
@@ -255,12 +257,16 @@ pub enum CommandError {
     },
 
     /// Cancelling the managed process tree failed.
-    #[error("failed to cancel command `{command}`: {source}")]
+    #[error(
+        "failed to cancel command `{command}`; process-tree source: {process_tree_source}; child source: {child_source}"
+    )]
     CancelFailed {
         /// Human-readable command representation.
         command: String,
-        /// I/O error reported while terminating the child process tree.
-        source: io::Error,
+        /// I/O error reported while cancelling the process tree.
+        process_tree_source: io::Error,
+        /// I/O error reported while cancelling the direct child process.
+        child_source: io::Error,
     },
 
     /// The command succeeded, but its captured output was truncated.
