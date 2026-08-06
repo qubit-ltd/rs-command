@@ -2,8 +2,6 @@
 //    Copyright (c) 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
-//
-//    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 use std::{
     io,
@@ -111,9 +109,7 @@ impl RunningCommand {
     /// # Errors
     ///
     /// Returns [`CommandError`] if waiting, timeout handling, cancellation,
-    /// output collection, or stdin writing fails. Wait-error cleanup only
-    /// joins I/O helpers after a non-blocking check confirms the child has
-    /// exited.
+    /// output collection, or stdin writing fails.
     pub(in crate::command_runner) fn wait_for_completion(
         mut self,
         timeout: Option<Duration>,
@@ -123,7 +119,7 @@ impl RunningCommand {
                 Ok(status) => status,
                 Err(source) => {
                     let error = wait_failed(&self.command_text, source);
-                    return Err(self.clean_up_after_wait_error(error));
+                    return Err(self.collect_after_wait_error(error));
                 }
             };
             return self.complete_after_exit(status, None);
@@ -135,7 +131,7 @@ impl RunningCommand {
                 Ok(status) => status,
                 Err(source) => {
                     let error = wait_failed(&self.command_text, source);
-                    return Err(self.clean_up_after_wait_error(error));
+                    return Err(self.collect_after_wait_error(error));
                 }
             };
             if let Some(status) = maybe_status {
@@ -159,8 +155,7 @@ impl RunningCommand {
                     if elapsed >= timeout {
                         return self.handle_timeout(timeout);
                     }
-                    let sleep =
-                        next_sleep(timeout, elapsed, timeout_poll_count);
+                    let sleep = next_sleep(timeout, elapsed, timeout_poll_count);
                     timeout_poll_count = timeout_poll_count.saturating_add(1);
                     sleep
                 }
@@ -192,7 +187,7 @@ impl RunningCommand {
     /// inherited I/O pipes keep helpers alive after the corresponding request,
     /// or another [`CommandError`] if cleanup or output collection fails.
     fn complete_after_exit(
-        self,
+        mut self,
         status: ExitStatus,
         timeout: Option<Duration>,
     ) -> Result<FinishedCommand, CommandError> {
@@ -211,9 +206,8 @@ impl RunningCommand {
                         let elapsed = match self.elapsed() {
                             Ok(elapsed) => elapsed,
                             Err(source) => {
-                                return self.handle_time_error_after_exit(
-                                    status, source,
-                                );
+                                return self
+                                    .handle_time_error_after_exit(status, source);
                             }
                         };
                         if elapsed >= timeout {
@@ -254,23 +248,33 @@ impl RunningCommand {
     ///
     /// # Errors
     ///
-    /// Returns [`CommandError::TimedOut`] after terminating the process tree
-    /// and collecting final output, or the process-control / collection
-    /// error that prevented timeout output from being built.
+    /// Returns [`CommandError::TimedOut`] after terminating the command and
+    /// collecting final output, or the process-control/output error that
+    /// prevented timeout output from being built.
     fn handle_output_collection_timeout(
         mut self,
         status: ExitStatus,
         timeout: Duration,
     ) -> Result<FinishedCommand, CommandError> {
-        if let Err(source) = self.child_process.start_kill()
-            && !Self::process_tree_already_exited(&source)
-        {
-            return Err(kill_failed(
-                self.command_text.clone(),
-                timeout,
-                source,
-            ));
-        }
+        let status = match self.terminate_child() {
+            Ok(status) => status,
+            Err(ProcessTerminationError::Wait(source)) => {
+                let error = wait_failed(&self.command_text, source);
+                return Err(self.finish_without_status(error));
+            }
+            Err(ProcessTerminationError::Kill(
+                process_tree_source,
+                child_source,
+            )) => {
+                let error = kill_failed(
+                    self.command_text.clone(),
+                    timeout,
+                    process_tree_source,
+                    child_source,
+                );
+                return Err(self.finish_without_status(error));
+            }
+        };
         let finished = self.complete_after_termination(status)?;
         Err(CommandError::TimedOut {
             command: finished.command_text,
@@ -279,7 +283,7 @@ impl RunningCommand {
         })
     }
 
-    /// Cancels descendants that keep inherited I/O pipes open after the
+    /// Cancels descendants that keep inherited output pipes open after the
     /// direct child has exited.
     ///
     /// # Parameters
@@ -293,14 +297,24 @@ impl RunningCommand {
         mut self,
         status: ExitStatus,
     ) -> Result<FinishedCommand, CommandError> {
-        if let Err(source) = self.child_process.start_kill()
-            && !Self::process_tree_already_exited(&source)
-        {
-            return Err(CommandError::CancelFailed {
-                command: self.command_text.clone(),
-                source,
-            });
-        }
+        let status = match self.terminate_child() {
+            Ok(status) => status,
+            Err(ProcessTerminationError::Wait(source)) => {
+                let error = wait_failed(&self.command_text, source);
+                return Err(self.finish_without_status(error));
+            }
+            Err(ProcessTerminationError::Kill(
+                process_tree_source,
+                child_source,
+            )) => {
+                let error = CommandError::CancelFailed {
+                    command: self.command_text.clone(),
+                    process_tree_source,
+                    child_source,
+                };
+                return Err(self.finish_without_status(error));
+            }
+        };
         let finished = self.complete_after_termination(status)?;
         Err(CommandError::Cancelled {
             command: finished.command_text,
@@ -318,13 +332,18 @@ impl RunningCommand {
             Ok(status) => status,
             Err(ProcessTerminationError::Wait(source)) => {
                 let error = wait_failed(&self.command_text, source);
-                return Err(self.collect_if_child_exited(error));
+                return Err(self.collect_after_wait_error(error));
             }
-            Err(ProcessTerminationError::Kill(source)) => {
-                return Err(CommandError::CancelFailed {
+            Err(ProcessTerminationError::Kill(
+                process_tree_source,
+                child_source,
+            )) => {
+                let error = CommandError::CancelFailed {
                     command: self.command_text.clone(),
-                    source,
-                });
+                    process_tree_source,
+                    child_source,
+                };
+                return Err(self.finish_without_status(error));
             }
         };
         let finished = self.complete_after_termination(status)?;
@@ -334,8 +353,7 @@ impl RunningCommand {
         })
     }
 
-    /// Handles timeout by killing the child process and collecting final
-    /// output.
+    /// Handles timeout by killing the command and collecting final output.
     ///
     /// # Parameters
     ///
@@ -343,15 +361,12 @@ impl RunningCommand {
     ///
     /// # Returns
     ///
-    /// This method returns an error after timeout handling; its success type is
-    /// retained to compose with the surrounding state machine.
+    /// This method returns an error after timeout handling.
     ///
     /// # Errors
     ///
-    /// Returns [`CommandError::TimedOut`] after successful kill and wait, or
-    /// the process-control error if killing or waiting fails. Cleanup after
-    /// those errors only joins I/O helpers if the child is already
-    /// confirmed exited.
+    /// Returns [`CommandError::TimedOut`] after successful termination and
+    /// collection, or the process-control error from failed cleanup.
     fn handle_timeout(
         mut self,
         timeout: Duration,
@@ -360,12 +375,19 @@ impl RunningCommand {
             Ok(status) => status,
             Err(ProcessTerminationError::Wait(source)) => {
                 let error = wait_failed(&self.command_text, source);
-                return Err(self.collect_if_child_exited(error));
+                return Err(self.collect_after_wait_error(error));
             }
-            Err(ProcessTerminationError::Kill(source)) => {
-                let error =
-                    kill_failed(self.command_text.clone(), timeout, source);
-                return Err(self.collect_if_child_exited(error));
+            Err(ProcessTerminationError::Kill(
+                process_tree_source,
+                child_source,
+            )) => {
+                let error = kill_failed(
+                    self.command_text.clone(),
+                    timeout,
+                    process_tree_source,
+                    child_source,
+                );
+                return Err(self.collect_after_status_lost(error));
             }
         };
         let finished = self.complete_after_termination(exit_status)?;
@@ -459,37 +481,71 @@ impl RunningCommand {
         self.timer.clock().now().duration_since(self.started_at)
     }
 
-    /// Terminates the managed process tree and waits for the direct child.
+    /// Terminates the managed process tree and returns final child status.
     ///
-    /// A failed termination request is treated as successful when the direct
-    /// child is concurrently observed to have exited.
-    ///
-    /// # Returns
-    ///
-    /// Final direct-child status after termination or a concurrent exit.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ProcessTerminationError::Wait`] when waiting after a
-    /// successful termination request fails. Returns
-    /// [`ProcessTerminationError::Kill`] when termination fails and the child
-    /// cannot be confirmed exited.
+    /// For process-tree managed children this method first tries wrapper tree
+    /// termination and falls back to direct-child kill through
+    /// `inner_mut().start_kill()` when needed.
     fn terminate_child(
         &mut self,
     ) -> Result<ExitStatus, ProcessTerminationError> {
-        match self.child_process.start_kill() {
+        if !self.child_process.process_tree_managed() {
+            if let Err(child_source) = self.child_process.start_kill_child() {
+                let status = self
+                    .child_process
+                    .try_wait()
+                    .map_err(ProcessTerminationError::Wait)?;
+                if let Some(status) = status {
+                    return Ok(status);
+                }
+                return Err(ProcessTerminationError::Kill(
+                    io::Error::other("direct kill used without tree management"),
+                    child_source,
+                ));
+            }
+            return self
+                .child_process
+                .wait()
+                .map_err(ProcessTerminationError::Wait);
+        }
+
+        match self.child_process.start_kill_tree() {
             Ok(()) => self
                 .child_process
                 .wait()
                 .map_err(ProcessTerminationError::Wait),
-            Err(source) => match self.status_after_kill_failure(&source) {
-                Ok(Some(status)) => Ok(status),
-                Ok(None) | Err(_) => Err(ProcessTerminationError::Kill(source)),
-            },
+            Err(process_tree_source) => {
+                match self.status_after_termination_failure(&process_tree_source) {
+                    Ok(Some(status)) => Ok(status),
+                    Ok(None) => match self.child_process.start_kill_child() {
+                        Ok(()) => self
+                            .child_process
+                            .wait()
+                            .map_err(ProcessTerminationError::Wait),
+                        Err(child_source) => {
+                            let status = self
+                                .child_process
+                                .try_wait()
+                                .map_err(ProcessTerminationError::Wait)?;
+                            if let Some(status) = status {
+                                Ok(status)
+                            } else {
+                                Err(ProcessTerminationError::Kill(
+                                    process_tree_source,
+                                    child_source,
+                                ))
+                            }
+                        }
+                    },
+                    Err(wait_source) => {
+                        Err(ProcessTerminationError::Wait(wait_source))
+                    }
+                }
+            }
         }
     }
 
-    /// Resolves the direct-child status after process-tree termination fails.
+    /// Resolves status after process-tree termination failure.
     ///
     /// # Parameters
     ///
@@ -504,13 +560,12 @@ impl RunningCommand {
     ///
     /// Returns the operating-system wait error when the final child status
     /// cannot be observed.
-    fn status_after_kill_failure(
+    fn status_after_termination_failure(
         &mut self,
         source: &io::Error,
     ) -> io::Result<Option<ExitStatus>> {
         if Self::process_tree_already_exited(source) {
-            let status = self.child_process.wait();
-            return status.map(Some);
+            return self.child_process.wait().map(Some);
         }
         for attempt in 0..KILL_FAILURE_EXIT_CHECK_ATTEMPTS {
             if let Some(status) = self.child_process.try_wait()? {
@@ -544,7 +599,7 @@ impl RunningCommand {
         }
     }
 
-    /// Terminates a running child after timer handling fails.
+    /// Best-effort cleanup after timer failure with best-effort helper cleanup.
     ///
     /// # Parameters
     ///
@@ -552,27 +607,18 @@ impl RunningCommand {
     ///
     /// # Returns
     ///
-    /// The timer error after best-effort process and I/O cleanup.
+    /// The preserved time error after helper cleanup.
     #[must_use]
     fn clean_up_after_time_error(mut self, source: TimeError) -> CommandError {
         let error = CommandError::TimeFailed {
             command: self.command_text.clone(),
             source,
         };
-        let status = match self.child_process.start_kill() {
-            Ok(()) => self.child_process.wait().ok(),
-            Err(_) => self.child_process.try_wait().ok().flatten(),
-        };
-        if let Some(status) = status {
-            let _ =
-                self.io.cancel_and_collect(&self.command_text, status, || {
-                    Ok::<Duration, TimeError>(Duration::ZERO)
-                });
-        }
-        error
+        let _ = self.terminate_child().ok();
+        self.finish_without_status(error)
     }
 
-    /// Cleans up inherited output pipes after timer handling fails.
+    /// Cleans up inherited output pipes after timer failure after exit.
     ///
     /// # Parameters
     ///
@@ -581,62 +627,59 @@ impl RunningCommand {
     ///
     /// # Returns
     ///
-    /// This method always returns the preserved time error.
-    ///
-    /// # Errors
-    ///
-    /// Always returns [`CommandError::TimeFailed`] after best-effort cleanup.
+    /// The preserved time error with helper cleanup guarantees.
     fn handle_time_error_after_exit(
         mut self,
         status: ExitStatus,
         source: TimeError,
     ) -> Result<FinishedCommand, CommandError> {
+        let _ = status;
         let error = CommandError::TimeFailed {
             command: self.command_text.clone(),
             source,
         };
-        let _ = self.child_process.start_kill();
-        let _ = self.io.cancel_and_collect(&self.command_text, status, || {
-            Ok::<Duration, TimeError>(Duration::ZERO)
-        });
+        let error = self.finish_without_status(error);
         Err(error)
     }
 
-    /// Attempts non-blocking cleanup after a wait error.
+    /// Best-effort helper cleanup after wait failures.
     ///
     /// # Parameters
     ///
-    /// * `error` - Original wait error to preserve.
-    ///
     /// # Returns
     ///
-    /// The original error after best-effort cleanup. This method deliberately
-    /// does not call blocking wait APIs because it is already handling a
-    /// wait failure.
+    /// Preserved process-control error with complete I/O cleanup.
     #[must_use]
-    fn clean_up_after_wait_error(
+    fn collect_after_wait_error(
         mut self,
         error: CommandError,
     ) -> CommandError {
-        let _ = self.child_process.start_kill();
-        self.collect_if_child_exited(error)
+        let _ = self.terminate_child().ok();
+        self.finish_without_status(error)
     }
 
-    /// Drains I/O helpers if the child is already known to have exited.
-    ///
-    /// # Parameters
-    ///
-    /// * `error` - Original process-control error to preserve.
+    /// Best-effort helper cleanup when timeout/cancellation cleanup lost status.
     ///
     /// # Returns
     ///
-    /// The original error. Output collection failures during cleanup are
-    /// ignored so the primary process-control failure remains visible.
+    /// Preserved error after all helper joins attempt.
     #[must_use]
-    fn collect_if_child_exited(mut self, error: CommandError) -> CommandError {
-        if let Ok(Some(status)) = self.child_process.try_wait() {
-            let _ = self.complete(status);
+    fn collect_after_status_lost(
+        mut self,
+        error: CommandError,
+    ) -> CommandError {
+        self.finish_without_status(error)
+    }
+
+    /// Completes without process output and preserves the primary error.
+    ///
+    /// This method always invokes helper cancellation and joining before returning
+    /// `primary`, logging any cleanup failures.
+    #[must_use]
+    fn finish_without_status(mut self, primary: CommandError) -> CommandError {
+        if let Err(source) = self.io.cancel_and_join(&self.command_text) {
+            log::error!("Failed to cleanup command I/O helpers: {source}");
         }
-        error
+        primary
     }
 }

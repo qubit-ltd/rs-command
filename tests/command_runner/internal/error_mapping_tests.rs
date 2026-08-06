@@ -19,7 +19,7 @@ use qubit_command::{
 #[cfg(not(windows))]
 #[test]
 fn test_error_mapping_preserves_unexpected_exit_output() {
-    let error = CommandRunner::new()
+    let error = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell(
             "printf mapped-out; printf mapped-err >&2; exit 9",
         ))
@@ -43,7 +43,7 @@ fn test_error_mapping_redacts_io_paths_in_diagnostics() {
     let temp_dir = LocalTempDir::with_prefix("qubit-command-error-mapping-")
         .expect("error mapping temp directory should be created");
     let path = temp_dir.path().join("private-input");
-    let error = CommandRunner::new()
+    let error = CommandRunner::new(Duration::from_secs(10))
         .run(Command::new("cat").stdin_file(&path))
         .expect_err("missing private stdin file should fail");
     let path_text = path.to_string_lossy();

@@ -22,6 +22,7 @@ use qubit_clock::{
 use qubit_command::{
     Command,
     CommandError,
+    CommandRunOptions,
     CommandRunner,
     OutputStream,
 };
@@ -58,7 +59,8 @@ fn test_command_error_accessors_for_errors_without_output() {
     let kill = CommandError::KillFailed {
         command: "kill".to_owned(),
         timeout: Duration::from_secs(1),
-        source: io::Error::other("kill failed"),
+        process_tree_source: io::Error::other("kill failed"),
+        child_source: io::Error::other("child kill failed"),
     };
     assert_eq!(kill.command(), "kill");
     assert!(kill.output().is_none());
@@ -210,7 +212,7 @@ fn test_start_input_thread_error_reports_command() {
 
 #[test]
 fn test_command_error_accessors_for_errors_with_output() {
-    let truncated = CommandRunner::new()
+    let truncated = CommandRunner::new(Duration::from_secs(10))
         .max_stdout_bytes(3)
         .fail_on_output_truncation(true)
         .run(Command::shell("printf output"))
@@ -225,7 +227,7 @@ fn test_command_error_accessors_for_errors_with_output() {
         b"out",
     );
 
-    let unexpected = CommandRunner::new()
+    let unexpected = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell("printf output; exit 9"))
         .expect_err("non-success exit code should be rejected");
     assert_eq!(unexpected.command(), r#"["sh", "-c", "<redacted>"]"#);
@@ -238,8 +240,7 @@ fn test_command_error_accessors_for_errors_with_output() {
         "output",
     );
 
-    let timed_out = CommandRunner::new()
-        .timeout(Duration::from_millis(500))
+    let timed_out = CommandRunner::new(Duration::from_millis(500))
         .run(Command::shell("printf before-timeout; sleep 2"))
         .expect_err("long-running command should time out");
     assert_eq!(timed_out.command(), r#"["sh", "-c", "<redacted>"]"#);
@@ -255,7 +256,7 @@ fn test_command_error_accessors_for_errors_with_output() {
 
 #[test]
 fn test_command_error_into_output_moves_retained_output() {
-    let error = CommandRunner::new()
+    let error = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell("printf output; exit 9"))
         .expect_err("non-success exit code should be rejected");
 
@@ -268,10 +269,13 @@ fn test_command_error_into_output_moves_retained_output() {
 
 #[test]
 fn test_command_error_accessors_cover_cancelled_and_tee_output() {
-    let output = CommandRunner::new()
-        .without_timeout()
-        .cancellation_token(qubit_command::CommandCancellation::new())
-        .run(Command::shell("printf output"))
+    let output = CommandRunner::without_timeout()
+        .run_with(
+            Command::shell("printf output"),
+            CommandRunOptions::new().cancellation(
+                qubit_command::CommandCancellation::new(),
+            ),
+        )
         .expect("command should finish before cancellation");
 
     let cancelled = CommandError::Cancelled {
@@ -299,7 +303,8 @@ fn test_command_error_accessors_cover_cancelled_and_tee_output() {
 
     let cancel_failed = CommandError::CancelFailed {
         command: "cancel-failed".to_owned(),
-        source: io::Error::other("cancel failed"),
+        process_tree_source: io::Error::other("cancel failed"),
+        child_source: io::Error::other("child cancel failed"),
     };
     assert_eq!(cancel_failed.command(), "cancel-failed");
 
@@ -308,7 +313,7 @@ fn test_command_error_accessors_cover_cancelled_and_tee_output() {
             command: "timed-out".to_owned(),
             timeout: Duration::from_secs(1),
             output: Box::new(
-                CommandRunner::new()
+                CommandRunner::new(Duration::from_secs(10))
                     .run(Command::shell("printf timed-out"))
                     .expect("timed-out fixture should run"),
             ),
@@ -316,7 +321,7 @@ fn test_command_error_accessors_cover_cancelled_and_tee_output() {
         CommandError::OutputTruncated {
             command: "truncated".to_owned(),
             output: Box::new(
-                CommandRunner::new()
+                CommandRunner::new(Duration::from_secs(10))
                     .run(Command::shell("printf truncated"))
                     .expect("truncation fixture should run"),
             ),
@@ -328,7 +333,7 @@ fn test_command_error_accessors_cover_cancelled_and_tee_output() {
 
 #[test]
 fn test_command_error_reports_unexpected_exit_signal() {
-    let error = CommandRunner::new()
+    let error = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell("kill -TERM $$"))
         .expect_err("signal-terminated command should be rejected");
 
@@ -338,7 +343,7 @@ fn test_command_error_reports_unexpected_exit_signal() {
 
 #[test]
 fn test_command_error_debug_does_not_expose_captured_streams() {
-    let error = CommandRunner::new()
+    let error = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell(
             "printf stdout-secret; printf stderr-secret >&2; exit 7",
         ))

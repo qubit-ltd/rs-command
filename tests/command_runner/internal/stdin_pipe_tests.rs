@@ -16,7 +16,7 @@ use qubit_command::{
 #[cfg(not(windows))]
 #[test]
 fn test_stdin_pipe_closes_after_configured_bytes() {
-    let output = CommandRunner::new()
+    let output = CommandRunner::new(Duration::from_secs(10))
         .run(Command::new("cat").stdin_bytes(b"pipe-input".to_vec()))
         .expect("stdin bytes should be delivered and pipe should close");
 

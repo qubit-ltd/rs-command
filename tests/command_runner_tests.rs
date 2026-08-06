@@ -21,11 +21,11 @@ use qubit_command::{
     Command,
     CommandCancellation,
     CommandError,
+    CommandRunOptions,
     CommandRunner,
 };
 #[cfg(not(windows))]
 use qubit_command::{
-    DEFAULT_COMMAND_TIMEOUT,
     DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
 };
 #[cfg(not(windows))]
@@ -47,10 +47,13 @@ fn test_runner_pre_cancelled_command_does_not_prepare_output_file() {
     let cancellation = CommandCancellation::new();
     cancellation.cancel();
 
-    let error = CommandRunner::new()
-        .cancellation_token(cancellation)
-        .tee_stdout_to_file(&stdout_path)
-        .run(Command::new("__qubit_command_must_not_start__"))
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            Command::new("__qubit_command_must_not_start__"),
+            CommandRunOptions::new()
+                .cancellation(cancellation)
+                .tee_stdout_to_file(&stdout_path),
+        )
         .expect_err("pre-cancelled command should not be prepared or started");
 
     assert!(matches!(error, CommandError::CancelledBeforeStart { .. }));
@@ -62,7 +65,7 @@ fn test_command_runner_rejects_directory_as_stdin_file() {
     let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
         .expect("command test temporary directory should be created");
 
-    let error = CommandRunner::new()
+    let error = CommandRunner::new(Duration::from_secs(10))
         .run(Command::new("true").stdin_file(temp_dir.path()))
         .expect_err("a directory must not be used as command stdin");
 
@@ -74,9 +77,11 @@ fn test_command_runner_rejects_directory_as_stdout_tee() {
     let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
         .expect("command test temporary directory should be created");
 
-    let error = CommandRunner::new()
-        .tee_stdout_to_file(temp_dir.path())
-        .run(Command::new("true"))
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            Command::new("true"),
+            CommandRunOptions::new().tee_stdout_to_file(temp_dir.path()),
+        )
         .expect_err("a directory must not be used as stdout tee");
 
     assert!(matches!(
@@ -93,9 +98,11 @@ fn test_command_runner_rejects_directory_as_stderr_tee() {
     let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
         .expect("command test temporary directory should be created");
 
-    let error = CommandRunner::new()
-        .tee_stderr_to_file(temp_dir.path())
-        .run(Command::new("true"))
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            Command::new("true"),
+            CommandRunOptions::new().tee_stderr_to_file(temp_dir.path()),
+        )
         .expect_err("a directory must not be used as stderr tee");
 
     assert!(matches!(
@@ -113,8 +120,8 @@ mod unix {
         Command,
         CommandCancellation,
         CommandError,
+        CommandRunOptions,
         CommandRunner,
-        DEFAULT_COMMAND_TIMEOUT,
         DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
         Duration,
         InputOutputLimit,
@@ -132,10 +139,12 @@ mod unix {
 
     #[test]
     fn test_command_runner_default_configuration() {
-        let runner = CommandRunner::new();
+        let runner = CommandRunner::new(Duration::from_secs(10));
 
-        assert_eq!(runner.configured_timeout(), Some(DEFAULT_COMMAND_TIMEOUT),);
-        assert!(runner.configured_cancellation_token().is_none());
+        assert_eq!(
+            runner.configured_timeout(),
+            Some(Duration::from_secs(10)),
+        );
         assert_eq!(runner.configured_success_exit_codes(), &[0]);
         assert!(runner.configured_working_directory().is_none());
         assert!(!runner.is_logging_disabled());
@@ -148,13 +157,20 @@ mod unix {
             runner.configured_max_stderr_bytes(),
             Some(DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM),
         );
-        assert!(runner.configured_stdout_file().is_none());
-        assert!(runner.configured_stderr_file().is_none());
+        let output = runner
+            .run_with(
+                Command::new("true"),
+                CommandRunOptions::new()
+                    .tee_stdout_to_file("disabled-config-check-stdout")
+                    .tee_stderr_to_file("disabled-config-check-stderr"),
+            )
+            .expect("runner option helper should not be persisted");
+        let _ = output;
     }
 
     #[test]
     fn test_command_runner_default_rejects_output_beyond_safe_limit() {
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .run(Command::shell("head -c 1048577 /dev/zero"))
             .expect_err("default runner should reject output beyond 1 MiB");
 
@@ -168,7 +184,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_unbounded_output_disables_safe_limit() {
-        let runner = CommandRunner::new().unbounded_output();
+        let runner = CommandRunner::new(Duration::from_secs(10)).unbounded_output();
 
         assert_eq!(runner.configured_max_stdout_bytes(), None);
         assert_eq!(runner.configured_max_stderr_bytes(), None);
@@ -197,7 +213,7 @@ mod unix {
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let runner =
-            CommandRunner::new().diagnostic_redaction_policy(policy.clone());
+            CommandRunner::new(Duration::from_secs(10)).diagnostic_redaction_policy(policy.clone());
 
         assert_eq!(runner.configured_diagnostic_redaction_policy(), &policy,);
     }
@@ -211,7 +227,7 @@ mod unix {
             .diagnostic_event(budget)
             .build()
             .expect("the diagnostic redaction policy should be valid");
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .diagnostic_redaction_policy(policy)
             .run(Command::new("xxx").env("A", "B").env_remove("C"))
             .expect_err("the missing executable should fail to spawn");
@@ -232,7 +248,7 @@ mod unix {
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let error =
-            CommandRunner::new()
+            CommandRunner::new(Duration::from_secs(10))
                 .diagnostic_redaction_policy(policy)
                 .run(Command::new("xxx").env("VISIBLE", "value").arg(
                     "argument-that-forces-the-full-diagnostic-to-truncate",
@@ -246,7 +262,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_debug_describes_configuration() {
-        let debug = format!("{:?}", CommandRunner::new());
+        let debug = format!("{:?}", CommandRunner::new(Duration::from_secs(10)));
 
         assert!(debug.contains("CommandRunner"));
         assert!(debug.contains("success_exit_codes: [0]"));
@@ -257,23 +273,27 @@ mod unix {
     fn test_command_runner_debug_redacts_path_configuration() {
         let debug = format!(
             "{:?}",
-            CommandRunner::new()
-                .working_directory("customer/working-directory")
+            CommandRunner::new(Duration::from_secs(10))
+                .working_directory("customer/working-directory"),
+        );
+        let options_debug = format!(
+            "{:?}",
+            CommandRunOptions::new()
                 .tee_stdout_to_file("customer/stdout.log")
                 .tee_stderr_to_file("customer/stderr.log"),
         );
 
         assert!(debug.contains("working_directory: Some(\"<redacted path>\")"));
-        assert!(debug.contains("stdout_file: Some(\"<redacted path>\")"));
-        assert!(debug.contains("stderr_file: Some(\"<redacted path>\")"));
+        assert!(options_debug.contains("stdout_file: Some(\"<redacted path>\")"));
+        assert!(options_debug.contains("stderr_file: Some(\"<redacted path>\")"));
         assert!(!debug.contains("customer/working-directory"));
-        assert!(!debug.contains("customer/stdout.log"));
-        assert!(!debug.contains("customer/stderr.log"));
+        assert!(!options_debug.contains("customer/stdout.log"));
+        assert!(!options_debug.contains("customer/stderr.log"));
     }
 
     #[test]
     fn test_command_runner_run_captures_stdout() {
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .run(Command::shell("printf command-out"))
             .expect("command should run successfully");
 
@@ -289,8 +309,7 @@ mod unix {
 
     #[test]
     fn test_runner_without_timeout_uses_parent_process_group() {
-        let output = CommandRunner::new()
-            .without_timeout()
+        let output = CommandRunner::without_timeout()
             .run(Command::shell("ps -o pgid= -p $$; ps -o pgid= -p $PPID"))
             .expect("command without timeout should run successfully");
         let process_groups: Vec<i32> = output
@@ -319,12 +338,13 @@ mod unix {
             started_path.display(),
         );
         let cancellation = CommandCancellation::new();
-        let runner = CommandRunner::new()
-            .without_timeout()
-            .cancellation_token(cancellation.clone());
+        let runner = CommandRunner::without_timeout();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let worker = std::thread::spawn(move || {
-            let result = runner.run(Command::shell(&script));
+            let result = runner.run_with(
+                Command::shell(&script),
+                CommandRunOptions::new().cancellation(cancellation.clone()),
+            );
             sender
                 .send(result)
                 .expect("test receiver should remain connected");
@@ -356,7 +376,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_captures_stderr() {
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .run(Command::shell("printf command-error >&2"))
             .expect("command should run successfully");
 
@@ -371,7 +391,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_applies_environment_override() {
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .run(
                 Command::shell("printf \"$QUBIT_COMMAND_TEST\"")
                     .env("QUBIT_COMMAND_TEST", "from-env"),
@@ -386,7 +406,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_applies_environment_remove() {
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .run(
                 Command::shell("printf \"${QUBIT_COMMAND_TEST:-missing}\"")
                     .env("QUBIT_COMMAND_TEST", "from-env")
@@ -402,7 +422,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_applies_environment_clear_then_set() {
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .run(
                 Command::shell("printf \"$QUBIT_COMMAND_TEST\"")
                     .env_clear()
@@ -420,7 +440,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_applies_working_directory_override() {
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .run(Command::shell("pwd").working_directory("/"))
             .expect("command should run in requested working directory");
 
@@ -435,7 +455,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_applies_default_working_directory() {
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .working_directory("/")
             .run(Command::shell("pwd"))
             .expect("command should run in runner working directory");
@@ -451,7 +471,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_reports_unexpected_exit() {
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .run(Command::shell(
                 "printf fail-out; printf fail-err >&2; exit 7",
             ))
@@ -481,7 +501,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_accepts_configured_success_code() {
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .success_exit_code(7)
             .run(Command::shell("exit 7"))
             .expect("configured success exit code should be accepted");
@@ -491,7 +511,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_accepts_configured_success_codes() {
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .success_exit_codes(&[3, 7])
             .run(Command::shell("exit 3"))
             .expect("configured success exit code list should be accepted");
@@ -501,8 +521,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_without_timeout() {
-        let output = CommandRunner::new()
-            .without_timeout()
+        let output = CommandRunner::without_timeout()
             .run(Command::shell("printf no-timeout"))
             .expect("command should run successfully without timeout");
 
@@ -521,8 +540,7 @@ mod unix {
         };
 
         let clock = ManualMonotonicClock::new_shared();
-        let runner = CommandRunner::new()
-            .without_timeout()
+        let runner = CommandRunner::without_timeout()
             .timer(clock.new_timer());
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let worker = std::thread::spawn(move || {
@@ -557,7 +575,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_writes_stdin_bytes() {
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .run(Command::shell("cat").stdin_bytes(b"stdin-bytes".to_vec()))
             .expect("command should receive stdin bytes");
 
@@ -570,7 +588,7 @@ mod unix {
     #[test]
     fn test_command_runner_run_ignores_stdin_broken_pipe_for_success() {
         let input = vec![b'x'; 1024 * 1024];
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .run(Command::shell("true").stdin_bytes(input))
             .expect("closed stdin should not hide a successful exit");
 
@@ -580,7 +598,7 @@ mod unix {
     #[test]
     fn test_command_runner_run_preserves_exit_status_after_stdin_broken_pipe() {
         let input = vec![b'x'; 1024 * 1024];
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .run(Command::shell("exit 7").stdin_bytes(input))
             .expect_err(
                 "non-success exit should remain visible after stdin closes",
@@ -607,7 +625,7 @@ mod unix {
         fs::write(&path, b"stdin-file")
             .expect("stdin fixture should be written");
 
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .run(Command::shell("cat").stdin_file(path.clone()))
             .expect("command should receive stdin file");
 
@@ -619,7 +637,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_accepts_stdin_inherit() {
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .run(Command::shell("printf inherited").stdin_inherit())
             .expect("command should run with inherited stdin");
 
@@ -634,7 +652,7 @@ mod unix {
         let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
             .expect("command test temp directory should be created");
         let path = temp_dir.path().join("missing-stdin.txt");
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .run(Command::shell("cat").stdin_file(path.clone()))
             .expect_err("missing stdin file should be reported");
 
@@ -648,7 +666,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_disable_logging_updates_configuration() {
-        let runner = CommandRunner::new().disable_logging(true);
+        let runner = CommandRunner::new(Duration::from_secs(10)).disable_logging(true);
 
         assert!(runner.is_logging_disabled());
     }
@@ -656,7 +674,7 @@ mod unix {
     #[test]
     fn test_command_runner_output_limit_updates_configuration() {
         let runner =
-            CommandRunner::new().max_stdout_bytes(3).max_stderr_bytes(4);
+            CommandRunner::new(Duration::from_secs(10)).max_stdout_bytes(3).max_stderr_bytes(4);
 
         assert_eq!(runner.configured_max_stdout_bytes(), Some(3));
         assert_eq!(runner.configured_max_stderr_bytes(), Some(4));
@@ -664,7 +682,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_can_accept_output_truncation() {
-        let runner = CommandRunner::new().fail_on_output_truncation(false);
+        let runner = CommandRunner::new(Duration::from_secs(10)).fail_on_output_truncation(false);
 
         assert!(!runner.is_output_truncation_failure_enabled());
     }
@@ -675,16 +693,16 @@ mod unix {
             .expect("command test temp directory should be created");
         let stdout_path = temp_dir.path().join("stdout-config.txt");
         let stderr_path = temp_dir.path().join("stderr-config.txt");
-        let runner = CommandRunner::new()
+        let options = CommandRunOptions::new()
             .tee_stdout_to_file(stdout_path.clone())
             .tee_stderr_to_file(stderr_path.clone());
 
         assert_eq!(
-            runner.configured_stdout_file(),
+            options.configured_stdout_file(),
             Some(stdout_path.as_path())
         );
         assert_eq!(
-            runner.configured_stderr_file(),
+            options.configured_stderr_file(),
             Some(stderr_path.as_path())
         );
     }
@@ -694,7 +712,7 @@ mod unix {
         const MARKER: &str = "qubit-command-log-success-marker";
         initialize_captured_logger();
 
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .run(Command::new("printf").arg(MARKER))
             .expect("command should run successfully");
 
@@ -719,7 +737,7 @@ mod unix {
         const MARKER: &str = "qubit-command-log-quiet-success-marker";
         initialize_captured_logger();
 
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .disable_logging(true)
             .run(Command::new("printf").arg(MARKER))
             .expect("command should run successfully when logging is disabled");
@@ -733,7 +751,7 @@ mod unix {
         const MARKER: &str = "qubit-command-log-failure-marker";
         initialize_captured_logger();
 
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .run(Command::new("sh").arg("-c").arg("exit 8").arg(MARKER))
             .expect_err("unexpected exit should be reported");
 
@@ -748,7 +766,7 @@ mod unix {
         const MARKER: &str = "qubit-command-log-quiet-failure-marker";
         initialize_captured_logger();
 
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .disable_logging(true)
             .run(Command::new("sh").arg("-c").arg("exit 8").arg(MARKER))
             .expect_err("unexpected exit should still be reported when logging is disabled");
@@ -763,7 +781,7 @@ mod unix {
         const SECRET: &str = "command-log-secret";
         initialize_captured_logger();
 
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .run(
                 Command::new("printf")
                     .arg("%s")
@@ -785,8 +803,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_reports_timeout() {
-        let error = CommandRunner::new()
-            .timeout(Duration::from_millis(50))
+        let error = CommandRunner::new(Duration::from_millis(50))
             .run(Command::shell("sleep 2"))
             .expect_err("long-running command should time out");
 
@@ -807,8 +824,7 @@ mod unix {
         // process-group error can arrive just before the child becomes
         // waitable.
         for _ in 0..10_000 {
-            match CommandRunner::new()
-                .timeout(Duration::ZERO)
+            match CommandRunner::new(Duration::ZERO)
                 .run(Command::new("true"))
             {
                 Ok(_) | Err(CommandError::TimedOut { .. }) => {}
@@ -835,8 +851,7 @@ mod unix {
             "setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" &";
         let started = Instant::now();
 
-        let error = CommandRunner::new()
-            .timeout(Duration::from_millis(100))
+        let error = CommandRunner::new(Duration::from_millis(100))
             .run(
                 Command::new("sh")
                     .arg("-c")
@@ -877,8 +892,7 @@ mod unix {
         let escaped_child = "setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" >/dev/null &";
         let started = Instant::now();
 
-        let error = CommandRunner::new()
-            .timeout(Duration::from_millis(100))
+        let error = CommandRunner::new(Duration::from_millis(100))
             .run(
                 Command::new("sh")
                     .arg("-c")
@@ -909,8 +923,7 @@ mod unix {
             .expect("command test temporary directory should be created");
         let pid_path = temp_dir.path().join("escaped-stdin-child.pid");
         let started = Instant::now();
-        let error = CommandRunner::new()
-            .timeout(Duration::from_millis(100))
+        let error = CommandRunner::new(Duration::from_millis(100))
             .run(
                 Command::shell(
                     "setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" >/dev/null 2>&1 & wait",
@@ -946,8 +959,7 @@ mod unix {
         };
 
         let clock = ManualMonotonicClock::new_shared();
-        let runner = CommandRunner::new()
-            .timeout(Duration::from_secs(30))
+        let runner = CommandRunner::new(Duration::from_secs(30))
             .timer(clock.new_timer());
         let worker =
             std::thread::spawn(move || runner.run(Command::shell("sleep 60")));
@@ -977,8 +989,7 @@ mod unix {
         let script = "while [ ! -e \"$1\" ]; do sleep 0.01; done; : > \"$2\"";
         let clock = ManualMonotonicClock::new_shared();
         let timeout = Duration::from_secs(30);
-        let runner = CommandRunner::new()
-            .timeout(timeout)
+        let runner = CommandRunner::new(timeout)
             .timer(clock.new_timer());
         let child_signal_path = signal_path.clone();
         let child_completion_path = completion_path.clone();
@@ -1021,7 +1032,7 @@ mod unix {
         };
 
         let clock = ManualMonotonicClock::new_shared();
-        let runner = CommandRunner::new().timer(clock.new_timer());
+        let runner = CommandRunner::new(Duration::from_secs(10)).timer(clock.new_timer());
 
         assert_eq!(
             runner.configured_timer().clock().now().domain(),
@@ -1032,8 +1043,7 @@ mod unix {
     #[test]
     fn test_command_runner_run_kills_process_group_on_timeout() {
         let start = Instant::now();
-        let error = CommandRunner::new()
-            .timeout(Duration::from_millis(50))
+        let error = CommandRunner::new(Duration::from_millis(50))
             .run(Command::shell("sleep 2 & wait"))
             .expect_err("process group should time out");
 
@@ -1048,8 +1058,7 @@ mod unix {
     fn test_command_runner_run_times_out_when_background_child_inherits_output()
     {
         let start = Instant::now();
-        let error = CommandRunner::new()
-            .timeout(Duration::from_millis(50))
+        let error = CommandRunner::new(Duration::from_millis(50))
             .run(Command::shell("sleep 2 &"))
             .expect_err(
                 "background child with inherited output pipes should time out",
@@ -1064,7 +1073,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_limits_captured_output() {
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .max_stdout_bytes(3)
             .max_stderr_bytes(2)
             .fail_on_output_truncation(false)
@@ -1079,7 +1088,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_fails_when_output_is_truncated() {
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .max_stdout_bytes(3)
             .max_stderr_bytes(2)
             .fail_on_output_truncation(true)
@@ -1099,7 +1108,7 @@ mod unix {
     #[test]
     fn test_command_runner_bounded_output_limits_streams_and_rejects_truncation()
      {
-        let runner = CommandRunner::new().bounded_output(3);
+        let runner = CommandRunner::new(Duration::from_secs(10)).bounded_output(3);
 
         assert_eq!(runner.configured_max_stdout_bytes(), Some(3));
         assert_eq!(runner.configured_max_stderr_bytes(), Some(3));
@@ -1113,7 +1122,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_unexpected_exit_precedes_output_truncation() {
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .max_output_bytes(3)
             .fail_on_output_truncation(true)
             .run(Command::shell("printf abcdef; exit 7"))
@@ -1135,7 +1144,7 @@ mod unix {
         let stdout_path = temp_dir.path().join("stdout.txt");
         let stderr_path = temp_dir.path().join("stderr.txt");
 
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .max_output_bytes(3)
             .fail_on_output_truncation(false)
             .tee_stdout_to_file(stdout_path.clone())
@@ -1160,7 +1169,7 @@ mod unix {
         let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
             .expect("command test temp directory should be created");
         let path = temp_dir.path().join("missing-dir").join("stdout.txt");
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .tee_stdout_to_file(path.clone())
             .run(Command::shell("printf ignored"))
             .expect_err("missing output directory should be reported");
@@ -1183,7 +1192,7 @@ mod unix {
         let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
             .expect("command test temp directory should be created");
         let path = temp_dir.path().join("missing-dir").join("stderr.txt");
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .tee_stderr_to_file(path.clone())
             .run(Command::shell("printf ignored"))
             .expect_err("missing output directory should be reported");
@@ -1203,7 +1212,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_reports_spawn_failure() {
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .run(Command::new("__qubit_command_missing_executable__"))
             .expect_err("missing executable should fail to spawn");
 
@@ -1212,7 +1221,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_error_uses_argv_style_command_text() {
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .run(
                 Command::new("__qubit_command_missing_executable__")
                     .arg("two words"),
@@ -1227,7 +1236,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_error_redacts_sensitive_argv_values() {
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .run(
                 Command::new("__qubit_command_missing_executable__")
                     .arg("--password")
@@ -1250,7 +1259,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_error_redacts_sensitive_jvm_property() {
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .run(
                 Command::new("__qubit_command_missing_executable__")
                     .arg("-Dpassword=jvm-secret"),
@@ -1267,7 +1276,7 @@ mod unix {
     #[test]
     fn test_command_runner_error_masks_sensitive_option_after_double_dash() {
         let error =
-            CommandRunner::new()
+            CommandRunner::new(Duration::from_secs(10))
                 .run(
                     Command::new("__qubit_command_missing_executable__")
                         .args(&["--", "child", "--password", "raw-secret"]),
@@ -1284,7 +1293,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_error_redacts_shell_payload() {
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .run(Command::shell("printf ignored; printf hunter2 >&2; exit 9"))
             .expect_err("non-success shell command should fail");
 
@@ -1294,7 +1303,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_error_redacts_environment_display() {
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .run(
                 Command::new("__qubit_command_missing_executable__")
                     .env("OPENAI_API_KEY", "abcdef")
@@ -1312,7 +1321,7 @@ mod unix {
 
     #[test]
     fn test_command_runner_error_redacts_default_database_credentials() {
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .run(
                 Command::new("__qubit_command_missing_executable__")
                     .arg("--passphrase")
@@ -1337,7 +1346,7 @@ mod unix {
             .expect("the test policy field must be valid")
             .build()
             .expect("the diagnostic redaction policy should be valid");
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .diagnostic_redaction_policy(policy)
             .run(
                 Command::new("__qubit_command_missing_executable__")
@@ -1366,7 +1375,7 @@ mod unix {
             .expect("the test policy field must be valid")
             .build()
             .expect("the diagnostic redaction policy should be valid");
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .diagnostic_redaction_policy(policy)
             .run(
                 Command::new("__qubit_command_missing_executable__")
@@ -1395,7 +1404,7 @@ mod unix {
             .expect("the test policy field must be valid")
             .build()
             .expect("the diagnostic redaction policy should be valid");
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .diagnostic_redaction_policy(policy)
             .run(
                 Command::new("__qubit_command_missing_executable__")
@@ -1418,7 +1427,7 @@ mod unix {
             .expect("the test policy field must be valid")
             .build()
             .expect("the diagnostic redaction policy should be valid");
-        let error = CommandRunner::new()
+        let error = CommandRunner::new(Duration::from_secs(10))
             .diagnostic_redaction_policy(policy)
             .run(
                 Command::new("__qubit_command_missing_executable__")
@@ -1463,7 +1472,7 @@ mod windows {
 
     #[test]
     fn test_command_runner_windows_captures_stdout() {
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .run(Command::shell("echo command-out"))
             .expect("Windows shell command should run successfully");
 
@@ -1477,7 +1486,7 @@ mod windows {
 
     #[test]
     fn test_command_runner_windows_captures_stderr() {
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .run(Command::shell("echo command-error>&2"))
             .expect("Windows shell command should run successfully");
 
@@ -1491,8 +1500,7 @@ mod windows {
 
     #[test]
     fn test_command_runner_windows_reports_timeout() {
-        let error = CommandRunner::new()
-            .timeout(Duration::from_millis(50))
+        let error = CommandRunner::new(Duration::from_millis(50))
             .run(Command::shell("ping -n 3 127.0.0.1 >NUL"))
             .expect_err("long-running Windows command should time out");
 
@@ -1509,10 +1517,11 @@ mod windows {
         });
         let started = Instant::now();
 
-        let error = CommandRunner::new()
-            .without_timeout()
-            .cancellation_token(cancellation)
-            .run(Command::shell("ping -n 30 127.0.0.1 >NUL"))
+        let error = CommandRunner::without_timeout()
+            .run_with(
+                Command::shell("ping -n 30 127.0.0.1 >NUL"),
+                CommandRunOptions::new().cancellation(cancellation),
+            )
             .expect_err("long-running Windows command should be cancelled");
         canceller
             .join()
@@ -1529,8 +1538,7 @@ mod windows {
     fn test_command_runner_windows_times_out_when_background_child_inherits_output()
      {
         let started = Instant::now();
-        let error = CommandRunner::new()
-            .timeout(Duration::from_millis(250))
+        let error = CommandRunner::new(Duration::from_millis(250))
             .run(Command::shell("start \"\" /B ping -n 6 127.0.0.1"))
             .expect_err(
                 "background child with inherited output should time out",
@@ -1548,11 +1556,13 @@ mod windows {
         let temp_dir = LocalTempDir::with_prefix("qubit-command-windows-")
             .expect("command test temp directory should be created");
         let stdout_path = temp_dir.path().join("stdout.txt");
-        let output = CommandRunner::new()
+        let output = CommandRunner::new(Duration::from_secs(10))
             .max_stdout_bytes(3)
             .fail_on_output_truncation(false)
-            .tee_stdout_to_file(stdout_path.clone())
-            .run(Command::shell("echo abcdef"))
+            .run_with(
+                Command::shell("echo abcdef"),
+                CommandRunOptions::new().tee_stdout_to_file(stdout_path.clone()),
+            )
             .expect("Windows shell command should run successfully");
 
         assert_eq!(output.stdout(), b"abc");

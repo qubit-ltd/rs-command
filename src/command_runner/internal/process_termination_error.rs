@@ -16,6 +16,8 @@ pub(super) enum ProcessTerminationError {
     Kill(
         /// Operating-system process-tree termination error.
         io::Error,
+        /// Fallback direct-child termination error.
+        io::Error,
     ),
     /// Waiting for the child failed after termination was requested.
     Wait(

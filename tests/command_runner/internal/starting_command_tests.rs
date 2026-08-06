@@ -14,7 +14,7 @@ use qubit_command::{
 
 #[test]
 fn test_starting_command_hands_child_and_io_helpers_to_runner() {
-    let output = CommandRunner::new()
+    let output = CommandRunner::new(Duration::from_secs(10))
         .run(Command::new("rustc").arg("--version"))
         .expect("started command should transfer into the running state");
 

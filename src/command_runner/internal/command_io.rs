@@ -12,17 +12,15 @@ use qubit_clock::TimeError;
 use super::{
     output_collector::{
         collect_output,
-        collect_output_results,
+    collect_output_results,
         join_output_reader,
     },
+    output_capture_error::OutputCaptureError,
     output_reader::OutputReader,
     stdin_pipe::join_stdin_writer,
     stdin_writer::OptionalStdinWriter,
 };
-use crate::{
-    CommandError,
-    CommandOutput,
-};
+use crate::{CommandError, CommandOutput, OutputStream};
 
 /// Output and stdin helper threads for one running command.
 #[must_use = "command I/O owns helper threads that must be collected"]
@@ -161,5 +159,80 @@ impl CommandIo {
             stderr_result,
             stdin_result,
         )
+    }
+
+    /// Cancels and joins every helper without process status.
+    ///
+    /// # Parameters
+    ///
+    /// * `command` - Human-readable command text for diagnostics.
+    ///
+    /// # Returns
+    ///
+    /// Ok when helpers are joined, or the first helper failure in
+    /// stdout/stderr/stdin order after all joins complete.
+    pub(in crate::command_runner) fn cancel_and_join(
+        self,
+        command: &str,
+    ) -> Result<(), CommandError> {
+        let Self {
+            stdout_reader,
+            stderr_reader,
+            stdin_writer,
+        } = self;
+        stdout_reader.cancel();
+        stderr_reader.cancel();
+        if let Some(writer) = stdin_writer.as_ref() {
+            writer.cancel();
+        }
+        let stdout_result = join_output_reader(stdout_reader);
+        let stderr_result = join_output_reader(stderr_reader);
+        let stdin_result = join_stdin_writer(command, stdin_writer);
+
+        let stdout_error = match stdout_result {
+            Ok(_) => None,
+            Err(OutputCaptureError::Read(source)) => {
+                Some(CommandError::ReadOutputFailed {
+                    command: command.to_owned(),
+                    stream: OutputStream::Stdout,
+                    source,
+                })
+            }
+            Err(OutputCaptureError::Write { path, source, .. }) => {
+                Some(CommandError::WriteOutputFailed {
+                    command: command.to_owned(),
+                    stream: OutputStream::Stdout,
+                    path,
+                    source,
+                    output: None,
+                })
+            }
+        };
+        let stderr_error = match stderr_result {
+            Ok(_) => None,
+            Err(OutputCaptureError::Read(source)) => {
+                Some(CommandError::ReadOutputFailed {
+                    command: command.to_owned(),
+                    stream: OutputStream::Stderr,
+                    source,
+                })
+            }
+            Err(OutputCaptureError::Write { path, source, .. }) => {
+                Some(CommandError::WriteOutputFailed {
+                    command: command.to_owned(),
+                    stream: OutputStream::Stderr,
+                    path,
+                    source,
+                    output: None,
+                })
+            }
+        };
+        if let Some(error) = stdout_error {
+            return Err(error);
+        }
+        if let Some(error) = stderr_error {
+            return Err(error);
+        }
+        stdin_result
     }
 }

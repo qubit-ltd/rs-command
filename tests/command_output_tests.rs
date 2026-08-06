@@ -14,9 +14,11 @@ use qubit_command::{
     CommandRunner,
 };
 
+use std::time::Duration;
+
 #[test]
 fn test_command_output_stdout_returns_bytes_and_text() {
-    let output = CommandRunner::new()
+    let output = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell("printf hello"))
         .expect("command should run successfully");
 
@@ -32,7 +34,7 @@ fn test_command_output_stdout_returns_bytes_and_text() {
 
 #[test]
 fn test_command_output_stderr_returns_bytes_and_text() {
-    let output = CommandRunner::new()
+    let output = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell("printf error >&2"))
         .expect("command should run successfully");
 
@@ -47,11 +49,11 @@ fn test_command_output_stderr_returns_bytes_and_text() {
 
 #[test]
 fn test_command_output_consuming_stream_accessors_preserve_bytes() {
-    let stdout = CommandRunner::new()
+    let stdout = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell("printf stdout"))
         .expect("command should run successfully")
         .into_stdout();
-    let stderr = CommandRunner::new()
+    let stderr = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell("printf stderr >&2"))
         .expect("command should run successfully")
         .into_stderr();
@@ -62,7 +64,7 @@ fn test_command_output_consuming_stream_accessors_preserve_bytes() {
 
 #[test]
 fn test_command_output_rejects_invalid_utf8_for_strict_text() {
-    let output = CommandRunner::new()
+    let output = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell("printf '\\377'; printf '\\377' >&2"))
         .expect("command should run successfully");
 
@@ -74,7 +76,7 @@ fn test_command_output_rejects_invalid_utf8_for_strict_text() {
 
 #[test]
 fn test_command_output_always_exposes_lossy_text() {
-    let output = CommandRunner::new()
+    let output = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell("printf '\\377'; printf '\\377' >&2"))
         .expect("command should run successfully");
 
@@ -86,7 +88,7 @@ fn test_command_output_always_exposes_lossy_text() {
 
 #[test]
 fn test_command_output_reports_unix_termination_signal() {
-    let error = CommandRunner::new()
+    let error = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell("kill -TERM $$"))
         .expect_err("signal-terminated command should not be successful");
     let output = error
@@ -99,7 +101,7 @@ fn test_command_output_reports_unix_termination_signal() {
 
 #[test]
 fn test_command_output_debug_redacts_captured_streams() {
-    let output = CommandRunner::new()
+    let output = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell(
             "printf stdout-secret; printf stderr-secret >&2",
         ))

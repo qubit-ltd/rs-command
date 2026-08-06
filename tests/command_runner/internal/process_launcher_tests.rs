@@ -15,7 +15,7 @@ use qubit_command::{
 
 #[test]
 fn test_process_launcher_maps_spawn_failure() {
-    let error = CommandRunner::new()
+    let error = CommandRunner::new(Duration::from_secs(10))
         .run(Command::new(
             "__qubit_command_program_that_should_not_exist__",
         ))

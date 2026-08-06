@@ -10,6 +10,7 @@
 use std::{
     fs,
     path::PathBuf,
+    time::Duration,
 };
 
 use crate::support::LocalTempDir;
@@ -18,6 +19,7 @@ use qubit_command::OutputStream;
 use qubit_command::{
     Command,
     CommandError,
+    CommandRunOptions,
     CommandRunner,
 };
 
@@ -46,9 +48,10 @@ fn test_runner_rejects_stdin_stdout_conflict_without_truncating_input() {
     let path = temp_dir.path().join("stdin-stdout-conflict");
     fs::write(&path, b"preserve-me").expect("stdin fixture should be written");
 
-    let error = CommandRunner::new()
-        .tee_stdout_to_file(&path)
-        .run(unspawnable_command().stdin_file(&path))
+    let error = CommandRunner::new(Duration::from_secs(10)).run_with(
+        unspawnable_command().stdin_file(&path),
+        CommandRunOptions::new().tee_stdout_to_file(&path),
+    )
         .expect_err("conflicting files should be rejected");
 
     assert!(matches!(error, CommandError::InputOutputConflict { .. }));
@@ -64,9 +67,10 @@ fn test_runner_rejects_stdin_stderr_conflict_without_truncating_input() {
     let path = temp_dir.path().join("stdin-stderr-conflict");
     fs::write(&path, b"preserve-me").expect("stdin fixture should be written");
 
-    let error = CommandRunner::new()
-        .tee_stderr_to_file(&path)
-        .run(unspawnable_command().stdin_file(&path))
+    let error = CommandRunner::new(Duration::from_secs(10)).run_with(
+        unspawnable_command().stdin_file(&path),
+        CommandRunOptions::new().tee_stderr_to_file(&path),
+    )
         .expect_err("conflicting files should be rejected");
 
     assert!(matches!(error, CommandError::InputOutputConflict { .. }));
@@ -81,10 +85,13 @@ fn test_runner_rejects_stdout_stderr_conflict_before_creating_file() {
     let temp_dir = temp_dir();
     let path = temp_dir.path().join("stdout-stderr-conflict");
 
-    let error = CommandRunner::new()
-        .tee_stdout_to_file(&path)
-        .tee_stderr_to_file(&path)
-        .run(unspawnable_command())
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            unspawnable_command(),
+            CommandRunOptions::new()
+                .tee_stdout_to_file(&path)
+                .tee_stderr_to_file(&path),
+        )
         .expect_err("conflicting output files should be rejected");
 
     assert!(matches!(error, CommandError::OutputFilesConflict { .. }));
@@ -102,9 +109,10 @@ fn test_runner_rejects_symlinked_input_output_conflict() {
     std::os::unix::fs::symlink(&input_path, &output_path)
         .expect("symlink fixture should be created");
 
-    let error = CommandRunner::new()
-        .tee_stdout_to_file(&output_path)
-        .run(unspawnable_command().stdin_file(&input_path))
+    let error = CommandRunner::new(Duration::from_secs(10)).run_with(
+        unspawnable_command().stdin_file(&input_path),
+        CommandRunOptions::new().tee_stdout_to_file(&output_path),
+    )
         .expect_err("symlinked files should be rejected");
 
     assert!(matches!(error, CommandError::InputOutputConflict { .. }));
@@ -124,9 +132,10 @@ fn test_runner_rejects_hard_linked_input_output_conflict() {
     fs::hard_link(&input_path, &output_path)
         .expect("hard link fixture should be created");
 
-    let error = CommandRunner::new()
-        .tee_stdout_to_file(&output_path)
-        .run(unspawnable_command().stdin_file(&input_path))
+    let error = CommandRunner::new(Duration::from_secs(10)).run_with(
+        unspawnable_command().stdin_file(&input_path),
+        CommandRunOptions::new().tee_stdout_to_file(&output_path),
+    )
         .expect_err("hard-linked files should be rejected");
 
     assert!(matches!(error, CommandError::InputOutputConflict { .. }));
@@ -146,9 +155,10 @@ fn test_runner_rejects_hard_linked_input_stderr_conflict() {
     fs::hard_link(&input_path, &output_path)
         .expect("hard link fixture should be created");
 
-    let error = CommandRunner::new()
-        .tee_stderr_to_file(&output_path)
-        .run(unspawnable_command().stdin_file(&input_path))
+    let error = CommandRunner::new(Duration::from_secs(10)).run_with(
+        unspawnable_command().stdin_file(&input_path),
+        CommandRunOptions::new().tee_stderr_to_file(&output_path),
+    )
         .expect_err("hard-linked files should be rejected");
 
     assert!(matches!(error, CommandError::InputOutputConflict { .. }));
@@ -168,10 +178,13 @@ fn test_runner_rejects_hard_linked_output_files() {
     fs::hard_link(&stdout_path, &stderr_path)
         .expect("hard link fixture should be created");
 
-    let error = CommandRunner::new()
-        .tee_stdout_to_file(&stdout_path)
-        .tee_stderr_to_file(&stderr_path)
-        .run(unspawnable_command())
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            unspawnable_command(),
+            CommandRunOptions::new()
+                .tee_stdout_to_file(&stdout_path)
+                .tee_stderr_to_file(&stderr_path),
+        )
         .expect_err("hard-linked output files should be rejected");
 
     assert!(matches!(error, CommandError::OutputFilesConflict { .. }));
@@ -202,9 +215,11 @@ fn test_runner_normalizes_relative_output_path_components() {
         .join(dir_name)
         .join("relative-output");
 
-    let output = CommandRunner::new()
-        .tee_stdout_to_file(&path)
-        .run(Command::shell("printf relative"))
+    let output = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            Command::shell("printf relative"),
+            CommandRunOptions::new().tee_stdout_to_file(&path),
+        )
         .expect("normalized relative output should be accepted");
 
     assert_eq!(output.stdout(), b"relative");
@@ -225,9 +240,11 @@ fn test_runner_reports_symlink_loop_during_path_inspection() {
     std::os::unix::fs::symlink(&first, &second)
         .expect("second symlink should be created");
 
-    let error = CommandRunner::new()
-        .tee_stdout_to_file(&first)
-        .run(Command::shell("printf ignored"))
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            Command::shell("printf ignored"),
+            CommandRunOptions::new().tee_stdout_to_file(&first),
+        )
         .expect_err("symlink loop should fail path inspection");
 
     assert!(matches!(error, CommandError::InspectIoFileFailed { .. }));
@@ -236,9 +253,11 @@ fn test_runner_reports_symlink_loop_during_path_inspection() {
 #[cfg(target_os = "linux")]
 #[test]
 fn test_runner_rejects_output_device() {
-    let error = CommandRunner::new()
-        .tee_stdout_to_file("/dev/full")
-        .run(Command::shell("printf ignored"))
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            Command::shell("printf ignored"),
+            CommandRunOptions::new().tee_stdout_to_file("/dev/full"),
+        )
         .expect_err("full output device should be rejected before spawn");
 
     assert!(matches!(
@@ -253,9 +272,11 @@ fn test_runner_rejects_output_device() {
 #[cfg(target_os = "linux")]
 #[test]
 fn test_runner_rejects_stderr_device() {
-    let error = CommandRunner::new()
-        .tee_stderr_to_file("/dev/full")
-        .run(Command::shell("printf ignored >&2"))
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            Command::shell("printf ignored >&2"),
+            CommandRunOptions::new().tee_stderr_to_file("/dev/full"),
+        )
         .expect_err("full output device should be rejected before spawn");
 
     assert!(matches!(
