@@ -250,6 +250,66 @@ fn test_command_error_into_output_moves_retained_output() {
 }
 
 #[test]
+fn test_command_error_accessors_cover_cancelled_and_tee_output() {
+    let output = CommandRunner::new()
+        .without_timeout()
+        .cancellation_token(qubit_command::CommandCancellation::new())
+        .run(Command::shell("printf output"))
+        .expect("command should finish before cancellation");
+
+    let cancelled = CommandError::Cancelled {
+        command: "cancelled".to_owned(),
+        output: Box::new(output.clone()),
+    };
+    assert_eq!(cancelled.command(), "cancelled");
+    assert!(cancelled.output().is_some());
+    assert!(cancelled.into_output().is_some());
+
+    let tee = CommandError::WriteOutputFailed {
+        command: "tee".to_owned(),
+        stream: OutputStream::Stdout,
+        path: PathBuf::from("tee.log"),
+        source: io::Error::other("tee failed"),
+        output: Some(Box::new(output)),
+    };
+    assert!(tee.output().is_some());
+    assert!(tee.into_output().is_some());
+
+    let cancelled_before_start = CommandError::CancelledBeforeStart {
+        command: "cancelled-before-start".to_owned(),
+    };
+    assert_eq!(cancelled_before_start.command(), "cancelled-before-start");
+
+    let cancel_failed = CommandError::CancelFailed {
+        command: "cancel-failed".to_owned(),
+        source: io::Error::other("cancel failed"),
+    };
+    assert_eq!(cancel_failed.command(), "cancel-failed");
+
+    for error in [
+        CommandError::TimedOut {
+            command: "timed-out".to_owned(),
+            timeout: Duration::from_secs(1),
+            output: Box::new(
+                CommandRunner::new()
+                    .run(Command::shell("printf timed-out"))
+                    .expect("timed-out fixture should run"),
+            ),
+        },
+        CommandError::OutputTruncated {
+            command: "truncated".to_owned(),
+            output: Box::new(
+                CommandRunner::new()
+                    .run(Command::shell("printf truncated"))
+                    .expect("truncation fixture should run"),
+            ),
+        },
+    ] {
+        assert!(error.into_output().is_some());
+    }
+}
+
+#[test]
 fn test_command_error_reports_unexpected_exit_signal() {
     let error = CommandRunner::new()
         .run(Command::shell("kill -TERM $$"))
