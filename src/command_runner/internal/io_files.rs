@@ -5,8 +5,14 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+// qubit-style: allow coverage-cfg
 //! Prepares command I/O files without truncating conflicting paths.
 
+#[cfg(coverage)]
+use std::sync::atomic::{
+    AtomicBool,
+    Ordering,
+};
 use std::{
     fs::{
         self,
@@ -32,6 +38,14 @@ use crate::{
     CommandError,
     OutputStream,
 };
+
+#[cfg(coverage)]
+static COVERAGE_FAIL_TRUNCATE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(coverage)]
+pub(in crate::command_runner) fn __coverage_fail_truncate(enabled: bool) {
+    COVERAGE_FAIL_TRUNCATE.store(enabled, Ordering::Relaxed);
+}
 
 /// Opened stdin path, file handle, and optional buffered input bytes.
 type PreparedInputParts = (Option<PathBuf>, Option<File>, Option<Vec<u8>>);
@@ -311,7 +325,7 @@ fn normalized_path(
 ///
 /// Lexically normalized path.
 #[must_use]
-fn normalize_lexically(path: &Path) -> PathBuf {
+pub(in crate::command_runner) fn normalize_lexically(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
@@ -448,7 +462,7 @@ fn file_handle(
 ///
 /// Panics when an open tee file has no corresponding configured path, which
 /// indicates an internal invariant violation.
-fn truncate_output(
+pub(in crate::command_runner) fn truncate_output(
     command: &str,
     stream: OutputStream,
     path: Option<&Path>,
@@ -461,6 +475,17 @@ fn truncate_output(
             .map_err(|source| inspect_error(command, path, source))?
             .file_type();
         if file_type.is_file() {
+            #[cfg(coverage)]
+            if COVERAGE_FAIL_TRUNCATE.load(Ordering::Relaxed) {
+                return Err(CommandError::OpenOutputFailed {
+                    command: command.to_owned(),
+                    stream,
+                    path: path.to_path_buf(),
+                    source: io::Error::other(
+                        "coverage-injected output truncation failure",
+                    ),
+                });
+            }
             file.set_len(0).map_err(|source| {
                 CommandError::OpenOutputFailed {
                     command: command.to_owned(),

@@ -5,6 +5,12 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+// qubit-style: allow coverage-cfg
+#[cfg(coverage)]
+use std::sync::atomic::{
+    AtomicBool,
+    Ordering,
+};
 use std::{
     io::{
         self,
@@ -17,6 +23,14 @@ use process_wrap::std::ChildWrapper;
 
 use super::stdin_writer::StdinWriter;
 use crate::CommandError;
+
+#[cfg(coverage)]
+static COVERAGE_FAIL_STDIN_THREAD: AtomicBool = AtomicBool::new(false);
+
+#[cfg(coverage)]
+pub(in crate::command_runner) fn __coverage_fail_stdin_thread(enabled: bool) {
+    COVERAGE_FAIL_STDIN_THREAD.store(enabled, Ordering::Relaxed);
+}
 
 /// Starts a helper thread that writes configured stdin bytes.
 ///
@@ -42,14 +56,22 @@ pub(in crate::command_runner) fn write_stdin_bytes(
 ) -> Result<StdinWriter, CommandError> {
     match stdin_bytes {
         Some(bytes) => match child.stdin().take() {
-            Some(mut stdin) => thread::Builder::new()
-                .name("qubit-command-stdin-writer".to_owned())
-                .spawn(move || stdin.write_all(&bytes))
-                .map(Some)
-                .map_err(|source| CommandError::StartInputThreadFailed {
-                    command: command.to_owned(),
-                    source,
-                }),
+            Some(mut stdin) => {
+                #[cfg(coverage)]
+                if COVERAGE_FAIL_STDIN_THREAD.load(Ordering::Relaxed) {
+                    return Err(CommandError::StartInputThreadFailed {
+                        command: command.to_owned(),
+                        source: io::Error::other(
+                            "coverage-injected stdin thread failure",
+                        ),
+                    });
+                }
+                let writer = thread::Builder::new()
+                    .name("qubit-command-stdin-writer".to_owned())
+                    .spawn(move || stdin.write_all(&bytes))
+                    .map(Some);
+                map_stdin_thread_result(command, writer)
+            }
             None => Err(CommandError::WriteInputFailed {
                 command: command.to_owned(),
                 source: io::Error::other("stdin pipe was not created"),
@@ -57,6 +79,16 @@ pub(in crate::command_runner) fn write_stdin_bytes(
         },
         None => Ok(None),
     }
+}
+
+pub(in crate::command_runner) fn map_stdin_thread_result(
+    command: &str,
+    result: io::Result<StdinWriter>,
+) -> Result<StdinWriter, CommandError> {
+    result.map_err(|source| CommandError::StartInputThreadFailed {
+        command: command.to_owned(),
+        source,
+    })
 }
 
 /// Joins the stdin writer and maps failures to command errors.

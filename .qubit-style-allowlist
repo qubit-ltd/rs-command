@@ -1,0 +1,7 @@
+# Project style exceptions (rs-command).
+coverage-cfg | src/lib.rs | Re-export the internal coverage probe only for cargo-llvm-cov integration tests.
+coverage-cfg | src/command_runner.rs | Host the coverage-only internal failure-path probe module.
+coverage-cfg | src/command_runner/coverage.rs | Exercise private process and I/O failures that cannot be induced reliably through public behavior.
+coverage-cfg | tests/coverage_tests.rs | Run the internal failure-path probe only in instrumented coverage builds.
+coverage-cfg | src/command_runner/internal/stdin_pipe.rs | Inject the otherwise unavailable stdin thread-start failure for coverage tests.
+coverage-cfg | src/command_runner/internal/io_files.rs | Inject the otherwise unavailable output truncation failure for coverage tests.
