@@ -235,36 +235,32 @@ fn test_runner_reports_symlink_loop_during_path_inspection() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn test_runner_reports_output_device_write_failure() {
+fn test_runner_rejects_output_device() {
     let error = CommandRunner::new()
         .tee_stdout_to_file("/dev/full")
         .run(Command::shell("printf ignored"))
-        .expect_err("full output device should reject writes");
+        .expect_err("full output device should be rejected before spawn");
 
     assert!(matches!(
-        &error,
-        CommandError::WriteOutputFailed {
+        error,
+        CommandError::NonRegularOutputFile {
             stream: OutputStream::Stdout,
             ..
         }
     ));
-    let output = error
-        .output()
-        .expect("output write failures should retain captured output");
-    assert_eq!(output.stdout(), b"ignored");
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn test_runner_reports_stderr_device_write_failure() {
+fn test_runner_rejects_stderr_device() {
     let error = CommandRunner::new()
         .tee_stderr_to_file("/dev/full")
         .run(Command::shell("printf ignored >&2"))
-        .expect_err("full output device should reject stderr writes");
+        .expect_err("full output device should be rejected before spawn");
 
     assert!(matches!(
         error,
-        CommandError::WriteOutputFailed {
+        CommandError::NonRegularOutputFile {
             stream: OutputStream::Stderr,
             ..
         }

@@ -12,6 +12,13 @@ use std::{
         Write,
     },
     process::ExitStatus,
+    sync::{
+        Arc,
+        atomic::{
+            AtomicBool,
+            Ordering,
+        },
+    },
     thread,
     time::Duration,
 };
@@ -19,12 +26,13 @@ use std::{
 use qubit_clock::TimeError;
 
 use super::{
+    cancellable_reader::CancellableReader,
     captured_output::CapturedOutput,
     output_capture_error::OutputCaptureError,
     output_capture_options::OutputCaptureOptions,
     output_reader::OutputReader,
     stdin_pipe::join_stdin_writer,
-    stdin_writer::StdinWriter,
+    stdin_writer::OptionalStdinWriter,
 };
 use crate::{
     CommandError,
@@ -32,49 +40,34 @@ use crate::{
     OutputStream,
 };
 
-/// Spawns a reader thread for a child output stream.
-///
-/// # Parameters
-///
-/// * `reader` - Child output pipe to drain.
-/// * `options` - In-memory capture limit and optional tee destination.
-///
-/// # Returns
-///
-/// Join handle for the named output-reader thread.
-///
-/// # Errors
-///
-/// Returns the thread builder's I/O error when the helper cannot be started.
 #[inline]
-pub(in crate::command_runner) fn read_output_stream(
-    mut reader: Box<dyn Read + Send>,
+pub(in crate::command_runner) fn read_output_stream<R: CancellableReader>(
+    reader: R,
     options: OutputCaptureOptions,
 ) -> io::Result<OutputReader> {
-    thread::Builder::new()
+    reader.prepare_for_cancellation()?;
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let thread_cancellation = Arc::clone(&cancellation);
+    let join = thread::Builder::new()
         .name("qubit-command-output-reader".to_owned())
-        .spawn(move || read_output(reader.as_mut(), options))
+        .spawn(move || {
+            read_output_until_cancelled(reader, options, &thread_cancellation)
+        })?;
+    Ok(OutputReader::new(join, cancellation))
 }
 
-/// Reads one child output stream to completion.
-///
-/// # Parameters
-///
-/// * `reader` - Child output pipe to drain.
-/// * `options` - In-memory capture limit and optional tee destination.
-///
-/// # Returns
-///
-/// Retained bytes and their truncation state.
-///
-/// # Errors
-///
-/// Returns [`OutputCaptureError::Read`] for pipe reads or
-/// [`OutputCaptureError::Write`] for tee writes and flushing. The reader still
-/// drains the child pipe after the first tee failure.
-pub(in crate::command_runner) fn read_output(
+fn read_output_until_cancelled<R: Read>(
+    mut reader: R,
+    options: OutputCaptureOptions,
+    cancellation: &AtomicBool,
+) -> Result<CapturedOutput, OutputCaptureError> {
+    read_output_inner(&mut reader, options, Some(cancellation))
+}
+
+fn read_output_inner(
     reader: &mut dyn Read,
     mut options: OutputCaptureOptions,
+    cancellation: Option<&AtomicBool>,
 ) -> Result<CapturedOutput, OutputCaptureError> {
     let mut bytes = Vec::new();
     if let Some(max_bytes) = options.max_bytes {
@@ -84,8 +77,40 @@ pub(in crate::command_runner) fn read_output(
     let mut write_error = None;
     let mut buffer = [0_u8; 8 * 1024];
     loop {
+        if cancellation.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+            return Ok(CapturedOutput {
+                bytes,
+                truncated,
+                complete: false,
+            });
+        }
         let read = match reader.read(&mut buffer) {
             Ok(read) => read,
+            Err(source) if source.kind() == io::ErrorKind::Interrupted => {
+                continue;
+            }
+            Err(source) if source.kind() == io::ErrorKind::WouldBlock => {
+                if cancellation.is_some_and(|flag| flag.load(Ordering::Acquire))
+                {
+                    return Ok(CapturedOutput {
+                        bytes,
+                        truncated,
+                        complete: false,
+                    });
+                }
+                thread::sleep(Duration::from_millis(1));
+                continue;
+            }
+            Err(_source)
+                if cancellation
+                    .is_some_and(|flag| flag.load(Ordering::Acquire)) =>
+            {
+                return Ok(CapturedOutput {
+                    bytes,
+                    truncated,
+                    complete: false,
+                });
+            }
             Err(source) => return Err(OutputCaptureError::Read(source)),
         };
         if read == 0 {
@@ -96,6 +121,13 @@ pub(in crate::command_runner) fn read_output(
             && write_error.is_none()
             && let Err(source) = tee.writer.write_all(chunk)
         {
+            if cancellation.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+                return Ok(CapturedOutput {
+                    bytes,
+                    truncated,
+                    complete: false,
+                });
+            }
             write_error = Some((tee.path.clone(), source));
             options.tee = None;
         }
@@ -117,17 +149,41 @@ pub(in crate::command_runner) fn read_output(
         && let Some(tee) = options.tee.as_mut()
         && let Err(source) = tee.writer.flush()
     {
+        if cancellation.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+            return Ok(CapturedOutput {
+                bytes,
+                truncated,
+                complete: false,
+            });
+        }
         write_error = Some((tee.path.clone(), source));
     }
     if let Some((path, source)) = write_error {
         Err(OutputCaptureError::Write {
             path,
             source,
-            output: CapturedOutput { bytes, truncated },
+            output: CapturedOutput {
+                bytes,
+                truncated,
+                complete: true,
+            },
         })
     } else {
-        Ok(CapturedOutput { bytes, truncated })
+        Ok(CapturedOutput {
+            bytes,
+            truncated,
+            complete: true,
+        })
     }
+}
+
+/// Reads one child output stream to completion for tests and coverage hooks.
+#[allow(dead_code)]
+pub(in crate::command_runner) fn read_output(
+    reader: &mut dyn Read,
+    options: OutputCaptureOptions,
+) -> Result<CapturedOutput, OutputCaptureError> {
+    read_output_inner(reader, options, None)
 }
 
 /// Collects reader-thread results into a command output value.
@@ -156,7 +212,7 @@ pub(in crate::command_runner) fn collect_output<F>(
     elapsed: F,
     stdout_reader: OutputReader,
     stderr_reader: OutputReader,
-    stdin_writer: StdinWriter,
+    stdin_writer: OptionalStdinWriter,
 ) -> Result<CommandOutput, CommandError>
 where
     F: FnOnce() -> Result<Duration, TimeError>,
@@ -203,7 +259,6 @@ pub(in crate::command_runner) fn collect_output_results(
     stderr_result: Result<CapturedOutput, OutputCaptureError>,
     stdin_result: Result<(), CommandError>,
 ) -> Result<CommandOutput, CommandError> {
-
     match (elapsed_result, stdout_result, stderr_result, stdin_result) {
         (Err(source), _, _, _) => Err(CommandError::TimeFailed {
             command: command.to_owned(),
@@ -212,10 +267,8 @@ pub(in crate::command_runner) fn collect_output_results(
         (Ok(elapsed), Ok(stdout), Ok(stderr), Ok(())) => {
             Ok(CommandOutput::new(
                 status,
-                stdout.bytes,
-                stderr.bytes,
-                stdout.truncated,
-                stderr.truncated,
+                (stdout.bytes, stdout.truncated, stdout.complete),
+                (stderr.bytes, stderr.truncated, stderr.complete),
                 elapsed,
             ))
         }
@@ -276,10 +329,8 @@ fn map_output_reader_error(
                 source,
                 output: Some(Box::new(CommandOutput::new(
                     status,
-                    stdout.bytes,
-                    stderr.bytes,
-                    stdout.truncated,
-                    stderr.truncated,
+                    (stdout.bytes, stdout.truncated, stdout.complete),
+                    (stderr.bytes, stderr.truncated, stderr.complete),
                     elapsed,
                 ))),
             }

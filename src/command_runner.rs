@@ -247,9 +247,8 @@ impl CommandRunner {
     /// process cleanup and helper-thread joins may take additional time.
     /// A zero duration still permits success when a completion check observes
     /// the child has already exited before timeout handling begins.
-    /// Command preparation is excluded: opening configured stdin or tee paths
-    /// can block before this timeout starts, particularly for FIFOs and device
-    /// files.
+    /// Command preparation is excluded: configured stdin and tee paths must be
+    /// ordinary files and are validated before this timeout starts.
     ///
     /// # Parameters
     ///
@@ -644,15 +643,20 @@ impl CommandRunner {
 
     /// Streams stdout to a file while still capturing it in memory.
     ///
-    /// Before spawning, the file is opened without truncation and checked for
-    /// identity conflicts with configured stdin and stderr files. It is
-    /// truncated only after all checks pass. Opening a FIFO, device, or other
-    /// special file may block before the child is spawned and before its
-    /// timeout clock starts. The default capture limit remains in effect;
-    /// use [`Self::max_stdout_bytes`] to select a different limit. Reusing
-    /// the same runner concurrently with the same tee path is not supported
-    /// because each run truncates that file after its own validation
-    /// completes.
+    /// The path must identify an ordinary file. Directories, FIFOs, devices,
+    /// sockets, and other special files are rejected before the child is
+    /// spawned. Before spawning, the file is opened without truncation and
+    /// checked for identity conflicts with configured stdin and stderr files.
+    /// It is truncated only after all checks pass. The default capture limit
+    /// remains in effect; use [`Self::max_stdout_bytes`] to select a
+    /// different limit. Reusing the same runner concurrently with the same
+    /// tee path is not supported because each run truncates that file after
+    /// its own validation completes.
+    ///
+    /// # Warning
+    ///
+    /// `path` must be an ordinary file. Special files are rejected rather than
+    /// used as tee destinations.
     ///
     /// # TODO
     ///
@@ -687,15 +691,20 @@ impl CommandRunner {
 
     /// Streams stderr to a file while still capturing it in memory.
     ///
-    /// Before spawning, the file is opened without truncation and checked for
-    /// identity conflicts with configured stdin and stdout files. It is
-    /// truncated only after all checks pass. Opening a FIFO, device, or other
-    /// special file may block before the child is spawned and before its
-    /// timeout clock starts. The default capture limit remains in effect;
-    /// use [`Self::max_stderr_bytes`] to select a different limit. Reusing
-    /// the same runner concurrently with the same tee path is not supported
-    /// because each run truncates that file after its own validation
-    /// completes.
+    /// The path must identify an ordinary file. Directories, FIFOs, devices,
+    /// sockets, and other special files are rejected before the child is
+    /// spawned. Before spawning, the file is opened without truncation and
+    /// checked for identity conflicts with configured stdin and stdout files.
+    /// It is truncated only after all checks pass. The default capture limit
+    /// remains in effect; use [`Self::max_stderr_bytes`] to select a
+    /// different limit. Reusing the same runner concurrently with the same
+    /// tee path is not supported because each run truncates that file after
+    /// its own validation completes.
+    ///
+    /// # Warning
+    ///
+    /// `path` must be an ordinary file. Special files are rejected rather than
+    /// used as tee destinations.
     ///
     /// # TODO
     ///
@@ -734,13 +743,11 @@ impl CommandRunner {
     ///
     /// A timeout is not a hard upper bound on this method's wall-clock return
     /// time. Platform termination, waiting, and I/O helper cleanup can take
-    /// additional time. In particular, a descendant that escapes the managed
-    /// Unix process group or Windows Job Object while retaining an inherited
-    /// I/O pipe can delay the final helper-thread join until it closes that
-    /// pipe. A tee destination that blocks an output helper on write or flush,
-    /// such as a FIFO, device, or stalled filesystem, can likewise delay that
-    /// final join. Use regular files for tee destinations when timely return is
-    /// required.
+    /// additional time. After termination, every helper is cancelled and
+    /// joined; Unix pipe readers use nonblocking polling and Windows helpers
+    /// interrupt synchronous I/O. Timeout and cancellation output may be
+    /// partial, which is reported by [`CommandOutput::stdout_complete`] and
+    /// [`CommandOutput::stderr_complete`].
     ///
     /// Captured output is retained as raw bytes up to the configured per-stream
     /// limits. Reader threads still drain complete streams so the child is not
@@ -753,12 +760,13 @@ impl CommandRunner {
     /// # Blocking
     ///
     /// Before spawning, this method opens configured stdin and tee paths.
-    /// Opening FIFOs, devices, or other special files may block independently
-    /// of the command timeout. After spawning, this method parks the caller
-    /// while waiting for command completion and timeout ticks. A configured
-    /// timer backend must continue progressing independently during that wait.
-    /// Process-tree termination and I/O helper cleanup after a timeout may
-    /// extend the blocking duration beyond the configured value.
+    /// These paths must identify ordinary files; FIFOs, devices, directories,
+    /// sockets, and other special files are rejected. After spawning, this
+    /// method parks the caller while waiting for command completion and
+    /// timeout ticks. A configured timer backend must continue progressing
+    /// independently during that wait. Process-tree termination and I/O
+    /// helper cleanup after a timeout may extend the blocking duration
+    /// beyond the configured value.
     ///
     /// # Parameters
     ///
@@ -840,7 +848,7 @@ impl CommandRunner {
         let stdout_reader =
             start_output_reader(&command_text, OutputStream::Stdout, || {
                 read_output_stream(
-                    Box::new(stdout),
+                    stdout,
                     OutputCaptureOptions::new(
                         self.max_stdout_bytes,
                         stdout_file,
@@ -852,7 +860,7 @@ impl CommandRunner {
         let stderr_reader =
             start_output_reader(&command_text, OutputStream::Stderr, || {
                 read_output_stream(
-                    Box::new(stderr),
+                    stderr,
                     OutputCaptureOptions::new(
                         self.max_stderr_bytes,
                         stderr_file,

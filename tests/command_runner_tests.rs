@@ -57,6 +57,56 @@ fn test_runner_pre_cancelled_command_does_not_prepare_output_file() {
     assert!(!stdout_path.exists());
 }
 
+#[test]
+fn test_command_runner_rejects_directory_as_stdin_file() {
+    let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+        .expect("command test temporary directory should be created");
+
+    let error = CommandRunner::new()
+        .run(Command::new("true").stdin_file(temp_dir.path()))
+        .expect_err("a directory must not be used as command stdin");
+
+    assert!(matches!(error, CommandError::NonRegularInputFile { .. }));
+}
+
+#[test]
+fn test_command_runner_rejects_directory_as_stdout_tee() {
+    let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+        .expect("command test temporary directory should be created");
+
+    let error = CommandRunner::new()
+        .tee_stdout_to_file(temp_dir.path())
+        .run(Command::new("true"))
+        .expect_err("a directory must not be used as stdout tee");
+
+    assert!(matches!(
+        error,
+        CommandError::NonRegularOutputFile {
+            stream: qubit_command::OutputStream::Stdout,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_command_runner_rejects_directory_as_stderr_tee() {
+    let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+        .expect("command test temporary directory should be created");
+
+    let error = CommandRunner::new()
+        .tee_stderr_to_file(temp_dir.path())
+        .run(Command::new("true"))
+        .expect_err("a directory must not be used as stderr tee");
+
+    assert!(matches!(
+        error,
+        CommandError::NonRegularOutputFile {
+            stream: qubit_command::OutputStream::Stderr,
+            ..
+        }
+    ));
+}
+
 #[cfg(not(windows))]
 mod unix {
     use super::{
@@ -233,6 +283,8 @@ mod unix {
             "command-out",
         );
         assert!(output.stderr().is_empty());
+        assert!(output.stdout_complete());
+        assert!(output.stderr_complete());
     }
 
     #[test]
@@ -313,6 +365,8 @@ mod unix {
             output.stderr_text().expect("stderr should be valid UTF-8"),
             "command-error",
         );
+        assert!(output.stdout_complete());
+        assert!(output.stderr_complete());
     }
 
     #[test]
@@ -772,11 +826,13 @@ mod unix {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn test_command_runner_timeout_returns_when_descendant_escapes_process_group() {
+    fn test_command_runner_timeout_returns_when_descendant_escapes_process_group()
+     {
         let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
             .expect("command test temporary directory should be created");
         let pid_path = temp_dir.path().join("escaped-child.pid");
-        let escaped_child = "setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" &";
+        let escaped_child =
+            "setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" &";
         let started = Instant::now();
 
         let error = CommandRunner::new()
@@ -801,10 +857,84 @@ mod unix {
                 .status();
         }
 
-        assert!(matches!(error, CommandError::TimedOut { .. }));
+        assert!(matches!(&error, CommandError::TimedOut { .. }));
+        let output = error
+            .output()
+            .expect("timeout should retain captured output metadata");
+        assert!(!output.stdout_complete());
         assert!(
             started.elapsed() < Duration::from_secs(1),
             "timeout must not wait for an escaped descendant to close inherited output"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_command_runner_timeout_cancels_incomplete_stream() {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temporary directory should be created");
+        let pid_path = temp_dir.path().join("escaped-child.pid");
+        let escaped_child = "setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" >/dev/null &";
+        let started = Instant::now();
+
+        let error = CommandRunner::new()
+            .timeout(Duration::from_millis(100))
+            .run(
+                Command::new("sh")
+                    .arg("-c")
+                    .arg(escaped_child)
+                    .arg("sh")
+                    .arg_os(&pid_path),
+            )
+            .expect_err("escaped stderr descendant should time out");
+
+        if let Ok(pid) = fs::read_to_string(&pid_path) {
+            let _ = std::process::Command::new("kill")
+                .arg("-KILL")
+                .arg(pid.trim())
+                .status();
+        }
+
+        assert!(matches!(error, CommandError::TimedOut { .. }));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "timeout must not wait for an escaped stderr descendant"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_command_runner_timeout_cancels_blocked_stdin_writer() {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temporary directory should be created");
+        let pid_path = temp_dir.path().join("escaped-stdin-child.pid");
+        let started = Instant::now();
+        let error = CommandRunner::new()
+            .timeout(Duration::from_millis(100))
+            .run(
+                Command::shell(
+                    "setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" >/dev/null 2>&1 & wait",
+                )
+                .arg_os(&pid_path)
+                .stdin_bytes(vec![b'x'; 4 * 1024 * 1024]),
+            )
+            .expect_err("escaped stdin descendant should make the command time out");
+
+        let pid_deadline = Instant::now() + Duration::from_secs(1);
+        while !pid_path.exists() && Instant::now() < pid_deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if let Ok(pid) = fs::read_to_string(&pid_path) {
+            let _ = std::process::Command::new("kill")
+                .arg("-KILL")
+                .arg(pid.trim())
+                .status();
+        }
+
+        assert!(matches!(error, CommandError::TimedOut { .. }));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "timeout must cancel a blocked stdin writer"
         );
     }
 

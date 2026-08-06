@@ -92,6 +92,17 @@ pub enum CommandError {
         source: io::Error,
     },
 
+    /// The configured stdin path does not identify an ordinary file.
+    #[error(
+        "stdin path `<redacted path>` for command `{command}` is not an ordinary file"
+    )]
+    NonRegularInputFile {
+        /// Human-readable command representation.
+        command: String,
+        /// Configured stdin path.
+        path: PathBuf,
+    },
+
     /// Opening an output redirection file failed.
     #[error(
         "failed to open {stream} file `<redacted path>` for command `{command}`: {source}"
@@ -105,6 +116,19 @@ pub enum CommandError {
         path: PathBuf,
         /// I/O error reported while opening the file.
         source: io::Error,
+    },
+
+    /// The configured output tee path does not identify an ordinary file.
+    #[error(
+        "{stream} path `<redacted path>` for command `{command}` is not an ordinary file"
+    )]
+    NonRegularOutputFile {
+        /// Human-readable command representation.
+        command: String,
+        /// Output stream receiving the tee.
+        stream: OutputStream,
+        /// Configured output tee path.
+        path: PathBuf,
     },
 
     /// An input file and one output tee identify the same file.
@@ -369,7 +393,9 @@ impl CommandError {
             | Self::CancelFailed { command, .. }
             | Self::ReadOutputFailed { command, .. }
             | Self::OpenInputFailed { command, .. }
+            | Self::NonRegularInputFile { command, .. }
             | Self::OpenOutputFailed { command, .. }
+            | Self::NonRegularOutputFile { command, .. }
             | Self::InputOutputConflict { command, .. }
             | Self::OutputFilesConflict { command, .. }
             | Self::InspectIoFileFailed { command, .. }

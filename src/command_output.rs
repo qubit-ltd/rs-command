@@ -22,7 +22,9 @@ use qubit_redact::redacted_debug;
 /// `CommandOutput` stores retained raw stdout and stderr bytes. When the runner
 /// is configured with per-stream capture limits, the retained bytes may be a
 /// prefix of the full output; use [`Self::stdout_truncated`] and
-/// [`Self::stderr_truncated`] to detect that case. [`Self::stdout`] and
+/// [`Self::stderr_truncated`] to detect that case. If a timeout or
+/// cancellation interrupts collection, use [`Self::stdout_complete`] and
+/// [`Self::stderr_complete`] to detect partial streams. [`Self::stdout`] and
 /// [`Self::stderr`] return raw bytes exactly as retained. Use
 /// [`Self::stdout_text`] and [`Self::stderr_text`] for strict UTF-8 text, or
 /// [`Self::stdout_lossy_text`] and [`Self::stderr_lossy_text`] to replace
@@ -55,6 +57,10 @@ pub struct CommandOutput {
     stdout_truncated: bool,
     /// Whether stderr was truncated by the configured capture limit.
     stderr_truncated: bool,
+    /// Whether stdout reached EOF before collection was cancelled.
+    stdout_complete: bool,
+    /// Whether stderr reached EOF before collection was cancelled.
+    stderr_complete: bool,
     /// Duration from process spawn until output collection completes.
     elapsed: Duration,
 }
@@ -76,9 +82,11 @@ impl fmt::Debug for CommandOutput {
             .field("stdout", &redacted_debug(&self.stdout))
             .field("stdout_len", &self.stdout.len())
             .field("stdout_truncated", &self.stdout_truncated)
+            .field("stdout_complete", &self.stdout_complete)
             .field("stderr", &redacted_debug(&self.stderr))
             .field("stderr_len", &self.stderr.len())
             .field("stderr_truncated", &self.stderr_truncated)
+            .field("stderr_complete", &self.stderr_complete)
             .field("elapsed", &self.elapsed)
             .finish()
     }
@@ -90,10 +98,10 @@ impl CommandOutput {
     /// # Parameters
     ///
     /// * `status` - Process exit status.
-    /// * `stdout` - Captured standard output bytes.
-    /// * `stderr` - Captured standard error bytes.
-    /// * `stdout_truncated` - Whether stdout exceeded the capture limit.
-    /// * `stderr_truncated` - Whether stderr exceeded the capture limit.
+    /// * `stdout` - Captured stdout bytes, truncation flag, and completion
+    ///   flag.
+    /// * `stderr` - Captured stderr bytes, truncation flag, and completion
+    ///   flag.
     /// * `elapsed` - Observed process duration.
     /// # Returns
     ///
@@ -101,18 +109,20 @@ impl CommandOutput {
     #[inline]
     pub(crate) fn new(
         status: ExitStatus,
-        stdout: Vec<u8>,
-        stderr: Vec<u8>,
-        stdout_truncated: bool,
-        stderr_truncated: bool,
+        stdout: (Vec<u8>, bool, bool),
+        stderr: (Vec<u8>, bool, bool),
         elapsed: Duration,
     ) -> Self {
+        let (stdout, stdout_truncated, stdout_complete) = stdout;
+        let (stderr, stderr_truncated, stderr_complete) = stderr;
         Self {
             status,
             stdout,
             stderr,
             stdout_truncated,
             stderr_truncated,
+            stdout_complete,
+            stderr_complete,
             elapsed,
         }
     }
@@ -190,6 +200,28 @@ impl CommandOutput {
     #[inline(always)]
     pub fn stderr(&self) -> &[u8] {
         &self.stderr
+    }
+
+    /// Returns whether stdout was drained through EOF.
+    ///
+    /// A `false` value means collection was cancelled, so the retained bytes
+    /// may be only a prefix of the process output even when no capture limit
+    /// was configured.
+    #[must_use]
+    #[inline(always)]
+    pub const fn stdout_complete(&self) -> bool {
+        self.stdout_complete
+    }
+
+    /// Returns whether stderr was drained through EOF.
+    ///
+    /// A `false` value means collection was cancelled, so the retained bytes
+    /// may be only a prefix of the process output even when no capture limit
+    /// was configured.
+    #[must_use]
+    #[inline(always)]
+    pub const fn stderr_complete(&self) -> bool {
+        self.stderr_complete
     }
 
     /// Consumes this output and returns captured standard error bytes.
