@@ -28,6 +28,10 @@ clear error values.
 - UTF-8 stdout and stderr text accessors, with raw byte accessors for binary
   output
 - Optional per-stream capture limits plus streaming tee files for large output
+- `stdin_file`, `tee_stdout_to_file`, and `tee_stderr_to_file` accept ordinary
+  files only; special files are rejected before spawning
+- Timeout and cancellation output reports whether each stream reached EOF via
+  `stdout_complete()` and `stderr_complete()`
 - Optional failure policy for successful commands whose captured output is
   truncated
 - Input and output file conflict detection before any tee file is truncated
@@ -43,17 +47,17 @@ seconds). Use `timeout(Duration)` when a command needs a different bound, or
 `without_timeout()` only when the absence of a timeout is deliberate.
 The timeout clock starts after the child process has been spawned; time spent
 preparing and spawning a command is not included. Preparation opens configured
-stdin and tee paths. Opening a FIFO, device, or other special file may block
-until an external peer or device becomes ready, independently of the command
-timeout.
+stdin and tee paths. Each configured path must be an ordinary file; directories,
+FIFOs, devices, sockets, and other special files are rejected before the child
+starts.
 
 Each polling step checks the direct child before checking the deadline. After
 an observed child exit, output collection remains bounded by the same timeout.
-Reaching the timeout starts process-tree termination and cleanup; it is not a
-hard upper bound on when `run()` returns. Platform termination and I/O helper
-cleanup can take additional time. A descendant that escapes the managed Unix
-process group or Windows Job Object while retaining an inherited I/O pipe
-can delay return until that pipe closes.
+Reaching the timeout starts process-tree termination and cleanup. Every I/O
+helper receives cancellation and is joined before `run()` returns; Unix pipe
+helpers use nonblocking reads and Windows helpers interrupt synchronous I/O.
+Captured bytes remain available, and `stdout_complete()` or
+`stderr_complete()` is `false` when cancellation interrupted that stream.
 
 When a timeout or cancellation handle is configured, the runner attempts to
 terminate the process tree: Unix commands are spawned in a new process group
@@ -104,6 +108,7 @@ let output = CommandRunner::new()
 if output.stdout_truncated() {
     eprintln!("stdout was truncated in memory; see stdout.log for the full stream");
 }
+assert!(output.stdout_complete());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -125,7 +130,12 @@ assert!(!output.stdout_truncated());
 
 An unexpected exit, timeout, or cancellation remains the primary error even
 when its retained output is truncated. All four error kinds expose retained
-output through `CommandError::output()`.
+output through `CommandError::output()`. Timeout and cancellation errors may
+contain partial output; inspect `stdout_complete()` and `stderr_complete()`
+before treating retained bytes as complete streams.
+
+The lifecycle and cancellation design is documented in
+[command-runner-io-lifecycle-design.md](doc/command-runner-io-lifecycle-design.md).
 
 ## Quick Start
 

@@ -22,6 +22,9 @@ Qubit Command 提供一个小而明确的结构化 API，用于运行外部程�
 - 设置超时或取消句柄时，基于 Unix process group 和 Windows Job Object 尝试终止进程树。
 - 默认保留 stdout 和 stderr 的原始字节，同时提供严格和有损 UTF-8 文本访问方法。
 - 支持按流限制内存捕获字节数，并把完整输出流式写入文件。
+- `stdin_file`、`tee_stdout_to_file` 和 `tee_stderr_to_file` 只接受普通文件；特殊文件会在
+  启动子进程前被拒绝。
+- 超时或取消时可通过 `stdout_complete()` 和 `stderr_complete()` 判断每个流是否读到了 EOF。
 - 可选择在命令成功但内存输出被截断时返回错误。
 - 在截断任何 tee 文件前检查 stdin、stdout 和 stderr 的文件冲突。
 - 日志和诊断里的命令文本会对敏感 argv、显式环境变量覆盖、shell
@@ -34,14 +37,14 @@ Qubit Command 提供一个小而明确的结构化 API，用于运行外部程�
 不同的命令时长限制时，请调用 `timeout(Duration)`；只有确实需要无限等待时才调用
 `without_timeout()`。
 超时从子进程成功启动后开始计时，命令准备与启动过程耗费的时间不计入该上限。准备阶段会
-打开配置的 stdin 和 tee 路径；打开 FIFO、设备或其他特殊文件时，可能要等待外部对端或
-设备就绪，并且该等待不受命令 timeout 限制。
+打开配置的 stdin 和 tee 路径；每个路径都必须是普通文件。目录、FIFO、设备、套接字及其他
+特殊文件会在启动子进程前被拒绝。
 
 每次轮询会先检查直接子进程，再检查 deadline；观察到子进程退出后，输出收集仍受同一
-timeout 限制。达到超时会启动进程树终止和清理，但不保证 `run()` 在该墙钟时长内返回；
-平台终止操作和 I/O 辅助线程清理可能需要额外时间。如果后代进程脱离了受管的 Unix
-process group 或 Windows Job Object，同时仍持有继承的 I/O 管道，runner 可能要等到
-该管道关闭后才能返回。
+timeout 限制。达到超时会启动进程树终止和清理；所有 I/O 辅助线程都会收到取消请求并在
+`run()` 返回前完成 join。Unix 管道辅助线程使用非阻塞读取，Windows 辅助线程会中断同步
+I/O。已经捕获的字节仍会保留；如果取消中断了某个流，对应的 `stdout_complete()` 或
+`stderr_complete()` 会返回 `false`。
 
 设置超时或取消句柄后，runner 会尝试终止整个进程树：Unix 平台把命令放入新的
 process group，Windows 平台把命令放入 Job Object。
@@ -82,6 +85,7 @@ let output = CommandRunner::new()
 if output.stdout_truncated() {
     eprintln!("stdout was truncated in memory; see stdout.log for the full stream");
 }
+assert!(output.stdout_complete());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -101,7 +105,11 @@ assert!(!output.stdout_truncated());
 ```
 
 即使保留输出发生截断，非预期退出、超时或取消仍是优先错误。这四类错误都可以通过
-`CommandError::output()` 取得保留输出。
+`CommandError::output()` 取得保留输出。超时和取消错误可能只包含部分输出；在把保留字节当作
+完整流处理前，请检查 `stdout_complete()` 和 `stderr_complete()`。
+
+生命周期与取消设计见
+[command-runner-io-lifecycle-design.md](doc/command-runner-io-lifecycle-design.md)。
 
 ## 快速开始
 
