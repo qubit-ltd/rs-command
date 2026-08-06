@@ -37,7 +37,7 @@ fn short_lived_command() -> Command {
 /// # Panics
 ///
 /// Panics when the local shell cannot execute the benchmark fixture.
-fn verify_fixture(runner: CommandRunner) {
+fn verify_fixture(runner: &CommandRunner) {
     let output = runner
         .run(short_lived_command())
         .expect("short-lived benchmark command should succeed");
@@ -50,23 +50,23 @@ fn verify_fixture(runner: CommandRunner) {
 ///
 /// * `criterion` - Criterion benchmark registry receiving both scenarios.
 fn benchmark_short_lived_command_runner(criterion: &mut Criterion) {
-    verify_fixture(CommandRunner::new());
-    verify_fixture(CommandRunner::new().without_timeout());
+    let default_timeout_runner = CommandRunner::new();
+    let without_timeout_runner = CommandRunner::new().without_timeout();
+    verify_fixture(&default_timeout_runner);
+    verify_fixture(&without_timeout_runner);
 
     let mut group = criterion.benchmark_group("short_lived_command_runner");
     group.bench_function("default_timeout", |bencher| {
         bencher.iter(|| {
             black_box(
-                CommandRunner::new().run(black_box(short_lived_command())),
+                default_timeout_runner.run(black_box(short_lived_command())),
             )
         });
     });
     group.bench_function("without_timeout", |bencher| {
         bencher.iter(|| {
             black_box(
-                CommandRunner::new()
-                    .without_timeout()
-                    .run(black_box(short_lived_command())),
+                without_timeout_runner.run(black_box(short_lived_command())),
             )
         });
     });
