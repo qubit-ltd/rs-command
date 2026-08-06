@@ -25,8 +25,10 @@ Suppose a service needs to run a repository check and include its output in a re
 ```rust
 use qubit_command::{Command, CommandRunner};
 
+use std::time::Duration;
+
 fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
-    let output = CommandRunner::new()
+    let output = CommandRunner::new(Duration::from_secs(10))
         .run(Command::new("git").args(&["status", "--short"]))?;
 
     Ok(output.stdout_text()?.to_owned())

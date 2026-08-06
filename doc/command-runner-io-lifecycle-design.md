@@ -8,8 +8,8 @@ output must state whether each stream was completely drained.
 
 ## Ordinary-file boundary
 
-`Command::stdin_file`, `CommandRunner::tee_stdout_to_file`, and
-`CommandRunner::tee_stderr_to_file` accept ordinary files only. Existing paths
+`Command::stdin_file`, `CommandRunOptions::tee_stdout_to_file`, and
+`CommandRunOptions::tee_stderr_to_file` accept ordinary files only. Existing paths
 are checked through their metadata; a missing tee path may be created as a
 regular file. FIFOs, devices, sockets, directories, and other special files are
 rejected before the child is spawned. A symlink is accepted only when its target
