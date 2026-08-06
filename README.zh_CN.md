@@ -7,234 +7,66 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![English Document](https://img.shields.io/badge/Document-English-blue.svg)](README.md)
 
-面向 Rust 的命令行进程运行工具库。
+Qubit Command 是一个 Rust 外部进程运行库。当应用不仅需要启动进程，还需要限制输出捕获、定义超时或取消策略、清理进程树，并在错误诊断中隐藏敏感信息时，它可以把这些边界统一成结构化 API。它适合构建工具、服务后台以及其他必须把外部进程作为受控步骤执行的应用。
 
-## 概览
+## 安装
 
-Qubit Command 提供一个小而明确的结构化 API，用于运行外部程序、捕获 stdout/stderr、控制超时，并用清晰的错误类型报告命令执行失败。
+crate 名称为 `qubit-command`，要求 Rust 1.94 或更高版本：
 
-## 功能
-
-- 使用 program + args 的结构化命令执行方式。
-- 在确实需要 shell 解析时，提供显式 shell 命令支持。
-- 支持配置超时、工作目录、stdin、环境变量和成功退出码。
-- 为已管理终端信号或关闭请求的应用提供显式、一次性的取消句柄。
-- 设置超时或取消句柄时，基于 Unix process group 和 Windows Job Object 尝试终止进程树。
-- 默认保留 stdout 和 stderr 的原始字节，同时提供严格和有损 UTF-8 文本访问方法。
-- 支持按流限制内存捕获字节数，并把完整输出流式写入文件。
-- `stdin_file`、`tee_stdout_to_file` 和 `tee_stderr_to_file` 只接受普通文件；特殊文件会在
-  启动子进程前被拒绝。
-- 超时或取消时可通过 `stdout_complete()` 和 `stderr_complete()` 判断每个流是否读到了 EOF。
-- 可选择在命令成功但内存输出被截断时返回错误。
-- 在截断任何 tee 文件前检查 stdin、stdout 和 stderr 的文件冲突。
-- 日志和诊断里的命令文本会对敏感 argv、显式环境变量覆盖、shell
-  脚本体以及调用方追加的敏感字段做脱敏展示。
-- 使用明确错误类型表示进程启动失败、超时、输出读取失败和非预期退出码。
-
-## 超时行为
-
-`CommandRunner::new()` 默认应用 `DEFAULT_COMMAND_TIMEOUT`（当前为十秒）。需要
-不同的命令时长限制时，请调用 `timeout(Duration)`；只有确实需要无限等待时才调用
-`without_timeout()`。
-超时从子进程成功启动后开始计时，命令准备与启动过程耗费的时间不计入该上限。准备阶段会
-打开配置的 stdin 和 tee 路径；每个路径都必须是普通文件。目录、FIFO、设备、套接字及其他
-特殊文件会在启动子进程前被拒绝。
-
-每次轮询会先检查直接子进程，再检查 deadline；观察到子进程退出后，输出收集仍受同一
-timeout 限制。达到超时会启动进程树终止和清理；所有 I/O 辅助线程都会收到取消请求并在
-`run()` 返回前完成 join。Unix 管道辅助线程使用非阻塞读取，Windows 辅助线程会中断同步
-I/O。已经捕获的字节仍会保留；如果取消中断了某个流，对应的 `stdout_complete()` 或
-`stderr_complete()` 会返回 `false`。
-
-设置超时或取消句柄后，runner 会尝试终止整个进程树：Unix 平台把命令放入新的
-process group，Windows 平台把命令放入 Job Object。
-
-超时测量和休眠使用可注入的 `qubit-clock` timer，因此单元测试可以用手动单调时钟
-驱动超时逻辑。未设置超时且未配置取消句柄时，runner 会直接等待进程结束，不进行轮询。
-设置超时或取消句柄时，命令执行会同步等待 timer，因此 timer 后端必须能在调用线程阻塞时
-独立推进。Tokio timer 不应依赖仅由同一调用线程驱动的 current-thread runtime。
-
-## 取消
-
-`CommandCancellation` 是供已经拥有关闭或终端信号策略的应用使用的一次性句柄。将其 clone
-后配置给 runner，再从该策略中调用 `cancel()`。如果在一次运行开始前已观察到取消请求，
-runner 不会准备或启动命令，而是返回 `CommandError::CancelledBeforeStart`；否则 runner
-会终止受管进程树，并以 `CommandError::Cancelled` 返回保留输出。本 crate 刻意不安装
-全局信号处理器。
-
-即使调用 `without_timeout()`，配置取消句柄也会启用进程树管理。支持取消的等待会轮询所配置的
-timer；请选择能独立于调用线程持续推进的 timer 后端。
-
-## 大输出
-
-默认情况下，stdout 和 stderr 每个流最多保留
-`DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM`（当前为 1 MiB）；如果成功命令的保留输出发生
-截断，runner 会返回 `CommandError::OutputTruncated`。如果命令可能输出大量日志，可以
-降低内存上限并把完整输出 tee 到文件：
-
-```rust
-use qubit_command::{Command, CommandRunner};
-
-let output = CommandRunner::new()
-    .max_output_bytes(64 * 1024)
-    .fail_on_output_truncation(false)
-    .tee_stdout_to_file("stdout.log")
-    .tee_stderr_to_file("stderr.log")
-    .run(Command::new("cargo").arg("test"))?;
-
-if output.stdout_truncated() {
-    eprintln!("stdout was truncated in memory; see stdout.log for the full stream");
-}
-assert!(output.stdout_complete());
-# Ok::<(), Box<dyn std::error::Error>>(())
+```toml
+[dependencies]
+qubit-command = "0.6"
 ```
-
-`bounded_output(max_bytes)` 会为两个流设置新的上限，并保留默认的截断拒绝策略。如果允许
-只保留部分内存输出，可组合 `max_output_bytes(max_bytes)` 与
-`fail_on_output_truncation(false)`。只有确认输出量有限的可信命令才应显式取消限制：
-
-```rust
-use qubit_command::{Command, CommandRunner};
-
-let output = CommandRunner::new()
-    .unbounded_output()
-    .run(Command::new("cargo").arg("test"))?;
-
-assert!(!output.stdout_truncated());
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
-
-即使保留输出发生截断，非预期退出、超时或取消仍是优先错误。这四类错误都可以通过
-`CommandError::output()` 取得保留输出。超时和取消错误可能只包含部分输出；在把保留字节当作
-完整流处理前，请检查 `stdout_complete()` 和 `stderr_complete()`。
-
-生命周期与取消设计见
-[command-runner-io-lifecycle-design.md](doc/command-runner-io-lifecycle-design.md)。
 
 ## 快速开始
 
-```rust
-use qubit_command::{Command, CommandRunner};
-
-let output = CommandRunner::new()
-    .run(Command::new("git").args(&["status", "--short"]))?;
-
-println!("{}", output.stdout_text()?);
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
-
-## Shell 命令
-
-优先使用结构化命令：
+假设服务需要运行一次仓库检查，并把命令输出放入结果中。使用程序和参数值构造结构化命令，用默认策略运行，确认命令成功后再解码 stdout：
 
 ```rust
 use qubit_command::{Command, CommandRunner};
 
-let output = CommandRunner::new()
-    .run(Command::new("printf").arg("hello"))?;
+fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
+    let output = CommandRunner::new()
+        .run(Command::new("git").args(&["status", "--short"]))?;
 
-assert_eq!(output.stdout_text()?, "hello");
-# Ok::<(), Box<dyn std::error::Error>>(())
+    Ok(output.stdout_text()?.to_owned())
+}
 ```
 
-只有在明确需要 shell 解析、重定向、变量展开或管道时，才使用
-`Command::shell`：
+结构化形式不会进行 shell 解析。如果确实需要 shell 管道或重定向，请显式使用 `Command::shell(...)`，并由调用方负责验证传入的 shell 命令行。
 
-```rust
-use qubit_command::{Command, CommandRunner};
+## 为什么需要这个项目
 
-let output = CommandRunner::new()
-    .run(Command::shell("printf hello | tr a-z A-Z"))?;
+启动子进程很简单；但当进程挂起、输出过大、取消后仍有子孙进程持有管道、退出状态不符合预期，或诊断信息可能包含 secret 时，应用必须自行定义清晰的处理策略。Qubit Command 将这些决策集中在 `CommandRunner`，并通过 `CommandOutput` 和 `CommandError` 暴露可观察结果。
 
-assert_eq!(output.stdout_text()?, "HELLO");
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
+当调用方需要对外部进程使用可重复的运行策略时，这个库可以减少重复的生命周期处理。它不替代目标程序自己的参数解析，不提供 shell 语言抽象，也不会安装全局信号处理器。
 
-结构化参数会避免 shell 解析，但目标程序仍会按照自己的规则解析选项。当路径或其他值可能
-以 `-` 开头时，应使用该程序支持的选项终止符（通常是 `--`），或遵循其文档规定的参数
-传递方式。
+## 核心能力与边界
 
-## 诊断脱敏
+- `Command` 描述程序、结构化参数、可选的 shell 执行方式、工作目录和环境变量覆盖，以及 stdin 配置。
+- `CommandRunner` 应用超时、取消、成功退出码、日志、输出捕获、tee 文件和诊断脱敏策略。
+- `CommandOutput` 提供退出状态、原始 stdout/stderr 字节、严格或有损 UTF-8 视图、耗时、截断标志和流完整性标志。
+- `CommandError` 区分准备、启动、等待、输出、超时、取消、截断和非预期退出错误。已经产生输出的错误会保留输出供调用方检查。
+- `CommandCancellation` 是供应用自己的关闭或终端信号策略使用的一次性句柄。本 crate 不安装信号处理器。
+- 启用超时或取消管理时，runner 会通过 Unix process group 或 Windows Job Object 尝试终止进程树。
+- 默认每个输出流最多在内存中保留 1 MiB。通过 tee 文件可以保留完整流，同时让内存中的结果保持有界。
+- 命令诊断和生命周期日志会遮盖敏感参数、环境变量、shell 内容和路径。捕获到的进程输出与 tee 文件仍是原始输出，需要由调用方自行处理。
 
-Runner 日志、`CommandError::command()` 和 `Command` 的 `Debug` 输出都会通过
-`qubit-redact` 生成遮盖后的命令文本。类似 `--password secret`、
-`--access-token=...`、`OPENAI_API_KEY=...` 的结构化 argv 值会被遮蔽；显式设置的
-环境变量覆盖也只展示遮盖后的 `KEY=value`。`Command::shell` 的脚本体不做 shell
-语法解析，统一作为不透明 secret 遮盖。
+重要边界：
 
-`CommandRunner::new()` 会取得当前进程级全局默认策略的快照。应用应在构造 runner 前安装
-全局策略；某个 runner 需要不同规则时，也可以向它注入完整的不可变策略：
+- `Command::new` 避免了 shell 解析，但目标可执行文件仍会按自身规则解析选项。
+- `Command::shell` 在类 Unix 平台使用 `sh -c`，在 Windows 使用 `cmd /C`；它不承诺一种跨平台的 shell 语言。
+- `unbounded_output()` 会移除内存捕获上限，只有在确认命令输出有限且可接受时才应使用。
+- 超时和取消结果可能只包含部分输出。在把保留字节当作完整流前，请检查 `stdout_complete()` 和 `stderr_complete()`。
+- `stdin_file`、`tee_stdout_to_file` 和 `tee_stderr_to_file` 只接受普通文件。输入文件与输出文件冲突时，会在截断 tee 文件前拒绝执行。
 
-下面的示例需要直接声明 `qubit-redact = "0.4"` 依赖，因为 `qubit-command` 不会
-重导出属于 `qubit-redact` 的类型。
+## 延伸阅读
 
-```rust
-use qubit_command::{Command, CommandRunner};
-use qubit_redact::{RedactionPolicy, Sensitivity};
-
-let mut builder = RedactionPolicy::default().to_builder();
-builder
-    .fields()
-    .raise("tenant_option", Sensitivity::Secret)?
-    .allow_exact("username")?;
-let policy = builder.build()?;
-let error = CommandRunner::new()
-    .diagnostic_redaction_policy(policy)
-    .run(Command::new("__missing__").arg("--tenant-option").arg("secret"))
-    .expect_err("sample command should fail");
-
-assert_eq!(
-    error.command(),
-    r#"["__missing__", "--tenant-option", "<redacted>"]"#,
-);
-```
-
-对于客户文件路径等位置参数，请使用 `Command::sensitive_arg` 或
-`Command::sensitive_arg_os`。原值仍会不加修改地传给子进程，但诊断中只显示配置的
-秘密掩码。
-
-Runner 策略只影响 runner 日志和 `CommandError::command()`。
-独立的 `Command` `Debug` 输出没有 runner 上下文；每次格式化时都会取得进程级全局
-`RedactionPolicy` 快照，只有尚未安装全局策略时才使用标准策略。对于确认过的精确字段名
-误报，可使用 `allow_exact`；只有在明确接受更宽泛的后缀放行时才使用
-`allow_suffix`。放行会让匹配的 argv 或环境变量值原样出现在诊断中，因此每条规则都应
-经过安全审阅。
-
-命令生命周期日志使用 `debug` 级别。调用 `disable_logging(true)` 会抑制这些日志；
-无法通过 `CommandError` 返回的清理失败仍可能使用 `error` 级别记录。
-
-`CommandOutput` 的 `Debug` 输出会遮盖两个捕获流，只报告字节数、截断标志、退出状态和
-耗时。捕获到的 stdout/stderr 字节、显式访问方法以及 tee 文件仍然是进程原始输出。
-如果命令输出本身可能包含敏感信息，请配置捕获上限，并在调用方按业务语义过滤。
-
-工作目录、stdin 文件和 tee 文件路径不会出现在 `Debug`、`Display` 或
-`CommandError` 的诊断文本中；需要按错误类型处理时，结构化错误字段仍保留原始路径。
-
-## 输出文本
-
-`stdout()` 和 `stderr()` 返回保留下来的原始字节。需要严格 UTF-8 文本时，
-使用 `stdout_text()` 和 `stderr_text()`；需要把非法 UTF-8 字节替换成 `�`
-时，使用 `stdout_lossy_text()` 和 `stderr_lossy_text()`。
-
-若实际捕获的 stdout 或 stderr 中含有非法 UTF-8 序列，则 `stdout_text()` /
-`stderr_text()` 会分别返回 `Err(str::Utf8Error)`（内部对保留字节执行
-`str::from_utf8` 失败），无法得到 `&str`；此时输出仍已完整保留在
-`CommandOutput` 中，可改用 `stdout()` / `stderr()` 取得保留的原始字节并自行处理。
-配置捕获上限时，若截断位置恰好落在多字节 UTF-8 序列中间，即使进程的完整输出本身
-是有效 UTF-8，严格解码也可能失败。
-
-不再需要其余元数据时，可以通过 `into_stdout()` 和 `into_stderr()` 无复制地取走保留字节；
-同样，`CommandError::into_output()` 可以从错误中取走保留输出。
-
-```rust
-use qubit_command::{Command, CommandRunner};
-
-let output = CommandRunner::new()
-    .run(Command::shell("printf '\\377'"))?;
-
-assert_eq!(output.stdout_lossy_text(), "\u{fffd}");
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
+- [English user guide](doc/user_guide.md)
+- [中文用户手册](doc/user_guide.zh_CN.md)
+- [docs.rs API 文档](https://docs.rs/qubit-command)
+- [命令 runner 的 I/O 生命周期设计](doc/command-runner-io-lifecycle-design.md)
+- [English README](README.md)
 
 ## 测试
 
