@@ -201,7 +201,8 @@ pub enum CommandError {
         path: PathBuf,
         /// I/O error reported while writing the file.
         source: io::Error,
-        /// Output retained before the tee writer failed, when available.
+        /// Output retained while draining the stream after the tee writer
+        /// failed, when available.
         output: Option<Box<CommandOutput>>,
     },
 

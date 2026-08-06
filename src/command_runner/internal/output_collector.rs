@@ -96,14 +96,7 @@ pub(in crate::command_runner) fn read_output(
             && write_error.is_none()
             && let Err(source) = tee.writer.write_all(chunk)
         {
-            write_error = Some(OutputCaptureError::Write {
-                path: tee.path.clone(),
-                source,
-                output: CapturedOutput {
-                    bytes: bytes.clone(),
-                    truncated,
-                },
-            });
+            write_error = Some((tee.path.clone(), source));
             options.tee = None;
         }
         match options.max_bytes {
@@ -119,28 +112,19 @@ pub(in crate::command_runner) fn read_output(
             }
             None => bytes.extend_from_slice(chunk),
         }
-        if let Some(OutputCaptureError::Write { output, .. }) =
-            write_error.as_mut()
-        {
-            output.bytes.clone_from(&bytes);
-            output.truncated = truncated;
-        }
     }
     if write_error.is_none()
         && let Some(tee) = options.tee.as_mut()
         && let Err(source) = tee.writer.flush()
     {
-        write_error = Some(OutputCaptureError::Write {
-            path: tee.path.clone(),
-            source,
-            output: CapturedOutput {
-                bytes: bytes.clone(),
-                truncated,
-            },
-        });
+        write_error = Some((tee.path.clone(), source));
     }
-    if let Some(error) = write_error {
-        Err(error)
+    if let Some((path, source)) = write_error {
+        Err(OutputCaptureError::Write {
+            path,
+            source,
+            output: CapturedOutput { bytes, truncated },
+        })
     } else {
         Ok(CapturedOutput { bytes, truncated })
     }
