@@ -138,6 +138,10 @@ mod unix {
     #[test]
     fn test_command_runner_default_configuration() {
         let runner = CommandRunner::new(Duration::from_secs(10));
+        let tee_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command tee temporary directory should be created");
+        let stdout_tee = tee_dir.path().join("stdout.log");
+        let stderr_tee = tee_dir.path().join("stderr.log");
 
         assert_eq!(runner.configured_timeout(), Some(Duration::from_secs(10)),);
         assert_eq!(runner.configured_success_exit_codes(), &[0]);
@@ -156,11 +160,13 @@ mod unix {
             .run_with(
                 Command::new("true"),
                 CommandRunOptions::new()
-                    .tee_stdout_to_file("disabled-config-check-stdout")
-                    .tee_stderr_to_file("disabled-config-check-stderr"),
+                    .tee_stdout_to_file(&stdout_tee)
+                    .tee_stderr_to_file(&stderr_tee),
             )
             .expect("runner option helper should not be persisted");
         let _ = output;
+        assert!(stdout_tee.exists());
+        assert!(stderr_tee.exists());
     }
 
     #[test]

@@ -18,6 +18,7 @@ mod output_capture_options_tests;
 mod output_collector_tests;
 mod output_reader_tests;
 mod output_tee_tests;
+mod pollable_stdin_tests;
 mod prepared_command_tests;
 mod process_launcher_tests;
 mod process_setup_tests;
