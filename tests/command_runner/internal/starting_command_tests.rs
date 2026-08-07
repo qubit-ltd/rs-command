@@ -7,6 +7,8 @@
 // =============================================================================
 //! Tests for handing a started child and its I/O helpers to the runner.
 
+use std::time::Duration;
+
 use qubit_command::{
     Command,
     CommandRunner,

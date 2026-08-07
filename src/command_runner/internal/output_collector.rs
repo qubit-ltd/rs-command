@@ -12,13 +12,6 @@ use std::{
         Write,
     },
     process::ExitStatus,
-    sync::{
-        Arc,
-        atomic::{
-            AtomicBool,
-            Ordering,
-        },
-    },
     thread,
     time::Duration,
 };
@@ -28,6 +21,8 @@ use qubit_clock::TimeError;
 use super::{
     cancellable_reader::CancellableReader,
     captured_output::CapturedOutput,
+    io_cancellation::IoCancellation,
+    io_cancellation_token::IoCancellationToken,
     output_capture_error::OutputCaptureError,
     output_capture_options::OutputCaptureOptions,
     output_reader::OutputReader,
@@ -40,34 +35,41 @@ use crate::{
     OutputStream,
 };
 
+#[cfg(unix)]
+type OutputFd = std::os::fd::RawFd;
+#[cfg(windows)]
+type OutputFd = ();
+
 #[inline]
 pub(in crate::command_runner) fn read_output_stream<R: CancellableReader>(
     reader: R,
     options: OutputCaptureOptions,
 ) -> io::Result<OutputReader> {
     reader.prepare_for_cancellation()?;
-    let cancellation = Arc::new(AtomicBool::new(false));
-    let thread_cancellation = Arc::clone(&cancellation);
+    let (cancellation, token) = IoCancellation::pair()?;
     let join = thread::Builder::new()
         .name("qubit-command-output-reader".to_owned())
-        .spawn(move || {
-            read_output_until_cancelled(reader, options, &thread_cancellation)
-        })?;
+        .spawn(move || read_output_until_cancelled(reader, options, token))?;
     Ok(OutputReader::new(join, cancellation))
 }
 
-fn read_output_until_cancelled<R: Read>(
+fn read_output_until_cancelled<R: CancellableReader>(
     mut reader: R,
     options: OutputCaptureOptions,
-    cancellation: &AtomicBool,
+    cancellation: IoCancellationToken,
 ) -> Result<CapturedOutput, OutputCaptureError> {
-    read_output_inner(&mut reader, options, Some(cancellation))
+    #[cfg(unix)]
+    let fd = Some(reader.raw_fd());
+    #[cfg(windows)]
+    let fd = None;
+    read_output_inner(&mut reader, options, Some(&cancellation), fd)
 }
 
 fn read_output_inner(
     reader: &mut dyn Read,
     mut options: OutputCaptureOptions,
-    cancellation: Option<&AtomicBool>,
+    cancellation: Option<&IoCancellationToken>,
+    fd: Option<OutputFd>,
 ) -> Result<CapturedOutput, OutputCaptureError> {
     let mut bytes = Vec::new();
     if let Some(max_bytes) = options.max_bytes {
@@ -77,7 +79,19 @@ fn read_output_inner(
     let mut write_error = None;
     let mut buffer = [0_u8; 8 * 1024];
     loop {
-        if cancellation.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+        if cancellation.is_some_and(IoCancellationToken::is_cancelled) {
+            return Ok(CapturedOutput {
+                bytes,
+                truncated,
+                complete: false,
+            });
+        }
+        #[cfg(unix)]
+        if let (Some(cancellation), Some(fd)) = (cancellation, fd)
+            && !cancellation
+                .wait_for_fd(fd, libc::POLLIN)
+                .map_err(OutputCaptureError::Read)?
+        {
             return Ok(CapturedOutput {
                 bytes,
                 truncated,
@@ -90,20 +104,21 @@ fn read_output_inner(
                 continue;
             }
             Err(source) if source.kind() == io::ErrorKind::WouldBlock => {
-                if cancellation.is_some_and(|flag| flag.load(Ordering::Acquire))
-                {
+                if cancellation.is_some_and(IoCancellationToken::is_cancelled) {
                     return Ok(CapturedOutput {
                         bytes,
                         truncated,
                         complete: false,
                     });
                 }
-                thread::sleep(Duration::from_millis(1));
+                if cancellation.is_none() {
+                    thread::sleep(Duration::from_millis(1));
+                }
                 continue;
             }
             Err(_source)
                 if cancellation
-                    .is_some_and(|flag| flag.load(Ordering::Acquire)) =>
+                    .is_some_and(IoCancellationToken::is_cancelled) =>
             {
                 return Ok(CapturedOutput {
                     bytes,
@@ -121,7 +136,7 @@ fn read_output_inner(
             && write_error.is_none()
             && let Err(source) = tee.writer.write_all(chunk)
         {
-            if cancellation.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+            if cancellation.is_some_and(IoCancellationToken::is_cancelled) {
                 return Ok(CapturedOutput {
                     bytes,
                     truncated,
@@ -149,7 +164,7 @@ fn read_output_inner(
         && let Some(tee) = options.tee.as_mut()
         && let Err(source) = tee.writer.flush()
     {
-        if cancellation.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+        if cancellation.is_some_and(IoCancellationToken::is_cancelled) {
             return Ok(CapturedOutput {
                 bytes,
                 truncated,
@@ -183,7 +198,7 @@ pub(in crate::command_runner) fn read_output(
     reader: &mut dyn Read,
     options: OutputCaptureOptions,
 ) -> Result<CapturedOutput, OutputCaptureError> {
-    read_output_inner(reader, options, None)
+    read_output_inner(reader, options, None, None)
 }
 
 /// Collects reader-thread results into a command output value.

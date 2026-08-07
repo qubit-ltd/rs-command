@@ -2,6 +2,8 @@
 //    Copyright (c) 2025 - 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 //! Owns a child process while its I/O helpers are being started.
 
@@ -177,15 +179,14 @@ impl Drop for StartingCommand<'_> {
 
         let tree_managed = child_process.process_tree_managed();
         if tree_managed {
-            if let Err(process_tree_source) = child_process.start_kill_tree() {
-                if child_process.try_wait().ok().flatten().is_none() {
-                    if let Err(child_source) = child_process.start_kill_child() {
-                        log::error!(
-                            "Failed to kill command '{}' during startup cleanup: process-tree: {process_tree_source}; child: {child_source}",
-                            self.command
-                        );
-                    }
-                }
+            if let Err(process_tree_source) = child_process.start_kill_tree()
+                && child_process.try_wait().ok().flatten().is_none()
+                && let Err(child_source) = child_process.start_kill_child()
+            {
+                log::error!(
+                    "Failed to kill command '{}' during startup cleanup: process-tree: {process_tree_source}; child: {child_source}",
+                    self.command
+                );
             }
         } else {
             if let Err(child_source) = child_process.start_kill_child() {

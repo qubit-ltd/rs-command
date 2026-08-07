@@ -3,7 +3,10 @@
     "qubit-command": [
       "src/command_runner/coverage.rs",
       "src/command_runner/internal/cancellable_reader.rs",
+      "src/command_runner/internal/command_io.rs",
       "src/command_runner/internal/io_files.rs",
+      "src/command_runner/internal/io_cancellation.rs",
+      "src/command_runner/internal/io_cancellation_token.rs",
       "src/command_runner/internal/output_collector.rs",
       "src/command_runner/internal/running_command.rs",
       "src/command_runner/internal/starting_command.rs",

@@ -7,12 +7,15 @@
 // =============================================================================
 //! Private command-runner implementation details.
 
+#[cfg(windows)]
 pub(in crate::command_runner) mod cancel;
 pub(in crate::command_runner) mod cancellable_reader;
 pub(in crate::command_runner) mod captured_output;
 pub(in crate::command_runner) mod command_io;
 pub(in crate::command_runner) mod error_mapping;
 pub(in crate::command_runner) mod finished_command;
+pub(in crate::command_runner) mod io_cancellation;
+pub(in crate::command_runner) mod io_cancellation_token;
 pub(in crate::command_runner) mod io_files;
 pub(in crate::command_runner) mod managed_child_process;
 pub(in crate::command_runner) mod output_capture_error;

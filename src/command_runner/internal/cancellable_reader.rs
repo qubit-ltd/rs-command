@@ -2,6 +2,8 @@
 //    Copyright (c) 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 //! Child-pipe preparation for cancellation-aware output readers.
 
@@ -19,17 +21,30 @@ pub(in crate::command_runner) trait CancellableReader:
 {
     /// Prepares the underlying pipe for cancellation polling.
     fn prepare_for_cancellation(&self) -> io::Result<()>;
+    /// Returns the underlying Unix descriptor for event-driven reads.
+    #[cfg(unix)]
+    fn raw_fd(&self) -> std::os::fd::RawFd;
 }
 
 impl CancellableReader for ChildStdout {
     fn prepare_for_cancellation(&self) -> io::Result<()> {
         prepare_pipe(self)
     }
+
+    #[cfg(unix)]
+    fn raw_fd(&self) -> std::os::fd::RawFd {
+        std::os::fd::AsRawFd::as_raw_fd(self)
+    }
 }
 
 impl CancellableReader for ChildStderr {
     fn prepare_for_cancellation(&self) -> io::Result<()> {
         prepare_pipe(self)
+    }
+
+    #[cfg(unix)]
+    fn raw_fd(&self) -> std::os::fd::RawFd {
+        std::os::fd::AsRawFd::as_raw_fd(self)
     }
 }
 

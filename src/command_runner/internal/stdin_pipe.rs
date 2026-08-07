@@ -11,14 +11,13 @@ use std::{
         self,
         Write,
     },
-    sync::{
-        Arc,
-        atomic::{
-            AtomicBool,
-            Ordering,
-        },
-    },
     thread,
+};
+
+#[cfg(coverage)]
+use std::sync::atomic::{
+    AtomicBool,
+    Ordering,
 };
 
 use process_wrap::std::ChildWrapper;
@@ -26,6 +25,10 @@ use process_wrap::std::ChildWrapper;
 use super::stdin_writer::{
     OptionalStdinWriter,
     StdinWriter,
+};
+use super::{
+    io_cancellation::IoCancellation,
+    io_cancellation_token::IoCancellationToken,
 };
 use crate::CommandError;
 
@@ -77,16 +80,17 @@ pub(in crate::command_runner) fn write_stdin_bytes(
                         source,
                     }
                 })?;
-                let cancellation = Arc::new(AtomicBool::new(false));
-                let thread_cancellation = Arc::clone(&cancellation);
+                let (cancellation, token) =
+                    IoCancellation::pair().map_err(|source| {
+                        CommandError::StartInputThreadFailed {
+                            command: command.to_owned(),
+                            source,
+                        }
+                    })?;
                 let writer = thread::Builder::new()
                     .name("qubit-command-stdin-writer".to_owned())
                     .spawn(move || {
-                        write_stdin_until_cancelled(
-                            &mut stdin,
-                            &bytes,
-                            &thread_cancellation,
-                        )
+                        write_stdin_until_cancelled(&mut stdin, &bytes, token)
                     })
                     .map(|join| Some(StdinWriter::new(join, cancellation)));
                 map_stdin_thread_result(command, writer)
@@ -151,14 +155,46 @@ pub(in crate::command_runner) fn join_stdin_writer(
     }
 }
 
-fn write_stdin_until_cancelled(
-    stdin: &mut dyn Write,
+trait PollableStdin: Write {
+    /// Waits for the pipe to accept another write or observes cancellation.
+    fn wait_writable(
+        &self,
+        cancellation: &IoCancellationToken,
+    ) -> io::Result<bool>;
+}
+
+#[cfg(unix)]
+impl<T: Write + std::os::fd::AsRawFd> PollableStdin for T {
+    fn wait_writable(
+        &self,
+        cancellation: &IoCancellationToken,
+    ) -> io::Result<bool> {
+        cancellation
+            .wait_for_fd(std::os::fd::AsRawFd::as_raw_fd(self), libc::POLLOUT)
+    }
+}
+
+#[cfg(windows)]
+impl<T: Write> PollableStdin for T {
+    fn wait_writable(
+        &self,
+        cancellation: &IoCancellationToken,
+    ) -> io::Result<bool> {
+        Ok(!cancellation.is_cancelled())
+    }
+}
+
+fn write_stdin_until_cancelled<W: PollableStdin>(
+    stdin: &mut W,
     bytes: &[u8],
-    cancellation: &AtomicBool,
+    cancellation: IoCancellationToken,
 ) -> io::Result<()> {
     let mut offset = 0;
     while offset < bytes.len() {
-        if cancellation.load(Ordering::Acquire) {
+        if cancellation.is_cancelled() {
+            return Ok(());
+        }
+        if !stdin.wait_writable(&cancellation)? {
             return Ok(());
         }
         match stdin.write(&bytes[offset..]) {
@@ -170,10 +206,8 @@ fn write_stdin_until_cancelled(
             }
             Ok(written) => offset += written,
             Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
-            Err(source) if source.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(std::time::Duration::from_millis(1));
-            }
-            Err(_source) if cancellation.load(Ordering::Acquire) => {
+            Err(source) if source.kind() == io::ErrorKind::WouldBlock => {}
+            Err(_source) if cancellation.is_cancelled() => {
                 return Ok(());
             }
             Err(source) => return Err(source),

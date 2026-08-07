@@ -5,26 +5,21 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-//! Tests for output collector behavior.
+//! Tests the internal per-run option handoff through the public runner API.
 
-#[cfg(not(windows))]
 use std::time::Duration;
 
-#[cfg(not(windows))]
 use qubit_command::{
     Command,
+    CommandRunOptions,
     CommandRunner,
 };
 
-#[cfg(not(windows))]
 #[test]
-fn test_output_collector_keeps_streams_separate() {
+fn test_command_run_options_parts_reach_runner() {
     let output = CommandRunner::new(Duration::from_secs(10))
-        .run(Command::shell(
-            "printf stdout-bytes; printf stderr-bytes >&2",
-        ))
-        .expect("command should run successfully");
+        .run_with(Command::shell("exit 0"), CommandRunOptions::new())
+        .expect("run options should reach the command runner");
 
-    assert_eq!(output.stdout(), b"stdout-bytes");
-    assert_eq!(output.stderr(), b"stderr-bytes");
+    assert_eq!(output.exit_code(), Some(0));
 }

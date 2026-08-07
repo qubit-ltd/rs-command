@@ -7,6 +7,8 @@
 // =============================================================================
 //! Tests for captured output behavior.
 
+use std::time::Duration;
+
 use qubit_command::{
     Command,
     CommandRunner,

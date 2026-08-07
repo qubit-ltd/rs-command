@@ -61,6 +61,7 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 - `unbounded_output()` 会移除内存捕获上限，只有在确认命令输出有限且可接受时才应使用。
 - 超时和取消结果可能只包含部分输出。在把保留字节当作完整流前，请检查 `stdout_complete()` 和 `stderr_complete()`。
 - `stdin_file`、`tee_stdout_to_file` 和 `tee_stderr_to_file` 只接受普通文件。输入文件与输出文件冲突时，会在截断 tee 文件前拒绝执行。
+- tee 文件会在每次运行开始时替换（而不是追加）。`CommandRunOptions::clone()` 会复制 tee 路径；如果并发运行需要分别保留日志，必须提供不同路径。
 
 ## 延伸阅读
 

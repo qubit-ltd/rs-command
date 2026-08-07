@@ -16,6 +16,8 @@ use std::{
 };
 
 #[cfg(not(windows))]
+use qubit_command::DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM;
+#[cfg(not(windows))]
 use qubit_command::OutputStream;
 use qubit_command::{
     Command,
@@ -23,10 +25,6 @@ use qubit_command::{
     CommandError,
     CommandRunOptions,
     CommandRunner,
-};
-#[cfg(not(windows))]
-use qubit_command::{
-    DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
 };
 #[cfg(not(windows))]
 use qubit_redact::{
@@ -141,10 +139,7 @@ mod unix {
     fn test_command_runner_default_configuration() {
         let runner = CommandRunner::new(Duration::from_secs(10));
 
-        assert_eq!(
-            runner.configured_timeout(),
-            Some(Duration::from_secs(10)),
-        );
+        assert_eq!(runner.configured_timeout(), Some(Duration::from_secs(10)),);
         assert_eq!(runner.configured_success_exit_codes(), &[0]);
         assert!(runner.configured_working_directory().is_none());
         assert!(!runner.is_logging_disabled());
@@ -184,7 +179,8 @@ mod unix {
 
     #[test]
     fn test_command_runner_unbounded_output_disables_safe_limit() {
-        let runner = CommandRunner::new(Duration::from_secs(10)).unbounded_output();
+        let runner =
+            CommandRunner::new(Duration::from_secs(10)).unbounded_output();
 
         assert_eq!(runner.configured_max_stdout_bytes(), None);
         assert_eq!(runner.configured_max_stderr_bytes(), None);
@@ -212,8 +208,8 @@ mod unix {
             .expect("the test policy field must be valid")
             .build()
             .expect("the diagnostic redaction policy should be valid");
-        let runner =
-            CommandRunner::new(Duration::from_secs(10)).diagnostic_redaction_policy(policy.clone());
+        let runner = CommandRunner::new(Duration::from_secs(10))
+            .diagnostic_redaction_policy(policy.clone());
 
         assert_eq!(runner.configured_diagnostic_redaction_policy(), &policy,);
     }
@@ -262,7 +258,8 @@ mod unix {
 
     #[test]
     fn test_command_runner_debug_describes_configuration() {
-        let debug = format!("{:?}", CommandRunner::new(Duration::from_secs(10)));
+        let debug =
+            format!("{:?}", CommandRunner::new(Duration::from_secs(10)));
 
         assert!(debug.contains("CommandRunner"));
         assert!(debug.contains("success_exit_codes: [0]"));
@@ -284,8 +281,12 @@ mod unix {
         );
 
         assert!(debug.contains("working_directory: Some(\"<redacted path>\")"));
-        assert!(options_debug.contains("stdout_file: Some(\"<redacted path>\")"));
-        assert!(options_debug.contains("stderr_file: Some(\"<redacted path>\")"));
+        assert!(
+            options_debug.contains("stdout_file: Some(\"<redacted path>\")")
+        );
+        assert!(
+            options_debug.contains("stderr_file: Some(\"<redacted path>\")")
+        );
         assert!(!debug.contains("customer/working-directory"));
         assert!(!options_debug.contains("customer/stdout.log"));
         assert!(!options_debug.contains("customer/stderr.log"));
@@ -340,10 +341,11 @@ mod unix {
         let cancellation = CommandCancellation::new();
         let runner = CommandRunner::without_timeout();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let run_cancellation = cancellation.clone();
         let worker = std::thread::spawn(move || {
             let result = runner.run_with(
                 Command::shell(&script),
-                CommandRunOptions::new().cancellation(cancellation.clone()),
+                CommandRunOptions::new().cancellation(run_cancellation),
             );
             sender
                 .send(result)
@@ -372,6 +374,78 @@ mod unix {
             }
             other => panic!("expected cancelled command error, got {other:?}"),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_runner_cancellation_wakes_silent_inherited_stdout_reader() {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temporary directory should be created");
+        let pid_path = temp_dir.path().join("escaped-child.pid");
+        let script = "setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" & printf started";
+        let cancellation = CommandCancellation::new();
+        let run_cancellation = cancellation.clone();
+        let run_pid_path = pid_path.clone();
+        let worker = std::thread::spawn(move || {
+            CommandRunner::without_timeout().run_with(
+                Command::new("sh")
+                    .arg("-c")
+                    .arg(script)
+                    .arg("sh")
+                    .arg_os(&run_pid_path),
+                CommandRunOptions::new().cancellation(run_cancellation),
+            )
+        });
+
+        std::thread::sleep(Duration::from_millis(100));
+        cancellation.cancel();
+        let error = worker
+            .join()
+            .expect("cancelled runner should not panic")
+            .expect_err("inherited output should make cancellation observable");
+
+        if let Ok(pid) = fs::read_to_string(&pid_path) {
+            let _ = std::process::Command::new("kill")
+                .arg("-KILL")
+                .arg(pid.trim())
+                .status();
+        }
+        assert!(matches!(error, CommandError::Cancelled { .. }));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_runner_cancellation_wakes_blocked_stdin_writer() {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temporary directory should be created");
+        let pid_path = temp_dir.path().join("escaped-stdin-child.pid");
+        let script = "setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" >/dev/null 2>&1 & wait";
+        let cancellation = CommandCancellation::new();
+        let run_cancellation = cancellation.clone();
+        let run_pid_path = pid_path.clone();
+        let worker = std::thread::spawn(move || {
+            CommandRunner::without_timeout().run_with(
+                Command::shell(script)
+                    .arg_os(&run_pid_path)
+                    .stdin_bytes(vec![b'x'; 4 * 1024 * 1024]),
+                CommandRunOptions::new().cancellation(run_cancellation),
+            )
+        });
+
+        std::thread::sleep(Duration::from_millis(100));
+        cancellation.cancel();
+        let error = worker
+            .join()
+            .expect("cancelled runner should not panic")
+            .expect_err("blocked stdin should make cancellation observable");
+
+        if let Ok(pid) = fs::read_to_string(&pid_path) {
+            let _ = std::process::Command::new("kill")
+                .arg("-KILL")
+                .arg(pid.trim())
+                .status();
+        }
+        assert!(matches!(error, CommandError::Cancelled { .. }));
     }
 
     #[test]
@@ -540,8 +614,7 @@ mod unix {
         };
 
         let clock = ManualMonotonicClock::new_shared();
-        let runner = CommandRunner::without_timeout()
-            .timer(clock.new_timer());
+        let runner = CommandRunner::without_timeout().timer(clock.new_timer());
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let worker = std::thread::spawn(move || {
             let result = runner.run(Command::shell("sleep 0.05"));
@@ -666,15 +739,17 @@ mod unix {
 
     #[test]
     fn test_command_runner_disable_logging_updates_configuration() {
-        let runner = CommandRunner::new(Duration::from_secs(10)).disable_logging(true);
+        let runner =
+            CommandRunner::new(Duration::from_secs(10)).disable_logging(true);
 
         assert!(runner.is_logging_disabled());
     }
 
     #[test]
     fn test_command_runner_output_limit_updates_configuration() {
-        let runner =
-            CommandRunner::new(Duration::from_secs(10)).max_stdout_bytes(3).max_stderr_bytes(4);
+        let runner = CommandRunner::new(Duration::from_secs(10))
+            .max_stdout_bytes(3)
+            .max_stderr_bytes(4);
 
         assert_eq!(runner.configured_max_stdout_bytes(), Some(3));
         assert_eq!(runner.configured_max_stderr_bytes(), Some(4));
@@ -682,7 +757,8 @@ mod unix {
 
     #[test]
     fn test_command_runner_can_accept_output_truncation() {
-        let runner = CommandRunner::new(Duration::from_secs(10)).fail_on_output_truncation(false);
+        let runner = CommandRunner::new(Duration::from_secs(10))
+            .fail_on_output_truncation(false);
 
         assert!(!runner.is_output_truncation_failure_enabled());
     }
@@ -824,13 +900,15 @@ mod unix {
         // process-group error can arrive just before the child becomes
         // waitable.
         for _ in 0..10_000 {
-            match CommandRunner::new(Duration::ZERO)
-                .run(Command::new("true"))
-            {
+            match CommandRunner::new(Duration::ZERO).run(Command::new("true")) {
                 Ok(_) | Err(CommandError::TimedOut { .. }) => {}
-                Err(CommandError::KillFailed { source, .. }) => {
+                Err(CommandError::KillFailed {
+                    process_tree_source,
+                    child_source,
+                    ..
+                }) => {
                     panic!(
-                        "an exited command must not report a kill failure: {source}"
+                        "an exited command must not report a kill failure: tree={process_tree_source}; child={child_source}"
                     );
                 }
                 Err(other) => {
@@ -989,8 +1067,7 @@ mod unix {
         let script = "while [ ! -e \"$1\" ]; do sleep 0.01; done; : > \"$2\"";
         let clock = ManualMonotonicClock::new_shared();
         let timeout = Duration::from_secs(30);
-        let runner = CommandRunner::new(timeout)
-            .timer(clock.new_timer());
+        let runner = CommandRunner::new(timeout).timer(clock.new_timer());
         let child_signal_path = signal_path.clone();
         let child_completion_path = completion_path.clone();
         let worker = std::thread::spawn(move || {
@@ -1032,7 +1109,8 @@ mod unix {
         };
 
         let clock = ManualMonotonicClock::new_shared();
-        let runner = CommandRunner::new(Duration::from_secs(10)).timer(clock.new_timer());
+        let runner = CommandRunner::new(Duration::from_secs(10))
+            .timer(clock.new_timer());
 
         assert_eq!(
             runner.configured_timer().clock().now().domain(),
@@ -1108,7 +1186,8 @@ mod unix {
     #[test]
     fn test_command_runner_bounded_output_limits_streams_and_rejects_truncation()
      {
-        let runner = CommandRunner::new(Duration::from_secs(10)).bounded_output(3);
+        let runner =
+            CommandRunner::new(Duration::from_secs(10)).bounded_output(3);
 
         assert_eq!(runner.configured_max_stdout_bytes(), Some(3));
         assert_eq!(runner.configured_max_stderr_bytes(), Some(3));
@@ -1147,9 +1226,12 @@ mod unix {
         let output = CommandRunner::new(Duration::from_secs(10))
             .max_output_bytes(3)
             .fail_on_output_truncation(false)
-            .tee_stdout_to_file(stdout_path.clone())
-            .tee_stderr_to_file(stderr_path.clone())
-            .run(Command::shell("printf abcdef; printf wxyz >&2"))
+            .run_with(
+                Command::shell("printf abcdef; printf wxyz >&2"),
+                CommandRunOptions::new()
+                    .tee_stdout_to_file(stdout_path.clone())
+                    .tee_stderr_to_file(stderr_path.clone()),
+            )
             .expect("command should run successfully");
 
         assert_eq!(output.stdout(), b"abc");
@@ -1170,8 +1252,10 @@ mod unix {
             .expect("command test temp directory should be created");
         let path = temp_dir.path().join("missing-dir").join("stdout.txt");
         let error = CommandRunner::new(Duration::from_secs(10))
-            .tee_stdout_to_file(path.clone())
-            .run(Command::shell("printf ignored"))
+            .run_with(
+                Command::shell("printf ignored"),
+                CommandRunOptions::new().tee_stdout_to_file(path.clone()),
+            )
             .expect_err("missing output directory should be reported");
 
         match error {
@@ -1193,8 +1277,10 @@ mod unix {
             .expect("command test temp directory should be created");
         let path = temp_dir.path().join("missing-dir").join("stderr.txt");
         let error = CommandRunner::new(Duration::from_secs(10))
-            .tee_stderr_to_file(path.clone())
-            .run(Command::shell("printf ignored"))
+            .run_with(
+                Command::shell("printf ignored"),
+                CommandRunOptions::new().tee_stderr_to_file(path.clone()),
+            )
             .expect_err("missing output directory should be reported");
 
         match error {
@@ -1561,7 +1647,8 @@ mod windows {
             .fail_on_output_truncation(false)
             .run_with(
                 Command::shell("echo abcdef"),
-                CommandRunOptions::new().tee_stdout_to_file(stdout_path.clone()),
+                CommandRunOptions::new()
+                    .tee_stdout_to_file(stdout_path.clone()),
             )
             .expect("Windows shell command should run successfully");
 

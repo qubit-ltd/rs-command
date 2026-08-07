@@ -7,27 +7,22 @@
 // =============================================================================
 use std::{
     io,
-    sync::{
-        Arc,
-        atomic::{
-            AtomicBool,
-            Ordering,
-        },
-    },
     thread,
 };
+
+use super::io_cancellation::IoCancellation;
 
 /// Stdin writer thread and its cancellation state.
 #[derive(Debug)]
 pub(in crate::command_runner) struct StdinWriter {
     pub(in crate::command_runner) join: thread::JoinHandle<io::Result<()>>,
-    pub(in crate::command_runner) cancellation: Arc<AtomicBool>,
+    pub(in crate::command_runner) cancellation: IoCancellation,
 }
 
 impl StdinWriter {
     pub(in crate::command_runner) fn new(
         join: thread::JoinHandle<io::Result<()>>,
-        cancellation: Arc<AtomicBool>,
+        cancellation: IoCancellation,
     ) -> Self {
         Self { join, cancellation }
     }
@@ -38,8 +33,7 @@ impl StdinWriter {
     }
 
     pub(in crate::command_runner) fn cancel(&self) {
-        self.cancellation.store(true, Ordering::Release);
-        super::cancel::cancel_synchronous_io(&self.join);
+        self.cancellation.cancel(&self.join);
     }
 
     pub(in crate::command_runner) fn join(

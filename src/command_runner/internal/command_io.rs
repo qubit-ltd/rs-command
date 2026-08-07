@@ -10,17 +10,21 @@ use std::time::Duration;
 use qubit_clock::TimeError;
 
 use super::{
+    output_capture_error::OutputCaptureError,
     output_collector::{
         collect_output,
-    collect_output_results,
+        collect_output_results,
         join_output_reader,
     },
-    output_capture_error::OutputCaptureError,
     output_reader::OutputReader,
     stdin_pipe::join_stdin_writer,
     stdin_writer::OptionalStdinWriter,
 };
-use crate::{CommandError, CommandOutput, OutputStream};
+use crate::{
+    CommandError,
+    CommandOutput,
+    OutputStream,
+};
 
 /// Output and stdin helper threads for one running command.
 #[must_use = "command I/O owns helper threads that must be collected"]

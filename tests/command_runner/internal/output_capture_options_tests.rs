@@ -8,6 +8,7 @@
 //! Tests for output capture options.
 
 use std::fs;
+use std::time::Duration;
 
 use crate::support::LocalTempDir;
 use qubit_command::{

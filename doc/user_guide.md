@@ -199,6 +199,7 @@ if output.stdout_truncated() {
 Timeout, cancellation, unexpected exit, and output-truncation errors can expose a `CommandOutput` through `CommandError::output()` or move it with `CommandError::into_output()`. For timeout and cancellation, inspect `stdout_complete()` and `stderr_complete()` before treating retained bytes as complete streams.
 
 Tee paths must be ordinary files. The runner checks stdin/tee and stdout-tee/stderr-tee conflicts before truncating any tee file.
+Tee files are truncated and replaced for each run; they are never appended. Cloning `CommandRunOptions` copies the configured paths, so concurrent runs must use distinct paths when their logs must remain separate.
 
 ## Diagnostics and Redaction
 

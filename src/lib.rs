@@ -17,15 +17,16 @@ mod command_env;
 mod command_error;
 mod command_output;
 mod command_run_options;
+mod command_run_options_parts;
 mod command_runner;
 mod command_stdin;
 mod output_stream;
 
 pub use command::Command;
 pub use command_cancellation::CommandCancellation;
-pub use command_run_options::CommandRunOptions;
 pub use command_error::CommandError;
 pub use command_output::CommandOutput;
+pub use command_run_options::CommandRunOptions;
 #[cfg(coverage)]
 #[doc(hidden)]
 pub use command_runner::__coverage_internal;

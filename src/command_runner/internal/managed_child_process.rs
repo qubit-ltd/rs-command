@@ -2,6 +2,8 @@
 //    Copyright (c) 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 use std::{
     io,
@@ -12,8 +14,9 @@ use process_wrap::std::ChildWrapper;
 
 /// Child process wrapper with explicit process-tree capability tracking.
 ///
-/// The `process_tree_managed` flag records whether the wrapped process is using a
-/// process-group or job-object wrapper and therefore can be terminated as a tree.
+/// The `process_tree_managed` flag records whether the wrapped process is using
+/// a process-group or job-object wrapper and therefore can be terminated as a
+/// tree.
 pub(in crate::command_runner) struct ManagedChildProcess {
     /// Wrapped process used for wait/try_wait operations.
     child: Box<dyn ChildWrapper>,
@@ -43,7 +46,9 @@ impl ManagedChildProcess {
 
     /// Returns mutable access to the wrapped child handle.
     #[inline]
-    pub(in crate::command_runner) fn wrapper_mut(&mut self) -> &mut dyn ChildWrapper {
+    pub(in crate::command_runner) fn wrapper_mut(
+        &mut self,
+    ) -> &mut dyn ChildWrapper {
         self.child.as_mut()
     }
 
@@ -60,8 +65,8 @@ impl ManagedChildProcess {
 
     /// Attempts direct-child termination by bypassing process-wrap management.
     ///
-    /// `inner_mut().start_kill()` intentionally targets the direct child process
-    /// after a process-tree termination failure.
+    /// `inner_mut().start_kill()` intentionally targets the direct child
+    /// process after a process-tree termination failure.
     #[inline]
     pub(in crate::command_runner) fn start_kill_child(
         &mut self,
@@ -79,9 +84,7 @@ impl ManagedChildProcess {
 
     /// Blocks until the child exits and returns its status.
     #[inline]
-    pub(in crate::command_runner) fn wait(
-        &mut self,
-    ) -> io::Result<ExitStatus> {
+    pub(in crate::command_runner) fn wait(&mut self) -> io::Result<ExitStatus> {
         self.child.wait()
     }
 }
