@@ -48,10 +48,11 @@ fn test_runner_rejects_stdin_stdout_conflict_without_truncating_input() {
     let path = temp_dir.path().join("stdin-stdout-conflict");
     fs::write(&path, b"preserve-me").expect("stdin fixture should be written");
 
-    let error = CommandRunner::new(Duration::from_secs(10)).run_with(
-        unspawnable_command().stdin_file(&path),
-        CommandRunOptions::new().tee_stdout_to_file(&path),
-    )
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            unspawnable_command().stdin_file(&path),
+            CommandRunOptions::new().tee_stdout_to_file(&path),
+        )
         .expect_err("conflicting files should be rejected");
 
     assert!(matches!(error, CommandError::InputOutputConflict { .. }));
@@ -67,10 +68,11 @@ fn test_runner_rejects_stdin_stderr_conflict_without_truncating_input() {
     let path = temp_dir.path().join("stdin-stderr-conflict");
     fs::write(&path, b"preserve-me").expect("stdin fixture should be written");
 
-    let error = CommandRunner::new(Duration::from_secs(10)).run_with(
-        unspawnable_command().stdin_file(&path),
-        CommandRunOptions::new().tee_stderr_to_file(&path),
-    )
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            unspawnable_command().stdin_file(&path),
+            CommandRunOptions::new().tee_stderr_to_file(&path),
+        )
         .expect_err("conflicting files should be rejected");
 
     assert!(matches!(error, CommandError::InputOutputConflict { .. }));
@@ -109,10 +111,11 @@ fn test_runner_rejects_symlinked_input_output_conflict() {
     std::os::unix::fs::symlink(&input_path, &output_path)
         .expect("symlink fixture should be created");
 
-    let error = CommandRunner::new(Duration::from_secs(10)).run_with(
-        unspawnable_command().stdin_file(&input_path),
-        CommandRunOptions::new().tee_stdout_to_file(&output_path),
-    )
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            unspawnable_command().stdin_file(&input_path),
+            CommandRunOptions::new().tee_stdout_to_file(&output_path),
+        )
         .expect_err("symlinked files should be rejected");
 
     assert!(matches!(error, CommandError::InputOutputConflict { .. }));
@@ -132,10 +135,11 @@ fn test_runner_rejects_hard_linked_input_output_conflict() {
     fs::hard_link(&input_path, &output_path)
         .expect("hard link fixture should be created");
 
-    let error = CommandRunner::new(Duration::from_secs(10)).run_with(
-        unspawnable_command().stdin_file(&input_path),
-        CommandRunOptions::new().tee_stdout_to_file(&output_path),
-    )
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            unspawnable_command().stdin_file(&input_path),
+            CommandRunOptions::new().tee_stdout_to_file(&output_path),
+        )
         .expect_err("hard-linked files should be rejected");
 
     assert!(matches!(error, CommandError::InputOutputConflict { .. }));
@@ -155,10 +159,11 @@ fn test_runner_rejects_hard_linked_input_stderr_conflict() {
     fs::hard_link(&input_path, &output_path)
         .expect("hard link fixture should be created");
 
-    let error = CommandRunner::new(Duration::from_secs(10)).run_with(
-        unspawnable_command().stdin_file(&input_path),
-        CommandRunOptions::new().tee_stderr_to_file(&output_path),
-    )
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            unspawnable_command().stdin_file(&input_path),
+            CommandRunOptions::new().tee_stderr_to_file(&output_path),
+        )
         .expect_err("hard-linked files should be rejected");
 
     assert!(matches!(error, CommandError::InputOutputConflict { .. }));

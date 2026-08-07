@@ -29,6 +29,15 @@ fn short_lived_command() -> Command {
     Command::shell("exit 0")
 }
 
+/// Builds a command whose output pipes remain idle briefly before closing.
+fn silent_command() -> Command {
+    if cfg!(windows) {
+        Command::shell("ping -n 1 127.0.0.1 >NUL")
+    } else {
+        Command::shell("sleep 0.01")
+    }
+}
+
 /// Verifies that a runner can execute the benchmark fixture before timing it.
 ///
 /// # Parameters
@@ -74,5 +83,20 @@ fn benchmark_short_lived_command_runner(criterion: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, benchmark_short_lived_command_runner);
+/// Measures helper-thread overhead while both output pipes remain silent.
+fn benchmark_silent_command_runner(criterion: &mut Criterion) {
+    let runner = CommandRunner::new(Duration::from_secs(10));
+    verify_fixture(&runner);
+    let mut group = criterion.benchmark_group("silent_command_runner");
+    group.bench_function("default_timeout", |bencher| {
+        bencher.iter(|| black_box(runner.run(black_box(silent_command()))));
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    benchmark_short_lived_command_runner,
+    benchmark_silent_command_runner,
+);
 criterion_main!(benches);

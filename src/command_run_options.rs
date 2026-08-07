@@ -2,20 +2,23 @@
 //    Copyright (c) 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
-// =============================================================================
 //
-//    SPDX-License-Identifier: Apache-2.0
+//    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::path::{Path, PathBuf};
+use std::path::{
+    Path,
+    PathBuf,
+};
 
 use crate::CommandCancellation;
+use crate::command_run_options_parts::CommandRunOptionsParts;
 
 /// Per-run options for [`CommandRunner`](crate::command_runner::CommandRunner).
 ///
-/// Each [`CommandRunner`](crate::command_runner::CommandRunner) has process-level
-/// defaults (timeout, logging, capture policy, etc.). This type carries run-level
-/// configuration that must not be shared across concurrent runs, such as cancellation
-/// and tee destinations.
+/// Each [`CommandRunner`](crate::command_runner::CommandRunner) has
+/// process-level defaults (timeout, logging, capture policy, etc.). This type
+/// carries run-level configuration that must not be shared across concurrent
+/// runs, such as cancellation and tee destinations.
 #[derive(Clone, Default)]
 #[must_use]
 pub struct CommandRunOptions {
@@ -67,8 +70,10 @@ impl CommandRunOptions {
 
     /// Streams stdout to a file while still capturing it in memory.
     ///
-    /// The path is validated by the runner before spawning. Paths are recorded
-    /// per run so concurrent runs can use independent tee destinations.
+    /// The file is opened with truncation, so an existing file is replaced for
+    /// each run. The path is validated by the runner before spawning. Cloning
+    /// these options clones the path; callers running concurrently must provide
+    /// distinct paths when they need to retain both streams.
     #[inline]
     pub fn tee_stdout_to_file<P>(mut self, path: P) -> Self
     where
@@ -80,8 +85,10 @@ impl CommandRunOptions {
 
     /// Streams stderr to a file while still capturing it in memory.
     ///
-    /// The path is validated by the runner before spawning. Paths are recorded
-    /// per run so concurrent runs can use independent tee destinations.
+    /// The file is opened with truncation, so an existing file is replaced for
+    /// each run. The path is validated by the runner before spawning. Cloning
+    /// these options clones the path; callers running concurrently must provide
+    /// distinct paths when they need to retain both streams.
     #[inline]
     pub fn tee_stderr_to_file<P>(mut self, path: P) -> Self
     where
@@ -116,11 +123,4 @@ impl CommandRunOptions {
             stderr_file: self.stderr_file,
         }
     }
-}
-
-#[derive(Clone)]
-pub(crate) struct CommandRunOptionsParts {
-    pub(crate) cancellation: Option<CommandCancellation>,
-    pub(crate) stdout_file: Option<PathBuf>,
-    pub(crate) stderr_file: Option<PathBuf>,
 }

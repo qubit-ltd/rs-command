@@ -49,9 +49,9 @@ use crate::{
     CommandCancellation,
     CommandError,
     CommandOutput,
-    OutputStream,
     CommandRunOptions,
-    command_run_options::CommandRunOptionsParts,
+    OutputStream,
+    command_run_options_parts::CommandRunOptionsParts,
 };
 
 const REDACTED_PATH: &str = "<redacted path>";
@@ -169,7 +169,6 @@ impl fmt::Debug for CommandRunner {
 
 impl CommandRunner {
     /// Creates a command runner with explicit timeout handling configuration.
-
     #[inline(always)]
     fn with_optional_timeout(timeout: Option<Duration>) -> Self {
         Self {
@@ -238,9 +237,9 @@ impl CommandRunner {
     /// # Errors
     ///
     /// Returns [`CommandError::CancelledBeforeStart`] when a configured
-    /// cancellation handle has already been requested before command preparation,
-    /// and maps all process, I/O, and timeout failures as described by
-    /// [`CommandRunner::run`].
+    /// cancellation handle has already been requested before command
+    /// preparation, and maps all process, I/O, and timeout failures as
+    /// described by [`CommandRunner::run`].
     pub fn run_with(
         &self,
         command: Command,
@@ -271,12 +270,15 @@ impl CommandRunner {
             log::debug!("Running command: {command_text}");
         }
 
-        let manage_process_tree = self.timeout.is_some() || cancellation.is_some();
-        let child_process = match spawn_child(process_command, manage_process_tree) {
-            Ok(child_process) => child_process,
-            Err(source) => return Err(spawn_failed(&command_text, source)),
-        };
-        let mut starting_command = StartingCommand::new(&command_text, child_process);
+        let manage_process_tree =
+            self.timeout.is_some() || cancellation.is_some();
+        let child_process =
+            match spawn_child(process_command, manage_process_tree) {
+                Ok(child_process) => child_process,
+                Err(source) => return Err(spawn_failed(&command_text, source)),
+            };
+        let mut starting_command =
+            StartingCommand::new(&command_text, child_process);
         let started_at = self.timer.clock().now();
 
         let stdin_writer = write_stdin_bytes(
@@ -318,7 +320,8 @@ impl CommandRunner {
                 )
             })?;
         starting_command.set_stderr_reader(stderr_reader);
-        if let Err(source) = self.timer.clock().now().duration_since(started_at) {
+        if let Err(source) = self.timer.clock().now().duration_since(started_at)
+        {
             return Err(CommandError::TimeFailed {
                 command: command_text.clone(),
                 source,
@@ -382,7 +385,6 @@ impl CommandRunner {
             })
         }
     }
-
 
     /// Returns the configured monotonic timer.
     ///
@@ -707,7 +709,8 @@ impl CommandRunner {
     ) -> Result<PreparedCommand, CommandError> {
         if cancellation.is_some_and(CommandCancellation::is_cancelled) {
             return Err(CommandError::CancelledBeforeStart {
-                command: command.display_command(&self.diagnostic_redaction_policy),
+                command: command
+                    .display_command(&self.diagnostic_redaction_policy),
             });
         }
         PreparedCommand::prepare(

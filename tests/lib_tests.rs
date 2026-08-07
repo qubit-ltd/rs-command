@@ -7,6 +7,8 @@
 // =============================================================================
 //! Tests for crate-level exports.
 
+use std::time::Duration;
+
 use qubit_command::{
     Command,
     CommandError,
@@ -29,7 +31,8 @@ fn test_lib_exports_public_api() {
         .expect("the test policy field must be valid")
         .build()
         .expect("the diagnostic redaction policy should be valid");
-    let runner = CommandRunner::new(Duration::from_secs(10)).diagnostic_redaction_policy(policy);
+    let runner = CommandRunner::new(Duration::from_secs(10))
+        .diagnostic_redaction_policy(policy);
     let stream = OutputStream::Stdout;
 
     assert_eq!(command.program().to_string_lossy(), "printf");

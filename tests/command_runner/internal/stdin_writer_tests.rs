@@ -8,6 +8,9 @@
 //! Tests for stdin writer behavior.
 
 #[cfg(not(windows))]
+use std::time::Duration;
+
+#[cfg(not(windows))]
 use qubit_command::{
     Command,
     CommandRunner,

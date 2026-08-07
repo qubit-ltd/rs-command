@@ -8,6 +8,9 @@
 //! Tests for command runner error mapping.
 
 #[cfg(not(windows))]
+use std::time::Duration;
+
+#[cfg(not(windows))]
 use crate::support::LocalTempDir;
 #[cfg(not(windows))]
 use qubit_command::{

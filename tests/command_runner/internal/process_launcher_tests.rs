@@ -7,6 +7,8 @@
 // =============================================================================
 //! Tests for process launcher behavior.
 
+use std::time::Duration;
+
 use qubit_command::{
     Command,
     CommandError,

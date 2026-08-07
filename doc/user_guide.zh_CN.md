@@ -198,6 +198,7 @@ if output.stdout_truncated() {
 超时、取消、非预期退出和输出截断错误都可能通过 `CommandError::output()` 暴露 `CommandOutput`，也可以通过 `CommandError::into_output()` 将其取出。对于超时和取消，请先检查 `stdout_complete()` 与 `stderr_complete()`，再判断保留字节是否代表完整流。
 
 tee 路径必须是普通文件。runner 会在截断任何 tee 文件前检查 stdin/tee 以及 stdout tee/stderr tee 之间的冲突。
+每次运行都会截断并替换 tee 文件，不会追加。复制 `CommandRunOptions` 会复制已配置的路径；如果并发运行需要分别保留日志，必须使用不同路径。
 
 ## 诊断与脱敏
 

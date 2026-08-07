@@ -7,6 +7,8 @@
 // =============================================================================
 //! Tests for output reader behavior.
 
+use std::time::Duration;
+
 use qubit_command::{
     Command,
     CommandRunner,

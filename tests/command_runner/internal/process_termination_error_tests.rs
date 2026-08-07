@@ -42,10 +42,11 @@ fn test_process_termination_maps_cancellation_after_kill() {
         cancellation_request.cancel();
     });
 
-    let error = CommandRunner::without_timeout().run_with(
-        Command::shell("sleep 1"),
-        CommandRunOptions::new().cancellation(cancellation),
-    )
+    let error = CommandRunner::without_timeout()
+        .run_with(
+            Command::shell("sleep 1"),
+            CommandRunOptions::new().cancellation(cancellation),
+        )
         .expect_err("terminated command should report cancellation");
     canceller
         .join()

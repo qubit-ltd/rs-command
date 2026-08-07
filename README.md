@@ -61,6 +61,7 @@ Important boundaries:
 - `unbounded_output()` removes the in-memory capture limit and should only be used when the command's output is known to be finite and acceptable.
 - Timeout and cancellation results may contain partial output. Check `stdout_complete()` and `stderr_complete()` before treating retained bytes as complete streams.
 - `stdin_file`, `tee_stdout_to_file`, and `tee_stderr_to_file` accept ordinary files only. Conflicting input and output paths are rejected before tee files are truncated.
+- Tee files are replaced (not appended) at the start of each run. `CommandRunOptions::clone()` copies tee paths; concurrent runs must use distinct paths when their logs must remain separate.
 
 ## Learn More
 

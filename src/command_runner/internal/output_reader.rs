@@ -5,19 +5,11 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::{
-    sync::{
-        Arc,
-        atomic::{
-            AtomicBool,
-            Ordering,
-        },
-    },
-    thread,
-};
+use std::thread;
 
 use super::{
     captured_output::CapturedOutput,
+    io_cancellation::IoCancellation,
     output_capture_error::OutputCaptureError,
 };
 
@@ -25,13 +17,13 @@ use super::{
 #[derive(Debug)]
 pub(in crate::command_runner) struct OutputReader {
     join: thread::JoinHandle<Result<CapturedOutput, OutputCaptureError>>,
-    cancellation: Arc<AtomicBool>,
+    cancellation: IoCancellation,
 }
 
 impl OutputReader {
     pub(in crate::command_runner) fn new(
         join: thread::JoinHandle<Result<CapturedOutput, OutputCaptureError>>,
-        cancellation: Arc<AtomicBool>,
+        cancellation: IoCancellation,
     ) -> Self {
         Self { join, cancellation }
     }
@@ -42,8 +34,7 @@ impl OutputReader {
     }
 
     pub(in crate::command_runner) fn cancel(&self) {
-        self.cancellation.store(true, Ordering::Release);
-        super::cancel::cancel_synchronous_io(&self.join);
+        self.cancellation.cancel(&self.join);
     }
 
     pub(in crate::command_runner) fn join(

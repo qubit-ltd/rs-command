@@ -20,10 +20,6 @@ use std::{
         Command as ProcessCommand,
         Stdio,
     },
-    sync::{
-        Arc,
-        atomic::AtomicBool,
-    },
     thread,
     time::Duration,
 };
@@ -36,12 +32,14 @@ use super::internal::{
         spawn_failed,
         wait_failed,
     },
+    io_cancellation::IoCancellation,
     io_files::{
         __coverage_fail_truncate,
         IoFiles,
         normalize_lexically,
         truncate_output,
     },
+    managed_child_process::ManagedChildProcess,
     output_capture_error::OutputCaptureError,
     output_capture_options::OutputCaptureOptions,
     output_collector::{
@@ -87,19 +85,30 @@ fn status() -> std::process::ExitStatus {
 fn output_reader(
     result: Result<CapturedOutput, OutputCaptureError>,
 ) -> OutputReader {
-    let cancellation = Arc::new(AtomicBool::new(false));
-    let join = thread::spawn(move || result);
+    let (cancellation, token) = IoCancellation::pair()
+        .expect("coverage cancellation pair should create");
+    let join = thread::spawn(move || {
+        let _token = token;
+        result
+    });
     OutputReader::new(join, cancellation)
 }
 
 fn stdin_writer(
     write: impl FnOnce() -> io::Result<()> + Send + 'static,
 ) -> StdinWriter {
-    let cancellation = Arc::new(AtomicBool::new(false));
-    StdinWriter::new(thread::spawn(write), cancellation)
+    let (cancellation, token) = IoCancellation::pair()
+        .expect("coverage cancellation pair should create");
+    StdinWriter::new(
+        thread::spawn(move || {
+            let _token = token;
+            write()
+        }),
+        cancellation,
+    )
 }
 
-fn spawn_rustc_child() -> Box<dyn process_wrap::std::ChildWrapper> {
+fn spawn_rustc_child() -> ManagedChildProcess {
     let mut command = ProcessCommand::new("rustc");
     command.arg("--version");
     super::internal::process_launcher::spawn_child(command, false)
@@ -117,6 +126,7 @@ pub fn __coverage_internal() {
         "kill".to_owned(),
         Duration::from_secs(3),
         io::Error::other("kill source"),
+        io::Error::other("child kill source"),
     );
     assert!(matches!(kill, CommandError::KillFailed { .. }));
     let pipe = output_pipe_error("pipe", OutputStream::Stdout);
@@ -569,7 +579,8 @@ pub fn __coverage_internal() {
     drop(StartingCommand::new("coverage-cleanup", child));
 
     let mut exited_child = spawn_rustc_child();
-    process_wrap::std::ChildWrapper::wait(exited_child.as_mut())
+    exited_child
+        .wait()
         .expect("coverage child should exit before cleanup");
     drop(StartingCommand::new(
         "coverage-exited-cleanup",

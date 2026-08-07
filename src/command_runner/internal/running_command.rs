@@ -2,6 +2,8 @@
 //    Copyright (c) 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 use std::{
     io,
@@ -155,7 +157,8 @@ impl RunningCommand {
                     if elapsed >= timeout {
                         return self.handle_timeout(timeout);
                     }
-                    let sleep = next_sleep(timeout, elapsed, timeout_poll_count);
+                    let sleep =
+                        next_sleep(timeout, elapsed, timeout_poll_count);
                     timeout_poll_count = timeout_poll_count.saturating_add(1);
                     sleep
                 }
@@ -187,7 +190,7 @@ impl RunningCommand {
     /// inherited I/O pipes keep helpers alive after the corresponding request,
     /// or another [`CommandError`] if cleanup or output collection fails.
     fn complete_after_exit(
-        mut self,
+        self,
         status: ExitStatus,
         timeout: Option<Duration>,
     ) -> Result<FinishedCommand, CommandError> {
@@ -199,7 +202,7 @@ impl RunningCommand {
                     .as_ref()
                     .is_some_and(CommandCancellation::is_cancelled)
                 {
-                    return self.handle_output_collection_cancellation(status);
+                    return self.handle_output_collection_cancellation();
                 }
                 let sleep = match timeout {
                     Some(timeout) => {
@@ -207,13 +210,12 @@ impl RunningCommand {
                             Ok(elapsed) => elapsed,
                             Err(source) => {
                                 return self
-                                    .handle_time_error_after_exit(status, source);
+                                    .handle_time_error_after_exit(source);
                             }
                         };
                         if elapsed >= timeout {
-                            return self.handle_output_collection_timeout(
-                                status, timeout,
-                            );
+                            return self
+                                .handle_output_collection_timeout(timeout);
                         }
                         let sleep =
                             next_sleep(timeout, elapsed, timeout_poll_count);
@@ -227,7 +229,7 @@ impl RunningCommand {
                     BlockingSleeper::new(Arc::clone(&self.timer))
                         .sleep_for(sleep)
                 {
-                    return self.handle_time_error_after_exit(status, source);
+                    return self.handle_time_error_after_exit(source);
                 }
             }
         }
@@ -238,7 +240,6 @@ impl RunningCommand {
     ///
     /// # Parameters
     ///
-    /// * `status` - Exit status reported by the direct child process.
     /// * `timeout` - Timeout that has been exceeded.
     ///
     /// # Returns
@@ -253,7 +254,6 @@ impl RunningCommand {
     /// prevented timeout output from being built.
     fn handle_output_collection_timeout(
         mut self,
-        status: ExitStatus,
         timeout: Duration,
     ) -> Result<FinishedCommand, CommandError> {
         let status = match self.terminate_child() {
@@ -286,16 +286,11 @@ impl RunningCommand {
     /// Cancels descendants that keep inherited output pipes open after the
     /// direct child has exited.
     ///
-    /// # Parameters
-    ///
-    /// * `status` - Exit status reported for the direct child.
-    ///
     /// # Returns
     ///
     /// Always returns a cancellation or process-control error after cleanup.
     fn handle_output_collection_cancellation(
         mut self,
-        status: ExitStatus,
     ) -> Result<FinishedCommand, CommandError> {
         let status = match self.terminate_child() {
             Ok(status) => status,
@@ -499,7 +494,9 @@ impl RunningCommand {
                     return Ok(status);
                 }
                 return Err(ProcessTerminationError::Kill(
-                    io::Error::other("direct kill used without tree management"),
+                    io::Error::other(
+                        "direct kill used without tree management",
+                    ),
                     child_source,
                 ));
             }
@@ -515,7 +512,9 @@ impl RunningCommand {
                 .wait()
                 .map_err(ProcessTerminationError::Wait),
             Err(process_tree_source) => {
-                match self.status_after_termination_failure(&process_tree_source) {
+                match self
+                    .status_after_termination_failure(&process_tree_source)
+                {
                     Ok(Some(status)) => Ok(status),
                     Ok(None) => match self.child_process.start_kill_child() {
                         Ok(()) => self
@@ -629,11 +628,9 @@ impl RunningCommand {
     ///
     /// The preserved time error with helper cleanup guarantees.
     fn handle_time_error_after_exit(
-        mut self,
-        status: ExitStatus,
+        self,
         source: TimeError,
     ) -> Result<FinishedCommand, CommandError> {
-        let _ = status;
         let error = CommandError::TimeFailed {
             command: self.command_text.clone(),
             source,
@@ -650,33 +647,28 @@ impl RunningCommand {
     ///
     /// Preserved process-control error with complete I/O cleanup.
     #[must_use]
-    fn collect_after_wait_error(
-        mut self,
-        error: CommandError,
-    ) -> CommandError {
+    fn collect_after_wait_error(mut self, error: CommandError) -> CommandError {
         let _ = self.terminate_child().ok();
         self.finish_without_status(error)
     }
 
-    /// Best-effort helper cleanup when timeout/cancellation cleanup lost status.
+    /// Best-effort helper cleanup when timeout/cancellation cleanup lost
+    /// status.
     ///
     /// # Returns
     ///
     /// Preserved error after all helper joins attempt.
     #[must_use]
-    fn collect_after_status_lost(
-        mut self,
-        error: CommandError,
-    ) -> CommandError {
+    fn collect_after_status_lost(self, error: CommandError) -> CommandError {
         self.finish_without_status(error)
     }
 
     /// Completes without process output and preserves the primary error.
     ///
-    /// This method always invokes helper cancellation and joining before returning
-    /// `primary`, logging any cleanup failures.
+    /// This method always invokes helper cancellation and joining before
+    /// returning `primary`, logging any cleanup failures.
     #[must_use]
-    fn finish_without_status(mut self, primary: CommandError) -> CommandError {
+    fn finish_without_status(self, primary: CommandError) -> CommandError {
         if let Err(source) = self.io.cancel_and_join(&self.command_text) {
             log::error!("Failed to cleanup command I/O helpers: {source}");
         }
