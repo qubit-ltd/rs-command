@@ -7,10 +7,7 @@
 // =============================================================================
 // qubit-style: allow coverage-cfg
 use std::{
-    io::{
-        self,
-        Write,
-    },
+    io,
     thread,
 };
 
@@ -29,6 +26,7 @@ use super::stdin_writer::{
 use super::{
     io_cancellation::IoCancellation,
     io_cancellation_token::IoCancellationToken,
+    pollable_stdin::PollableStdin,
 };
 use crate::CommandError;
 
@@ -36,6 +34,7 @@ use crate::CommandError;
 static COVERAGE_FAIL_STDIN_THREAD: AtomicBool = AtomicBool::new(false);
 
 #[cfg(coverage)]
+/// Enables or disables deterministic stdin-thread failure injection.
 pub(in crate::command_runner) fn __coverage_fail_stdin_thread(enabled: bool) {
     COVERAGE_FAIL_STDIN_THREAD.store(enabled, Ordering::Relaxed);
 }
@@ -104,6 +103,21 @@ pub(in crate::command_runner) fn write_stdin_bytes(
     }
 }
 
+/// Maps stdin worker thread creation to a command error.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used in the error.
+/// * `result` - Thread creation result.
+///
+/// # Returns
+///
+/// The created optional writer.
+///
+/// # Errors
+///
+/// Returns [`CommandError::StartInputThreadFailed`] when the worker cannot be
+/// created.
 pub(in crate::command_runner) fn map_stdin_thread_result(
     command: &str,
     result: io::Result<OptionalStdinWriter>,
@@ -155,35 +169,7 @@ pub(in crate::command_runner) fn join_stdin_writer(
     }
 }
 
-trait PollableStdin: Write {
-    /// Waits for the pipe to accept another write or observes cancellation.
-    fn wait_writable(
-        &self,
-        cancellation: &IoCancellationToken,
-    ) -> io::Result<bool>;
-}
-
-#[cfg(unix)]
-impl<T: Write + std::os::fd::AsRawFd> PollableStdin for T {
-    fn wait_writable(
-        &self,
-        cancellation: &IoCancellationToken,
-    ) -> io::Result<bool> {
-        cancellation
-            .wait_for_fd(std::os::fd::AsRawFd::as_raw_fd(self), libc::POLLOUT)
-    }
-}
-
-#[cfg(windows)]
-impl<T: Write> PollableStdin for T {
-    fn wait_writable(
-        &self,
-        cancellation: &IoCancellationToken,
-    ) -> io::Result<bool> {
-        Ok(!cancellation.is_cancelled())
-    }
-}
-
+/// Writes configured stdin bytes until completion or cancellation.
 fn write_stdin_until_cancelled<W: PollableStdin>(
     stdin: &mut W,
     bytes: &[u8],
@@ -216,6 +202,7 @@ fn write_stdin_until_cancelled<W: PollableStdin>(
     Ok(())
 }
 
+/// Configures one Unix stdin pipe for non-blocking writes.
 #[cfg(unix)]
 fn prepare_stdin_pipe<T: std::os::fd::AsRawFd>(pipe: &T) -> io::Result<()> {
     // SAFETY: fcntl operates on the valid descriptor owned by `pipe`.
@@ -237,6 +224,7 @@ fn prepare_stdin_pipe<T: std::os::fd::AsRawFd>(pipe: &T) -> io::Result<()> {
 }
 
 #[cfg(windows)]
+/// Leaves Windows stdin handles unchanged.
 fn prepare_stdin_pipe<T>(_pipe: &T) -> io::Result<()> {
     Ok(())
 }
