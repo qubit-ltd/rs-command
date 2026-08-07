@@ -64,7 +64,7 @@ fn test_command_error_accessors_for_errors_without_output() {
     };
     assert_eq!(kill.command(), "kill");
     assert!(kill.output().is_none());
-    assert!(kill.to_string().contains("failed to kill"));
+    assert!(kill.to_string().contains("failed to terminate timed-out"));
 
     let read = CommandError::ReadOutputFailed {
         command: "read".to_owned(),
@@ -133,6 +133,53 @@ fn test_command_error_accessors_for_errors_without_output() {
     assert_eq!(write_output.command(), "write-output");
     assert!(write_output.output().is_none());
     assert!(write_output.to_string().contains("failed to write stdout"));
+}
+
+#[test]
+fn test_command_error_exposes_termination_error_chain() {
+    use std::error::Error;
+
+    let kill = CommandError::KillFailed {
+        command: "kill".to_owned(),
+        timeout: Duration::from_secs(1),
+        process_tree_source: io::Error::other("process tree failed"),
+        child_source: io::Error::other("child failed"),
+    };
+    assert_eq!(
+        kill.process_tree_source()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("process tree failed")
+    );
+    assert_eq!(
+        kill.child_source().map(ToString::to_string).as_deref(),
+        Some("child failed")
+    );
+    assert_eq!(
+        kill.source().map(ToString::to_string).as_deref(),
+        Some("process tree failed")
+    );
+
+    let cancel = CommandError::CancelFailed {
+        command: "cancel".to_owned(),
+        process_tree_source: io::Error::other("cancel tree failed"),
+        child_source: io::Error::other("cancel child failed"),
+    };
+    assert_eq!(
+        cancel
+            .process_tree_source()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("cancel tree failed")
+    );
+    assert_eq!(
+        cancel.child_source().map(ToString::to_string).as_deref(),
+        Some("cancel child failed")
+    );
+    assert_eq!(
+        cancel.source().map(ToString::to_string).as_deref(),
+        Some("cancel tree failed")
+    );
 }
 
 #[test]
@@ -272,9 +319,8 @@ fn test_command_error_accessors_cover_cancelled_and_tee_output() {
     let output = CommandRunner::without_timeout()
         .run_with(
             Command::shell("printf output"),
-            CommandRunOptions::new().cancellation(
-                qubit_command::CommandCancellation::new(),
-            ),
+            CommandRunOptions::new()
+                .cancellation(qubit_command::CommandCancellation::new()),
         )
         .expect("command should finish before cancellation");
 

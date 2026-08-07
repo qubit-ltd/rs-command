@@ -65,6 +65,7 @@ pub enum CommandError {
         /// Timeout that was exceeded.
         timeout: Duration,
         /// I/O error reported while killing the process tree.
+        #[source]
         process_tree_source: io::Error,
         /// I/O error reported while killing the direct child process.
         child_source: io::Error,
@@ -264,6 +265,7 @@ pub enum CommandError {
         /// Human-readable command representation.
         command: String,
         /// I/O error reported while cancelling the process tree.
+        #[source]
         process_tree_source: io::Error,
         /// I/O error reported while cancelling the direct child process.
         child_source: io::Error,
@@ -414,6 +416,44 @@ impl CommandError {
             | Self::Cancelled { command, .. }
             | Self::OutputTruncated { command, .. }
             | Self::UnexpectedExit { command, .. } => command,
+        }
+    }
+
+    /// Returns the process-tree failure carried by a termination error.
+    ///
+    /// # Returns
+    ///
+    /// `Some(source)` for [`Self::KillFailed`] and [`Self::CancelFailed`], or
+    /// `None` for errors that do not represent a two-stage termination failure.
+    #[must_use]
+    #[inline(always)]
+    pub fn process_tree_source(&self) -> Option<&io::Error> {
+        match self {
+            Self::KillFailed {
+                process_tree_source,
+                ..
+            }
+            | Self::CancelFailed {
+                process_tree_source,
+                ..
+            } => Some(process_tree_source),
+            _ => None,
+        }
+    }
+
+    /// Returns the direct-child failure carried by a termination error.
+    ///
+    /// # Returns
+    ///
+    /// `Some(source)` for [`Self::KillFailed`] and [`Self::CancelFailed`], or
+    /// `None` for errors that do not represent a two-stage termination failure.
+    #[must_use]
+    #[inline(always)]
+    pub fn child_source(&self) -> Option<&io::Error> {
+        match self {
+            Self::KillFailed { child_source, .. }
+            | Self::CancelFailed { child_source, .. } => Some(child_source),
+            _ => None,
         }
     }
 }
