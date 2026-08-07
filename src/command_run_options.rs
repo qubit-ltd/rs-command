@@ -116,6 +116,11 @@ impl CommandRunOptions {
         self.stderr_file.as_deref()
     }
 
+    /// Splits options into the runner's internal per-run representation.
+    ///
+    /// # Returns
+    ///
+    /// Owned cancellation and tee-path settings consumed by one run.
     pub(crate) fn into_parts(self) -> CommandRunOptionsParts {
         CommandRunOptionsParts {
             cancellation: self.cancellation,

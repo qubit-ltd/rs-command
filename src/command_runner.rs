@@ -219,6 +219,12 @@ impl CommandRunner {
     /// # Returns
     ///
     /// Captured output when the process exits with a configured success code.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError`] when command preparation, spawning, waiting,
+    /// output collection, timeout handling, cancellation, output truncation,
+    /// or exit-status validation fails.
     pub fn run(&self, command: Command) -> Result<CommandOutput, CommandError> {
         self.run_with(command, CommandRunOptions::new())
     }
@@ -700,6 +706,23 @@ impl CommandRunner {
         self
     }
 
+    /// Prepares command I/O and diagnostics before spawning the child process.
+    ///
+    /// # Parameters
+    ///
+    /// * `command` - Structured command to validate and prepare.
+    /// * `cancellation` - Optional cancellation handle checked before setup.
+    /// * `stdout_file` - Optional stdout tee path.
+    /// * `stderr_file` - Optional stderr tee path.
+    ///
+    /// # Returns
+    ///
+    /// A prepared process command and validated I/O resources.
+    ///
+    /// # Errors
+    ///
+    /// Returns a preparation or pre-start cancellation error without spawning
+    /// the child process.
     fn prepare_command_for_run(
         &self,
         command: Command,

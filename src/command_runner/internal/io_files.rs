@@ -43,6 +43,7 @@ use crate::{
 static COVERAGE_FAIL_TRUNCATE: AtomicBool = AtomicBool::new(false);
 
 #[cfg(coverage)]
+/// Enables or disables deterministic truncation failure injection.
 pub(in crate::command_runner) fn __coverage_fail_truncate(enabled: bool) {
     COVERAGE_FAIL_TRUNCATE.store(enabled, Ordering::Relaxed);
 }
