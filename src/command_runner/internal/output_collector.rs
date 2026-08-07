@@ -40,6 +40,21 @@ type OutputFd = std::os::fd::RawFd;
 #[cfg(windows)]
 type OutputFd = ();
 
+/// Starts a cancellation-aware helper thread for one output stream.
+///
+/// # Parameters
+///
+/// * `reader` - Child stdout or stderr pipe.
+/// * `options` - In-memory limit and optional tee destination.
+///
+/// # Returns
+///
+/// An output reader owning the helper thread.
+///
+/// # Errors
+///
+/// Returns an I/O error when the pipe cannot be prepared, cancellation state
+/// cannot be created, or the helper thread cannot be spawned.
 #[inline]
 pub(in crate::command_runner) fn read_output_stream<R: CancellableReader>(
     reader: R,
@@ -53,6 +68,7 @@ pub(in crate::command_runner) fn read_output_stream<R: CancellableReader>(
     Ok(OutputReader::new(join, cancellation))
 }
 
+/// Reads one output stream until EOF or cancellation is requested.
 fn read_output_until_cancelled<R: CancellableReader>(
     mut reader: R,
     options: OutputCaptureOptions,
@@ -65,6 +81,23 @@ fn read_output_until_cancelled<R: CancellableReader>(
     read_output_inner(&mut reader, options, Some(&cancellation), fd)
 }
 
+/// Drains one output stream while retaining bounded bytes and teeing the full
+/// stream when configured.
+///
+/// # Parameters
+///
+/// * `reader` - Output stream reader.
+/// * `options` - Capture limit and optional tee writer.
+/// * `cancellation` - Optional cancellation token.
+/// * `fd` - Unix descriptor used for event-driven polling.
+///
+/// # Returns
+///
+/// Captured bytes and stream completion metadata.
+///
+/// # Errors
+///
+/// Returns an output read or tee write error.
 fn read_output_inner(
     reader: &mut dyn Read,
     mut options: OutputCaptureOptions,

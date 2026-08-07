@@ -75,6 +75,7 @@ use internal::{
 
 mod internal;
 
+/// Runs a deterministic successful process and returns its exit status.
 fn status() -> std::process::ExitStatus {
     ProcessCommand::new("rustc")
         .arg("--version")
@@ -82,6 +83,7 @@ fn status() -> std::process::ExitStatus {
         .expect("coverage process should provide an exit status")
 }
 
+/// Builds an output reader whose worker returns a supplied coverage result.
 fn output_reader(
     result: Result<CapturedOutput, OutputCaptureError>,
 ) -> OutputReader {
@@ -94,6 +96,7 @@ fn output_reader(
     OutputReader::new(join, cancellation)
 }
 
+/// Builds a stdin writer whose worker executes a supplied coverage closure.
 fn stdin_writer(
     write: impl FnOnce() -> io::Result<()> + Send + 'static,
 ) -> StdinWriter {
@@ -108,6 +111,7 @@ fn stdin_writer(
     )
 }
 
+/// Spawns a deterministic child process for coverage probes.
 fn spawn_rustc_child() -> ManagedChildProcess {
     let mut command = ProcessCommand::new("rustc");
     command.arg("--version");
