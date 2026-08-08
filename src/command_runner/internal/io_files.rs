@@ -31,6 +31,11 @@ use std::{
     },
 };
 
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
 use same_file::Handle;
 
 use crate::command_stdin::CommandStdin;
@@ -50,6 +55,120 @@ pub(in crate::command_runner) fn __coverage_fail_truncate(enabled: bool) {
 
 /// Opened stdin path, file handle, and optional buffered input bytes.
 type PreparedInputParts = (Option<PathBuf>, Option<File>, Option<Vec<u8>>);
+
+/// Opens a stdin candidate with platform-specific special-file protection.
+///
+/// Unix callers receive a descriptor opened with `O_NONBLOCK`, so opening a
+/// FIFO does not wait for a peer. Other platforms use their native file open
+/// operation and rely on the subsequent handle-authoritative type check.
+///
+/// # Parameters
+///
+/// * `path` - Candidate path to open for reading.
+///
+/// # Returns
+///
+/// An open file handle whose metadata must be validated before use.
+///
+/// # Errors
+///
+/// Returns the operating-system error reported while opening `path`.
+#[cfg(unix)]
+pub(in crate::command_runner) fn open_input_candidate(
+    path: &Path,
+) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).custom_flags(libc::O_NONBLOCK);
+    options.open(path)
+}
+
+/// Opens a stdin candidate on platforms without Unix open flags.
+#[cfg(not(unix))]
+pub(in crate::command_runner) fn open_input_candidate(
+    path: &Path,
+) -> io::Result<File> {
+    File::open(path)
+}
+
+/// Opens an output candidate with platform-specific special-file protection.
+///
+/// # Parameters
+///
+/// * `path` - Candidate path to open for writing.
+///
+/// # Returns
+///
+/// An open file handle whose metadata must be validated before use.
+///
+/// # Errors
+///
+/// Returns the operating-system error reported while opening `path`.
+#[cfg(unix)]
+pub(in crate::command_runner) fn open_output_candidate(
+    path: &Path,
+) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .custom_flags(libc::O_NONBLOCK);
+    options.open(path)
+}
+
+/// Opens an output candidate on platforms without Unix open flags.
+#[cfg(not(unix))]
+pub(in crate::command_runner) fn open_output_candidate(
+    path: &Path,
+) -> io::Result<File> {
+    OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+}
+
+/// Clears the temporary nonblocking flag from a validated Unix file handle.
+///
+/// # Parameters
+///
+/// * `file` - Live descriptor opened with `O_NONBLOCK`.
+///
+/// # Returns
+///
+/// `Ok(())` after the descriptor is blocking, or immediately when it was
+/// already blocking.
+///
+/// # Errors
+///
+/// Returns the native error from either `fcntl` operation.
+#[cfg(unix)]
+fn clear_nonblocking(file: &File) -> io::Result<()> {
+    // SAFETY: `file` owns a live descriptor throughout both non-retaining
+    // `fcntl` calls.
+    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+    if flags == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    if flags & libc::O_NONBLOCK == 0 {
+        return Ok(());
+    }
+    // SAFETY: `F_SETFL` accepts the status flags returned by `F_GETFL` with
+    // only `O_NONBLOCK` cleared, and the descriptor remains live.
+    let result = unsafe {
+        libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags & !libc::O_NONBLOCK)
+    };
+    if result == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Leaves file blocking state unchanged on non-Unix platforms.
+#[cfg(not(unix))]
+fn clear_nonblocking(_file: &File) -> io::Result<()> {
+    Ok(())
+}
 
 /// Prepared command-side stdin and runner-side output files.
 pub(in crate::command_runner) struct IoFiles {
@@ -167,7 +286,15 @@ fn open_input(
         }
         CommandStdin::File(path) => {
             ensure_regular_input(command, &path)?;
-            let file = File::open(&path).map_err(|source| {
+            let file = open_input_candidate(&path).map_err(|source| {
+                CommandError::OpenInputFailed {
+                    command: command.to_owned(),
+                    path: path.clone(),
+                    source,
+                }
+            })?;
+            ensure_regular_input_handle(command, &path, &file)?;
+            clear_nonblocking(&file).map_err(|source| {
                 CommandError::OpenInputFailed {
                     command: command.to_owned(),
                     path: path.clone(),
@@ -201,19 +328,106 @@ fn open_output(
 ) -> Result<Option<File>, CommandError> {
     path.map(|path| {
         ensure_regular_output(command, stream, path)?;
-        OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(false)
-            .open(path)
+        let file = open_output_candidate(path).map_err(|source| {
+            CommandError::OpenOutputFailed {
+                command: command.to_owned(),
+                stream,
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+        ensure_regular_output_handle(command, stream, path, &file)?;
+        clear_nonblocking(&file).map_err(|source| {
+            CommandError::OpenOutputFailed {
+                command: command.to_owned(),
+                stream,
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+        Ok(file)
+    })
+    .transpose()
+}
+
+/// Validates the metadata of the opened stdin handle.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used in errors.
+/// * `path` - Configured stdin path.
+/// * `file` - Open handle whose metadata is authoritative.
+///
+/// # Returns
+///
+/// `Ok(())` when the handle identifies an ordinary file.
+///
+/// # Errors
+///
+/// Returns [`CommandError::OpenInputFailed`] when handle metadata cannot be
+/// read, or [`CommandError::NonRegularInputFile`] for another file type.
+pub(in crate::command_runner) fn ensure_regular_input_handle(
+    command: &str,
+    path: &Path,
+    file: &File,
+) -> Result<(), CommandError> {
+    let metadata =
+        file.metadata()
+            .map_err(|source| CommandError::OpenInputFailed {
+                command: command.to_owned(),
+                path: path.to_path_buf(),
+                source,
+            })?;
+    if metadata.file_type().is_file() {
+        Ok(())
+    } else {
+        Err(CommandError::NonRegularInputFile {
+            command: command.to_owned(),
+            path: path.to_path_buf(),
+        })
+    }
+}
+
+/// Validates the metadata of an opened output handle.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used in errors.
+/// * `stream` - Output stream receiving the file.
+/// * `path` - Configured output path.
+/// * `file` - Open handle whose metadata is authoritative.
+///
+/// # Returns
+///
+/// `Ok(())` when the handle identifies an ordinary file.
+///
+/// # Errors
+///
+/// Returns [`CommandError::OpenOutputFailed`] when handle metadata cannot be
+/// read, or [`CommandError::NonRegularOutputFile`] for another file type.
+pub(in crate::command_runner) fn ensure_regular_output_handle(
+    command: &str,
+    stream: OutputStream,
+    path: &Path,
+    file: &File,
+) -> Result<(), CommandError> {
+    let metadata =
+        file.metadata()
             .map_err(|source| CommandError::OpenOutputFailed {
                 command: command.to_owned(),
                 stream,
                 path: path.to_path_buf(),
                 source,
-            })
-    })
-    .transpose()
+            })?;
+    if metadata.file_type().is_file() {
+        Ok(())
+    } else {
+        Err(CommandError::NonRegularOutputFile {
+            command: command.to_owned(),
+            stream,
+            path: path.to_path_buf(),
+        })
+    }
 }
 
 /// Ensures that a configured stdin path identifies an ordinary file.
