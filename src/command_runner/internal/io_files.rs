@@ -8,47 +8,35 @@
 // qubit-style: allow coverage-cfg
 //! Prepares command I/O files without truncating conflicting paths.
 
-#[cfg(coverage)]
-use std::sync::atomic::{
-    AtomicBool,
-    Ordering,
-};
-use std::{
-    fs::{
-        self,
-        File,
-        OpenOptions,
-    },
-    io,
-    path::{
-        Component,
-        Path,
-        PathBuf,
-    },
-    process::{
-        Command as ProcessCommand,
-        Stdio,
-    },
-};
-
+use std::fs;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io;
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+use std::path::Component;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command as ProcessCommand;
+use std::process::Stdio;
+#[cfg(coverage)]
+use std::sync::atomic::AtomicBool;
+#[cfg(coverage)]
+use std::sync::atomic::Ordering;
 
 use same_file::Handle;
 
+use crate::CommandError;
+use crate::OutputStream;
 use crate::command_stdin::CommandStdin;
-use crate::{
-    CommandError,
-    OutputStream,
-};
 
 #[cfg(coverage)]
 static COVERAGE_FAIL_TRUNCATE: AtomicBool = AtomicBool::new(false);
 
-#[cfg(coverage)]
 /// Enables or disables deterministic truncation failure injection.
+#[cfg(coverage)]
 pub(in crate::command_runner) fn __coverage_fail_truncate(enabled: bool) {
     COVERAGE_FAIL_TRUNCATE.store(enabled, Ordering::Relaxed);
 }

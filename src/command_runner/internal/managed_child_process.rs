@@ -5,10 +5,8 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::{
-    io,
-    process::ExitStatus,
-};
+use std::io;
+use std::process::ExitStatus;
 
 use process_wrap::std::ChildWrapper;
 

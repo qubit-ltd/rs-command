@@ -5,10 +5,8 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::{
-    io,
-    path::PathBuf,
-};
+use std::io;
+use std::path::PathBuf;
 
 use super::captured_output::CapturedOutput;
 

@@ -9,13 +9,9 @@
 
 #[cfg(unix)]
 use std::io;
-use std::sync::{
-    Arc,
-    atomic::{
-        AtomicBool,
-        Ordering,
-    },
-};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 /// Receives cancellation notifications from the owning command runner.
 #[derive(Debug)]

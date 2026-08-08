@@ -8,78 +8,60 @@
 // qubit-style: allow coverage-cfg
 //! Coverage-only probes for internal command-runner failure paths.
 
-use std::{
-    fs::OpenOptions,
-    io::{
-        self,
-        Cursor,
-        Write,
-    },
-    path::Path,
-    process::{
-        Command as ProcessCommand,
-        Stdio,
-    },
-    thread,
-    time::Duration,
-};
+use std::fs::OpenOptions;
+use std::io;
+use std::io::Cursor;
+use std::io::Write;
+use std::path::Path;
+use std::process::Command as ProcessCommand;
+use std::process::Stdio;
+use std::thread;
+use std::time::Duration;
 
-use super::internal::{
-    captured_output::CapturedOutput,
-    error_mapping::{
-        kill_failed,
-        output_pipe_error,
-        spawn_failed,
-        wait_failed,
-    },
-    io_cancellation::IoCancellation,
-    io_files::{
-        __coverage_fail_truncate,
-        IoFiles,
-        normalize_lexically,
-        truncate_output,
-    },
-    managed_child_process::ManagedChildProcess,
-    output_capture_error::OutputCaptureError,
-    output_capture_options::OutputCaptureOptions,
-    output_collector::{
-        collect_output,
-        join_output_reader,
-        read_output,
-        read_output_stream,
-    },
-    output_reader::OutputReader,
-    output_tee::OutputTee,
-    starting_command::StartingCommand,
-    stdin_pipe::{
-        __coverage_fail_stdin_thread,
-        join_stdin_writer,
-        map_stdin_thread_result,
-        write_stdin_bytes,
-    },
-    stdin_writer::StdinWriter,
-};
-use super::{
-    start_output_reader,
-    take_output_pipe,
-};
-use crate::command_stdin::CommandStdin;
-use crate::{
-    CommandError,
-    OutputStream,
-};
-use internal::{
-    FailingReader,
-    FailingWriter,
-};
+use internal::FailingReader;
+use internal::FailingWriter;
+use qubit_clock::TimeError;
+use qubit_clock::TimerUnavailableError;
 
+use super::internal::captured_output::CapturedOutput;
+use super::internal::error_mapping::kill_failed;
+use super::internal::error_mapping::output_pipe_error;
+use super::internal::error_mapping::spawn_failed;
+use super::internal::error_mapping::wait_failed;
+use super::internal::io_cancellation::IoCancellation;
+use super::internal::io_files::__coverage_fail_truncate;
+use super::internal::io_files::IoFiles;
 #[cfg(unix)]
-use super::internal::io_files::{
-    ensure_regular_input_handle,
-    ensure_regular_output_handle,
-    open_input_candidate,
-    open_output_candidate,
-};
+use super::internal::io_files::ensure_regular_input_handle;
+#[cfg(unix)]
+use super::internal::io_files::ensure_regular_output_handle;
+use super::internal::io_files::normalize_lexically;
+#[cfg(unix)]
+use super::internal::io_files::open_input_candidate;
+#[cfg(unix)]
+use super::internal::io_files::open_output_candidate;
+use super::internal::io_files::truncate_output;
+use super::internal::managed_child_process::ManagedChildProcess;
+use super::internal::output_capture_error::OutputCaptureError;
+use super::internal::output_capture_options::OutputCaptureOptions;
+use super::internal::output_collector::collect_output;
+use super::internal::output_collector::join_output_reader;
+use super::internal::output_collector::read_output;
+use super::internal::output_collector::read_output_stream;
+use super::internal::output_reader::OutputReader;
+use super::internal::output_tee::OutputTee;
+use super::internal::process_launcher::spawn_child;
+use super::internal::starting_command::StartingCommand;
+use super::internal::stdin_pipe::__coverage_fail_stdin_thread;
+use super::internal::stdin_pipe::join_stdin_writer;
+use super::internal::stdin_pipe::map_stdin_thread_result;
+use super::internal::stdin_pipe::write_stdin_bytes;
+use super::internal::stdin_writer::StdinWriter;
+use super::start_output_reader;
+use super::take_output_pipe;
+use crate::CommandError;
+use crate::OutputStream;
+use crate::command_stdin::CommandStdin;
 
 mod internal;
 
@@ -123,8 +105,7 @@ fn stdin_writer(
 fn spawn_rustc_child() -> ManagedChildProcess {
     let mut command = ProcessCommand::new("rustc");
     command.arg("--version");
-    super::internal::process_launcher::spawn_child(command, false)
-        .expect("coverage process should spawn")
+    spawn_child(command, false).expect("coverage process should spawn")
 }
 
 /// Verifies that Unix special-file candidates are opened without blocking.
@@ -379,14 +360,13 @@ pub fn __coverage_internal() {
         "command",
         status(),
         || {
-            Err(qubit_clock::TimeError::TimerUnavailable {
-                source:
-                    qubit_clock::TimerUnavailableError::BackendUnavailable {
-                        backend: "coverage",
-                        source: Box::new(io::Error::other(
-                            "coverage timer failure",
-                        )),
-                    },
+            Err(TimeError::TimerUnavailable {
+                source: TimerUnavailableError::BackendUnavailable {
+                    backend: "coverage",
+                    source: Box::new(io::Error::other(
+                        "coverage timer failure",
+                    )),
+                },
             })
         },
         output_reader(Ok(CapturedOutput::default())),

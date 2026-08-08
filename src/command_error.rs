@@ -5,21 +5,16 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::{
-    fmt,
-    io,
-    path::PathBuf,
-    time::Duration,
-};
-
-use thiserror::Error;
+use std::fmt;
+use std::io;
+use std::path::PathBuf;
+use std::time::Duration;
 
 use qubit_clock::TimeError;
+use thiserror::Error;
 
-use crate::{
-    CommandOutput,
-    OutputStream,
-};
+use crate::CommandOutput;
+use crate::OutputStream;
 
 /// Error returned while preparing, spawning, waiting for, or collecting a
 /// command.

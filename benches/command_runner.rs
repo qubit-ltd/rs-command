@@ -10,15 +10,11 @@
 use std::hint::black_box;
 use std::time::Duration;
 
-use criterion::{
-    Criterion,
-    criterion_group,
-    criterion_main,
-};
-use qubit_command::{
-    Command,
-    CommandRunner,
-};
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
+use qubit_command::Command;
+use qubit_command::CommandRunner;
 
 /// Builds a shell command that exits successfully without producing output.
 ///

@@ -30,8 +30,6 @@ pub use command_run_options::CommandRunOptions;
 #[cfg(coverage)]
 #[doc(hidden)]
 pub use command_runner::__coverage_internal;
-pub use command_runner::{
-    CommandRunner,
-    DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
-};
+pub use command_runner::CommandRunner;
+pub use command_runner::DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM;
 pub use output_stream::OutputStream;

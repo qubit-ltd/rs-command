@@ -6,7 +6,6 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 use std::ffi::OsStr;
-
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 

@@ -5,35 +5,27 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::{
-    io::{
-        self,
-        Read,
-        Write,
-    },
-    process::ExitStatus,
-    thread,
-    time::Duration,
-};
+use std::io;
+use std::io::Read;
+use std::io::Write;
+use std::process::ExitStatus;
+use std::thread;
+use std::time::Duration;
 
 use qubit_clock::TimeError;
 
-use super::{
-    cancellable_reader::CancellableReader,
-    captured_output::CapturedOutput,
-    io_cancellation::IoCancellation,
-    io_cancellation_token::IoCancellationToken,
-    output_capture_error::OutputCaptureError,
-    output_capture_options::OutputCaptureOptions,
-    output_reader::OutputReader,
-    stdin_pipe::join_stdin_writer,
-    stdin_writer::OptionalStdinWriter,
-};
-use crate::{
-    CommandError,
-    CommandOutput,
-    OutputStream,
-};
+use super::cancellable_reader::CancellableReader;
+use super::captured_output::CapturedOutput;
+use super::io_cancellation::IoCancellation;
+use super::io_cancellation_token::IoCancellationToken;
+use super::output_capture_error::OutputCaptureError;
+use super::output_capture_options::OutputCaptureOptions;
+use super::output_reader::OutputReader;
+use super::stdin_pipe::join_stdin_writer;
+use super::stdin_writer::OptionalStdinWriter;
+use crate::CommandError;
+use crate::CommandOutput;
+use crate::OutputStream;
 
 #[cfg(unix)]
 type OutputFd = std::os::fd::RawFd;

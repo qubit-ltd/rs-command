@@ -7,13 +7,9 @@
 // =============================================================================
 //! Child-pipe preparation for cancellation-aware output readers.
 
-use std::{
-    io,
-    process::{
-        ChildStderr,
-        ChildStdout,
-    },
-};
+use std::io;
+use std::process::ChildStderr;
+use std::process::ChildStdout;
 
 /// A child output pipe that can be switched to cancellation-aware reads.
 pub(in crate::command_runner) trait CancellableReader:
@@ -32,8 +28,8 @@ impl CancellableReader for ChildStdout {
         prepare_pipe(self)
     }
 
-    #[cfg(unix)]
     /// Returns stdout's underlying descriptor.
+    #[cfg(unix)]
     fn raw_fd(&self) -> std::os::fd::RawFd {
         std::os::fd::AsRawFd::as_raw_fd(self)
     }
@@ -45,8 +41,8 @@ impl CancellableReader for ChildStderr {
         prepare_pipe(self)
     }
 
-    #[cfg(unix)]
     /// Returns stderr's underlying descriptor.
+    #[cfg(unix)]
     fn raw_fd(&self) -> std::os::fd::RawFd {
         std::os::fd::AsRawFd::as_raw_fd(self)
     }
@@ -73,8 +69,8 @@ fn prepare_pipe<T: std::os::fd::AsRawFd>(pipe: &T) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(windows)]
 /// Leaves Windows output pipes unchanged because cancellation uses thread APIs.
+#[cfg(windows)]
 fn prepare_pipe<T>(_pipe: &T) -> io::Result<()> {
     Ok(())
 }

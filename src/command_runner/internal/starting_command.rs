@@ -9,12 +9,10 @@
 
 use process_wrap::std::ChildWrapper;
 
-use super::{
-    command_io::CommandIo,
-    managed_child_process::ManagedChildProcess,
-    output_reader::OutputReader,
-    stdin_writer::OptionalStdinWriter,
-};
+use super::command_io::CommandIo;
+use super::managed_child_process::ManagedChildProcess;
+use super::output_reader::OutputReader;
+use super::stdin_writer::OptionalStdinWriter;
 
 /// Guards a spawned child until all runner-side I/O helpers are ready.
 ///

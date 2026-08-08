@@ -5,10 +5,8 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::io::{
-    self,
-    Read,
-};
+use std::io;
+use std::io::Read;
 
 /// Reader that returns one prefix and then fails for coverage probes.
 #[derive(Debug)]

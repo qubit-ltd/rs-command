@@ -6,35 +6,27 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 // qubit-style: allow coverage-cfg
-use std::{
-    io,
-    thread,
-};
-
+use std::io;
 #[cfg(coverage)]
-use std::sync::atomic::{
-    AtomicBool,
-    Ordering,
-};
+use std::sync::atomic::AtomicBool;
+#[cfg(coverage)]
+use std::sync::atomic::Ordering;
+use std::thread;
 
 use process_wrap::std::ChildWrapper;
 
-use super::stdin_writer::{
-    OptionalStdinWriter,
-    StdinWriter,
-};
-use super::{
-    io_cancellation::IoCancellation,
-    io_cancellation_token::IoCancellationToken,
-    pollable_stdin::PollableStdin,
-};
+use super::io_cancellation::IoCancellation;
+use super::io_cancellation_token::IoCancellationToken;
+use super::pollable_stdin::PollableStdin;
+use super::stdin_writer::OptionalStdinWriter;
+use super::stdin_writer::StdinWriter;
 use crate::CommandError;
 
 #[cfg(coverage)]
 static COVERAGE_FAIL_STDIN_THREAD: AtomicBool = AtomicBool::new(false);
 
-#[cfg(coverage)]
 /// Enables or disables deterministic stdin-thread failure injection.
+#[cfg(coverage)]
 pub(in crate::command_runner) fn __coverage_fail_stdin_thread(enabled: bool) {
     COVERAGE_FAIL_STDIN_THREAD.store(enabled, Ordering::Relaxed);
 }
@@ -227,8 +219,8 @@ fn prepare_stdin_pipe<T: std::os::fd::AsRawFd>(pipe: &T) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(windows)]
 /// Leaves Windows stdin handles unchanged.
+#[cfg(windows)]
 fn prepare_stdin_pipe<T>(_pipe: &T) -> io::Result<()> {
     Ok(())
 }

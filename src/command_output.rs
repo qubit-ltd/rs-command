@@ -5,15 +5,13 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+use std::borrow::Cow;
+use std::fmt;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
-use std::{
-    borrow::Cow,
-    fmt,
-    process::ExitStatus,
-    str,
-    time::Duration,
-};
+use std::process::ExitStatus;
+use std::str;
+use std::time::Duration;
 
 use qubit_redact::redacted_debug;
 

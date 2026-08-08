@@ -6,21 +6,15 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 // qubit-style: allow coverage-cfg
-use std::{
-    fmt,
-    io,
-    path::{
-        Path,
-        PathBuf,
-    },
-    sync::Arc,
-    time::Duration,
-};
+use std::fmt;
+use std::io;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
-use qubit_clock::{
-    StdTimer,
-    Timer,
-};
+use qubit_clock::StdTimer;
+use qubit_clock::Timer;
 use qubit_redact::RedactionPolicy;
 
 #[cfg(coverage)]
@@ -29,11 +23,8 @@ mod internal;
 #[cfg(coverage)]
 #[doc(hidden)]
 pub use coverage::__coverage_internal;
-
-use internal::error_mapping::{
-    output_pipe_error,
-    spawn_failed,
-};
+use internal::error_mapping::output_pipe_error;
+use internal::error_mapping::spawn_failed;
 use internal::finished_command::FinishedCommand;
 use internal::output_capture_options::OutputCaptureOptions;
 use internal::output_collector::read_output_stream;
@@ -44,15 +35,13 @@ use internal::running_command::RunningCommand;
 use internal::starting_command::StartingCommand;
 use internal::stdin_pipe::write_stdin_bytes;
 
-use crate::{
-    Command,
-    CommandCancellation,
-    CommandError,
-    CommandOutput,
-    CommandRunOptions,
-    OutputStream,
-    command_run_options_parts::CommandRunOptionsParts,
-};
+use crate::Command;
+use crate::CommandCancellation;
+use crate::CommandError;
+use crate::CommandOutput;
+use crate::CommandRunOptions;
+use crate::OutputStream;
+use crate::command_run_options_parts::CommandRunOptionsParts;
 
 const REDACTED_PATH: &str = "<redacted path>";
 

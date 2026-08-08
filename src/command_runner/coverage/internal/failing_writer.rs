@@ -5,10 +5,8 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::io::{
-    self,
-    Write,
-};
+use std::io;
+use std::io::Write;
 
 /// Writer that deterministically fails either writes or flushes for coverage
 /// probes.
