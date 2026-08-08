@@ -8,7 +8,10 @@
 //! Coverage-only integration entry points.
 
 #[cfg(coverage)]
+use qubit_command::__coverage_internal;
+
+#[cfg(coverage)]
 #[test]
 fn test_internal_coverage_probes() {
-    qubit_command::__coverage_internal();
+    __coverage_internal();
 }

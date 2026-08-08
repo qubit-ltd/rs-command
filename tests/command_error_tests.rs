@@ -9,23 +9,18 @@
 
 #![cfg(not(windows))]
 
-use std::{
-    io,
-    path::PathBuf,
-    time::Duration,
-};
+use std::io;
+use std::path::PathBuf;
+use std::time::Duration;
 
-use qubit_clock::{
-    TimeError,
-    TimerUnavailableError,
-};
-use qubit_command::{
-    Command,
-    CommandError,
-    CommandRunOptions,
-    CommandRunner,
-    OutputStream,
-};
+use qubit_clock::TimeError;
+use qubit_clock::TimerUnavailableError;
+use qubit_command::Command;
+use qubit_command::CommandCancellation;
+use qubit_command::CommandError;
+use qubit_command::CommandRunOptions;
+use qubit_command::CommandRunner;
+use qubit_command::OutputStream;
 
 #[test]
 fn test_command_error_accessors_for_errors_without_output() {
@@ -342,8 +337,7 @@ fn test_command_error_accessors_cover_cancelled_and_tee_output() {
     let output = CommandRunner::without_timeout()
         .run_with(
             Command::shell("printf output"),
-            CommandRunOptions::new()
-                .cancellation(qubit_command::CommandCancellation::new()),
+            CommandRunOptions::new().cancellation(CommandCancellation::new()),
         )
         .expect("command should finish before cancellation");
 

@@ -7,12 +7,11 @@
 // =============================================================================
 //! Tests that command-runner defaults snapshot the application policy.
 
-use qubit_command::CommandRunner;
-use qubit_redact::{
-    RedactionPolicy,
-    Sensitivity,
-};
 use std::time::Duration;
+
+use qubit_command::CommandRunner;
+use qubit_redact::RedactionPolicy;
+use qubit_redact::Sensitivity;
 
 #[test]
 fn test_command_runner_default_uses_installed_global_policy() {

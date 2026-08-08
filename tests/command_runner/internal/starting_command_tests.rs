@@ -9,10 +9,8 @@
 
 use std::time::Duration;
 
-use qubit_command::{
-    Command,
-    CommandRunner,
-};
+use qubit_command::Command;
+use qubit_command::CommandRunner;
 
 #[test]
 fn test_starting_command_hands_child_and_io_helpers_to_runner() {

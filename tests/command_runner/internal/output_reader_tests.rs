@@ -9,10 +9,8 @@
 
 use std::time::Duration;
 
-use qubit_command::{
-    Command,
-    CommandRunner,
-};
+use qubit_command::Command;
+use qubit_command::CommandRunner;
 
 #[test]
 fn test_output_reader_drains_stderr_even_when_stdout_is_limited() {

@@ -9,12 +9,10 @@
 
 #![cfg(not(windows))]
 
-use qubit_command::{
-    Command,
-    CommandRunner,
-};
-
 use std::time::Duration;
+
+use qubit_command::Command;
+use qubit_command::CommandRunner;
 
 #[test]
 fn test_command_output_stdout_returns_bytes_and_text() {

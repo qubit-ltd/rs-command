@@ -8,10 +8,9 @@
 //! Tests for [`Command`](qubit_command::Command).
 
 #[cfg(unix)]
-use std::{
-    ffi::OsString,
-    os::unix::ffi::OsStringExt,
-};
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
 
 use qubit_command::Command;
 

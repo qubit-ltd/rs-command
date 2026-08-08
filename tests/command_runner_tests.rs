@@ -7,31 +7,25 @@
 // =============================================================================
 //! Tests for [`CommandRunner`](qubit_command::CommandRunner).
 
-use std::{
-    fs,
-    time::{
-        Duration,
-        Instant,
-    },
-};
+use std::fs;
+use std::time::Duration;
+use std::time::Instant;
 
+use qubit_command::Command;
+use qubit_command::CommandCancellation;
+use qubit_command::CommandError;
+use qubit_command::CommandRunOptions;
+use qubit_command::CommandRunner;
 #[cfg(not(windows))]
 use qubit_command::DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM;
 #[cfg(not(windows))]
 use qubit_command::OutputStream;
-use qubit_command::{
-    Command,
-    CommandCancellation,
-    CommandError,
-    CommandRunOptions,
-    CommandRunner,
-};
 #[cfg(not(windows))]
-use qubit_redact::{
-    InputOutputLimit,
-    RedactionPolicy,
-    Sensitivity,
-};
+use qubit_redact::InputOutputLimit;
+#[cfg(not(windows))]
+use qubit_redact::RedactionPolicy;
+#[cfg(not(windows))]
+use qubit_redact::Sensitivity;
 
 mod command_runner;
 mod support;
@@ -85,7 +79,7 @@ fn test_command_runner_rejects_directory_as_stdout_tee() {
     assert!(matches!(
         error,
         CommandError::NonRegularOutputFile {
-            stream: qubit_command::OutputStream::Stdout,
+            stream: OutputStream::Stdout,
             ..
         }
     ));
@@ -106,7 +100,7 @@ fn test_command_runner_rejects_directory_as_stderr_tee() {
     assert!(matches!(
         error,
         CommandError::NonRegularOutputFile {
-            stream: qubit_command::OutputStream::Stderr,
+            stream: OutputStream::Stderr,
             ..
         }
     ));
@@ -114,26 +108,22 @@ fn test_command_runner_rejects_directory_as_stderr_tee() {
 
 #[cfg(not(windows))]
 mod unix {
-    use super::{
-        Command,
-        CommandCancellation,
-        CommandError,
-        CommandRunOptions,
-        CommandRunner,
-        DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
-        Duration,
-        InputOutputLimit,
-        Instant,
-        LocalTempDir,
-        OutputStream,
-        RedactionPolicy,
-        Sensitivity,
-        fs,
-        support::{
-            captured_log_records_containing,
-            initialize_captured_logger,
-        },
-    };
+    use super::Command;
+    use super::CommandCancellation;
+    use super::CommandError;
+    use super::CommandRunOptions;
+    use super::CommandRunner;
+    use super::DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM;
+    use super::Duration;
+    use super::InputOutputLimit;
+    use super::Instant;
+    use super::LocalTempDir;
+    use super::OutputStream;
+    use super::RedactionPolicy;
+    use super::Sensitivity;
+    use super::fs;
+    use super::support::captured_log_records_containing;
+    use super::support::initialize_captured_logger;
 
     #[test]
     fn test_command_runner_default_configuration() {
@@ -614,10 +604,8 @@ mod unix {
 
     #[test]
     fn test_runner_without_timeout_does_not_wait_on_injected_timer() {
-        use qubit_clock::{
-            ManualMonotonicClock,
-            MonotonicClock,
-        };
+        use qubit_clock::ManualMonotonicClock;
+        use qubit_clock::MonotonicClock;
 
         let clock = ManualMonotonicClock::new_shared();
         let runner = CommandRunner::without_timeout().timer(clock.new_timer());
@@ -1037,10 +1025,8 @@ mod unix {
 
     #[test]
     fn test_runner_timeout_uses_injected_manual_timer() {
-        use qubit_clock::{
-            ManualMonotonicClock,
-            MonotonicClock,
-        };
+        use qubit_clock::ManualMonotonicClock;
+        use qubit_clock::MonotonicClock;
 
         let clock = ManualMonotonicClock::new_shared();
         let runner = CommandRunner::new(Duration::from_secs(30))
@@ -1061,10 +1047,8 @@ mod unix {
 
     #[test]
     fn test_runner_timeout_accepts_child_that_exits_before_deadline() {
-        use qubit_clock::{
-            ManualMonotonicClock,
-            MonotonicClock,
-        };
+        use qubit_clock::ManualMonotonicClock;
+        use qubit_clock::MonotonicClock;
 
         let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
             .expect("command test temp directory should be created");
@@ -1109,10 +1093,8 @@ mod unix {
 
     #[test]
     fn test_command_runner_timer_updates_configuration() {
-        use qubit_clock::{
-            ManualMonotonicClock,
-            MonotonicClock,
-        };
+        use qubit_clock::ManualMonotonicClock;
+        use qubit_clock::MonotonicClock;
 
         let clock = ManualMonotonicClock::new_shared();
         let runner = CommandRunner::new(Duration::from_secs(10))
@@ -1538,16 +1520,14 @@ mod unix {
 mod windows {
     use std::thread;
 
-    use super::{
-        Command,
-        CommandCancellation,
-        CommandError,
-        CommandRunner,
-        Duration,
-        Instant,
-        LocalTempDir,
-        fs,
-    };
+    use super::Command;
+    use super::CommandCancellation;
+    use super::CommandError;
+    use super::CommandRunner;
+    use super::Duration;
+    use super::Instant;
+    use super::LocalTempDir;
+    use super::fs;
 
     /// Removes trailing Windows line endings from command output.
     ///

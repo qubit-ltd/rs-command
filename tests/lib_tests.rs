@@ -9,18 +9,14 @@
 
 use std::time::Duration;
 
-use qubit_command::{
-    Command,
-    CommandError,
-    CommandOutput,
-    CommandRunner,
-    DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM,
-    OutputStream,
-};
-use qubit_redact::{
-    RedactionPolicy,
-    Sensitivity,
-};
+use qubit_command::Command;
+use qubit_command::CommandError;
+use qubit_command::CommandOutput;
+use qubit_command::CommandRunner;
+use qubit_command::DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM;
+use qubit_command::OutputStream;
+use qubit_redact::RedactionPolicy;
+use qubit_redact::Sensitivity;
 
 #[test]
 fn test_lib_exports_public_api() {

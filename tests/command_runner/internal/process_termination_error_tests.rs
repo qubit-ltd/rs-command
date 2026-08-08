@@ -8,19 +8,20 @@
 //! Tests for process-termination error mapping.
 
 #[cfg(not(windows))]
-use std::{
-    thread,
-    time::Duration,
-};
+use std::thread;
+#[cfg(not(windows))]
+use std::time::Duration;
 
 #[cfg(not(windows))]
-use qubit_command::{
-    Command,
-    CommandCancellation,
-    CommandError,
-    CommandRunOptions,
-    CommandRunner,
-};
+use qubit_command::Command;
+#[cfg(not(windows))]
+use qubit_command::CommandCancellation;
+#[cfg(not(windows))]
+use qubit_command::CommandError;
+#[cfg(not(windows))]
+use qubit_command::CommandRunOptions;
+#[cfg(not(windows))]
+use qubit_command::CommandRunner;
 
 #[cfg(not(windows))]
 #[test]

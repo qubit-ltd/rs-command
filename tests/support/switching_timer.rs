@@ -7,23 +7,17 @@
 // =============================================================================
 //! Timer that changes clock domains after its first clock observation.
 
-use std::{
-    io,
-    sync::atomic::{
-        AtomicUsize,
-        Ordering,
-    },
-};
+use std::io;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
-use qubit_clock::{
-    ManualMonotonicClock,
-    MonotonicClock,
-    MonotonicInstant,
-    TimeError,
-    Timer,
-    TimerFuture,
-    TimerUnavailableError,
-};
+use qubit_clock::ManualMonotonicClock;
+use qubit_clock::MonotonicClock;
+use qubit_clock::MonotonicInstant;
+use qubit_clock::TimeError;
+use qubit_clock::Timer;
+use qubit_clock::TimerFuture;
+use qubit_clock::TimerUnavailableError;
 
 pub(crate) struct SwitchingTimer {
     first: ManualMonotonicClock,

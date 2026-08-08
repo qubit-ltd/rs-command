@@ -7,21 +7,16 @@
 // =============================================================================
 //! Tests for running command behavior.
 
-use std::time::{
-    Duration,
-    Instant,
-};
+use std::time::Duration;
+use std::time::Instant;
 
 #[cfg(not(windows))]
-use qubit_clock::test_util::{
-    FaultInjectingTimer,
-    TimerFailurePoint,
-};
-use qubit_command::{
-    Command,
-    CommandError,
-    CommandRunner,
-};
+use qubit_clock::test_util::FaultInjectingTimer;
+#[cfg(not(windows))]
+use qubit_clock::test_util::TimerFailurePoint;
+use qubit_command::Command;
+use qubit_command::CommandError;
+use qubit_command::CommandRunner;
 
 #[cfg(not(windows))]
 use crate::support::SwitchingTimer;

@@ -9,10 +9,8 @@
 
 use std::time::Duration;
 
-use qubit_command::{
-    Command,
-    CommandRunner,
-};
+use qubit_command::Command;
+use qubit_command::CommandRunner;
 
 #[test]
 fn test_command_io_collects_stdout_and_stderr() {

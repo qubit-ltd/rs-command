@@ -8,22 +8,20 @@
 //! Tests for wait policy behavior.
 
 #[cfg(not(windows))]
-use std::{
-    thread,
-    time::Duration,
-};
+use std::thread;
+#[cfg(not(windows))]
+use std::time::Duration;
 
 #[cfg(not(windows))]
-use qubit_clock::{
-    ManualMonotonicClock,
-    MonotonicClock,
-};
+use qubit_clock::ManualMonotonicClock;
 #[cfg(not(windows))]
-use qubit_command::{
-    Command,
-    CommandError,
-    CommandRunner,
-};
+use qubit_clock::MonotonicClock;
+#[cfg(not(windows))]
+use qubit_command::Command;
+#[cfg(not(windows))]
+use qubit_command::CommandError;
+#[cfg(not(windows))]
+use qubit_command::CommandRunner;
 
 #[cfg(not(windows))]
 #[test]

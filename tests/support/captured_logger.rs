@@ -7,18 +7,16 @@
 // =============================================================================
 //! Captures log records emitted by command-runner integration tests.
 
-use std::sync::{
-    Mutex,
-    Once,
-};
+use std::sync::Mutex;
+use std::sync::Once;
 
-use log::{
-    Level,
-    LevelFilter,
-    Log,
-    Metadata,
-    Record,
-};
+use log::Level;
+use log::LevelFilter;
+use log::Log;
+use log::Metadata;
+use log::Record;
+use log::set_logger;
+use log::set_max_level;
 
 /// Stores formatted log records for assertions in integration tests.
 struct CapturedLogger {
@@ -76,9 +74,9 @@ static INSTALL_LOGGER: Once = Once::new();
 /// logger, and later calls only observe the completed initialization.
 pub(crate) fn initialize_captured_logger() {
     INSTALL_LOGGER.call_once(|| {
-        log::set_logger(&CAPTURED_LOGGER)
+        set_logger(&CAPTURED_LOGGER)
             .expect("captured test logger should install exactly once");
-        log::set_max_level(LevelFilter::Trace);
+        set_max_level(LevelFilter::Trace);
     });
 }
 
