@@ -13,7 +13,7 @@ use std::time::Duration;
 #[cfg(not(windows))]
 use qubit_command::Command;
 #[cfg(not(windows))]
-use qubit_command::CommandError;
+use qubit_command::CommandErrorReason;
 #[cfg(not(windows))]
 use qubit_command::CommandRunner;
 
@@ -31,8 +31,10 @@ fn test_process_setup_reports_missing_stdin_file_before_spawn() {
         .run(Command::new("cat").stdin_file(missing.clone()))
         .expect_err("missing stdin file should be reported");
 
-    match error {
-        CommandError::OpenInputFailed { path, .. } => assert_eq!(path, missing),
+    match error.reason() {
+        CommandErrorReason::OpenInputFailed { path, .. } => {
+            assert_eq!(path, &missing)
+        }
         other => panic!("expected input-open failure, got {other:?}"),
     }
 }

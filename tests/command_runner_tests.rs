@@ -13,7 +13,8 @@ use std::time::Instant;
 
 use qubit_command::Command;
 use qubit_command::CommandCancellation;
-use qubit_command::CommandError;
+use qubit_command::CommandErrorKind;
+use qubit_command::CommandErrorReason;
 use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
 #[cfg(not(windows))]
@@ -48,8 +49,34 @@ fn test_runner_pre_cancelled_command_does_not_prepare_output_file() {
         )
         .expect_err("pre-cancelled command should not be prepared or started");
 
-    assert!(matches!(error, CommandError::CancelledBeforeStart { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::CancelledBeforeStart);
     assert!(!stdout_path.exists());
+}
+
+#[test]
+fn test_runner_pre_cancelled_command_does_not_truncate_existing_output_file() {
+    let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+        .expect("command test temporary directory should be created");
+    let stdout_path = temp_dir.path().join("stdout.log");
+    fs::write(&stdout_path, b"must-survive-cancellation")
+        .expect("tee fixture should be written");
+    let cancellation = CommandCancellation::new();
+    cancellation.cancel();
+
+    let error = CommandRunner::without_timeout()
+        .run_with(
+            Command::new("__qubit_command_must_not_start__"),
+            CommandRunOptions::new()
+                .cancellation(cancellation)
+                .tee_stdout_to_file(&stdout_path),
+        )
+        .expect_err("pre-cancelled command should not commit tee I/O");
+
+    assert_eq!(error.kind(), CommandErrorKind::CancelledBeforeStart);
+    assert_eq!(
+        fs::read(&stdout_path).expect("tee fixture should remain readable"),
+        b"must-survive-cancellation"
+    );
 }
 
 #[test]
@@ -61,7 +88,7 @@ fn test_command_runner_rejects_directory_as_stdin_file() {
         .run(Command::new("true").stdin_file(temp_dir.path()))
         .expect_err("a directory must not be used as command stdin");
 
-    assert!(matches!(error, CommandError::NonRegularInputFile { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::NonRegularInputFile);
 }
 
 #[test]
@@ -77,8 +104,8 @@ fn test_command_runner_rejects_directory_as_stdout_tee() {
         .expect_err("a directory must not be used as stdout tee");
 
     assert!(matches!(
-        error,
-        CommandError::NonRegularOutputFile {
+        error.reason(),
+        CommandErrorReason::NonRegularOutputFile {
             stream: OutputStream::Stdout,
             ..
         }
@@ -98,8 +125,8 @@ fn test_command_runner_rejects_directory_as_stderr_tee() {
         .expect_err("a directory must not be used as stderr tee");
 
     assert!(matches!(
-        error,
-        CommandError::NonRegularOutputFile {
+        error.reason(),
+        CommandErrorReason::NonRegularOutputFile {
             stream: OutputStream::Stderr,
             ..
         }
@@ -110,7 +137,8 @@ fn test_command_runner_rejects_directory_as_stderr_tee() {
 mod unix {
     use super::Command;
     use super::CommandCancellation;
-    use super::CommandError;
+    use super::CommandErrorKind;
+    use super::CommandErrorReason;
     use super::CommandRunOptions;
     use super::CommandRunner;
     use super::DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM;
@@ -165,7 +193,7 @@ mod unix {
             .run(Command::shell("head -c 1048577 /dev/zero"))
             .expect_err("default runner should reject output beyond 1 MiB");
 
-        assert!(matches!(error, CommandError::OutputTruncated { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::OutputTruncated);
         let output = error
             .output()
             .expect("output truncation error should retain bounded output");
@@ -364,12 +392,11 @@ mod unix {
             .expect_err("cancelled command should return an error");
         worker.join().expect("runner thread should not panic");
 
-        match error {
-            CommandError::Cancelled { output, .. } => {
-                assert_eq!(output.stdout(), b"started");
-            }
-            other => panic!("expected cancelled command error, got {other:?}"),
-        }
+        assert_eq!(error.kind(), CommandErrorKind::Cancelled);
+        assert_eq!(
+            error.output().expect("cancelled output").stdout(),
+            b"started"
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -406,7 +433,7 @@ mod unix {
                 .arg(pid.trim())
                 .status();
         }
-        assert!(matches!(error, CommandError::Cancelled { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::Cancelled);
     }
 
     #[cfg(target_os = "linux")]
@@ -441,7 +468,7 @@ mod unix {
                 .arg(pid.trim())
                 .status();
         }
-        assert!(matches!(error, CommandError::Cancelled { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::Cancelled);
     }
 
     #[test]
@@ -547,26 +574,21 @@ mod unix {
             ))
             .expect_err("non-success exit code should be rejected");
 
-        match error {
-            CommandError::UnexpectedExit {
-                exit_code,
-                expected,
-                output,
-                ..
-            } => {
-                assert_eq!(exit_code, Some(7));
-                assert_eq!(expected, vec![0]);
-                assert_eq!(
-                    output.stdout_text().expect("stdout should be valid UTF-8"),
-                    "fail-out",
-                );
-                assert_eq!(
-                    output.stderr_text().expect("stderr should be valid UTF-8"),
-                    "fail-err",
-                );
-            }
-            other => panic!("expected unexpected-exit error, got {other:?}"),
-        }
+        assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
+        assert_eq!(error.exit_code(), Some(7));
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::UnexpectedExit { expected, .. } if expected == &[0]
+        ));
+        let output = error.output().expect("unexpected output");
+        assert_eq!(
+            output.stdout_text().expect("stdout should be valid UTF-8"),
+            "fail-out"
+        );
+        assert_eq!(
+            output.stderr_text().expect("stderr should be valid UTF-8"),
+            "fail-err"
+        );
     }
 
     #[test]
@@ -671,17 +693,12 @@ mod unix {
                 "non-success exit should remain visible after stdin closes",
             );
 
-        match error {
-            CommandError::UnexpectedExit {
-                exit_code,
-                expected,
-                ..
-            } => {
-                assert_eq!(exit_code, Some(7));
-                assert_eq!(expected, vec![0]);
-            }
-            other => panic!("expected unexpected-exit error, got {other:?}"),
-        }
+        assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
+        assert_eq!(error.exit_code(), Some(7));
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::UnexpectedExit { expected, .. } if expected == &[0]
+        ));
     }
 
     #[test]
@@ -723,10 +740,12 @@ mod unix {
             .run(Command::shell("cat").stdin_file(path.clone()))
             .expect_err("missing stdin file should be reported");
 
-        match error {
-            CommandError::OpenInputFailed {
+        match error.reason() {
+            CommandErrorReason::OpenInputFailed {
                 path: actual_path, ..
-            } => assert_eq!(actual_path, path),
+            } => {
+                assert_eq!(actual_path, &path)
+            }
             other => panic!("expected stdin open failure, got {other:?}"),
         }
     }
@@ -825,7 +844,7 @@ mod unix {
             .run(Command::new("sh").arg("-c").arg("exit 8").arg(MARKER))
             .expect_err("unexpected exit should be reported");
 
-        assert!(matches!(error, CommandError::UnexpectedExit { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
         let records = captured_log_records_containing(MARKER);
         assert_eq!(records.len(), 2);
         assert!(records.iter().all(|(level, _)| *level == log::Level::Debug));
@@ -841,7 +860,7 @@ mod unix {
             .run(Command::new("sh").arg("-c").arg("exit 8").arg(MARKER))
             .expect_err("unexpected exit should still be reported when logging is disabled");
 
-        assert!(matches!(error, CommandError::UnexpectedExit { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
         assert!(captured_log_records_containing(MARKER).is_empty());
     }
 
@@ -877,12 +896,13 @@ mod unix {
             .run(Command::shell("sleep 2"))
             .expect_err("long-running command should time out");
 
-        match error {
-            CommandError::TimedOut {
-                timeout, output, ..
-            } => {
-                assert_eq!(timeout, Duration::from_millis(50));
-                assert!(output.elapsed() >= Duration::from_millis(50));
+        match error.reason() {
+            CommandErrorReason::TimedOut { timeout } => {
+                assert_eq!(*timeout, Duration::from_millis(50));
+                assert!(
+                    error.output().expect("timeout output").elapsed()
+                        >= Duration::from_millis(50)
+                );
             }
             other => panic!("expected timeout error, got {other:?}"),
         }
@@ -894,20 +914,11 @@ mod unix {
         // process-group error can arrive just before the child becomes
         // waitable.
         for _ in 0..10_000 {
-            match CommandRunner::new(Duration::ZERO).run(Command::new("true")) {
-                Ok(_) | Err(CommandError::TimedOut { .. }) => {}
-                Err(CommandError::KillFailed {
-                    process_tree_source,
-                    child_source,
-                    ..
-                }) => {
-                    panic!(
-                        "an exited command must not report a kill failure: tree={process_tree_source}; child={child_source}"
-                    );
-                }
-                Err(other) => {
-                    panic!("unexpected zero-timeout result: {other:?}");
-                }
+            if let Err(error) =
+                CommandRunner::new(Duration::ZERO).run(Command::new("true"))
+            {
+                assert_ne!(error.kind(), CommandErrorKind::KillFailed);
+                assert_ne!(error.kind(), CommandErrorKind::UnexpectedExit);
             }
         }
     }
@@ -944,7 +955,7 @@ mod unix {
                 .status();
         }
 
-        assert!(matches!(&error, CommandError::TimedOut { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::TimedOut);
         let output = error
             .output()
             .expect("timeout should retain captured output metadata");
@@ -981,7 +992,7 @@ mod unix {
                 .status();
         }
 
-        assert!(matches!(error, CommandError::TimedOut { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::TimedOut);
         assert!(
             started.elapsed() < Duration::from_secs(1),
             "timeout must not wait for an escaped stderr descendant"
@@ -1016,7 +1027,7 @@ mod unix {
                 .status();
         }
 
-        assert!(matches!(error, CommandError::TimedOut { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::TimedOut);
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "timeout must cancel a blocked stdin writer"
@@ -1042,7 +1053,7 @@ mod unix {
             .join()
             .expect("runner thread should not panic")
             .expect_err("command should time out");
-        assert!(matches!(error, CommandError::TimedOut { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::TimedOut);
     }
 
     #[test]
@@ -1113,7 +1124,7 @@ mod unix {
             .run(Command::shell("sleep 2 & wait"))
             .expect_err("process group should time out");
 
-        assert!(matches!(error, CommandError::TimedOut { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::TimedOut);
         assert!(
             start.elapsed() < Duration::from_secs(1),
             "timeout should not wait for a background child that inherited output pipes",
@@ -1130,7 +1141,7 @@ mod unix {
                 "background child with inherited output pipes should time out",
             );
 
-        assert!(matches!(error, CommandError::TimedOut { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::TimedOut);
         assert!(
             start.elapsed() < Duration::from_secs(1),
             "timeout should include output collection after the direct child exits",
@@ -1161,7 +1172,7 @@ mod unix {
             .run(Command::shell("printf abcdef; printf wxyz >&2"))
             .expect_err("truncated successful output should be rejected");
 
-        assert!(matches!(error, CommandError::OutputTruncated { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::OutputTruncated);
         let output = error
             .output()
             .expect("truncation error should expose output");
@@ -1184,7 +1195,7 @@ mod unix {
         let error = runner
             .run(Command::shell("printf abcdef; printf wxyz >&2"))
             .expect_err("bounded output should reject truncation");
-        assert!(matches!(error, CommandError::OutputTruncated { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::OutputTruncated);
     }
 
     #[test]
@@ -1195,7 +1206,7 @@ mod unix {
             .run(Command::shell("printf abcdef; exit 7"))
             .expect_err("unexpected exit should be rejected");
 
-        assert!(matches!(error, CommandError::UnexpectedExit { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
         assert!(
             error
                 .output()
@@ -1246,14 +1257,14 @@ mod unix {
             )
             .expect_err("missing output directory should be reported");
 
-        match error {
-            CommandError::OpenOutputFailed {
+        match error.reason() {
+            CommandErrorReason::OpenOutputFailed {
                 stream,
                 path: actual_path,
                 ..
             } => {
-                assert_eq!(stream, OutputStream::Stdout);
-                assert_eq!(actual_path, path);
+                assert_eq!(*stream, OutputStream::Stdout);
+                assert_eq!(actual_path, &path);
             }
             other => panic!("expected stdout open failure, got {other:?}"),
         }
@@ -1271,14 +1282,14 @@ mod unix {
             )
             .expect_err("missing output directory should be reported");
 
-        match error {
-            CommandError::OpenOutputFailed {
+        match error.reason() {
+            CommandErrorReason::OpenOutputFailed {
                 stream,
                 path: actual_path,
                 ..
             } => {
-                assert_eq!(stream, OutputStream::Stderr);
-                assert_eq!(actual_path, path);
+                assert_eq!(*stream, OutputStream::Stderr);
+                assert_eq!(actual_path, &path);
             }
             other => panic!("expected stderr open failure, got {other:?}"),
         }
@@ -1290,7 +1301,7 @@ mod unix {
             .run(Command::new("__qubit_command_missing_executable__"))
             .expect_err("missing executable should fail to spawn");
 
-        assert!(matches!(error, CommandError::SpawnFailed { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::SpawnFailed);
     }
 
     #[test]
@@ -1522,7 +1533,6 @@ mod windows {
 
     use super::Command;
     use super::CommandCancellation;
-    use super::CommandError;
     use super::CommandRunner;
     use super::Duration;
     use super::Instant;
@@ -1576,7 +1586,7 @@ mod windows {
             .run(Command::shell("ping -n 3 127.0.0.1 >NUL"))
             .expect_err("long-running Windows command should time out");
 
-        assert!(matches!(error, CommandError::TimedOut { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::TimedOut);
     }
 
     #[test]
@@ -1599,7 +1609,7 @@ mod windows {
             .join()
             .expect("Windows cancellation thread should finish");
 
-        assert!(matches!(error, CommandError::Cancelled { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::Cancelled);
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "cancellation should not wait for the command to exit normally",
@@ -1616,7 +1626,7 @@ mod windows {
                 "background child with inherited output should time out",
             );
 
-        assert!(matches!(error, CommandError::TimedOut { .. }));
+        assert_eq!(error.kind(), CommandErrorKind::TimedOut);
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "timeout should not wait for the background child to exit",

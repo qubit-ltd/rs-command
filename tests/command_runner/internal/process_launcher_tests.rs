@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use qubit_command::Command;
-use qubit_command::CommandError;
+use qubit_command::CommandErrorKind;
 use qubit_command::CommandRunner;
 
 #[test]
@@ -21,5 +21,5 @@ fn test_process_launcher_maps_spawn_failure() {
         ))
         .expect_err("missing executable should fail to spawn");
 
-    assert!(matches!(error, CommandError::SpawnFailed { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::SpawnFailed);
 }

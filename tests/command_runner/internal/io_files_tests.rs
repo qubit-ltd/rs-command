@@ -15,7 +15,8 @@ use std::process::Command as ProcessCommand;
 use std::time::Duration;
 
 use qubit_command::Command;
-use qubit_command::CommandError;
+use qubit_command::CommandErrorKind;
+use qubit_command::CommandErrorReason;
 use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
 #[cfg(target_os = "linux")]
@@ -65,7 +66,7 @@ fn test_runner_rejects_stdin_stdout_conflict_without_truncating_input() {
         )
         .expect_err("conflicting files should be rejected");
 
-    assert!(matches!(error, CommandError::InputOutputConflict { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::InputOutputConflict);
     assert_eq!(
         fs::read(&path).expect("stdin fixture should remain readable"),
         b"preserve-me",
@@ -85,7 +86,7 @@ fn test_runner_rejects_stdin_stderr_conflict_without_truncating_input() {
         )
         .expect_err("conflicting files should be rejected");
 
-    assert!(matches!(error, CommandError::InputOutputConflict { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::InputOutputConflict);
     assert_eq!(
         fs::read(&path).expect("stdin fixture should remain readable"),
         b"preserve-me",
@@ -106,7 +107,7 @@ fn test_runner_rejects_stdout_stderr_conflict_before_creating_file() {
         )
         .expect_err("conflicting output files should be rejected");
 
-    assert!(matches!(error, CommandError::OutputFilesConflict { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::OutputFilesConflict);
     assert!(!path.exists());
 }
 
@@ -128,7 +129,7 @@ fn test_runner_rejects_symlinked_input_output_conflict() {
         )
         .expect_err("symlinked files should be rejected");
 
-    assert!(matches!(error, CommandError::InputOutputConflict { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::InputOutputConflict);
     assert_eq!(
         fs::read(&input_path).expect("stdin fixture should remain readable"),
         b"preserve-me",
@@ -152,7 +153,7 @@ fn test_runner_rejects_hard_linked_input_output_conflict() {
         )
         .expect_err("hard-linked files should be rejected");
 
-    assert!(matches!(error, CommandError::InputOutputConflict { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::InputOutputConflict);
     assert_eq!(
         fs::read(&input_path).expect("stdin fixture should remain readable"),
         b"preserve-me",
@@ -176,7 +177,7 @@ fn test_runner_rejects_hard_linked_input_stderr_conflict() {
         )
         .expect_err("hard-linked files should be rejected");
 
-    assert!(matches!(error, CommandError::InputOutputConflict { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::InputOutputConflict);
     assert_eq!(
         fs::read(&input_path).expect("stdin fixture should remain readable"),
         b"preserve-me",
@@ -202,7 +203,7 @@ fn test_runner_rejects_hard_linked_output_files() {
         )
         .expect_err("hard-linked output files should be rejected");
 
-    assert!(matches!(error, CommandError::OutputFilesConflict { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::OutputFilesConflict);
     assert_eq!(
         fs::read(&stdout_path).expect("fixture should remain readable"),
         b"preserve-me",
@@ -262,7 +263,7 @@ fn test_runner_reports_symlink_loop_during_path_inspection() {
         )
         .expect_err("symlink loop should fail path inspection");
 
-    assert!(matches!(error, CommandError::InspectIoFileFailed { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::InspectIoFileFailed);
 }
 
 #[cfg(target_os = "linux")]
@@ -276,8 +277,8 @@ fn test_runner_rejects_output_device() {
         .expect_err("full output device should be rejected before spawn");
 
     assert!(matches!(
-        error,
-        CommandError::NonRegularOutputFile {
+        error.reason(),
+        CommandErrorReason::NonRegularOutputFile {
             stream: OutputStream::Stdout,
             ..
         }
@@ -295,8 +296,8 @@ fn test_runner_rejects_stderr_device() {
         .expect_err("full output device should be rejected before spawn");
 
     assert!(matches!(
-        error,
-        CommandError::NonRegularOutputFile {
+        error.reason(),
+        CommandErrorReason::NonRegularOutputFile {
             stream: OutputStream::Stderr,
             ..
         }
@@ -314,7 +315,7 @@ fn test_runner_rejects_fifo_for_stdin_path() {
         .run(unspawnable_command().stdin_file(&path))
         .expect_err("FIFO stdin should be rejected before spawn");
 
-    assert!(matches!(error, CommandError::NonRegularInputFile { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::NonRegularInputFile);
 }
 
 #[cfg(unix)]
@@ -332,8 +333,8 @@ fn test_runner_rejects_fifo_for_stdout_path() {
         .expect_err("FIFO stdout should be rejected before spawn");
 
     assert!(matches!(
-        error,
-        CommandError::NonRegularOutputFile {
+        error.reason(),
+        CommandErrorReason::NonRegularOutputFile {
             stream: OutputStream::Stdout,
             ..
         }
@@ -355,8 +356,8 @@ fn test_runner_rejects_fifo_for_stderr_path() {
         .expect_err("FIFO stderr should be rejected before spawn");
 
     assert!(matches!(
-        error,
-        CommandError::NonRegularOutputFile {
+        error.reason(),
+        CommandErrorReason::NonRegularOutputFile {
             stream: OutputStream::Stderr,
             ..
         }

@@ -10,7 +10,8 @@
 use std::time::Duration;
 
 use qubit_command::Command;
-use qubit_command::CommandError;
+use qubit_command::CommandErrorKind;
+use qubit_command::CommandErrorReason;
 use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
 use qubit_command::OutputStream;
@@ -30,11 +31,12 @@ fn test_output_capture_error_reports_unopenable_stdout_file() {
         )
         .expect_err("missing output directory should be reported");
 
+    assert_eq!(error.kind(), CommandErrorKind::OpenOutputFailed);
     assert!(matches!(
-        error,
-        CommandError::OpenOutputFailed {
+        error.reason(),
+        CommandErrorReason::OpenOutputFailed {
             stream: OutputStream::Stdout,
             ..
-        },
+        }
     ));
 }
