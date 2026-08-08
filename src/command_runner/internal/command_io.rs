@@ -195,11 +195,12 @@ impl CommandIo {
 
         let stdout_error = match stdout_result {
             Ok(_) => None,
-            Err(OutputCaptureError::Read(source)) => {
+            Err(OutputCaptureError::Read { source, .. }) => {
                 Some(CommandError::ReadOutputFailed {
                     command: command.to_owned(),
                     stream: OutputStream::Stdout,
                     source,
+                    output: None,
                 })
             }
             Err(OutputCaptureError::Write { path, source, .. }) => {
@@ -214,11 +215,12 @@ impl CommandIo {
         };
         let stderr_error = match stderr_result {
             Ok(_) => None,
-            Err(OutputCaptureError::Read(source)) => {
+            Err(OutputCaptureError::Read { source, .. }) => {
                 Some(CommandError::ReadOutputFailed {
                     command: command.to_owned(),
                     stream: OutputStream::Stderr,
                     source,
+                    output: None,
                 })
             }
             Err(OutputCaptureError::Write { path, source, .. }) => {

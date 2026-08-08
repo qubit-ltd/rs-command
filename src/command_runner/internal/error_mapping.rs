@@ -109,5 +109,6 @@ pub(in crate::command_runner) fn output_pipe_error(
             "{} pipe was not created",
             stream.as_str()
         )),
+        output: None,
     }
 }

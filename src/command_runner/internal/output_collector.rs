@@ -104,6 +104,8 @@ fn read_output_inner(
     cancellation: Option<&IoCancellationToken>,
     fd: Option<OutputFd>,
 ) -> Result<CapturedOutput, OutputCaptureError> {
+    #[cfg(not(unix))]
+    let _ = fd;
     let mut bytes = Vec::new();
     if let Some(max_bytes) = options.max_bytes {
         bytes.reserve(max_bytes.min(8 * 1024));
@@ -120,16 +122,17 @@ fn read_output_inner(
             });
         }
         #[cfg(unix)]
-        if let (Some(cancellation), Some(fd)) = (cancellation, fd)
-            && !cancellation
-                .wait_for_fd(fd, libc::POLLIN)
-                .map_err(OutputCaptureError::Read)?
-        {
-            return Ok(CapturedOutput {
-                bytes,
-                truncated,
-                complete: false,
-            });
+        if let (Some(cancellation), Some(fd)) = (cancellation, fd) {
+            let ready = cancellation.wait_for_fd(fd, libc::POLLIN).map_err(
+                |source| read_capture_error(source, bytes.clone(), truncated),
+            )?;
+            if !ready {
+                return Ok(CapturedOutput {
+                    bytes,
+                    truncated,
+                    complete: false,
+                });
+            }
         }
         let read = match reader.read(&mut buffer) {
             Ok(read) => read,
@@ -159,7 +162,9 @@ fn read_output_inner(
                     complete: false,
                 });
             }
-            Err(source) => return Err(OutputCaptureError::Read(source)),
+            Err(source) => {
+                return Err(read_capture_error(source, bytes, truncated));
+            }
         };
         if read == 0 {
             break;
@@ -222,6 +227,22 @@ fn read_output_inner(
             truncated,
             complete: true,
         })
+    }
+}
+
+/// Builds a read error with the bytes retained before the failure.
+fn read_capture_error(
+    source: io::Error,
+    bytes: Vec<u8>,
+    truncated: bool,
+) -> OutputCaptureError {
+    OutputCaptureError::Read {
+        source,
+        output: CapturedOutput {
+            bytes,
+            truncated,
+            complete: false,
+        },
     }
 }
 
@@ -307,38 +328,68 @@ pub(in crate::command_runner) fn collect_output_results(
     stderr_result: Result<CapturedOutput, OutputCaptureError>,
     stdin_result: Result<(), CommandError>,
 ) -> Result<CommandOutput, CommandError> {
-    match (elapsed_result, stdout_result, stderr_result, stdin_result) {
-        (Err(source), _, _, _) => Err(CommandError::TimeFailed {
-            command: command.to_owned(),
-            source,
-        }),
-        (Ok(elapsed), Ok(stdout), Ok(stderr), Ok(())) => {
-            Ok(CommandOutput::new(
-                status,
-                (stdout.bytes, stdout.truncated, stdout.complete),
-                (stderr.bytes, stderr.truncated, stderr.complete),
-                elapsed,
-            ))
+    let elapsed = match elapsed_result {
+        Err(source) => {
+            return Err(CommandError::TimeFailed {
+                command: command.to_owned(),
+                source,
+            });
         }
-        (Ok(elapsed), Err(error), _, _) => Err(map_output_reader_error(
-            command,
-            status,
-            elapsed,
-            OutputStream::Stdout,
-            error,
-            None,
-        )),
-        (Ok(elapsed), Ok(stdout), Err(error), _) => {
-            Err(map_output_reader_error(
+        Ok(elapsed) => elapsed,
+    };
+    let stdout = match stdout_result {
+        Err(error) => {
+            return Err(map_output_reader_error(
+                command,
+                status,
+                elapsed,
+                OutputStream::Stdout,
+                error,
+                Some(retained_output(stderr_result)),
+            ));
+        }
+        Ok(stdout) => stdout,
+    };
+    let stderr = match stderr_result {
+        Err(error) => {
+            return Err(map_output_reader_error(
                 command,
                 status,
                 elapsed,
                 OutputStream::Stderr,
                 error,
                 Some(stdout),
-            ))
+            ));
         }
-        (Ok(_), _, _, Err(error)) => Err(error),
+        Ok(stderr) => stderr,
+    };
+    let output = CommandOutput::new(
+        status,
+        (stdout.bytes, stdout.truncated, stdout.complete),
+        (stderr.bytes, stderr.truncated, stderr.complete),
+        elapsed,
+    );
+    match stdin_result {
+        Ok(()) => Ok(output),
+        Err(CommandError::WriteInputFailed {
+            command, source, ..
+        }) => Err(CommandError::WriteInputFailed {
+            command,
+            source,
+            output: Some(Box::new(output)),
+        }),
+        Err(error) => Err(error),
+    }
+}
+
+/// Extracts retained bytes from a completed or failed output reader.
+fn retained_output(
+    result: Result<CapturedOutput, OutputCaptureError>,
+) -> CapturedOutput {
+    match result {
+        Ok(output)
+        | Err(OutputCaptureError::Read { output, .. })
+        | Err(OutputCaptureError::Write { output, .. }) => output,
     }
 }
 
@@ -352,11 +403,27 @@ fn map_output_reader_error(
     other_output: Option<CapturedOutput>,
 ) -> CommandError {
     match error {
-        OutputCaptureError::Read(source) => CommandError::ReadOutputFailed {
-            command: command.to_owned(),
-            stream,
-            source,
-        },
+        OutputCaptureError::Read { source, output } => {
+            let (stdout, stderr) = match stream {
+                OutputStream::Stdout => {
+                    (output, other_output.unwrap_or_default())
+                }
+                OutputStream::Stderr => {
+                    (other_output.unwrap_or_default(), output)
+                }
+            };
+            CommandError::ReadOutputFailed {
+                command: command.to_owned(),
+                stream,
+                source,
+                output: Some(Box::new(CommandOutput::new(
+                    status,
+                    (stdout.bytes, stdout.truncated, stdout.complete),
+                    (stderr.bytes, stderr.truncated, stderr.complete),
+                    elapsed,
+                ))),
+            }
+        }
         OutputCaptureError::Write {
             path,
             source,
@@ -406,8 +473,13 @@ pub(in crate::command_runner) fn join_output_reader(
     match reader.join() {
         Ok(Ok(output)) => Ok(output),
         Ok(Err(error)) => Err(error),
-        Err(_) => Err(OutputCaptureError::Read(io::Error::other(
-            "output reader thread panicked",
-        ))),
+        Err(_) => Err(OutputCaptureError::Read {
+            source: io::Error::other("output reader thread panicked"),
+            output: CapturedOutput {
+                bytes: Vec::new(),
+                truncated: false,
+                complete: false,
+            },
+        }),
     }
 }

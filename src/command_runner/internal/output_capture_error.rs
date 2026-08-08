@@ -15,8 +15,13 @@ use super::captured_output::CapturedOutput;
 /// Error reported by an output reader thread.
 #[derive(Debug)]
 pub(in crate::command_runner) enum OutputCaptureError {
-    /// Reading from the child pipe failed.
-    Read(io::Error),
+    /// Reading from the child pipe failed after retaining partial output.
+    Read {
+        /// I/O error reported by the child pipe.
+        source: io::Error,
+        /// Bytes retained before the read failed.
+        output: CapturedOutput,
+    },
     /// Writing to a tee file failed.
     Write {
         /// Tee file path.

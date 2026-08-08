@@ -73,6 +73,14 @@ use internal::{
     FailingWriter,
 };
 
+#[cfg(unix)]
+use super::internal::io_files::{
+    ensure_regular_input_handle,
+    ensure_regular_output_handle,
+    open_input_candidate,
+    open_output_candidate,
+};
+
 mod internal;
 
 /// Runs a deterministic successful process and returns its exit status.
@@ -119,9 +127,54 @@ fn spawn_rustc_child() -> ManagedChildProcess {
         .expect("coverage process should spawn")
 }
 
+/// Verifies that Unix special-file candidates are opened without blocking.
+#[cfg(unix)]
+fn probe_nonblocking_special_file_open() {
+    let fifo_path = std::env::temp_dir().join(format!(
+        "qubit-command-coverage-{}-fifo",
+        std::process::id(),
+    ));
+    let status = ProcessCommand::new("mkfifo")
+        .arg(&fifo_path)
+        .status()
+        .expect("coverage FIFO command should start");
+    assert!(status.success(), "coverage FIFO should be created");
+
+    let input = open_input_candidate(&fifo_path)
+        .expect("nonblocking FIFO input open should return immediately");
+    assert!(matches!(
+        ensure_regular_input_handle("command", &fifo_path, &input),
+        Err(CommandError::NonRegularInputFile { .. })
+    ));
+
+    let output = open_output_candidate(&fifo_path)
+        .expect("FIFO output should open while the input handle is live");
+    assert!(matches!(
+        ensure_regular_output_handle(
+            "command",
+            OutputStream::Stdout,
+            &fifo_path,
+            &output,
+        ),
+        Err(CommandError::NonRegularOutputFile { .. })
+    ));
+
+    drop(output);
+    drop(input);
+    std::fs::remove_file(&fifo_path).expect("coverage FIFO should be removed");
+}
+
 /// Executes deterministic coverage probes for internal error and I/O paths.
 #[doc(hidden)]
 pub fn __coverage_internal() {
+    #[cfg(unix)]
+    probe_nonblocking_special_file_open();
+
+    let default_captured = CapturedOutput::default();
+    assert!(default_captured.bytes.is_empty());
+    assert!(!default_captured.truncated);
+    assert!(default_captured.complete);
+
     let spawn = spawn_failed("spawn", io::Error::other("spawn source"));
     assert!(matches!(spawn, CommandError::SpawnFailed { .. }));
     let wait = wait_failed("wait", io::Error::other("wait source"));
@@ -272,15 +325,20 @@ pub fn __coverage_internal() {
     assert!(captured_stdout.complete);
     assert!(captured_stderr.complete);
 
+    let mut failing_reader = FailingReader::with_prefix(b"partial".to_vec());
     let read_error = read_output(
-        &mut FailingReader,
+        &mut failing_reader,
         OutputCaptureOptions {
             max_bytes: None,
             tee: None,
         },
     )
     .expect_err("coverage reader failure should be returned");
-    assert!(matches!(read_error, OutputCaptureError::Read(_)));
+    let OutputCaptureError::Read { output, .. } = read_error else {
+        panic!("coverage reader failure should retain output");
+    };
+    assert_eq!(output.bytes, b"partial");
+    assert!(!output.complete);
 
     let tee_input = vec![b'o'; 3 * 8 * 1024];
     let tee_error = read_output(
@@ -342,20 +400,36 @@ pub fn __coverage_internal() {
         "command",
         status(),
         || Ok(Duration::from_secs(1)),
-        output_reader(Err(OutputCaptureError::Read(io::Error::other(
-            "coverage stdout failure",
-        )))),
-        output_reader(Ok(CapturedOutput::default())),
+        output_reader(Err(OutputCaptureError::Read {
+            source: io::Error::other("coverage stdout failure"),
+            output: CapturedOutput {
+                bytes: b"partial-stdout".to_vec(),
+                truncated: false,
+                complete: false,
+            },
+        })),
+        output_reader(Ok(CapturedOutput {
+            bytes: b"complete-stderr".to_vec(),
+            truncated: false,
+            complete: true,
+        })),
         None,
     )
     .expect_err("coverage stdout failure should be mapped");
     assert!(matches!(
-        stdout_error,
+        &stdout_error,
         CommandError::ReadOutputFailed {
             stream: OutputStream::Stdout,
             ..
         }
     ));
+    let stdout_output = stdout_error
+        .output()
+        .expect("read failure should retain both streams");
+    assert_eq!(stdout_output.stdout(), b"partial-stdout");
+    assert_eq!(stdout_output.stderr(), b"complete-stderr");
+    assert!(!stdout_output.stdout_complete());
+    assert!(stdout_output.stderr_complete());
 
     let stderr_error = collect_output(
         "command",
@@ -366,14 +440,19 @@ pub fn __coverage_internal() {
             truncated: false,
             complete: true,
         })),
-        output_reader(Err(OutputCaptureError::Read(io::Error::other(
-            "coverage stderr failure",
-        )))),
+        output_reader(Err(OutputCaptureError::Read {
+            source: io::Error::other("coverage stderr failure"),
+            output: CapturedOutput {
+                bytes: b"partial-stderr".to_vec(),
+                truncated: false,
+                complete: false,
+            },
+        })),
         None,
     )
     .expect_err("coverage stderr failure should be mapped");
     assert!(matches!(
-        stderr_error,
+        &stderr_error,
         CommandError::ReadOutputFailed {
             stream: OutputStream::Stderr,
             ..
@@ -444,14 +523,27 @@ pub fn __coverage_internal() {
         "command",
         status(),
         || Ok(Duration::from_secs(1)),
-        output_reader(Ok(CapturedOutput::default())),
-        output_reader(Ok(CapturedOutput::default())),
+        output_reader(Ok(CapturedOutput {
+            bytes: b"out".to_vec(),
+            truncated: false,
+            complete: true,
+        })),
+        output_reader(Ok(CapturedOutput {
+            bytes: b"err".to_vec(),
+            truncated: false,
+            complete: true,
+        })),
         Some(stdin_writer(|| -> io::Result<()> {
             panic!("coverage stdin writer failure");
         })),
     )
     .expect_err("coverage stdin failure should be returned");
     assert!(matches!(stdin_error, CommandError::WriteInputFailed { .. }));
+    let stdin_output = stdin_error
+        .output()
+        .expect("stdin failure should retain completed output");
+    assert_eq!(stdin_output.stdout(), b"out");
+    assert_eq!(stdin_output.stderr(), b"err");
 
     let output = collect_output(
         "command",
@@ -481,16 +573,28 @@ pub fn __coverage_internal() {
     })))
     .expect("successful coverage reader should join");
     assert_eq!(joined.bytes, b"ok");
-    let joined_error = join_output_reader(output_reader(Err(
-        OutputCaptureError::Read(io::Error::other("coverage read failure")),
-    )))
-    .expect_err("coverage reader error should be preserved");
-    assert!(matches!(joined_error, OutputCaptureError::Read(_)));
-    let joined_panic = join_output_reader(output_reader(Err(
-        OutputCaptureError::Read(io::Error::other("coverage reader panic")),
-    )))
-    .expect_err("coverage reader panic should map to a read error");
-    assert!(matches!(joined_panic, OutputCaptureError::Read(_)));
+    let joined_error =
+        join_output_reader(output_reader(Err(OutputCaptureError::Read {
+            source: io::Error::other("coverage read failure"),
+            output: CapturedOutput {
+                bytes: Vec::new(),
+                truncated: false,
+                complete: false,
+            },
+        })))
+        .expect_err("coverage reader error should be preserved");
+    assert!(matches!(joined_error, OutputCaptureError::Read { .. }));
+    let joined_panic =
+        join_output_reader(output_reader(Err(OutputCaptureError::Read {
+            source: io::Error::other("coverage reader panic"),
+            output: CapturedOutput {
+                bytes: Vec::new(),
+                truncated: false,
+                complete: false,
+            },
+        })))
+        .expect_err("coverage reader panic should map to a read error");
+    assert!(matches!(joined_panic, OutputCaptureError::Read { .. }));
 
     let mut no_pipe = ProcessCommand::new("rustc")
         .arg("--version")
