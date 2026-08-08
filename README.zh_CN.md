@@ -48,7 +48,7 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 - `Command` 描述程序、结构化参数、可选的 shell 执行方式、工作目录和环境变量覆盖，以及 stdin 配置。
 - `CommandRunner` 应用超时、取消、成功退出码、日志、输出捕获、tee 文件和诊断脱敏策略。
 - `CommandOutput` 提供退出状态、原始 stdout/stderr 字节、严格或有损 UTF-8 视图、耗时、截断标志和流完整性标志。
-- `CommandError` 区分准备、启动、等待、输出、超时、取消、截断和非预期退出错误。已经产生输出的错误会保留输出供调用方检查。
+- `CommandError` 区分准备、启动、等待、输出、超时、取消、截断和非预期退出错误。当进程状态和流状态可以可靠组装时，超时、取消、截断、非预期退出、tee 写入、输出读取以及最终 stdin 写入错误会保留 `CommandOutput`；准备、线程启动、时钟和进程控制错误可能不携带输出。
 - `CommandCancellation` 是供应用自己的关闭或终端信号策略使用的一次性句柄。本 crate 不安装信号处理器。
 - 启用超时或取消管理时，runner 会通过 Unix process group 或 Windows Job Object 尝试终止进程树。
 - 默认每个输出流最多在内存中保留 1 MiB。通过 tee 文件可以保留完整流，同时让内存中的结果保持有界。
@@ -61,6 +61,7 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 - `unbounded_output()` 会移除内存捕获上限，只有在确认命令输出有限且可接受时才应使用。
 - 超时和取消结果可能只包含部分输出。在把保留字节当作完整流前，请检查 `stdout_complete()` 和 `stderr_complete()`。
 - `stdin_file`、`tee_stdout_to_file` 和 `tee_stderr_to_file` 只接受普通文件。输入文件与输出文件冲突时，会在截断 tee 文件前拒绝执行。
+- 在 Unix 上，文件型 stdin 和 stdout/stderr tee 目标使用非阻塞安全标志打开，依据已打开句柄验证，并在使用前恢复阻塞模式，从而避免路径被替换为 FIFO 后阻塞命令准备。其他平台会验证已打开句柄，但无法以可移植方式保证所有设备命名空间的打开操作及时返回，因此只应传入可信的普通文件路径。
 - tee 文件会在每次运行开始时替换（而不是追加）。`CommandRunOptions::clone()` 会复制 tee 路径；如果并发运行需要分别保留日志，必须提供不同路径。
 
 ## 延伸阅读

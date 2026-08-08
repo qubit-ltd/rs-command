@@ -10,15 +10,26 @@ output must state whether each stream was completely drained.
 
 `Command::stdin_file`, `CommandRunOptions::tee_stdout_to_file`, and
 `CommandRunOptions::tee_stderr_to_file` accept ordinary files only. Existing paths
-are checked through their metadata; a missing tee path may be created as a
-regular file. FIFOs, devices, sockets, directories, and other special files are
-rejected before the child is spawned. A symlink is accepted only when its target
-is an ordinary file.
+are checked through their metadata as an early classification aid; a missing tee
+path may be created as a regular file. The metadata read from the opened handle
+is authoritative for every stream, so a path replacement between the early check
+and open cannot make a FIFO, device, socket, directory, or other special file
+usable. A symlink is accepted only when its target is an ordinary file.
 
-This boundary prevents a FIFO or device from blocking the command's I/O helper
-forever. It does not promise that a broken remote or FUSE filesystem can never
-stall an operating-system file operation; such external filesystem failures are
-outside the command timeout contract.
+On Unix, all path candidates are opened with `O_NONBLOCK`, checked from the live
+handle, and restored to blocking mode before the handle is passed to the child or
+tee writer. Thus a FIFO replacement cannot block command preparation. Windows and
+other non-Unix targets perform the same handle-authoritative check, but have no
+portable way to guarantee that an arbitrary device-namespace open itself returns
+promptly; trusted ordinary-file paths are required for that stronger property.
+Broken remote or FUSE filesystems may still stall an operating-system operation,
+which remains outside the command timeout contract.
+
+The output collector preserves a `CommandOutput` for output-read and final
+stdin-write failures whenever process status, elapsed time, and both stream
+states can be assembled. Preparation, thread-start, clock, and process-control
+failures may not carry output; callers use `CommandError::output()` or
+`CommandError::into_output()` as the single access path.
 
 ## Helper lifecycle
 

@@ -48,7 +48,7 @@ The library is useful when the caller needs a repeatable policy around an extern
 - `Command` describes a program, structured arguments, optional shell execution, working-directory and environment overrides, and stdin configuration.
 - `CommandRunner` applies timeout, cancellation, successful exit-code, logging, output-capture, tee-file, and diagnostic-redaction policies.
 - `CommandOutput` exposes exit status, raw stdout/stderr bytes, strict or lossy UTF-8 views, elapsed time, truncation flags, and stream-completion flags.
-- `CommandError` distinguishes preparation, spawn, wait, output, timeout, cancellation, truncation, and unexpected-exit failures. Errors that have output retain it for inspection.
+- `CommandError` distinguishes preparation, spawn, wait, output, timeout, cancellation, truncation, and unexpected-exit failures. Timeout, cancellation, truncation, unexpected-exit, tee-write, output-read, and final stdin-write errors retain `CommandOutput` when the process status and stream state can be assembled; preparation, thread-start, clock, and process-control errors may not.
 - `CommandCancellation` is a one-shot handle for an application-owned shutdown or terminal-signal policy. The crate does not install signal handlers.
 - When timeout or cancellation management is enabled, the runner attempts to terminate the process tree using a Unix process group or a Windows Job Object.
 - Each output stream is limited to 1 MiB in memory by default. Tee files can retain the complete stream while the in-memory result stays bounded.
@@ -61,6 +61,7 @@ Important boundaries:
 - `unbounded_output()` removes the in-memory capture limit and should only be used when the command's output is known to be finite and acceptable.
 - Timeout and cancellation results may contain partial output. Check `stdout_complete()` and `stderr_complete()` before treating retained bytes as complete streams.
 - `stdin_file`, `tee_stdout_to_file`, and `tee_stderr_to_file` accept ordinary files only. Conflicting input and output paths are rejected before tee files are truncated.
+- On Unix, path-backed stdin and stdout/stderr tee files are opened with non-blocking safety flags, validated from the opened handle, and restored to blocking mode before use. This prevents a FIFO replacement from blocking command preparation. Other platforms validate the opened handle but cannot portably guarantee that every device-namespace open returns promptly; supply trusted ordinary-file paths there.
 - Tee files are replaced (not appended) at the start of each run. `CommandRunOptions::clone()` copies tee paths; concurrent runs must use distinct paths when their logs must remain separate.
 
 ## Learn More
