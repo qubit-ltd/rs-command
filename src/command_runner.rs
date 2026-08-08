@@ -38,6 +38,7 @@ use internal::stdin_pipe::write_stdin_bytes;
 use crate::Command;
 use crate::CommandCancellation;
 use crate::CommandError;
+use crate::CommandErrorReason;
 use crate::CommandOutput;
 use crate::CommandRunOptions;
 use crate::OutputStream;
@@ -62,10 +63,12 @@ fn start_output_reader(
     stream: OutputStream,
     start: impl FnOnce() -> io::Result<OutputReader>,
 ) -> Result<OutputReader, CommandError> {
-    start().map_err(|source| CommandError::StartOutputThreadFailed {
-        command: command.to_owned(),
-        stream,
-        source,
+    start().map_err(|source| {
+        CommandError::from_reason(
+            command,
+            CommandErrorReason::StartOutputThreadFailed { stream, source },
+            None,
+        )
     })
 }
 
@@ -231,7 +234,9 @@ impl CommandRunner {
     ///
     /// # Errors
     ///
-    /// Returns [`CommandError::CancelledBeforeStart`] when a configured
+    /// Returns a [`CommandError`](crate::CommandError) with kind
+    /// [`CommandErrorKind::CancelledBeforeStart`](crate::CommandErrorKind::CancelledBeforeStart)
+    /// when a configured
     /// cancellation handle has already been requested before command
     /// preparation, and maps all process, I/O, and timeout failures as
     /// described by [`CommandRunner::run`].
@@ -246,6 +251,22 @@ impl CommandRunner {
             stderr_file,
         } = options.into_parts();
 
+        let prepared = self.prepare_command_for_run(
+            command,
+            cancellation.as_ref(),
+            stdout_file.as_deref(),
+            stderr_file.as_deref(),
+        )?;
+        if cancellation
+            .as_ref()
+            .is_some_and(CommandCancellation::is_cancelled)
+        {
+            return Err(CommandError::from_reason(
+                prepared.command_text,
+                CommandErrorReason::CancelledBeforeStart,
+                None,
+            ));
+        }
         let PreparedCommand {
             command_text,
             process_command,
@@ -254,12 +275,8 @@ impl CommandRunner {
             stderr_file,
             stdout_file_path,
             stderr_file_path,
-        } = self.prepare_command_for_run(
-            command,
-            cancellation.as_ref(),
-            stdout_file.as_deref(),
-            stderr_file.as_deref(),
-        )?;
+            ..
+        } = prepared.commit()?;
 
         if !self.disable_logging {
             log::debug!("Running command: {command_text}");
@@ -317,10 +334,11 @@ impl CommandRunner {
         starting_command.set_stderr_reader(stderr_reader);
         if let Err(source) = self.timer.clock().now().duration_since(started_at)
         {
-            return Err(CommandError::TimeFailed {
-                command: command_text.clone(),
-                source,
-            });
+            return Err(CommandError::from_reason(
+                command_text.clone(),
+                CommandErrorReason::TimeFailed { source },
+                None,
+            ));
         }
 
         let (child_process, command_io) = starting_command.finish();
@@ -351,10 +369,11 @@ impl CommandRunner {
                         output.elapsed()
                     );
                 }
-                return Err(CommandError::OutputTruncated {
-                    command: command_text,
-                    output: Box::new(output),
-                });
+                return Err(CommandError::from_reason(
+                    command_text,
+                    CommandErrorReason::OutputTruncated,
+                    Some(Box::new(output)),
+                ));
             }
             if !self.disable_logging {
                 log::debug!(
@@ -372,12 +391,14 @@ impl CommandRunner {
                     output.exit_code()
                 );
             }
-            Err(CommandError::UnexpectedExit {
-                command: command_text,
-                exit_code: output.exit_code(),
-                expected: self.success_exit_codes.clone(),
-                output: Box::new(output),
-            })
+            Err(CommandError::from_reason(
+                command_text,
+                CommandErrorReason::UnexpectedExit {
+                    exit_code: output.exit_code(),
+                    expected: self.success_exit_codes.clone(),
+                },
+                Some(Box::new(output)),
+            ))
         }
     }
 
@@ -520,7 +541,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// `true` when a successful command returns
-    /// [`CommandError::OutputTruncated`] if either captured stream is
+    /// [`CommandErrorKind::OutputTruncated`](crate::CommandErrorKind::OutputTruncated) if either captured stream is
     /// truncated.
     #[must_use]
     #[inline(always)]
@@ -720,10 +741,11 @@ impl CommandRunner {
         stderr_file: Option<&Path>,
     ) -> Result<PreparedCommand, CommandError> {
         if cancellation.is_some_and(CommandCancellation::is_cancelled) {
-            return Err(CommandError::CancelledBeforeStart {
-                command: command
-                    .display_command(&self.diagnostic_redaction_policy),
-            });
+            return Err(CommandError::from_reason(
+                command.display_command(&self.diagnostic_redaction_policy),
+                CommandErrorReason::CancelledBeforeStart,
+                None,
+            ));
         }
         PreparedCommand::prepare(
             command,

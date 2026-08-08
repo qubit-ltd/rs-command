@@ -21,6 +21,7 @@ use super::pollable_stdin::PollableStdin;
 use super::stdin_writer::OptionalStdinWriter;
 use super::stdin_writer::StdinWriter;
 use crate::CommandError;
+use crate::CommandErrorReason;
 
 #[cfg(coverage)]
 static COVERAGE_FAIL_STDIN_THREAD: AtomicBool = AtomicBool::new(false);
@@ -45,8 +46,8 @@ pub(in crate::command_runner) fn __coverage_fail_stdin_thread(enabled: bool) {
 ///
 /// # Errors
 ///
-/// Returns [`CommandError::WriteInputFailed`] when the configured pipe is
-/// missing, or [`CommandError::StartInputThreadFailed`] when the writer thread
+/// Returns a [`CommandError`] with kind `WriteInputFailed` when the configured
+/// pipe is missing, or kind `StartInputThreadFailed` when the writer thread
 /// cannot be created.
 pub(in crate::command_runner) fn write_stdin_bytes(
     command: &str,
@@ -58,26 +59,32 @@ pub(in crate::command_runner) fn write_stdin_bytes(
             Some(mut stdin) => {
                 #[cfg(coverage)]
                 if COVERAGE_FAIL_STDIN_THREAD.load(Ordering::Relaxed) {
-                    return Err(CommandError::StartInputThreadFailed {
-                        command: command.to_owned(),
-                        source: io::Error::other(
-                            "coverage-injected stdin thread failure",
-                        ),
-                    });
+                    return Err(CommandError::from_reason(
+                        command,
+                        CommandErrorReason::StartInputThreadFailed {
+                            source: io::Error::other(
+                                "coverage-injected stdin thread failure",
+                            ),
+                        },
+                        None,
+                    ));
                 }
                 prepare_stdin_pipe(&stdin).map_err(|source| {
-                    CommandError::WriteInputFailed {
-                        command: command.to_owned(),
-                        source,
-                        output: None,
-                    }
+                    CommandError::from_reason(
+                        command,
+                        CommandErrorReason::WriteInputFailed { source },
+                        None,
+                    )
                 })?;
                 let (cancellation, token) =
                     IoCancellation::pair().map_err(|source| {
-                        CommandError::StartInputThreadFailed {
-                            command: command.to_owned(),
-                            source,
-                        }
+                        CommandError::from_reason(
+                            command,
+                            CommandErrorReason::StartInputThreadFailed {
+                                source,
+                            },
+                            None,
+                        )
                     })?;
                 let writer = thread::Builder::new()
                     .name("qubit-command-stdin-writer".to_owned())
@@ -87,11 +94,13 @@ pub(in crate::command_runner) fn write_stdin_bytes(
                     .map(|join| Some(StdinWriter::new(join, cancellation)));
                 map_stdin_thread_result(command, writer)
             }
-            None => Err(CommandError::WriteInputFailed {
-                command: command.to_owned(),
-                source: io::Error::other("stdin pipe was not created"),
-                output: None,
-            }),
+            None => Err(CommandError::from_reason(
+                command,
+                CommandErrorReason::WriteInputFailed {
+                    source: io::Error::other("stdin pipe was not created"),
+                },
+                None,
+            )),
         },
         None => Ok(None),
     }
@@ -110,15 +119,18 @@ pub(in crate::command_runner) fn write_stdin_bytes(
 ///
 /// # Errors
 ///
-/// Returns [`CommandError::StartInputThreadFailed`] when the worker cannot be
-/// created.
+/// Returns a [`CommandError`] with kind `StartInputThreadFailed` when the
+/// worker cannot be created.
 pub(in crate::command_runner) fn map_stdin_thread_result(
     command: &str,
     result: io::Result<OptionalStdinWriter>,
 ) -> Result<OptionalStdinWriter, CommandError> {
-    result.map_err(|source| CommandError::StartInputThreadFailed {
-        command: command.to_owned(),
-        source,
+    result.map_err(|source| {
+        CommandError::from_reason(
+            command,
+            CommandErrorReason::StartInputThreadFailed { source },
+            None,
+        )
     })
 }
 
@@ -138,8 +150,8 @@ pub(in crate::command_runner) fn map_stdin_thread_result(
 ///
 /// # Errors
 ///
-/// Returns [`CommandError::WriteInputFailed`] for non-broken-pipe write errors
-/// or a writer-thread panic.
+/// Returns a [`CommandError`] with kind `WriteInputFailed` for non-broken-pipe
+/// write errors or a writer-thread panic.
 pub(in crate::command_runner) fn join_stdin_writer(
     command: &str,
     writer: OptionalStdinWriter,
@@ -150,16 +162,18 @@ pub(in crate::command_runner) fn join_stdin_writer(
             Ok(Err(source)) if source.kind() == io::ErrorKind::BrokenPipe => {
                 Ok(())
             }
-            Ok(Err(source)) => Err(CommandError::WriteInputFailed {
-                command: command.to_owned(),
-                source,
-                output: None,
-            }),
-            Err(_) => Err(CommandError::WriteInputFailed {
-                command: command.to_owned(),
-                source: io::Error::other("stdin writer thread panicked"),
-                output: None,
-            }),
+            Ok(Err(source)) => Err(CommandError::from_reason(
+                command,
+                CommandErrorReason::WriteInputFailed { source },
+                None,
+            )),
+            Err(_) => Err(CommandError::from_reason(
+                command,
+                CommandErrorReason::WriteInputFailed {
+                    source: io::Error::other("stdin writer thread panicked"),
+                },
+                None,
+            )),
         },
         None => Ok(()),
     }

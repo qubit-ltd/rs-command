@@ -24,7 +24,9 @@ use super::managed_child_process::ManagedChildProcess;
 use super::process_termination_error::ProcessTerminationError;
 use super::wait_policy::next_sleep;
 use crate::CommandCancellation;
+use crate::CommandCleanupFailure;
 use crate::CommandError;
+use crate::CommandErrorReason;
 
 /// Maximum delay before a cancellation-aware wait observes cancellation.
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -176,7 +178,7 @@ impl RunningCommand {
     ///
     /// # Errors
     ///
-    /// Returns [`CommandError::TimedOut`] or [`CommandError::Cancelled`] when
+    /// Returns a [`CommandError`] with kind `TimedOut` or `Cancelled` when
     /// inherited I/O pipes keep helpers alive after the corresponding request,
     /// or another [`CommandError`] if cleanup or output collection fails.
     fn complete_after_exit(
@@ -239,9 +241,9 @@ impl RunningCommand {
     ///
     /// # Errors
     ///
-    /// Returns [`CommandError::TimedOut`] after terminating the command and
-    /// collecting final output, or the process-control/output error that
-    /// prevented timeout output from being built.
+    /// Returns a [`CommandError`] with kind `TimedOut` after terminating the
+    /// command and collecting final output, or the process-control/output
+    /// error that prevented timeout output from being built.
     fn handle_output_collection_timeout(
         mut self,
         timeout: Duration,
@@ -266,11 +268,11 @@ impl RunningCommand {
             }
         };
         let finished = self.complete_after_termination(status)?;
-        Err(CommandError::TimedOut {
-            command: finished.command_text,
-            timeout,
-            output: Box::new(finished.output),
-        })
+        Err(CommandError::from_reason(
+            finished.command_text,
+            CommandErrorReason::TimedOut { timeout },
+            Some(Box::new(finished.output)),
+        ))
     }
 
     /// Cancels descendants that keep inherited output pipes open after the
@@ -292,19 +294,23 @@ impl RunningCommand {
                 process_tree_source,
                 child_source,
             )) => {
-                let error = CommandError::CancelFailed {
-                    command: self.command_text.clone(),
-                    process_tree_source,
-                    child_source,
-                };
+                let error = CommandError::from_reason(
+                    self.command_text.clone(),
+                    CommandErrorReason::CancelFailed {
+                        process_tree_source,
+                        child_source,
+                    },
+                    None,
+                );
                 return Err(self.finish_without_status(error));
             }
         };
         let finished = self.complete_after_termination(status)?;
-        Err(CommandError::Cancelled {
-            command: finished.command_text,
-            output: Box::new(finished.output),
-        })
+        Err(CommandError::from_reason(
+            finished.command_text,
+            CommandErrorReason::Cancelled,
+            Some(Box::new(finished.output)),
+        ))
     }
 
     /// Cancels a running process tree and collects its final output.
@@ -323,19 +329,23 @@ impl RunningCommand {
                 process_tree_source,
                 child_source,
             )) => {
-                let error = CommandError::CancelFailed {
-                    command: self.command_text.clone(),
-                    process_tree_source,
-                    child_source,
-                };
+                let error = CommandError::from_reason(
+                    self.command_text.clone(),
+                    CommandErrorReason::CancelFailed {
+                        process_tree_source,
+                        child_source,
+                    },
+                    None,
+                );
                 return Err(self.finish_without_status(error));
             }
         };
         let finished = self.complete_after_termination(status)?;
-        Err(CommandError::Cancelled {
-            command: finished.command_text,
-            output: Box::new(finished.output),
-        })
+        Err(CommandError::from_reason(
+            finished.command_text,
+            CommandErrorReason::Cancelled,
+            Some(Box::new(finished.output)),
+        ))
     }
 
     /// Handles timeout by killing the command and collecting final output.
@@ -350,8 +360,9 @@ impl RunningCommand {
     ///
     /// # Errors
     ///
-    /// Returns [`CommandError::TimedOut`] after successful termination and
-    /// collection, or the process-control error from failed cleanup.
+    /// Returns a [`CommandError`] with kind `TimedOut` after successful
+    /// termination and collection, or the process-control error from failed
+    /// cleanup.
     fn handle_timeout(
         mut self,
         timeout: Duration,
@@ -376,11 +387,11 @@ impl RunningCommand {
             }
         };
         let finished = self.complete_after_termination(exit_status)?;
-        Err(CommandError::TimedOut {
-            command: finished.command_text,
-            timeout,
-            output: Box::new(finished.output),
-        })
+        Err(CommandError::from_reason(
+            finished.command_text,
+            CommandErrorReason::TimedOut { timeout },
+            Some(Box::new(finished.output)),
+        ))
     }
 
     /// Completes a known-exited command by joining all I/O helpers.
@@ -599,11 +610,29 @@ impl RunningCommand {
     /// The preserved time error after helper cleanup.
     #[must_use]
     fn clean_up_after_time_error(mut self, source: TimeError) -> CommandError {
-        let error = CommandError::TimeFailed {
-            command: self.command_text.clone(),
-            source,
+        let error = CommandError::from_reason(
+            self.command_text.clone(),
+            CommandErrorReason::TimeFailed { source },
+            None,
+        );
+        let error = match self.terminate_child() {
+            Ok(_) => error,
+            Err(ProcessTerminationError::Wait(source)) => error
+                .with_cleanup_failures([CommandCleanupFailure::Wait {
+                    source,
+                }]),
+            Err(ProcessTerminationError::Kill(
+                process_tree_source,
+                child_source,
+            )) => error.with_cleanup_failures([
+                CommandCleanupFailure::ProcessTreeTermination {
+                    source: process_tree_source,
+                },
+                CommandCleanupFailure::ChildTermination {
+                    source: child_source,
+                },
+            ]),
         };
-        let _ = self.terminate_child().ok();
         self.finish_without_status(error)
     }
 
@@ -621,10 +650,11 @@ impl RunningCommand {
         self,
         source: TimeError,
     ) -> Result<FinishedCommand, CommandError> {
-        let error = CommandError::TimeFailed {
-            command: self.command_text.clone(),
-            source,
-        };
+        let error = CommandError::from_reason(
+            self.command_text.clone(),
+            CommandErrorReason::TimeFailed { source },
+            None,
+        );
         let error = self.finish_without_status(error);
         Err(error)
     }
@@ -638,7 +668,24 @@ impl RunningCommand {
     /// Preserved process-control error with complete I/O cleanup.
     #[must_use]
     fn collect_after_wait_error(mut self, error: CommandError) -> CommandError {
-        let _ = self.terminate_child().ok();
+        let error = match self.terminate_child() {
+            Ok(_) => error,
+            Err(ProcessTerminationError::Wait(source)) => error
+                .with_cleanup_failures([CommandCleanupFailure::Wait {
+                    source,
+                }]),
+            Err(ProcessTerminationError::Kill(
+                process_tree_source,
+                child_source,
+            )) => error.with_cleanup_failures([
+                CommandCleanupFailure::ProcessTreeTermination {
+                    source: process_tree_source,
+                },
+                CommandCleanupFailure::ChildTermination {
+                    source: child_source,
+                },
+            ]),
+        };
         self.finish_without_status(error)
     }
 
@@ -656,12 +703,10 @@ impl RunningCommand {
     /// Completes without process output and preserves the primary error.
     ///
     /// This method always invokes helper cancellation and joining before
-    /// returning `primary`, logging any cleanup failures.
+    /// returning `primary`, retaining every cleanup failure.
     #[must_use]
     fn finish_without_status(self, primary: CommandError) -> CommandError {
-        if let Err(source) = self.io.cancel_and_join(&self.command_text) {
-            log::error!("Failed to cleanup command I/O helpers: {source}");
-        }
-        primary
+        let cleanup_failures = self.io.cancel_and_join(&self.command_text);
+        primary.with_cleanup_failures(cleanup_failures)
     }
 }

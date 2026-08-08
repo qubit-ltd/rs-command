@@ -16,9 +16,9 @@ use super::output_collector::join_output_reader;
 use super::output_reader::OutputReader;
 use super::stdin_pipe::join_stdin_writer;
 use super::stdin_writer::OptionalStdinWriter;
+use crate::CommandCleanupFailure;
 use crate::CommandError;
 use crate::CommandOutput;
-use crate::OutputStream;
 
 /// Output and stdin helper threads for one running command.
 #[must_use = "command I/O owns helper threads that must be collected"]
@@ -167,12 +167,12 @@ impl CommandIo {
     ///
     /// # Returns
     ///
-    /// Ok when helpers are joined, or the first helper failure in
-    /// stdout/stderr/stdin order after all joins complete.
+    /// All helper failures in stdout/stderr/stdin order after all joins
+    /// complete.
     pub(in crate::command_runner) fn cancel_and_join(
         self,
         command: &str,
-    ) -> Result<(), CommandError> {
+    ) -> Vec<CommandCleanupFailure> {
         let Self {
             stdout_reader,
             stderr_reader,
@@ -187,52 +187,32 @@ impl CommandIo {
         let stderr_result = join_output_reader(stderr_reader);
         let stdin_result = join_stdin_writer(command, stdin_writer);
 
-        let stdout_error = match stdout_result {
-            Ok(_) => None,
+        let mut failures = Vec::new();
+        match stdout_result {
+            Ok(_) => {}
             Err(OutputCaptureError::Read { source, .. }) => {
-                Some(CommandError::ReadOutputFailed {
-                    command: command.to_owned(),
-                    stream: OutputStream::Stdout,
-                    source,
-                    output: None,
-                })
+                failures.push(CommandCleanupFailure::StdoutRead { source });
             }
             Err(OutputCaptureError::Write { path, source, .. }) => {
-                Some(CommandError::WriteOutputFailed {
-                    command: command.to_owned(),
-                    stream: OutputStream::Stdout,
-                    path,
-                    source,
-                    output: None,
-                })
+                failures
+                    .push(CommandCleanupFailure::StdoutWrite { path, source });
             }
-        };
-        let stderr_error = match stderr_result {
-            Ok(_) => None,
+        }
+        match stderr_result {
+            Ok(_) => {}
             Err(OutputCaptureError::Read { source, .. }) => {
-                Some(CommandError::ReadOutputFailed {
-                    command: command.to_owned(),
-                    stream: OutputStream::Stderr,
-                    source,
-                    output: None,
-                })
+                failures.push(CommandCleanupFailure::StderrRead { source });
             }
             Err(OutputCaptureError::Write { path, source, .. }) => {
-                Some(CommandError::WriteOutputFailed {
-                    command: command.to_owned(),
-                    stream: OutputStream::Stderr,
-                    path,
-                    source,
-                    output: None,
-                })
+                failures
+                    .push(CommandCleanupFailure::StderrWrite { path, source });
             }
-        };
-        if let Some(error) = stdout_error {
-            return Err(error);
         }
-        if let Some(error) = stderr_error {
-            return Err(error);
+        if let Err(error) = stdin_result
+            && let Some(failure) = error.into_cleanup_failure()
+        {
+            failures.push(failure);
         }
-        stdin_result
+        failures
     }
 }
