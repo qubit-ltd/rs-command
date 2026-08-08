@@ -5,3 +5,5 @@ coverage-cfg | src/command_runner/coverage.rs | Exercise private process and I/O
 coverage-cfg | tests/coverage_tests.rs | Run the internal failure-path probe only in instrumented coverage builds.
 coverage-cfg | src/command_runner/internal/stdin_pipe.rs | Inject the otherwise unavailable stdin thread-start failure for coverage tests.
 coverage-cfg | src/command_runner/internal/io_files.rs | Inject the otherwise unavailable output truncation failure for coverage tests.
+multiple-public-types | src/command_runner/internal/process_termination_error.rs | Process termination outcome and failure categories form one internal lifecycle result contract.
+coverage-cfg | src/command_runner/internal/managed_child_process.rs | Inject the otherwise unavailable process-tree kill failure for lifecycle cleanup coverage.

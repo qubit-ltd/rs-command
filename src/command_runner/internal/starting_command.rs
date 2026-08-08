@@ -177,14 +177,27 @@ impl Drop for StartingCommand<'_> {
 
         let tree_managed = child_process.process_tree_managed();
         if tree_managed {
-            if let Err(process_tree_source) = child_process.start_kill_tree()
-                && child_process.try_wait().ok().flatten().is_none()
-                && let Err(child_source) = child_process.start_kill_child()
-            {
-                log::error!(
-                    "Failed to kill command '{}' during startup cleanup: process-tree: {process_tree_source}; child: {child_source}",
-                    self.command
-                );
+            if let Err(process_tree_source) = child_process.start_kill_tree() {
+                let child_result =
+                    if child_process.try_wait().ok().flatten().is_none() {
+                        child_process.start_kill_child()
+                    } else {
+                        Ok(())
+                    };
+                match child_result {
+                    Ok(()) => {
+                        log::error!(
+                            "Failed to kill process tree for command '{}' during startup cleanup; direct-child fallback completed: {process_tree_source}",
+                            self.command
+                        );
+                    }
+                    Err(child_source) => {
+                        log::error!(
+                            "Failed to kill command '{}' during startup cleanup: process-tree: {process_tree_source}; child: {child_source}",
+                            self.command
+                        );
+                    }
+                }
             }
         } else {
             if let Err(child_source) = child_process.start_kill_child() {

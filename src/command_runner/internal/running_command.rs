@@ -22,6 +22,7 @@ use super::error_mapping::wait_failed;
 use super::finished_command::FinishedCommand;
 use super::managed_child_process::ManagedChildProcess;
 use super::process_termination_error::ProcessTerminationError;
+use super::process_termination_error::ProcessTerminationOutcome;
 use super::wait_policy::next_sleep;
 use crate::CommandCancellation;
 use crate::CommandCleanupFailure;
@@ -248,10 +249,22 @@ impl RunningCommand {
         mut self,
         timeout: Duration,
     ) -> Result<FinishedCommand, CommandError> {
-        let status = match self.terminate_child() {
-            Ok(status) => status,
+        let outcome = match self.terminate_child() {
+            Ok(outcome) => outcome,
             Err(ProcessTerminationError::Wait(source)) => {
                 let error = wait_failed(&self.command_text, source);
+                return Err(self.finish_without_status(error));
+            }
+            Err(ProcessTerminationError::WaitAfterTreeTermination {
+                wait_source,
+                process_tree_source,
+            }) => {
+                let error = wait_failed(&self.command_text, wait_source)
+                    .with_cleanup_failures([
+                        CommandCleanupFailure::ProcessTreeTermination {
+                            source: process_tree_source,
+                        },
+                    ]);
                 return Err(self.finish_without_status(error));
             }
             Err(ProcessTerminationError::Kill(
@@ -267,12 +280,22 @@ impl RunningCommand {
                 return Err(self.finish_without_status(error));
             }
         };
-        let finished = self.complete_after_termination(status)?;
+        let ProcessTerminationOutcome {
+            status,
+            cleanup_failures,
+        } = outcome;
+        let finished = match self.complete_after_termination(status) {
+            Ok(finished) => finished,
+            Err(error) => {
+                return Err(error.with_cleanup_failures(cleanup_failures));
+            }
+        };
         Err(CommandError::from_reason(
             finished.command_text,
             CommandErrorReason::TimedOut { timeout },
             Some(Box::new(finished.output)),
-        ))
+        )
+        .with_cleanup_failures(cleanup_failures))
     }
 
     /// Cancels descendants that keep inherited output pipes open after the
@@ -284,10 +307,22 @@ impl RunningCommand {
     fn handle_output_collection_cancellation(
         mut self,
     ) -> Result<FinishedCommand, CommandError> {
-        let status = match self.terminate_child() {
-            Ok(status) => status,
+        let outcome = match self.terminate_child() {
+            Ok(outcome) => outcome,
             Err(ProcessTerminationError::Wait(source)) => {
                 let error = wait_failed(&self.command_text, source);
+                return Err(self.finish_without_status(error));
+            }
+            Err(ProcessTerminationError::WaitAfterTreeTermination {
+                wait_source,
+                process_tree_source,
+            }) => {
+                let error = wait_failed(&self.command_text, wait_source)
+                    .with_cleanup_failures([
+                        CommandCleanupFailure::ProcessTreeTermination {
+                            source: process_tree_source,
+                        },
+                    ]);
                 return Err(self.finish_without_status(error));
             }
             Err(ProcessTerminationError::Kill(
@@ -305,12 +340,22 @@ impl RunningCommand {
                 return Err(self.finish_without_status(error));
             }
         };
-        let finished = self.complete_after_termination(status)?;
+        let ProcessTerminationOutcome {
+            status,
+            cleanup_failures,
+        } = outcome;
+        let finished = match self.complete_after_termination(status) {
+            Ok(finished) => finished,
+            Err(error) => {
+                return Err(error.with_cleanup_failures(cleanup_failures));
+            }
+        };
         Err(CommandError::from_reason(
             finished.command_text,
             CommandErrorReason::Cancelled,
             Some(Box::new(finished.output)),
-        ))
+        )
+        .with_cleanup_failures(cleanup_failures))
     }
 
     /// Cancels a running process tree and collects its final output.
@@ -319,11 +364,23 @@ impl RunningCommand {
     ///
     /// Always returns a cancellation or process-control error after cleanup.
     fn handle_cancellation(mut self) -> Result<FinishedCommand, CommandError> {
-        let status = match self.terminate_child() {
-            Ok(status) => status,
+        let outcome = match self.terminate_child() {
+            Ok(outcome) => outcome,
             Err(ProcessTerminationError::Wait(source)) => {
                 let error = wait_failed(&self.command_text, source);
                 return Err(self.collect_after_wait_error(error));
+            }
+            Err(ProcessTerminationError::WaitAfterTreeTermination {
+                wait_source,
+                process_tree_source,
+            }) => {
+                let error = wait_failed(&self.command_text, wait_source)
+                    .with_cleanup_failures([
+                        CommandCleanupFailure::ProcessTreeTermination {
+                            source: process_tree_source,
+                        },
+                    ]);
+                return Err(self.finish_without_status(error));
             }
             Err(ProcessTerminationError::Kill(
                 process_tree_source,
@@ -340,12 +397,22 @@ impl RunningCommand {
                 return Err(self.finish_without_status(error));
             }
         };
-        let finished = self.complete_after_termination(status)?;
+        let ProcessTerminationOutcome {
+            status,
+            cleanup_failures,
+        } = outcome;
+        let finished = match self.complete_after_termination(status) {
+            Ok(finished) => finished,
+            Err(error) => {
+                return Err(error.with_cleanup_failures(cleanup_failures));
+            }
+        };
         Err(CommandError::from_reason(
             finished.command_text,
             CommandErrorReason::Cancelled,
             Some(Box::new(finished.output)),
-        ))
+        )
+        .with_cleanup_failures(cleanup_failures))
     }
 
     /// Handles timeout by killing the command and collecting final output.
@@ -367,11 +434,23 @@ impl RunningCommand {
         mut self,
         timeout: Duration,
     ) -> Result<FinishedCommand, CommandError> {
-        let exit_status = match self.terminate_child() {
-            Ok(status) => status,
+        let outcome = match self.terminate_child() {
+            Ok(outcome) => outcome,
             Err(ProcessTerminationError::Wait(source)) => {
                 let error = wait_failed(&self.command_text, source);
                 return Err(self.collect_after_wait_error(error));
+            }
+            Err(ProcessTerminationError::WaitAfterTreeTermination {
+                wait_source,
+                process_tree_source,
+            }) => {
+                let error = wait_failed(&self.command_text, wait_source)
+                    .with_cleanup_failures([
+                        CommandCleanupFailure::ProcessTreeTermination {
+                            source: process_tree_source,
+                        },
+                    ]);
+                return Err(self.finish_without_status(error));
             }
             Err(ProcessTerminationError::Kill(
                 process_tree_source,
@@ -386,12 +465,22 @@ impl RunningCommand {
                 return Err(self.collect_after_status_lost(error));
             }
         };
-        let finished = self.complete_after_termination(exit_status)?;
+        let ProcessTerminationOutcome {
+            status,
+            cleanup_failures,
+        } = outcome;
+        let finished = match self.complete_after_termination(status) {
+            Ok(finished) => finished,
+            Err(error) => {
+                return Err(error.with_cleanup_failures(cleanup_failures));
+            }
+        };
         Err(CommandError::from_reason(
             finished.command_text,
             CommandErrorReason::TimedOut { timeout },
             Some(Box::new(finished.output)),
-        ))
+        )
+        .with_cleanup_failures(cleanup_failures))
     }
 
     /// Completes a known-exited command by joining all I/O helpers.
@@ -484,7 +573,7 @@ impl RunningCommand {
     /// `inner_mut().start_kill()` when needed.
     fn terminate_child(
         &mut self,
-    ) -> Result<ExitStatus, ProcessTerminationError> {
+    ) -> Result<ProcessTerminationOutcome, ProcessTerminationError> {
         if !self.child_process.process_tree_managed() {
             if let Err(child_source) = self.child_process.start_kill_child() {
                 let status = self
@@ -492,7 +581,10 @@ impl RunningCommand {
                     .try_wait()
                     .map_err(ProcessTerminationError::Wait)?;
                 if let Some(status) = status {
-                    return Ok(status);
+                    return Ok(ProcessTerminationOutcome {
+                        status,
+                        cleanup_failures: Vec::new(),
+                    });
                 }
                 return Err(ProcessTerminationError::Kill(
                     io::Error::other(
@@ -504,6 +596,10 @@ impl RunningCommand {
             return self
                 .child_process
                 .wait()
+                .map(|status| ProcessTerminationOutcome {
+                    status,
+                    cleanup_failures: Vec::new(),
+                })
                 .map_err(ProcessTerminationError::Wait);
         }
 
@@ -511,24 +607,63 @@ impl RunningCommand {
             Ok(()) => self
                 .child_process
                 .wait()
+                .map(|status| ProcessTerminationOutcome {
+                    status,
+                    cleanup_failures: Vec::new(),
+                })
                 .map_err(ProcessTerminationError::Wait),
             Err(process_tree_source) => {
                 match self
                     .status_after_termination_failure(&process_tree_source)
                 {
-                    Ok(Some(status)) => Ok(status),
+                    Ok(Some(status)) => Ok(ProcessTerminationOutcome {
+                        status,
+                        cleanup_failures: if Self::process_tree_already_exited(
+                            &process_tree_source,
+                        ) {
+                            Vec::new()
+                        } else {
+                            vec![CommandCleanupFailure::ProcessTreeTermination {
+                                source: process_tree_source,
+                            }]
+                        },
+                    }),
                     Ok(None) => match self.child_process.start_kill_child() {
-                        Ok(()) => self
-                            .child_process
-                            .wait()
-                            .map_err(ProcessTerminationError::Wait),
+                        Ok(()) => {
+                            match self.child_process.wait() {
+                                Ok(status) => Ok(ProcessTerminationOutcome {
+                                    status,
+                                    cleanup_failures: vec![
+                                        CommandCleanupFailure::ProcessTreeTermination {
+                                            source: process_tree_source,
+                                        },
+                                    ],
+                                }),
+                                Err(wait_source) => {
+                                    Err(ProcessTerminationError::WaitAfterTreeTermination {
+                                        wait_source,
+                                        process_tree_source,
+                                    })
+                                }
+                            }
+                        }
                         Err(child_source) => {
                             let status = self
                                 .child_process
                                 .try_wait()
                                 .map_err(ProcessTerminationError::Wait)?;
                             if let Some(status) = status {
-                                Ok(status)
+                                Ok(ProcessTerminationOutcome {
+                                    status,
+                                    cleanup_failures: vec![
+                                        CommandCleanupFailure::ProcessTreeTermination {
+                                            source: process_tree_source,
+                                        },
+                                        CommandCleanupFailure::ChildTermination {
+                                            source: child_source,
+                                        },
+                                    ],
+                                })
                             } else {
                                 Err(ProcessTerminationError::Kill(
                                     process_tree_source,
@@ -538,7 +673,10 @@ impl RunningCommand {
                         }
                     },
                     Err(wait_source) => {
-                        Err(ProcessTerminationError::Wait(wait_source))
+                        Err(ProcessTerminationError::WaitAfterTreeTermination {
+                            wait_source,
+                            process_tree_source,
+                        })
                     }
                 }
             }
@@ -616,11 +754,24 @@ impl RunningCommand {
             None,
         );
         let error = match self.terminate_child() {
-            Ok(_) => error,
+            Ok(outcome) => {
+                error.with_cleanup_failures(outcome.cleanup_failures)
+            }
             Err(ProcessTerminationError::Wait(source)) => error
                 .with_cleanup_failures([CommandCleanupFailure::Wait {
                     source,
                 }]),
+            Err(ProcessTerminationError::WaitAfterTreeTermination {
+                wait_source,
+                process_tree_source,
+            }) => error.with_cleanup_failures([
+                CommandCleanupFailure::Wait {
+                    source: wait_source,
+                },
+                CommandCleanupFailure::ProcessTreeTermination {
+                    source: process_tree_source,
+                },
+            ]),
             Err(ProcessTerminationError::Kill(
                 process_tree_source,
                 child_source,
@@ -669,11 +820,24 @@ impl RunningCommand {
     #[must_use]
     fn collect_after_wait_error(mut self, error: CommandError) -> CommandError {
         let error = match self.terminate_child() {
-            Ok(_) => error,
+            Ok(outcome) => {
+                error.with_cleanup_failures(outcome.cleanup_failures)
+            }
             Err(ProcessTerminationError::Wait(source)) => error
                 .with_cleanup_failures([CommandCleanupFailure::Wait {
                     source,
                 }]),
+            Err(ProcessTerminationError::WaitAfterTreeTermination {
+                wait_source,
+                process_tree_source,
+            }) => error.with_cleanup_failures([
+                CommandCleanupFailure::Wait {
+                    source: wait_source,
+                },
+                CommandCleanupFailure::ProcessTreeTermination {
+                    source: process_tree_source,
+                },
+            ]),
             Err(ProcessTerminationError::Kill(
                 process_tree_source,
                 child_source,
