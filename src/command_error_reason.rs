@@ -7,16 +7,17 @@
 // =============================================================================
 //! Detailed primary failure reasons for command execution.
 
+use std::fmt;
 use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use qubit_clock::TimeError;
+use qubit_redact::redacted_debug;
 
 use crate::OutputStream;
 
 /// Detailed primary reason carried by [`crate::CommandError`].
-#[derive(Debug)]
 #[non_exhaustive]
 pub enum CommandErrorReason {
     /// The process could not be spawned.
@@ -152,4 +153,133 @@ pub enum CommandErrorReason {
         /// Exit codes configured as successful.
         expected: Vec<i32>,
     },
+}
+
+impl fmt::Debug for CommandErrorReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SpawnFailed { source } => formatter
+                .debug_struct("SpawnFailed")
+                .field("source", source)
+                .finish(),
+            Self::WaitFailed { source } => formatter
+                .debug_struct("WaitFailed")
+                .field("source", source)
+                .finish(),
+            Self::CancelledBeforeStart => {
+                formatter.write_str("CancelledBeforeStart")
+            }
+            Self::KillFailed {
+                timeout,
+                process_tree_source,
+                child_source,
+            } => formatter
+                .debug_struct("KillFailed")
+                .field("timeout", timeout)
+                .field("process_tree_source", process_tree_source)
+                .field("child_source", child_source)
+                .finish(),
+            Self::ReadOutputFailed { stream, source } => formatter
+                .debug_struct("ReadOutputFailed")
+                .field("stream", stream)
+                .field("source", source)
+                .finish(),
+            Self::OpenInputFailed { path, source } => formatter
+                .debug_struct("OpenInputFailed")
+                .field("path", &redacted_debug(path))
+                .field("source", source)
+                .finish(),
+            Self::NonRegularInputFile { path } => formatter
+                .debug_struct("NonRegularInputFile")
+                .field("path", &redacted_debug(path))
+                .finish(),
+            Self::OpenOutputFailed {
+                stream,
+                path,
+                source,
+            } => formatter
+                .debug_struct("OpenOutputFailed")
+                .field("stream", stream)
+                .field("path", &redacted_debug(path))
+                .field("source", source)
+                .finish(),
+            Self::NonRegularOutputFile { stream, path } => formatter
+                .debug_struct("NonRegularOutputFile")
+                .field("stream", stream)
+                .field("path", &redacted_debug(path))
+                .finish(),
+            Self::InputOutputConflict {
+                input_path,
+                output_stream,
+                output_path,
+            } => formatter
+                .debug_struct("InputOutputConflict")
+                .field("input_path", &redacted_debug(input_path))
+                .field("output_stream", output_stream)
+                .field("output_path", &redacted_debug(output_path))
+                .finish(),
+            Self::OutputFilesConflict {
+                stdout_path,
+                stderr_path,
+            } => formatter
+                .debug_struct("OutputFilesConflict")
+                .field("stdout_path", &redacted_debug(stdout_path))
+                .field("stderr_path", &redacted_debug(stderr_path))
+                .finish(),
+            Self::InspectIoFileFailed { path, source } => formatter
+                .debug_struct("InspectIoFileFailed")
+                .field("path", &redacted_debug(path))
+                .field("source", source)
+                .finish(),
+            Self::StartInputThreadFailed { source } => formatter
+                .debug_struct("StartInputThreadFailed")
+                .field("source", source)
+                .finish(),
+            Self::StartOutputThreadFailed { stream, source } => formatter
+                .debug_struct("StartOutputThreadFailed")
+                .field("stream", stream)
+                .field("source", source)
+                .finish(),
+            Self::TimeFailed { source } => formatter
+                .debug_struct("TimeFailed")
+                .field("source", source)
+                .finish(),
+            Self::WriteInputFailed { source } => formatter
+                .debug_struct("WriteInputFailed")
+                .field("source", source)
+                .finish(),
+            Self::WriteOutputFailed {
+                stream,
+                path,
+                source,
+            } => formatter
+                .debug_struct("WriteOutputFailed")
+                .field("stream", stream)
+                .field("path", &redacted_debug(path))
+                .field("source", source)
+                .finish(),
+            Self::TimedOut { timeout } => formatter
+                .debug_struct("TimedOut")
+                .field("timeout", timeout)
+                .finish(),
+            Self::Cancelled => formatter.write_str("Cancelled"),
+            Self::CancelFailed {
+                process_tree_source,
+                child_source,
+            } => formatter
+                .debug_struct("CancelFailed")
+                .field("process_tree_source", process_tree_source)
+                .field("child_source", child_source)
+                .finish(),
+            Self::OutputTruncated => formatter.write_str("OutputTruncated"),
+            Self::UnexpectedExit {
+                exit_code,
+                expected,
+            } => formatter
+                .debug_struct("UnexpectedExit")
+                .field("exit_code", exit_code)
+                .field("expected", expected)
+                .finish(),
+        }
+    }
 }
