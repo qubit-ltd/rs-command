@@ -35,7 +35,7 @@ qubit-command = "0.6"
 普通命令使用结构化参数。这样参数边界明确，也不会调用 shell：
 
 ```rust
-use qubit_command::{Command, CommandCancellation, CommandRunOptions, CommandRunner};
+use qubit_command::{Command, CommandRunner};
 
 fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
     let output = CommandRunner::new(std::time::Duration::from_secs(10))
@@ -52,7 +52,7 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 `stdout()` 和 `stderr()` 返回保留的原始字节。只有确实要求严格 UTF-8 时才使用 `stdout_text()` 或 `stderr_text()`；如果希望把非法字节替换为 `�`，使用 `stdout_lossy_text()` 或 `stderr_lossy_text()`。
 
 ```rust
-use qubit_command::{Command, CommandRunOptions, CommandRunner};
+use qubit_command::{Command, CommandRunner};
 
 let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::new("printf").arg("hello"))?;
@@ -94,7 +94,7 @@ assert_eq!(output.stdout_text()?, "HELLO");
 `Command` 可以继承 stdin、使用空 stdin、提供字节或从文件读取；也可以继承环境、添加或覆盖变量、删除变量，或者先清空继承环境再应用显式值：
 
 ```rust
-use qubit_command::{Command, CommandRunner};
+use qubit_command::{Command, CommandRunOptions, CommandRunner};
 
 let output = CommandRunner::new(std::time::Duration::from_secs(10)).run(
     Command::new("cat")
@@ -119,7 +119,8 @@ let output = CommandRunner::new(std::time::Duration::from_secs(10))
 # let _ = output;
 ```
 
-不在配置列表中的退出状态会返回 `CommandError::UnexpectedExit`，并保留捕获到的输出。
+不在配置列表中的退出状态会返回 `CommandError`，其 `kind()` 为
+`CommandErrorKind::UnexpectedExit`，并保留捕获到的输出。
 
 ## 超时与取消
 
@@ -137,7 +138,7 @@ let result = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::new("long-running-tool"));
 ```
 
-达到 deadline 后，runner 会尝试终止受管进程树，收集可用输出，等待 I/O 辅助线程结束，并返回 `CommandError::TimedOut`。超时错误可能只包含部分输出。
+达到 deadline 后，runner 会尝试终止受管进程树，收集可用输出，等待 I/O 辅助线程结束，并返回 `CommandError`，其 `kind()` 为 `CommandErrorKind::TimedOut`。超时错误可能只包含部分输出。
 
 只有在明确需要无限等待时才使用 `without_timeout()`。如果配置了取消句柄，即使没有超时，runner 仍会轮询 timer 并管理进程树。
 
@@ -146,31 +147,35 @@ let result = CommandRunner::new(std::time::Duration::from_secs(10))
 创建一个取消句柄，将其 clone 后交给 runner，并从应用已有的关闭策略中调用 `cancel()`：
 
 ```rust
-use qubit_command::{Command, CommandCancellation, CommandRunner};
+use qubit_command::{Command, CommandCancellation, CommandRunOptions, CommandRunner};
 
 let cancellation = CommandCancellation::new();
 let runner = CommandRunner::new(std::time::Duration::from_secs(10));
-let result = runner.run_with(
-    Command::new("long-running-tool"),
-    CommandRunOptions::new().cancellation(cancellation.clone()),
-);
+let worker_runner = runner.clone();
+let worker_cancellation = cancellation.clone();
+let worker = std::thread::spawn(move || {
+    worker_runner.run_with(
+        Command::new("long-running-tool"),
+        CommandRunOptions::new().cancellation(worker_cancellation),
+    )
+});
 
-// 在应用的关闭或终端信号策略中调用：
+// 在应用的关闭或终端信号策略中、worker 运行期间调用：
 cancellation.cancel();
-
-let result = runner.run_with(
-    Command::new("long-running-tool"),
-    CommandRunOptions::new().cancellation(cancellation.clone()),
-);
+let result = worker.join().expect("command worker should not panic");
 ```
 
-如果在准备开始前观察到取消请求，结果是 `CommandError::CancelledBeforeStart`。否则 runner 会终止受管进程树，并在可用时通过 `CommandError::Cancelled` 保留输出。句柄是一次性的；多次调用 `cancel()` 不会产生额外效果。
+如果在最终启动检查前观察到取消请求，结果是 `kind()` 为
+`CancelledBeforeStart` 的 `CommandError`；不会创建或截断 tee 文件，也不会
+启动子进程。最终检查是启动线性化点。检查之后观察到的取消属于运行中取消：
+runner 会终止受管进程树，`kind()` 为 `Cancelled`，并在可用时保留输出。
+句柄是一次性的；多次调用 `cancel()` 不会产生额外效果。
 
 启用超时或取消的等待时，timer 必须能在 `run()` 同步阻塞调用方线程时继续推进。Tokio timer 不应依赖只能由同一阻塞线程驱动的 current-thread runtime。
 
 ## 有界输出与大输出
 
-默认每个流的上限是 `DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM`，当前为 1 MiB。成功命令的保留输出被截断时，除非关闭该策略，否则会返回 `CommandError::OutputTruncated`。
+默认每个流的上限是 `DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM`，当前为 1 MiB。成功命令的保留输出被截断时，除非关闭该策略，否则会返回 `CommandError`，其 `kind()` 为 `CommandErrorKind::OutputTruncated`。
 
 对于大量日志，保持内存有界，并把每个流 tee 到文件：
 
@@ -218,7 +223,8 @@ let command = Command::new("uploader")
 
 ## 错误与诊断
 
-`CommandError` 是 non-exhaustive 枚举，因此下游匹配必须保留通配分支。重要类别包括：
+`CommandError` 是字段私有的稳定容器。使用 `kind()` 做可前向兼容的分类，只有
+需要详细字段时才读取 `reason()`；不要匹配其存储布局。重要类别包括：
 
 | 类别 | 示例 | 下一步诊断 |
 | --- | --- | --- |
@@ -231,7 +237,7 @@ let command = Command::new("uploader")
 处理带输出的策略错误时，可以这样检查：
 
 ```rust
-use qubit_command::{Command, CommandError, CommandRunner};
+use qubit_command::{Command, CommandErrorKind, CommandRunner};
 
 match CommandRunner::new(std::time::Duration::from_secs(10)).run(Command::new("tool")) {
     Ok(output) => println!("{}", output.stdout_lossy_text()),
@@ -241,8 +247,11 @@ match CommandRunner::new(std::time::Duration::from_secs(10)).run(Command::new("t
             eprintln!("stdout complete: {}", output.stdout_complete());
             eprintln!("stderr complete: {}", output.stderr_complete());
         }
-        if matches!(error, CommandError::TimedOut { .. }) {
+        if error.kind() == CommandErrorKind::TimedOut {
             eprintln!("the process exceeded its timeout");
+        }
+        if !error.cleanup_failures().is_empty() {
+            eprintln!("保留了 {} 个清理失败", error.cleanup_failures().len());
         }
     }
 }
@@ -256,7 +265,9 @@ match CommandRunner::new(std::time::Duration::from_secs(10)).run(Command::new("t
 
 ### 命令退出状态异常
 
-读取 `CommandError::UnexpectedExit`，检查 `exit_code`、`expected`、stdout 和 stderr，再判断该状态对当前业务是否确实代表成功。不要静默地把所有非零退出码当成成功。
+检查 `error.kind() == CommandErrorKind::UnexpectedExit`，再读取
+`error.exit_code()`、`error.reason()`、stdout 和 stderr，判断该状态对当前业务
+是否确实代表成功。不要静默地把所有非零退出码当成成功。
 
 ### 命令超时或被取消
 
