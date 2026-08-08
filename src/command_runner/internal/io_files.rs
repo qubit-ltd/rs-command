@@ -29,6 +29,7 @@ use std::sync::atomic::Ordering;
 use same_file::Handle;
 
 use crate::CommandError;
+use crate::CommandErrorReason;
 use crate::OutputStream;
 use crate::command_stdin::CommandStdin;
 
@@ -162,14 +163,18 @@ fn clear_nonblocking(_file: &File) -> io::Result<()> {
 pub(in crate::command_runner) struct IoFiles {
     /// Bytes written to piped stdin after spawning, if configured.
     pub(in crate::command_runner) stdin_bytes: Option<Vec<u8>>,
-    /// Open, validated, and truncated stdout tee file.
+    /// Open and validated stdin file retained until commit.
+    pub(in crate::command_runner) stdin_path: Option<PathBuf>,
+    /// Open and validated stdin file retained until commit.
+    pub(in crate::command_runner) stdin_file: Option<File>,
+    /// Open, validated, and truncated stdout tee file after commit.
     pub(in crate::command_runner) stdout_file: Option<File>,
-    /// Open, validated, and truncated stderr tee file.
+    /// Open, validated, and truncated stderr tee file after commit.
     pub(in crate::command_runner) stderr_file: Option<File>,
 }
 
 impl IoFiles {
-    /// Opens, validates, and configures all command I/O files.
+    /// Performs non-destructive command I/O validation.
     ///
     /// # Parameters
     ///
@@ -181,7 +186,8 @@ impl IoFiles {
     ///
     /// # Returns
     ///
-    /// Validated I/O resources ready for process spawning.
+    /// Input resources and output paths validated without creating or
+    /// truncating output files.
     ///
     /// # Errors
     ///
@@ -203,14 +209,37 @@ impl IoFiles {
             stderr_path,
         )?;
 
+        if let Some(path) = stdout_path {
+            ensure_regular_output(command, OutputStream::Stdout, path)?;
+        }
+        if let Some(path) = stderr_path {
+            ensure_regular_output(command, OutputStream::Stderr, path)?;
+        }
+
+        Ok(Self {
+            stdin_bytes,
+            stdin_path,
+            stdin_file,
+            stdout_file: None,
+            stderr_file: None,
+        })
+    }
+
+    /// Commits output file creation, truncation, and stdin attachment.
+    pub(in crate::command_runner) fn commit(
+        &mut self,
+        command: &str,
+        stdout_path: Option<&Path>,
+        stderr_path: Option<&Path>,
+        process_command: &mut ProcessCommand,
+    ) -> Result<(), CommandError> {
         let stdout_file =
             open_output(command, OutputStream::Stdout, stdout_path)?;
         let stderr_file =
             open_output(command, OutputStream::Stderr, stderr_path)?;
-
         validate_file_identities(
             command,
-            stdin_path.as_deref().zip(stdin_file.as_ref()),
+            self.stdin_path.as_deref().zip(self.stdin_file.as_ref()),
             stdout_path.zip(stdout_file.as_ref()),
             stderr_path.zip(stderr_file.as_ref()),
         )?;
@@ -226,15 +255,12 @@ impl IoFiles {
             stderr_path,
             stderr_file.as_ref(),
         )?;
-        if let Some(file) = stdin_file {
+        if let Some(file) = self.stdin_file.take() {
             process_command.stdin(Stdio::from(file));
         }
-
-        Ok(Self {
-            stdin_bytes,
-            stdout_file,
-            stderr_file,
-        })
+        self.stdout_file = stdout_file;
+        self.stderr_file = stderr_file;
+        Ok(())
     }
 }
 
@@ -252,7 +278,7 @@ impl IoFiles {
 ///
 /// # Errors
 ///
-/// Returns [CommandError::OpenInputFailed] when a configured file cannot be
+/// Returns [CommandError] when a configured file cannot be
 /// opened.
 fn open_input(
     command: &str,
@@ -274,21 +300,11 @@ fn open_input(
         }
         CommandStdin::File(path) => {
             ensure_regular_input(command, &path)?;
-            let file = open_input_candidate(&path).map_err(|source| {
-                CommandError::OpenInputFailed {
-                    command: command.to_owned(),
-                    path: path.clone(),
-                    source,
-                }
-            })?;
+            let file = open_input_candidate(&path)
+                .map_err(|source| open_input_error(command, &path, source))?;
             ensure_regular_input_handle(command, &path, &file)?;
-            clear_nonblocking(&file).map_err(|source| {
-                CommandError::OpenInputFailed {
-                    command: command.to_owned(),
-                    path: path.clone(),
-                    source,
-                }
-            })?;
+            clear_nonblocking(&file)
+                .map_err(|source| open_input_error(command, &path, source))?;
             Ok((Some(path), Some(file), None))
         }
     }
@@ -308,7 +324,7 @@ fn open_input(
 ///
 /// # Errors
 ///
-/// Returns [CommandError::OpenOutputFailed] when the file cannot be opened.
+/// Returns [CommandError] when the file cannot be opened.
 fn open_output(
     command: &str,
     stream: OutputStream,
@@ -317,21 +333,11 @@ fn open_output(
     path.map(|path| {
         ensure_regular_output(command, stream, path)?;
         let file = open_output_candidate(path).map_err(|source| {
-            CommandError::OpenOutputFailed {
-                command: command.to_owned(),
-                stream,
-                path: path.to_path_buf(),
-                source,
-            }
+            open_output_error(command, stream, path, source)
         })?;
         ensure_regular_output_handle(command, stream, path, &file)?;
         clear_nonblocking(&file).map_err(|source| {
-            CommandError::OpenOutputFailed {
-                command: command.to_owned(),
-                stream,
-                path: path.to_path_buf(),
-                source,
-            }
+            open_output_error(command, stream, path, source)
         })?;
         Ok(file)
     })
@@ -352,27 +358,20 @@ fn open_output(
 ///
 /// # Errors
 ///
-/// Returns [`CommandError::OpenInputFailed`] when handle metadata cannot be
-/// read, or [`CommandError::NonRegularInputFile`] for another file type.
+/// Returns [`CommandError`] when handle metadata cannot be
+/// read, or [`CommandError`] for another file type.
 pub(in crate::command_runner) fn ensure_regular_input_handle(
     command: &str,
     path: &Path,
     file: &File,
 ) -> Result<(), CommandError> {
-    let metadata =
-        file.metadata()
-            .map_err(|source| CommandError::OpenInputFailed {
-                command: command.to_owned(),
-                path: path.to_path_buf(),
-                source,
-            })?;
+    let metadata = file
+        .metadata()
+        .map_err(|source| open_input_error(command, path, source))?;
     if metadata.file_type().is_file() {
         Ok(())
     } else {
-        Err(CommandError::NonRegularInputFile {
-            command: command.to_owned(),
-            path: path.to_path_buf(),
-        })
+        Err(non_regular_input_error(command, path))
     }
 }
 
@@ -391,30 +390,21 @@ pub(in crate::command_runner) fn ensure_regular_input_handle(
 ///
 /// # Errors
 ///
-/// Returns [`CommandError::OpenOutputFailed`] when handle metadata cannot be
-/// read, or [`CommandError::NonRegularOutputFile`] for another file type.
+/// Returns [`CommandError`] when handle metadata cannot be
+/// read, or [`CommandError`] for another file type.
 pub(in crate::command_runner) fn ensure_regular_output_handle(
     command: &str,
     stream: OutputStream,
     path: &Path,
     file: &File,
 ) -> Result<(), CommandError> {
-    let metadata =
-        file.metadata()
-            .map_err(|source| CommandError::OpenOutputFailed {
-                command: command.to_owned(),
-                stream,
-                path: path.to_path_buf(),
-                source,
-            })?;
+    let metadata = file
+        .metadata()
+        .map_err(|source| open_output_error(command, stream, path, source))?;
     if metadata.file_type().is_file() {
         Ok(())
     } else {
-        Err(CommandError::NonRegularOutputFile {
-            command: command.to_owned(),
-            stream,
-            path: path.to_path_buf(),
-        })
+        Err(non_regular_output_error(command, stream, path))
     }
 }
 
@@ -431,26 +421,19 @@ pub(in crate::command_runner) fn ensure_regular_output_handle(
 ///
 /// # Errors
 ///
-/// Returns [`CommandError::OpenInputFailed`] when metadata cannot be read, or
-/// [`CommandError::NonRegularInputFile`] when the path identifies another file
+/// Returns [`CommandError`] when metadata cannot be read, or
+/// [`CommandError`] when the path identifies another file
 /// type.
 fn ensure_regular_input(
     command: &str,
     path: &Path,
 ) -> Result<(), CommandError> {
-    let metadata =
-        fs::metadata(path).map_err(|source| CommandError::OpenInputFailed {
-            command: command.to_owned(),
-            path: path.to_path_buf(),
-            source,
-        })?;
+    let metadata = fs::metadata(path)
+        .map_err(|source| open_input_error(command, path, source))?;
     if metadata.file_type().is_file() {
         Ok(())
     } else {
-        Err(CommandError::NonRegularInputFile {
-            command: command.to_owned(),
-            path: path.to_path_buf(),
-        })
+        Err(non_regular_input_error(command, path))
     }
 }
 
@@ -469,8 +452,8 @@ fn ensure_regular_input(
 ///
 /// # Errors
 ///
-/// Returns [`CommandError::NonRegularOutputFile`] when an existing path is not
-/// an ordinary file, or [`CommandError::InspectIoFileFailed`] when metadata
+/// Returns [`CommandError`] when an existing path is not
+/// an ordinary file, or [`CommandError`] when metadata
 /// inspection fails for a reason other than absence.
 fn ensure_regular_output(
     command: &str,
@@ -479,18 +462,10 @@ fn ensure_regular_output(
 ) -> Result<(), CommandError> {
     match fs::metadata(path) {
         Ok(metadata) if metadata.file_type().is_file() => Ok(()),
-        Ok(_) => Err(CommandError::NonRegularOutputFile {
-            command: command.to_owned(),
-            stream,
-            path: path.to_path_buf(),
-        }),
+        Ok(_) => Err(non_regular_output_error(command, stream, path)),
         Err(source) if source.kind() == io::ErrorKind::NotFound => {
             match fs::symlink_metadata(path) {
-                Ok(_) => Err(CommandError::NonRegularOutputFile {
-                    command: command.to_owned(),
-                    stream,
-                    path: path.to_path_buf(),
-                }),
+                Ok(_) => Err(non_regular_output_error(command, stream, path)),
                 Err(link_source)
                     if link_source.kind() == io::ErrorKind::NotFound =>
                 {
@@ -521,7 +496,7 @@ fn ensure_regular_output(
 /// # Errors
 ///
 /// Returns a conflict error for equal normalized paths, or
-/// [CommandError::InspectIoFileFailed] when normalization fails.
+/// [CommandError] when normalization fails.
 ///
 /// # Panics
 ///
@@ -582,7 +557,7 @@ fn validate_normalized_paths(
 ///
 /// # Errors
 ///
-/// Returns [CommandError::InspectIoFileFailed] when the current directory or
+/// Returns [CommandError] when the current directory or
 /// an existing path cannot be resolved.
 fn normalized_path(
     command: &str,
@@ -647,7 +622,7 @@ pub(in crate::command_runner) fn normalize_lexically(path: &Path) -> PathBuf {
 /// # Errors
 ///
 /// Returns a conflict error for identical handles, or
-/// [CommandError::InspectIoFileFailed] when a handle cannot be inspected.
+/// [CommandError] when a handle cannot be inspected.
 ///
 /// # Panics
 ///
@@ -715,7 +690,7 @@ fn validate_file_identities(
 ///
 /// # Errors
 ///
-/// Returns [CommandError::InspectIoFileFailed] when cloning or inspecting
+/// Returns [CommandError] when cloning or inspecting
 /// the file fails.
 fn file_handle(
     command: &str,
@@ -746,8 +721,8 @@ fn file_handle(
 ///
 /// # Errors
 ///
-/// Returns [CommandError::InspectIoFileFailed] when file metadata cannot be
-/// read, or [CommandError::OpenOutputFailed] when truncation fails.
+/// Returns [CommandError] when file metadata cannot be
+/// read, or [CommandError] when truncation fails.
 ///
 /// # Panics
 ///
@@ -766,30 +741,20 @@ pub(in crate::command_runner) fn truncate_output(
             .map_err(|source| inspect_error(command, path, source))?
             .file_type();
         if !file_type.is_file() {
-            return Err(CommandError::NonRegularOutputFile {
-                command: command.to_owned(),
-                stream,
-                path: path.to_path_buf(),
-            });
+            return Err(non_regular_output_error(command, stream, path));
         }
         #[cfg(coverage)]
         if COVERAGE_FAIL_TRUNCATE.load(Ordering::Relaxed) {
-            return Err(CommandError::OpenOutputFailed {
-                command: command.to_owned(),
+            return Err(open_output_error(
+                command,
                 stream,
-                path: path.to_path_buf(),
-                source: io::Error::other(
-                    "coverage-injected output truncation failure",
-                ),
-            });
+                path,
+                io::Error::other("coverage-injected output truncation failure"),
+            ));
         }
-        file.set_len(0)
-            .map_err(|source| CommandError::OpenOutputFailed {
-                command: command.to_owned(),
-                stream,
-                path: path.to_path_buf(),
-                source,
-            })?;
+        file.set_len(0).map_err(|source| {
+            open_output_error(command, stream, path, source)
+        })?;
     }
     Ok(())
 }
@@ -814,12 +779,15 @@ fn input_output_conflict(
     output_stream: OutputStream,
     output_path: &Path,
 ) -> CommandError {
-    CommandError::InputOutputConflict {
-        command: command.to_owned(),
-        input_path: input_path.to_path_buf(),
-        output_stream,
-        output_path: output_path.to_path_buf(),
-    }
+    CommandError::from_reason(
+        command,
+        CommandErrorReason::InputOutputConflict {
+            input_path: input_path.to_path_buf(),
+            output_stream,
+            output_path: output_path.to_path_buf(),
+        },
+        None,
+    )
 }
 
 /// Builds an output/output conflict error.
@@ -840,11 +808,14 @@ fn output_files_conflict(
     stdout_path: &Path,
     stderr_path: &Path,
 ) -> CommandError {
-    CommandError::OutputFilesConflict {
-        command: command.to_owned(),
-        stdout_path: stdout_path.to_path_buf(),
-        stderr_path: stderr_path.to_path_buf(),
-    }
+    CommandError::from_reason(
+        command,
+        CommandErrorReason::OutputFilesConflict {
+            stdout_path: stdout_path.to_path_buf(),
+            stderr_path: stderr_path.to_path_buf(),
+        },
+        None,
+    )
 }
 
 /// Builds an I/O-file inspection error.
@@ -865,9 +836,73 @@ fn inspect_error(
     path: &Path,
     source: io::Error,
 ) -> CommandError {
-    CommandError::InspectIoFileFailed {
-        command: command.to_owned(),
-        path: path.to_path_buf(),
-        source,
-    }
+    CommandError::from_reason(
+        command,
+        CommandErrorReason::InspectIoFileFailed {
+            path: path.to_path_buf(),
+            source,
+        },
+        None,
+    )
+}
+
+/// Builds an input-opening failure.
+fn open_input_error(
+    command: &str,
+    path: &Path,
+    source: io::Error,
+) -> CommandError {
+    CommandError::from_reason(
+        command,
+        CommandErrorReason::OpenInputFailed {
+            path: path.to_path_buf(),
+            source,
+        },
+        None,
+    )
+}
+
+/// Builds an output-opening failure.
+fn open_output_error(
+    command: &str,
+    stream: OutputStream,
+    path: &Path,
+    source: io::Error,
+) -> CommandError {
+    CommandError::from_reason(
+        command,
+        CommandErrorReason::OpenOutputFailed {
+            stream,
+            path: path.to_path_buf(),
+            source,
+        },
+        None,
+    )
+}
+
+/// Builds a non-regular input failure.
+fn non_regular_input_error(command: &str, path: &Path) -> CommandError {
+    CommandError::from_reason(
+        command,
+        CommandErrorReason::NonRegularInputFile {
+            path: path.to_path_buf(),
+        },
+        None,
+    )
+}
+
+/// Builds a non-regular output failure.
+fn non_regular_output_error(
+    command: &str,
+    stream: OutputStream,
+    path: &Path,
+) -> CommandError {
+    CommandError::from_reason(
+        command,
+        CommandErrorReason::NonRegularOutputFile {
+            stream,
+            path: path.to_path_buf(),
+        },
+        None,
+    )
 }

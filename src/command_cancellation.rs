@@ -15,11 +15,12 @@ use std::sync::atomic::Ordering;
 /// Clone this handle before passing it to
 /// [`CommandRunOptions::cancellation`](crate::CommandRunOptions::cancellation).
 /// Calling [`Self::cancel`] before a run starts makes the runner return
-/// [`CommandError::CancelledBeforeStart`](crate::CommandError::CancelledBeforeStart)
+/// a [`CommandError`](crate::CommandError) with kind
+/// [`CommandErrorKind::CancelledBeforeStart`](crate::CommandErrorKind::CancelledBeforeStart)
 /// without preparing or spawning the command. Otherwise it makes the run
-/// terminate its managed process tree and return
-/// [`CommandError::Cancelled`](crate::CommandError::Cancelled). The handle is
-/// intentionally one-shot and cannot be reset.
+/// terminate its managed process tree and return an error with kind
+/// [`CommandErrorKind::Cancelled`](crate::CommandErrorKind::Cancelled). The
+/// handle is intentionally one-shot and cannot be reset.
 #[derive(Clone, Debug, Default)]
 #[must_use]
 pub struct CommandCancellation {

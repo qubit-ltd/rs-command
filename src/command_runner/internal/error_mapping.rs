@@ -9,6 +9,7 @@ use std::io;
 use std::time::Duration;
 
 use crate::CommandError;
+use crate::CommandErrorReason;
 use crate::OutputStream;
 
 /// Builds a process spawn failure.
@@ -27,10 +28,11 @@ pub(in crate::command_runner) fn spawn_failed(
     command: &str,
     source: io::Error,
 ) -> CommandError {
-    CommandError::SpawnFailed {
-        command: command.to_owned(),
-        source,
-    }
+    CommandError::from_reason(
+        command,
+        CommandErrorReason::SpawnFailed { source },
+        None,
+    )
 }
 
 /// Builds a process wait failure.
@@ -49,10 +51,11 @@ pub(in crate::command_runner) fn wait_failed(
     command: &str,
     source: io::Error,
 ) -> CommandError {
-    CommandError::WaitFailed {
-        command: command.to_owned(),
-        source,
-    }
+    CommandError::from_reason(
+        command,
+        CommandErrorReason::WaitFailed { source },
+        None,
+    )
 }
 
 /// Builds a timed-out process kill failure.
@@ -74,12 +77,15 @@ pub(in crate::command_runner) fn kill_failed(
     process_tree_source: io::Error,
     child_source: io::Error,
 ) -> CommandError {
-    CommandError::KillFailed {
+    CommandError::from_reason(
         command,
-        timeout,
-        process_tree_source,
-        child_source,
-    }
+        CommandErrorReason::KillFailed {
+            timeout,
+            process_tree_source,
+            child_source,
+        },
+        None,
+    )
 }
 
 /// Builds an internal missing-pipe error.
@@ -98,13 +104,15 @@ pub(in crate::command_runner) fn output_pipe_error(
     command: &str,
     stream: OutputStream,
 ) -> CommandError {
-    CommandError::ReadOutputFailed {
-        command: command.to_owned(),
-        stream,
-        source: io::Error::other(format!(
-            "{} pipe was not created",
-            stream.as_str()
-        )),
-        output: None,
-    }
+    CommandError::from_reason(
+        command,
+        CommandErrorReason::ReadOutputFailed {
+            stream,
+            source: io::Error::other(format!(
+                "{} pipe was not created",
+                stream.as_str()
+            )),
+        },
+        None,
+    )
 }

@@ -8,6 +8,7 @@
 // qubit-style: allow coverage-cfg
 //! Coverage-only probes for internal command-runner failure paths.
 
+use std::error::Error;
 use std::fs::OpenOptions;
 use std::io;
 use std::io::Cursor;
@@ -59,9 +60,180 @@ use super::internal::stdin_pipe::write_stdin_bytes;
 use super::internal::stdin_writer::StdinWriter;
 use super::start_output_reader;
 use super::take_output_pipe;
+use crate::CommandCleanupFailure;
 use crate::CommandError;
+use crate::CommandErrorReason;
+use crate::CommandOutput;
 use crate::OutputStream;
 use crate::command_stdin::CommandStdin;
+
+/// Exercises the public error container and every primary reason formatter.
+fn probe_error_container() {
+    let io_error = || io::Error::other("coverage error source");
+    let reasons = vec![
+        CommandErrorReason::SpawnFailed { source: io_error() },
+        CommandErrorReason::WaitFailed { source: io_error() },
+        CommandErrorReason::CancelledBeforeStart,
+        CommandErrorReason::KillFailed {
+            timeout: Duration::from_secs(1),
+            process_tree_source: io_error(),
+            child_source: io_error(),
+        },
+        CommandErrorReason::ReadOutputFailed {
+            stream: OutputStream::Stdout,
+            source: io_error(),
+        },
+        CommandErrorReason::OpenInputFailed {
+            path: "input".into(),
+            source: io_error(),
+        },
+        CommandErrorReason::NonRegularInputFile {
+            path: "input".into(),
+        },
+        CommandErrorReason::OpenOutputFailed {
+            stream: OutputStream::Stdout,
+            path: "output".into(),
+            source: io_error(),
+        },
+        CommandErrorReason::NonRegularOutputFile {
+            stream: OutputStream::Stderr,
+            path: "output".into(),
+        },
+        CommandErrorReason::InputOutputConflict {
+            input_path: "input".into(),
+            output_stream: OutputStream::Stdout,
+            output_path: "output".into(),
+        },
+        CommandErrorReason::OutputFilesConflict {
+            stdout_path: "stdout".into(),
+            stderr_path: "stderr".into(),
+        },
+        CommandErrorReason::InspectIoFileFailed {
+            path: "output".into(),
+            source: io_error(),
+        },
+        CommandErrorReason::StartInputThreadFailed { source: io_error() },
+        CommandErrorReason::StartOutputThreadFailed {
+            stream: OutputStream::Stderr,
+            source: io_error(),
+        },
+        CommandErrorReason::TimeFailed {
+            source: TimeError::TimerUnavailable {
+                source: TimerUnavailableError::BackendUnavailable {
+                    backend: "coverage",
+                    source: Box::new(io_error()),
+                },
+            },
+        },
+        CommandErrorReason::WriteInputFailed { source: io_error() },
+        CommandErrorReason::WriteOutputFailed {
+            stream: OutputStream::Stdout,
+            path: "output".into(),
+            source: io_error(),
+        },
+        CommandErrorReason::TimedOut {
+            timeout: Duration::from_secs(1),
+        },
+        CommandErrorReason::Cancelled,
+        CommandErrorReason::CancelFailed {
+            process_tree_source: io_error(),
+            child_source: io_error(),
+        },
+        CommandErrorReason::OutputTruncated,
+        CommandErrorReason::UnexpectedExit {
+            exit_code: Some(9),
+            expected: vec![0],
+        },
+    ];
+
+    for reason in reasons {
+        let error = CommandError::from_reason("probe command", reason, None);
+        let _ = error.kind();
+        let _ = error.reason();
+        let _ = error.output();
+        let _ = error.cleanup_failures();
+        let _ = error.exit_code();
+        let _ = error.is_unexpected_exit();
+        let _ = error.process_tree_source();
+        let _ = error.child_source();
+        let _ = error.source();
+        let _ = error.to_string();
+        let _ = format!("{error:?}");
+    }
+
+    let output = CommandOutput::new(
+        ProcessCommand::new("true")
+            .status()
+            .expect("coverage output process should exit"),
+        (b"stdout".to_vec(), false, true),
+        (b"stderr".to_vec(), false, true),
+        Duration::from_secs(1),
+    );
+    let unexpected = CommandError::from_reason(
+        "probe command",
+        CommandErrorReason::UnexpectedExit {
+            exit_code: Some(9),
+            expected: vec![0],
+        },
+        Some(Box::new(output)),
+    );
+    assert_eq!(unexpected.exit_code(), Some(9));
+    let _ = unexpected.to_string();
+
+    let cleanup = CommandError::from_reason(
+        "probe command",
+        CommandErrorReason::Cancelled,
+        None,
+    )
+    .with_cleanup_failures([
+        CommandCleanupFailure::Wait { source: io_error() },
+        CommandCleanupFailure::ProcessTreeTermination { source: io_error() },
+        CommandCleanupFailure::ChildTermination { source: io_error() },
+        CommandCleanupFailure::Stdin { source: io_error() },
+        CommandCleanupFailure::StdoutRead { source: io_error() },
+        CommandCleanupFailure::StdoutWrite {
+            path: "stdout".into(),
+            source: io_error(),
+        },
+        CommandCleanupFailure::StderrRead { source: io_error() },
+        CommandCleanupFailure::StderrWrite {
+            path: "stderr".into(),
+            source: io_error(),
+        },
+    ]);
+    assert_eq!(cleanup.cleanup_failures().len(), 8);
+    assert!(cleanup.process_tree_source().is_some());
+    assert!(cleanup.child_source().is_some());
+    assert!(cleanup.to_string().contains("8 cleanup failure(s)"));
+
+    let _ = CommandError::from_reason(
+        "probe command",
+        CommandErrorReason::WriteInputFailed { source: io_error() },
+        None,
+    )
+    .into_cleanup_failure();
+    for stream in [OutputStream::Stdout, OutputStream::Stderr] {
+        let _ = CommandError::from_reason(
+            "probe command",
+            CommandErrorReason::ReadOutputFailed {
+                stream,
+                source: io_error(),
+            },
+            None,
+        )
+        .into_cleanup_failure();
+        let _ = CommandError::from_reason(
+            "probe command",
+            CommandErrorReason::WriteOutputFailed {
+                stream,
+                path: "output".into(),
+                source: io_error(),
+            },
+            None,
+        )
+        .into_cleanup_failure();
+    }
+}
 
 mod internal;
 
@@ -125,7 +297,7 @@ fn probe_nonblocking_special_file_open() {
         .expect("nonblocking FIFO input open should return immediately");
     assert!(matches!(
         ensure_regular_input_handle("command", &fifo_path, &input),
-        Err(CommandError::NonRegularInputFile { .. })
+        Err(error) if error.kind() == crate::CommandErrorKind::NonRegularInputFile
     ));
 
     let output = open_output_candidate(&fifo_path)
@@ -137,7 +309,7 @@ fn probe_nonblocking_special_file_open() {
             &fifo_path,
             &output,
         ),
-        Err(CommandError::NonRegularOutputFile { .. })
+        Err(error) if error.kind() == crate::CommandErrorKind::NonRegularOutputFile
     ));
 
     drop(output);
@@ -148,6 +320,8 @@ fn probe_nonblocking_special_file_open() {
 /// Executes deterministic coverage probes for internal error and I/O paths.
 #[doc(hidden)]
 pub fn __coverage_internal() {
+    probe_error_container();
+
     #[cfg(unix)]
     probe_nonblocking_special_file_open();
 
@@ -157,16 +331,16 @@ pub fn __coverage_internal() {
     assert!(default_captured.complete);
 
     let spawn = spawn_failed("spawn", io::Error::other("spawn source"));
-    assert!(matches!(spawn, CommandError::SpawnFailed { .. }));
+    assert_eq!(spawn.kind(), crate::CommandErrorKind::SpawnFailed);
     let wait = wait_failed("wait", io::Error::other("wait source"));
-    assert!(matches!(wait, CommandError::WaitFailed { .. }));
+    assert_eq!(wait.kind(), crate::CommandErrorKind::WaitFailed);
     let kill = kill_failed(
         "kill".to_owned(),
         Duration::from_secs(3),
         io::Error::other("kill source"),
         io::Error::other("child kill source"),
     );
-    assert!(matches!(kill, CommandError::KillFailed { .. }));
+    assert_eq!(kill.kind(), crate::CommandErrorKind::KillFailed);
     let pipe = output_pipe_error("pipe", OutputStream::Stdout);
     assert!(pipe.to_string().contains("stdout pipe was not created"));
     assert_eq!(
@@ -183,7 +357,7 @@ pub fn __coverage_internal() {
         std::process::id(),
     ));
     let mut prepare_command = ProcessCommand::new("true");
-    IoFiles::prepare(
+    let mut io_files = IoFiles::prepare(
         "command",
         CommandStdin::Null,
         Some(&stdout_path),
@@ -191,6 +365,14 @@ pub fn __coverage_internal() {
         &mut prepare_command,
     )
     .expect("coverage output files should prepare");
+    io_files
+        .commit(
+            "command",
+            Some(&stdout_path),
+            Some(&stderr_path),
+            &mut prepare_command,
+        )
+        .expect("coverage output files should commit");
     std::fs::remove_file(stdout_path)
         .expect("coverage stdout fixture should be removed");
     std::fs::remove_file(stderr_path)
@@ -215,10 +397,10 @@ pub fn __coverage_internal() {
     )
     .expect_err("coverage truncation failure should be injected");
     __coverage_fail_truncate(false);
-    assert!(matches!(
-        truncate_error,
-        CommandError::OpenOutputFailed { .. }
-    ));
+    assert_eq!(
+        truncate_error.kind(),
+        crate::CommandErrorKind::OpenOutputFailed
+    );
     drop(truncate_file);
     std::fs::remove_file(truncate_path)
         .expect("coverage fixture should be removed");
@@ -229,44 +411,38 @@ pub fn __coverage_internal() {
         || None,
     )
     .expect_err("coverage missing stdout pipe should be reported");
-    assert!(matches!(
-        missing_stdout,
-        CommandError::ReadOutputFailed { .. }
-    ));
+    assert_eq!(
+        missing_stdout.kind(),
+        crate::CommandErrorKind::ReadOutputFailed
+    );
     let missing_stderr = take_output_pipe::<std::process::ChildStderr>(
         "command",
         OutputStream::Stderr,
         || None,
     )
     .expect_err("coverage missing stderr pipe should be reported");
-    assert!(matches!(
-        missing_stderr,
-        CommandError::ReadOutputFailed { .. }
-    ));
+    assert_eq!(
+        missing_stderr.kind(),
+        crate::CommandErrorKind::ReadOutputFailed
+    );
     let stdout_thread =
         start_output_reader("command", OutputStream::Stdout, || {
             Err(io::Error::other("coverage stdout thread failure"))
         })
         .expect_err("coverage stdout thread failure should be mapped");
-    assert!(matches!(
-        stdout_thread,
-        CommandError::StartOutputThreadFailed {
-            stream: OutputStream::Stdout,
-            ..
-        }
-    ));
+    assert_eq!(
+        stdout_thread.kind(),
+        crate::CommandErrorKind::StartOutputThreadFailed
+    );
     let stderr_thread =
         start_output_reader("command", OutputStream::Stderr, || {
             Err(io::Error::other("coverage stderr thread failure"))
         })
         .expect_err("coverage stderr thread failure should be mapped");
-    assert!(matches!(
-        stderr_thread,
-        CommandError::StartOutputThreadFailed {
-            stream: OutputStream::Stderr,
-            ..
-        }
-    ));
+    assert_eq!(
+        stderr_thread.kind(),
+        crate::CommandErrorKind::StartOutputThreadFailed
+    );
 
     let mut output_child = ProcessCommand::new("rustc")
         .arg("--version")
@@ -374,7 +550,7 @@ pub fn __coverage_internal() {
         None,
     )
     .expect_err("coverage elapsed failure should take precedence");
-    assert!(matches!(elapsed_error, CommandError::TimeFailed { .. }));
+    assert_eq!(elapsed_error.kind(), crate::CommandErrorKind::TimeFailed);
 
     let stdout_error = collect_output(
         "command",
@@ -397,8 +573,8 @@ pub fn __coverage_internal() {
     )
     .expect_err("coverage stdout failure should be mapped");
     assert!(matches!(
-        &stdout_error,
-        CommandError::ReadOutputFailed {
+        stdout_error.reason(),
+        crate::CommandErrorReason::ReadOutputFailed {
             stream: OutputStream::Stdout,
             ..
         }
@@ -432,8 +608,8 @@ pub fn __coverage_internal() {
     )
     .expect_err("coverage stderr failure should be mapped");
     assert!(matches!(
-        &stderr_error,
-        CommandError::ReadOutputFailed {
+        stderr_error.reason(),
+        crate::CommandErrorReason::ReadOutputFailed {
             stream: OutputStream::Stderr,
             ..
         }
@@ -461,10 +637,9 @@ pub fn __coverage_internal() {
     )
     .expect_err("coverage stdout tee failure should be mapped");
     assert!(matches!(
-        stdout_tee_error,
-        CommandError::WriteOutputFailed {
+        stdout_tee_error.reason(),
+        crate::CommandErrorReason::WriteOutputFailed {
             stream: OutputStream::Stdout,
-            output: Some(_),
             ..
         }
     ));
@@ -491,10 +666,9 @@ pub fn __coverage_internal() {
     )
     .expect_err("coverage stderr tee failure should be mapped");
     assert!(matches!(
-        stderr_tee_error,
-        CommandError::WriteOutputFailed {
+        stderr_tee_error.reason(),
+        crate::CommandErrorReason::WriteOutputFailed {
             stream: OutputStream::Stderr,
-            output: Some(_),
             ..
         }
     ));
@@ -518,7 +692,10 @@ pub fn __coverage_internal() {
         })),
     )
     .expect_err("coverage stdin failure should be returned");
-    assert!(matches!(stdin_error, CommandError::WriteInputFailed { .. }));
+    assert_eq!(
+        stdin_error.kind(),
+        crate::CommandErrorKind::WriteInputFailed
+    );
     let stdin_output = stdin_error
         .output()
         .expect("stdin failure should retain completed output");
@@ -584,10 +761,10 @@ pub fn __coverage_internal() {
     let missing_stdin =
         write_stdin_bytes("command", &mut no_pipe, Some(b"input".to_vec()))
             .expect_err("coverage missing stdin pipe should be reported");
-    assert!(matches!(
-        missing_stdin,
-        CommandError::WriteInputFailed { .. }
-    ));
+    assert_eq!(
+        missing_stdin.kind(),
+        crate::CommandErrorKind::WriteInputFailed
+    );
     no_pipe.wait().expect("coverage child should be waitable");
 
     let mut piped = ProcessCommand::new("rustc")
@@ -618,10 +795,10 @@ pub fn __coverage_internal() {
         write_stdin_bytes("command", &mut injected, Some(b"input".to_vec()))
             .expect_err("coverage stdin thread failure should be injected");
     __coverage_fail_stdin_thread(false);
-    assert!(matches!(
-        injected_error,
-        CommandError::StartInputThreadFailed { .. }
-    ));
+    assert_eq!(
+        injected_error.kind(),
+        crate::CommandErrorKind::StartInputThreadFailed
+    );
     injected.kill().expect("injected child should be stoppable");
     injected.wait().expect("injected child should be waitable");
     let mapped_stdin_error = map_stdin_thread_result(
@@ -629,10 +806,10 @@ pub fn __coverage_internal() {
         Err(io::Error::other("coverage thread start failure")),
     )
     .expect_err("coverage thread start mapping should preserve the error");
-    assert!(matches!(
-        mapped_stdin_error,
-        CommandError::StartInputThreadFailed { .. }
-    ));
+    assert_eq!(
+        mapped_stdin_error.kind(),
+        crate::CommandErrorKind::StartInputThreadFailed
+    );
 
     join_stdin_writer(
         "command",
@@ -648,10 +825,10 @@ pub fn __coverage_internal() {
         })),
     )
     .expect_err("coverage stdin failure should be mapped");
-    assert!(matches!(
-        stdin_write_error,
-        CommandError::WriteInputFailed { .. }
-    ));
+    assert_eq!(
+        stdin_write_error.kind(),
+        crate::CommandErrorKind::WriteInputFailed
+    );
     let stdin_panic = join_stdin_writer(
         "command",
         Some(stdin_writer(|| -> io::Result<()> {
@@ -659,7 +836,10 @@ pub fn __coverage_internal() {
         })),
     )
     .expect_err("coverage stdin panic should be mapped");
-    assert!(matches!(stdin_panic, CommandError::WriteInputFailed { .. }));
+    assert_eq!(
+        stdin_panic.kind(),
+        crate::CommandErrorKind::WriteInputFailed
+    );
     join_stdin_writer("command", None)
         .expect("coverage absent writer should be accepted");
 

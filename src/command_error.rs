@@ -5,334 +5,32 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+//! Public command execution error container.
+
+use std::error::Error;
 use std::fmt;
 use std::io;
-use std::path::PathBuf;
-use std::time::Duration;
 
-use qubit_clock::TimeError;
-use thiserror::Error;
-
+use crate::CommandCleanupFailure;
+use crate::CommandErrorKind;
+use crate::CommandErrorReason;
 use crate::CommandOutput;
 use crate::OutputStream;
 
 /// Error returned while preparing, spawning, waiting for, or collecting a
 /// command.
-///
-/// This enum is non-exhaustive; downstream matches must retain a wildcard arm
-/// so future process and platform failures can be represented without another
-/// breaking change.
-#[derive(Error)]
-#[non_exhaustive]
-pub enum CommandError {
-    /// The process could not be spawned.
-    #[error("failed to spawn command `{command}`: {source}")]
-    SpawnFailed {
-        /// Human-readable command representation.
-        command: String,
-        /// I/O error reported by the operating system.
-        source: io::Error,
-    },
-
-    /// Waiting for process completion failed.
-    #[error("failed to wait for command `{command}`: {source}")]
-    WaitFailed {
-        /// Human-readable command representation.
-        command: String,
-        /// I/O error reported while waiting for the child process.
-        source: io::Error,
-    },
-
-    /// Cancellation was requested before the command was prepared or started.
-    #[error("command `{command}` was cancelled before it started")]
-    CancelledBeforeStart {
-        /// Human-readable command representation.
-        command: String,
-    },
-
-    /// The process could not be killed after exceeding the configured timeout.
-    #[error(
-        "failed to terminate timed-out command `{command}` after {timeout:?}; process-tree source: {process_tree_source}; child source: {child_source}"
-    )]
-    KillFailed {
-        /// Human-readable command representation.
-        command: String,
-        /// Timeout that was exceeded.
-        timeout: Duration,
-        /// I/O error reported while killing the process tree.
-        #[source]
-        process_tree_source: io::Error,
-        /// I/O error reported while killing the direct child process.
-        child_source: io::Error,
-    },
-
-    /// Reading one of the captured output streams failed.
-    #[error("failed to read {stream} for command `{command}`: {source}")]
-    ReadOutputFailed {
-        /// Human-readable command representation.
-        command: String,
-        /// Stream whose reader failed.
-        stream: OutputStream,
-        /// I/O error reported while reading the stream.
-        source: io::Error,
-        /// Output retained before the read failure, when collection state was
-        /// available to assemble.
-        output: Option<Box<CommandOutput>>,
-    },
-
-    /// Opening a stdin file failed.
-    #[error(
-        "failed to open stdin file `<redacted path>` for command `{command}`: {source}"
-    )]
-    OpenInputFailed {
-        /// Human-readable command representation.
-        command: String,
-        /// Path that could not be opened.
-        path: PathBuf,
-        /// I/O error reported while opening the file.
-        source: io::Error,
-    },
-
-    /// The configured stdin path does not identify an ordinary file.
-    #[error(
-        "stdin path `<redacted path>` for command `{command}` is not an ordinary file"
-    )]
-    NonRegularInputFile {
-        /// Human-readable command representation.
-        command: String,
-        /// Configured stdin path.
-        path: PathBuf,
-    },
-
-    /// Opening an output redirection file failed.
-    #[error(
-        "failed to open {stream} file `<redacted path>` for command `{command}`: {source}"
-    )]
-    OpenOutputFailed {
-        /// Human-readable command representation.
-        command: String,
-        /// Stream whose file could not be opened.
-        stream: OutputStream,
-        /// Path that could not be opened.
-        path: PathBuf,
-        /// I/O error reported while opening the file.
-        source: io::Error,
-    },
-
-    /// The configured output tee path does not identify an ordinary file.
-    #[error(
-        "{stream} path `<redacted path>` for command `{command}` is not an ordinary file"
-    )]
-    NonRegularOutputFile {
-        /// Human-readable command representation.
-        command: String,
-        /// Output stream receiving the tee.
-        stream: OutputStream,
-        /// Configured output tee path.
-        path: PathBuf,
-    },
-
-    /// An input file and one output tee identify the same file.
-    #[error(
-        "stdin file '<redacted path>' conflicts with {output_stream} file '<redacted path>' for command '{command}'"
-    )]
-    InputOutputConflict {
-        /// Human-readable command representation.
-        command: String,
-        /// Configured stdin file path.
-        input_path: PathBuf,
-        /// Output stream whose tee file conflicts with stdin.
-        output_stream: OutputStream,
-        /// Configured output tee path.
-        output_path: PathBuf,
-    },
-
-    /// Stdout and stderr tee paths identify the same file.
-    #[error(
-        "stdout file '<redacted path>' conflicts with stderr file '<redacted path>' for command '{command}'"
-    )]
-    OutputFilesConflict {
-        /// Human-readable command representation.
-        command: String,
-        /// Configured stdout tee path.
-        stdout_path: PathBuf,
-        /// Configured stderr tee path.
-        stderr_path: PathBuf,
-    },
-
-    /// Inspecting an I/O file for conflict detection failed.
-    #[error(
-        "failed to inspect I/O file '<redacted path>' for command '{command}': {source}"
-    )]
-    InspectIoFileFailed {
-        /// Human-readable command representation.
-        command: String,
-        /// Configured I/O file path.
-        path: PathBuf,
-        /// I/O error reported while resolving or inspecting the file.
-        source: io::Error,
-    },
-
-    /// Starting the helper thread that writes stdin failed.
-    #[error("failed to start stdin writer for command '{command}': {source}")]
-    StartInputThreadFailed {
-        /// Human-readable command representation.
-        command: String,
-        /// I/O error reported while creating the helper thread.
-        source: io::Error,
-    },
-
-    /// Starting a helper thread that reads captured output failed.
-    #[error(
-        "failed to start {stream} reader for command '{command}': {source}"
-    )]
-    StartOutputThreadFailed {
-        /// Human-readable command representation.
-        command: String,
-        /// Output stream whose helper thread could not be started.
-        stream: OutputStream,
-        /// I/O error reported while creating the helper thread.
-        source: io::Error,
-    },
-
-    /// Monotonic time measurement or sleeping failed.
-    #[error("time handling failed for command '{command}': {source}")]
-    TimeFailed {
-        /// Human-readable command representation.
-        command: String,
-        /// Timer or monotonic-clock error.
-        source: TimeError,
-    },
-
-    /// Writing configured stdin bytes failed.
-    #[error("failed to write stdin for command `{command}`: {source}")]
-    WriteInputFailed {
-        /// Human-readable command representation.
-        command: String,
-        /// I/O error reported while writing stdin.
-        source: io::Error,
-        /// Output retained before the stdin writer failure, when available.
-        output: Option<Box<CommandOutput>>,
-    },
-
-    /// Writing captured output to a redirection file failed.
-    #[error(
-        "failed to write {stream} for command `{command}` to `<redacted path>`: {source}"
-    )]
-    WriteOutputFailed {
-        /// Human-readable command representation.
-        command: String,
-        /// Stream whose redirected writer failed.
-        stream: OutputStream,
-        /// Path that could not be written.
-        path: PathBuf,
-        /// I/O error reported while writing the file.
-        source: io::Error,
-        /// Output retained while draining the stream after the tee writer
-        /// failed, when available.
-        output: Option<Box<CommandOutput>>,
-    },
-
-    /// The command exceeded the configured timeout and was terminated.
-    #[error("command `{command}` timed out after {timeout:?}")]
-    TimedOut {
-        /// Human-readable command representation.
-        command: String,
-        /// Timeout that was exceeded.
-        timeout: Duration,
-        /// Output captured before the terminated process and I/O cleanup
-        /// cutoff. It can omit bytes held by escaped descendants or blocked
-        /// output helpers.
-        output: Box<CommandOutput>,
-    },
-
-    /// The command was cancelled and its managed process tree was terminated.
-    #[error("command `{command}` was cancelled")]
-    Cancelled {
-        /// Human-readable command representation.
-        command: String,
-        /// Output captured before the terminated process and I/O cleanup
-        /// cutoff. It can omit bytes held by escaped descendants or blocked
-        /// output helpers.
-        output: Box<CommandOutput>,
-    },
-
-    /// Cancelling the managed process tree failed.
-    #[error(
-        "failed to cancel command `{command}`; process-tree source: {process_tree_source}; child source: {child_source}"
-    )]
-    CancelFailed {
-        /// Human-readable command representation.
-        command: String,
-        /// I/O error reported while cancelling the process tree.
-        #[source]
-        process_tree_source: io::Error,
-        /// I/O error reported while cancelling the direct child process.
-        child_source: io::Error,
-    },
-
-    /// The command succeeded, but its captured output was truncated.
-    #[error(
-        "command `{command}` completed successfully, but captured output was truncated"
-    )]
-    OutputTruncated {
-        /// Human-readable command representation.
-        command: String,
-        /// Partially retained output from the successful command.
-        output: Box<CommandOutput>,
-    },
-
-    /// The command completed with a status not configured as successful.
-    #[error(
-        "command `{command}` exited with {}; expected one of {expected:?}",
-        unexpected_exit_detail(.exit_code, .output.as_ref())
-    )]
-    UnexpectedExit {
-        /// Human-readable command representation.
-        command: String,
-        /// Exit code reported by the process, if available.
-        exit_code: Option<i32>,
-        /// Configured successful exit codes.
-        expected: Vec<i32>,
-        /// Captured output from the failed command.
-        output: Box<CommandOutput>,
-    },
-}
-
-/// Formats the observed termination detail for an unexpected command exit.
-///
-/// # Parameters
-///
-/// * `exit_code` - Numeric exit code reported by the process, if available.
-/// * `output` - Captured command status and output metadata.
-///
-/// # Returns
-///
-/// A diagnostic that reports the Unix termination signal when available, or
-/// preserves the numeric exit-code representation on other platforms.
-fn unexpected_exit_detail(
-    exit_code: &Option<i32>,
-    output: &CommandOutput,
-) -> String {
-    #[cfg(unix)]
-    if let Some(signal) = output.termination_signal() {
-        return format!("signal {signal}");
-    }
-    #[cfg(not(unix))]
-    let _ = output;
-    format!("code {exit_code:?}")
+pub struct CommandError {
+    /// Human-readable, redacted command representation.
+    command: String,
+    /// Primary failure reason.
+    reason: CommandErrorReason,
+    /// Output retained before the primary failure, when available.
+    output: Option<Box<CommandOutput>>,
+    /// Failures observed while cleaning up after the primary failure.
+    cleanup_failures: Vec<CommandCleanupFailure>,
 }
 
 impl fmt::Debug for CommandError {
-    /// Formats the error without exposing retained I/O path fields.
-    ///
-    /// # Parameters
-    ///
-    /// * `formatter` - Destination formatter.
-    ///
-    /// # Returns
-    ///
-    /// Formatting result after rendering the redacted error message.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CommandError")
@@ -342,136 +40,412 @@ impl fmt::Debug for CommandError {
 }
 
 impl CommandError {
-    /// Returns captured command output when this error carries it.
-    ///
-    /// # Returns
-    ///
-    /// `Some(output)` when the error retained timeout, cancellation,
-    /// truncation, unexpected-exit, tee-write, output-read, or final stdin
-    /// write output; otherwise `None`.
-    #[inline(always)]
-    pub const fn output(&self) -> Option<&CommandOutput> {
-        match self {
-            Self::TimedOut { output, .. }
-            | Self::Cancelled { output, .. }
-            | Self::OutputTruncated { output, .. }
-            | Self::UnexpectedExit { output, .. } => Some(output),
-            Self::WriteOutputFailed {
-                output: Some(output),
-                ..
-            } => Some(output),
-            Self::ReadOutputFailed {
-                output: Some(output),
-                ..
+    /// Creates an error from a primary reason and optional captured output.
+    #[inline]
+    pub(crate) fn from_reason(
+        command: impl Into<String>,
+        reason: CommandErrorReason,
+        output: Option<Box<CommandOutput>>,
+    ) -> Self {
+        Self {
+            command: command.into(),
+            reason,
+            output,
+            cleanup_failures: Vec::new(),
+        }
+    }
+
+    /// Adds all cleanup failures observed after the primary error.
+    #[inline]
+    pub(crate) fn with_cleanup_failures(
+        mut self,
+        cleanup_failures: impl IntoIterator<Item = CommandCleanupFailure>,
+    ) -> Self {
+        self.cleanup_failures.extend(cleanup_failures);
+        self
+    }
+
+    /// Converts a helper error into its cleanup representation.
+    pub(crate) fn into_cleanup_failure(self) -> Option<CommandCleanupFailure> {
+        match self.reason {
+            CommandErrorReason::WriteInputFailed { source } => {
+                Some(CommandCleanupFailure::Stdin { source })
             }
-            | Self::WriteInputFailed {
-                output: Some(output),
-                ..
-            } => Some(output),
+            CommandErrorReason::ReadOutputFailed { stream, source } => {
+                match stream {
+                    OutputStream::Stdout => {
+                        Some(CommandCleanupFailure::StdoutRead { source })
+                    }
+                    OutputStream::Stderr => {
+                        Some(CommandCleanupFailure::StderrRead { source })
+                    }
+                }
+            }
+            CommandErrorReason::WriteOutputFailed {
+                stream,
+                path,
+                source,
+            } => match stream {
+                OutputStream::Stdout => {
+                    Some(CommandCleanupFailure::StdoutWrite { path, source })
+                }
+                OutputStream::Stderr => {
+                    Some(CommandCleanupFailure::StderrWrite { path, source })
+                }
+            },
             _ => None,
         }
     }
 
-    /// Consumes this error and returns captured output when it is available.
-    ///
-    /// # Returns
-    ///
-    /// `Some(output)` when the error retained timeout, cancellation,
-    /// truncation, unexpected-exit, tee-write, output-read, or final stdin
-    /// write output; otherwise `None`.
-    #[must_use]
-    #[inline(always)]
-    pub fn into_output(self) -> Option<CommandOutput> {
-        match self {
-            Self::TimedOut { output, .. }
-            | Self::Cancelled { output, .. }
-            | Self::OutputTruncated { output, .. }
-            | Self::UnexpectedExit { output, .. } => Some(*output),
-            Self::WriteOutputFailed {
-                output: Some(output),
-                ..
-            } => Some(*output),
-            Self::ReadOutputFailed {
-                output: Some(output),
-                ..
-            }
-            | Self::WriteInputFailed {
-                output: Some(output),
-                ..
-            } => Some(*output),
-            _ => None,
-        }
-    }
-
-    /// Returns the command string associated with this error.
-    ///
-    /// # Returns
-    ///
-    /// A human-readable command representation used in diagnostics.
+    /// Returns the redacted command representation.
     #[must_use]
     #[inline(always)]
     pub fn command(&self) -> &str {
-        match self {
-            Self::SpawnFailed { command, .. }
-            | Self::WaitFailed { command, .. }
-            | Self::CancelledBeforeStart { command, .. }
-            | Self::KillFailed { command, .. }
-            | Self::CancelFailed { command, .. }
-            | Self::ReadOutputFailed { command, .. }
-            | Self::OpenInputFailed { command, .. }
-            | Self::NonRegularInputFile { command, .. }
-            | Self::OpenOutputFailed { command, .. }
-            | Self::NonRegularOutputFile { command, .. }
-            | Self::InputOutputConflict { command, .. }
-            | Self::OutputFilesConflict { command, .. }
-            | Self::InspectIoFileFailed { command, .. }
-            | Self::StartInputThreadFailed { command, .. }
-            | Self::StartOutputThreadFailed { command, .. }
-            | Self::TimeFailed { command, .. }
-            | Self::WriteInputFailed { command, .. }
-            | Self::WriteOutputFailed { command, .. }
-            | Self::TimedOut { command, .. }
-            | Self::Cancelled { command, .. }
-            | Self::OutputTruncated { command, .. }
-            | Self::UnexpectedExit { command, .. } => command,
+        &self.command
+    }
+
+    /// Returns the stable, data-free error category.
+    #[must_use]
+    #[inline(always)]
+    pub fn kind(&self) -> CommandErrorKind {
+        (&self.reason).into()
+    }
+
+    /// Returns the detailed primary failure reason.
+    #[must_use]
+    #[inline(always)]
+    pub fn reason(&self) -> &CommandErrorReason {
+        &self.reason
+    }
+
+    /// Returns captured output retained by the primary failure.
+    #[must_use]
+    #[inline(always)]
+    pub fn output(&self) -> Option<&CommandOutput> {
+        self.output.as_deref()
+    }
+
+    /// Consumes the error and returns captured output, when available.
+    #[must_use]
+    #[inline(always)]
+    pub fn into_output(self) -> Option<CommandOutput> {
+        self.output.map(|output| *output)
+    }
+
+    /// Returns every cleanup failure observed after the primary failure.
+    #[must_use]
+    #[inline(always)]
+    pub fn cleanup_failures(&self) -> &[CommandCleanupFailure] {
+        &self.cleanup_failures
+    }
+
+    /// Returns the process exit code when one was observed.
+    #[must_use]
+    #[inline]
+    pub fn exit_code(&self) -> Option<i32> {
+        match &self.reason {
+            CommandErrorReason::UnexpectedExit { exit_code, .. } => *exit_code,
+            _ => self.output.as_deref().and_then(CommandOutput::exit_code),
         }
     }
 
-    /// Returns the process-tree failure carried by a termination error.
-    ///
-    /// # Returns
-    ///
-    /// `Some(source)` for [`Self::KillFailed`] and [`Self::CancelFailed`], or
-    /// `None` for errors that do not represent a two-stage termination failure.
+    /// Returns whether this is an unexpected process exit.
     #[must_use]
     #[inline(always)]
+    pub fn is_unexpected_exit(&self) -> bool {
+        matches!(self.kind(), CommandErrorKind::UnexpectedExit)
+    }
+
+    /// Returns the process-tree source from the primary or cleanup failures.
+    #[must_use]
     pub fn process_tree_source(&self) -> Option<&io::Error> {
-        match self {
-            Self::KillFailed {
+        if let CommandErrorReason::KillFailed {
+            process_tree_source,
+            ..
+        }
+        | CommandErrorReason::CancelFailed {
+            process_tree_source,
+            ..
+        } = &self.reason
+        {
+            return Some(process_tree_source);
+        }
+        self.cleanup_failures
+            .iter()
+            .find_map(|failure| match failure {
+                CommandCleanupFailure::ProcessTreeTermination { source } => {
+                    Some(source)
+                }
+                _ => None,
+            })
+    }
+
+    /// Returns the direct-child termination source from the primary or cleanup
+    /// failures.
+    #[must_use]
+    pub fn child_source(&self) -> Option<&io::Error> {
+        if let CommandErrorReason::KillFailed { child_source, .. }
+        | CommandErrorReason::CancelFailed { child_source, .. } =
+            &self.reason
+        {
+            return Some(child_source);
+        }
+        self.cleanup_failures
+            .iter()
+            .find_map(|failure| match failure {
+                CommandCleanupFailure::ChildTermination { source } => {
+                    Some(source)
+                }
+                _ => None,
+            })
+    }
+}
+
+impl fmt::Display for CommandError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let command = &self.command;
+        match (&self.reason, self.output.as_deref()) {
+            (CommandErrorReason::SpawnFailed { source }, _) => {
+                write!(
+                    formatter,
+                    "failed to spawn command `{command}`: {source}"
+                )
+            }
+            (CommandErrorReason::WaitFailed { source }, _) => {
+                write!(
+                    formatter,
+                    "failed to wait for command `{command}`: {source}"
+                )
+            }
+            (CommandErrorReason::CancelledBeforeStart, _) => {
+                write!(
+                    formatter,
+                    "command `{command}` was cancelled before it started"
+                )
+            }
+            (
+                CommandErrorReason::KillFailed {
+                    timeout,
+                    process_tree_source,
+                    child_source,
+                },
+                _,
+            ) => write!(
+                formatter,
+                "failed to terminate timed-out command `{command}` after {timeout:?}; process-tree source: {process_tree_source}; child source: {child_source}"
+            ),
+            (CommandErrorReason::ReadOutputFailed { stream, source }, _) => {
+                write!(
+                    formatter,
+                    "failed to read {stream} for command `{command}`: {source}"
+                )
+            }
+            (CommandErrorReason::OpenInputFailed { source, .. }, _) => write!(
+                formatter,
+                "failed to open stdin file `<redacted path>` for command `{command}`: {source}"
+            ),
+            (CommandErrorReason::NonRegularInputFile { .. }, _) => write!(
+                formatter,
+                "stdin path `<redacted path>` for command `{command}` is not an ordinary file"
+            ),
+            (
+                CommandErrorReason::OpenOutputFailed { stream, source, .. },
+                _,
+            ) => write!(
+                formatter,
+                "failed to open {stream} file `<redacted path>` for command `{command}`: {source}"
+            ),
+            (CommandErrorReason::NonRegularOutputFile { stream, .. }, _) => {
+                write!(
+                    formatter,
+                    "{stream} path `<redacted path>` for command `{command}` is not an ordinary file"
+                )
+            }
+            (
+                CommandErrorReason::InputOutputConflict {
+                    output_stream, ..
+                },
+                _,
+            ) => write!(
+                formatter,
+                "stdin file '<redacted path>' conflicts with {output_stream} file '<redacted path>' for command '{command}'"
+            ),
+            (CommandErrorReason::OutputFilesConflict { .. }, _) => write!(
+                formatter,
+                "stdout file '<redacted path>' conflicts with stderr file '<redacted path>' for command '{command}'"
+            ),
+            (CommandErrorReason::InspectIoFileFailed { source, .. }, _) => {
+                write!(
+                    formatter,
+                    "failed to inspect I/O file '<redacted path>' for command '{command}': {source}"
+                )
+            }
+            (CommandErrorReason::StartInputThreadFailed { source }, _) => {
+                write!(
+                    formatter,
+                    "failed to start stdin writer for command '{command}': {source}"
+                )
+            }
+            (
+                CommandErrorReason::StartOutputThreadFailed { stream, source },
+                _,
+            ) => write!(
+                formatter,
+                "failed to start {stream} reader for command '{command}': {source}"
+            ),
+            (CommandErrorReason::TimeFailed { source }, _) => write!(
+                formatter,
+                "time handling failed for command '{command}': {source}"
+            ),
+            (CommandErrorReason::WriteInputFailed { source }, _) => write!(
+                formatter,
+                "failed to write stdin for command `{command}`: {source}"
+            ),
+            (
+                CommandErrorReason::WriteOutputFailed {
+                    stream, source, ..
+                },
+                _,
+            ) => write!(
+                formatter,
+                "failed to write {stream} for command `{command}` to `<redacted path>`: {source}"
+            ),
+            (CommandErrorReason::TimedOut { timeout }, _) => {
+                write!(
+                    formatter,
+                    "command `{command}` timed out after {timeout:?}"
+                )
+            }
+            (CommandErrorReason::Cancelled, _) => {
+                write!(formatter, "command `{command}` was cancelled")
+            }
+            (
+                CommandErrorReason::CancelFailed {
+                    process_tree_source,
+                    child_source,
+                },
+                _,
+            ) => write!(
+                formatter,
+                "failed to cancel command `{command}`; process-tree source: {process_tree_source}; child source: {child_source}"
+            ),
+            (CommandErrorReason::OutputTruncated, _) => write!(
+                formatter,
+                "command `{command}` completed successfully, but captured output was truncated"
+            ),
+            (
+                CommandErrorReason::UnexpectedExit {
+                    exit_code,
+                    expected,
+                },
+                output,
+            ) => write!(
+                formatter,
+                "command `{command}` exited with {}; expected one of {expected:?}",
+                unexpected_exit_detail(exit_code, output),
+            ),
+        }?;
+        if !self.cleanup_failures.is_empty() {
+            write!(
+                formatter,
+                "; {} cleanup failure(s)",
+                self.cleanup_failures.len()
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl Error for CommandError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match &self.reason {
+            CommandErrorReason::SpawnFailed { source }
+            | CommandErrorReason::WaitFailed { source }
+            | CommandErrorReason::ReadOutputFailed { source, .. }
+            | CommandErrorReason::OpenInputFailed { source, .. }
+            | CommandErrorReason::OpenOutputFailed { source, .. }
+            | CommandErrorReason::InspectIoFileFailed { source, .. }
+            | CommandErrorReason::StartInputThreadFailed { source }
+            | CommandErrorReason::StartOutputThreadFailed { source, .. }
+            | CommandErrorReason::WriteInputFailed { source }
+            | CommandErrorReason::WriteOutputFailed { source, .. } => {
+                Some(source)
+            }
+            CommandErrorReason::KillFailed {
                 process_tree_source,
                 ..
             }
-            | Self::CancelFailed {
+            | CommandErrorReason::CancelFailed {
                 process_tree_source,
                 ..
             } => Some(process_tree_source),
+            CommandErrorReason::TimeFailed { source } => Some(source),
             _ => None,
         }
     }
+}
 
-    /// Returns the direct-child failure carried by a termination error.
-    ///
-    /// # Returns
-    ///
-    /// `Some(source)` for [`Self::KillFailed`] and [`Self::CancelFailed`], or
-    /// `None` for errors that do not represent a two-stage termination failure.
-    #[must_use]
-    #[inline(always)]
-    pub fn child_source(&self) -> Option<&io::Error> {
-        match self {
-            Self::KillFailed { child_source, .. }
-            | Self::CancelFailed { child_source, .. } => Some(child_source),
-            _ => None,
+impl From<&CommandErrorReason> for CommandErrorKind {
+    fn from(reason: &CommandErrorReason) -> Self {
+        match reason {
+            CommandErrorReason::SpawnFailed { .. } => Self::SpawnFailed,
+            CommandErrorReason::WaitFailed { .. } => Self::WaitFailed,
+            CommandErrorReason::CancelledBeforeStart => {
+                Self::CancelledBeforeStart
+            }
+            CommandErrorReason::KillFailed { .. } => Self::KillFailed,
+            CommandErrorReason::ReadOutputFailed { .. } => {
+                Self::ReadOutputFailed
+            }
+            CommandErrorReason::OpenInputFailed { .. } => Self::OpenInputFailed,
+            CommandErrorReason::NonRegularInputFile { .. } => {
+                Self::NonRegularInputFile
+            }
+            CommandErrorReason::OpenOutputFailed { .. } => {
+                Self::OpenOutputFailed
+            }
+            CommandErrorReason::NonRegularOutputFile { .. } => {
+                Self::NonRegularOutputFile
+            }
+            CommandErrorReason::InputOutputConflict { .. } => {
+                Self::InputOutputConflict
+            }
+            CommandErrorReason::OutputFilesConflict { .. } => {
+                Self::OutputFilesConflict
+            }
+            CommandErrorReason::InspectIoFileFailed { .. } => {
+                Self::InspectIoFileFailed
+            }
+            CommandErrorReason::StartInputThreadFailed { .. } => {
+                Self::StartInputThreadFailed
+            }
+            CommandErrorReason::StartOutputThreadFailed { .. } => {
+                Self::StartOutputThreadFailed
+            }
+            CommandErrorReason::TimeFailed { .. } => Self::TimeFailed,
+            CommandErrorReason::WriteInputFailed { .. } => {
+                Self::WriteInputFailed
+            }
+            CommandErrorReason::WriteOutputFailed { .. } => {
+                Self::WriteOutputFailed
+            }
+            CommandErrorReason::TimedOut { .. } => Self::TimedOut,
+            CommandErrorReason::Cancelled => Self::Cancelled,
+            CommandErrorReason::CancelFailed { .. } => Self::CancelFailed,
+            CommandErrorReason::OutputTruncated => Self::OutputTruncated,
+            CommandErrorReason::UnexpectedExit { .. } => Self::UnexpectedExit,
         }
     }
+}
+
+/// Formats the observed termination detail for an unexpected command exit.
+fn unexpected_exit_detail(
+    exit_code: &Option<i32>,
+    output: Option<&CommandOutput>,
+) -> String {
+    #[cfg(unix)]
+    if let Some(signal) = output.and_then(CommandOutput::termination_signal) {
+        return format!("signal {signal}");
+    }
+    format!("code {exit_code:?}")
 }

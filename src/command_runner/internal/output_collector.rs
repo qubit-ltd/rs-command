@@ -24,6 +24,7 @@ use super::output_reader::OutputReader;
 use super::stdin_pipe::join_stdin_writer;
 use super::stdin_writer::OptionalStdinWriter;
 use crate::CommandError;
+use crate::CommandErrorReason;
 use crate::CommandOutput;
 use crate::OutputStream;
 
@@ -322,10 +323,11 @@ pub(in crate::command_runner) fn collect_output_results(
 ) -> Result<CommandOutput, CommandError> {
     let elapsed = match elapsed_result {
         Err(source) => {
-            return Err(CommandError::TimeFailed {
-                command: command.to_owned(),
-                source,
-            });
+            return Err(CommandError::from_reason(
+                command,
+                CommandErrorReason::TimeFailed { source },
+                None,
+            ));
         }
         Ok(elapsed) => elapsed,
     };
@@ -363,13 +365,25 @@ pub(in crate::command_runner) fn collect_output_results(
     );
     match stdin_result {
         Ok(()) => Ok(output),
-        Err(CommandError::WriteInputFailed {
-            command, source, ..
-        }) => Err(CommandError::WriteInputFailed {
-            command,
-            source,
-            output: Some(Box::new(output)),
-        }),
+        Err(error)
+            if matches!(
+                error.kind(),
+                crate::CommandErrorKind::WriteInputFailed
+            ) =>
+        {
+            let command = error.command().to_owned();
+            let source = match error.reason() {
+                CommandErrorReason::WriteInputFailed { source } => {
+                    io::Error::new(source.kind(), source.to_string())
+                }
+                _ => io::Error::other("invalid stdin error category"),
+            };
+            Err(CommandError::from_reason(
+                command,
+                CommandErrorReason::WriteInputFailed { source },
+                Some(Box::new(output)),
+            ))
+        }
         Err(error) => Err(error),
     }
 }
@@ -404,17 +418,16 @@ fn map_output_reader_error(
                     (other_output.unwrap_or_default(), output)
                 }
             };
-            CommandError::ReadOutputFailed {
-                command: command.to_owned(),
-                stream,
-                source,
-                output: Some(Box::new(CommandOutput::new(
+            CommandError::from_reason(
+                command,
+                CommandErrorReason::ReadOutputFailed { stream, source },
+                Some(Box::new(CommandOutput::new(
                     status,
                     (stdout.bytes, stdout.truncated, stdout.complete),
                     (stderr.bytes, stderr.truncated, stderr.complete),
                     elapsed,
                 ))),
-            }
+            )
         }
         OutputCaptureError::Write {
             path,
@@ -429,18 +442,20 @@ fn map_output_reader_error(
                     (other_output.unwrap_or_default(), output)
                 }
             };
-            CommandError::WriteOutputFailed {
-                command: command.to_owned(),
-                stream,
-                path,
-                source,
-                output: Some(Box::new(CommandOutput::new(
+            CommandError::from_reason(
+                command,
+                CommandErrorReason::WriteOutputFailed {
+                    stream,
+                    path,
+                    source,
+                },
+                Some(Box::new(CommandOutput::new(
                     status,
                     (stdout.bytes, stdout.truncated, stdout.complete),
                     (stderr.bytes, stderr.truncated, stderr.complete),
                     elapsed,
                 ))),
-            }
+            )
         }
     }
 }
@@ -457,8 +472,8 @@ fn map_output_reader_error(
 ///
 /// # Errors
 ///
-/// Returns [`CommandError::ReadOutputFailed`] for read failures or thread
-/// panics, and [`CommandError::WriteOutputFailed`] for tee failures.
+/// Returns a [`CommandError`] with kind `ReadOutputFailed` for read failures or
+/// thread panics, and kind `WriteOutputFailed` for tee failures.
 pub(in crate::command_runner) fn join_output_reader(
     reader: OutputReader,
 ) -> Result<CapturedOutput, OutputCaptureError> {

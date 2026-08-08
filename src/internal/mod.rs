@@ -5,4 +5,8 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-pub(crate) use crate::internal::command_stdin::CommandStdin;
+//! Private command construction and run-option representations.
+
+pub(crate) mod command_argument;
+pub(crate) mod command_run_options_parts;
+pub(crate) mod command_stdin;

@@ -17,7 +17,7 @@ use super::process_setup::configure_environment;
 use crate::Command;
 use crate::CommandError;
 
-/// Fully prepared standard-library command plus runner-side I/O resources.
+/// Non-destructively prepared command awaiting I/O commit.
 pub(in crate::command_runner) struct PreparedCommand {
     /// Human-readable command text for logs and diagnostics.
     pub(in crate::command_runner) command_text: String,
@@ -25,6 +25,10 @@ pub(in crate::command_runner) struct PreparedCommand {
     pub(in crate::command_runner) process_command: ProcessCommand,
     /// Bytes to write to stdin after spawning, if configured.
     pub(in crate::command_runner) stdin_bytes: Option<Vec<u8>>,
+    /// Open stdin file retained through the cancellation linearization point.
+    pub(in crate::command_runner) stdin_path: Option<PathBuf>,
+    /// Open stdin file retained through the cancellation linearization point.
+    pub(in crate::command_runner) stdin_file: Option<File>,
     /// Open tee file for stdout.
     pub(in crate::command_runner) stdout_file: Option<File>,
     /// Open tee file for stderr.
@@ -36,7 +40,7 @@ pub(in crate::command_runner) struct PreparedCommand {
 }
 
 impl PreparedCommand {
-    /// Creates the process command and all pre-spawn I/O resources.
+    /// Creates the process command and performs non-destructive I/O checks.
     ///
     /// # Parameters
     ///
@@ -50,7 +54,7 @@ impl PreparedCommand {
     ///
     /// # Returns
     ///
-    /// Process builder, redacted diagnostics, and validated I/O resources.
+    /// Process builder, redacted diagnostics, and resources awaiting commit.
     ///
     /// # Errors
     ///
@@ -78,9 +82,11 @@ impl PreparedCommand {
 
         configure_environment(&command, &mut process_command);
         let IoFiles {
+            stdin_path,
             stdin_bytes,
-            stdout_file,
-            stderr_file,
+            stdin_file,
+            stdout_file: _,
+            stderr_file: _,
         } = IoFiles::prepare(
             &command_text,
             command.into_stdin_configuration(),
@@ -93,10 +99,37 @@ impl PreparedCommand {
             command_text,
             process_command,
             stdin_bytes,
-            stdout_file,
-            stderr_file,
+            stdin_path,
+            stdin_file,
+            stdout_file: None,
+            stderr_file: None,
             stdout_file_path: stdout_file_path.map(Path::to_path_buf),
             stderr_file_path: stderr_file_path.map(Path::to_path_buf),
         })
+    }
+
+    /// Commits tee file creation and attaches the validated stdin file.
+    pub(in crate::command_runner) fn commit(
+        mut self,
+    ) -> Result<Self, CommandError> {
+        let mut io_files = IoFiles {
+            stdin_bytes: self.stdin_bytes.take(),
+            stdin_path: self.stdin_path.take(),
+            stdin_file: self.stdin_file.take(),
+            stdout_file: self.stdout_file.take(),
+            stderr_file: self.stderr_file.take(),
+        };
+        io_files.commit(
+            &self.command_text,
+            self.stdout_file_path.as_deref(),
+            self.stderr_file_path.as_deref(),
+            &mut self.process_command,
+        )?;
+        self.stdin_bytes = io_files.stdin_bytes;
+        self.stdin_path = io_files.stdin_path;
+        self.stdin_file = io_files.stdin_file;
+        self.stdout_file = io_files.stdout_file;
+        self.stderr_file = io_files.stderr_file;
+        Ok(self)
     }
 }
