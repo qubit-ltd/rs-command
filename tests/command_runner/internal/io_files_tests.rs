@@ -9,9 +9,15 @@
 
 use std::{
     fs,
-    path::PathBuf,
+    path::{
+        Path,
+        PathBuf,
+    },
     time::Duration,
 };
+
+#[cfg(unix)]
+use std::process::Command as ProcessCommand;
 
 use crate::support::LocalTempDir;
 #[cfg(target_os = "linux")]
@@ -40,6 +46,16 @@ fn unspawnable_command() -> Command {
 fn temp_dir() -> LocalTempDir {
     LocalTempDir::with_prefix("qubit-command-io-files-")
         .expect("command I/O test temp directory should be created")
+}
+
+/// Creates a Unix FIFO at `path` for special-file rejection tests.
+#[cfg(unix)]
+fn create_fifo(path: &Path) {
+    let status = ProcessCommand::new("mkfifo")
+        .arg(path)
+        .status()
+        .expect("mkfifo should start");
+    assert!(status.success(), "mkfifo should create the fixture");
 }
 
 #[test]
@@ -291,4 +307,87 @@ fn test_runner_rejects_stderr_device() {
             ..
         }
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_runner_rejects_fifo_for_stdin_path() {
+    let temp_dir = temp_dir();
+    let path = temp_dir.path().join("stdin-fifo");
+    create_fifo(&path);
+
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run(unspawnable_command().stdin_file(&path))
+        .expect_err("FIFO stdin should be rejected before spawn");
+
+    assert!(matches!(error, CommandError::NonRegularInputFile { .. }));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_runner_rejects_fifo_for_stdout_path() {
+    let temp_dir = temp_dir();
+    let path = temp_dir.path().join("stdout-fifo");
+    create_fifo(&path);
+
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            unspawnable_command(),
+            CommandRunOptions::new().tee_stdout_to_file(&path),
+        )
+        .expect_err("FIFO stdout should be rejected before spawn");
+
+    assert!(matches!(
+        error,
+        CommandError::NonRegularOutputFile {
+            stream: OutputStream::Stdout,
+            ..
+        }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_runner_rejects_fifo_for_stderr_path() {
+    let temp_dir = temp_dir();
+    let path = temp_dir.path().join("stderr-fifo");
+    create_fifo(&path);
+
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            unspawnable_command(),
+            CommandRunOptions::new().tee_stderr_to_file(&path),
+        )
+        .expect_err("FIFO stderr should be rejected before spawn");
+
+    assert!(matches!(
+        error,
+        CommandError::NonRegularOutputFile {
+            stream: OutputStream::Stderr,
+            ..
+        }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_runner_accepts_regular_files_after_handle_validation() {
+    let temp_dir = temp_dir();
+    let input_path = temp_dir.path().join("regular-input");
+    let output_path = temp_dir.path().join("regular-output");
+    fs::write(&input_path, b"regular-input")
+        .expect("regular stdin fixture should be written");
+
+    let output = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            Command::new("cat").stdin_file(&input_path),
+            CommandRunOptions::new().tee_stdout_to_file(&output_path),
+        )
+        .expect("regular files should remain usable");
+
+    assert_eq!(output.stdout(), b"regular-input");
+    assert_eq!(
+        fs::read(&output_path).expect("regular tee output should be readable"),
+        b"regular-input",
+    );
 }
