@@ -119,7 +119,8 @@ let output = CommandRunner::new(std::time::Duration::from_secs(10))
 # let _ = output;
 ```
 
-An exit status outside the configured list returns `CommandError::UnexpectedExit` and retains the captured output.
+An exit status outside the configured list returns a `CommandError` whose
+`kind()` is `CommandErrorKind::UnexpectedExit` and retains the captured output.
 
 ## Timeouts and Cancellation
 
@@ -138,7 +139,7 @@ let result = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::new("long-running-tool"));
 ```
 
-When the deadline is reached, the runner attempts to terminate the managed process tree, collects available output, joins its I/O helpers, and returns `CommandError::TimedOut`. A timeout error can contain partial output.
+When the deadline is reached, the runner attempts to terminate the managed process tree, collects available output, joins its I/O helpers, and returns a `CommandError` whose `kind()` is `CommandErrorKind::TimedOut`. A timeout error can contain partial output.
 
 Use `without_timeout()` only when an unlimited wait is deliberate. If cancellation is configured, the runner still polls its timer and manages the process tree even without a timeout.
 
@@ -151,27 +152,34 @@ use qubit_command::{Command, CommandCancellation, CommandRunOptions, CommandRunn
 
 let cancellation = CommandCancellation::new();
 let runner = CommandRunner::new(std::time::Duration::from_secs(10));
-let result = runner.run_with(
-    Command::new("long-running-tool"),
-    CommandRunOptions::new().cancellation(cancellation.clone()),
-);
+let worker_runner = runner.clone();
+let worker_cancellation = cancellation.clone();
+let worker = std::thread::spawn(move || {
+    worker_runner.run_with(
+        Command::new("long-running-tool"),
+        CommandRunOptions::new().cancellation(worker_cancellation),
+    )
+});
 
-// Call this from the application's shutdown or terminal-signal policy:
+// Call this from the application's shutdown or terminal-signal policy while
+// the worker is running:
 cancellation.cancel();
-
-let result = runner.run_with(
-    Command::new("long-running-tool"),
-    CommandRunOptions::new().cancellation(cancellation.clone()),
-);
+let result = worker.join().expect("command worker should not panic");
 ```
 
-If cancellation is observed before preparation starts, the result is `CommandError::CancelledBeforeStart`. Otherwise the managed process tree is terminated and the result is `CommandError::Cancelled`, with retained output when available. The handle is one-shot; calling `cancel()` more than once has no additional effect.
+If cancellation is observed before the final startup check, the result is a
+    `CommandError` whose `kind()` is `CommandErrorKind::CancelledBeforeStart`; no tee file is created
+or truncated and no child is spawned. The final check is the startup
+linearization point. Cancellation observed after that point is an in-flight
+request: the managed process tree is terminated and `kind()` is `Cancelled`,
+with retained output when available. The handle is one-shot; calling `cancel()`
+more than once has no additional effect.
 
 For timeout- or cancellation-aware waiting, the configured timer must continue progressing while `run()` blocks synchronously. A Tokio timer must not depend on a current-thread runtime driven only by that same blocked thread.
 
 ## Bounded and Large Output
 
-Each stream is limited to `DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM`, currently 1 MiB, by default. A successful command whose retained output is truncated returns `CommandError::OutputTruncated` unless that policy is disabled.
+Each stream is limited to `DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM`, currently 1 MiB, by default. A successful command whose retained output is truncated returns a `CommandError` whose `kind()` is `CommandErrorKind::OutputTruncated` unless that policy is disabled.
 
 For large logs, keep memory bounded and tee each stream to a file:
 
@@ -219,7 +227,9 @@ Lifecycle records are emitted at `debug` level. `disable_logging(true)` suppress
 
 ## Errors and Diagnostics
 
-`CommandError` is non-exhaustive, so downstream matches must keep a wildcard arm. The important categories are:
+`CommandError` is a stable container with private storage. Use `kind()` for
+forward-compatible classification and `reason()` only when detailed fields are
+needed; do not match its storage layout. The important categories are:
 
 | Category | Examples | Next diagnostic step |
 | --- | --- | --- |
@@ -233,7 +243,7 @@ Lifecycle records are emitted at `debug` level. `disable_logging(true)` suppress
 For a policy error with output:
 
 ```rust
-use qubit_command::{Command, CommandError, CommandRunner};
+use qubit_command::{Command, CommandErrorKind, CommandRunner};
 
 match CommandRunner::new(std::time::Duration::from_secs(10)).run(Command::new("tool")) {
     Ok(output) => println!("{}", output.stdout_lossy_text()),
@@ -243,8 +253,11 @@ match CommandRunner::new(std::time::Duration::from_secs(10)).run(Command::new("t
             eprintln!("stdout complete: {}", output.stdout_complete());
             eprintln!("stderr complete: {}", output.stderr_complete());
         }
-        if matches!(error, CommandError::TimedOut { .. }) {
+        if error.kind() == CommandErrorKind::TimedOut {
             eprintln!("the process exceeded its timeout");
+        }
+        if !error.cleanup_failures().is_empty() {
+            eprintln!("{} cleanup failure(s) were retained", error.cleanup_failures().len());
         }
     }
 }
@@ -258,7 +271,10 @@ match CommandRunner::new(std::time::Duration::from_secs(10)).run(Command::new("t
 
 ### The command exits with an unexpected status
 
-Read `CommandError::UnexpectedExit`, inspect `exit_code`, `expected`, stdout, and stderr, then decide whether the status is genuinely successful for the application. Do not silently treat every non-zero exit as success.
+Check `error.kind() == CommandErrorKind::UnexpectedExit`, then inspect
+`error.exit_code()`, `error.reason()`, stdout, and stderr before deciding
+whether the status is genuinely successful for the application. Do not
+silently treat every non-zero exit as success.
 
 ### The command times out or is cancelled
 
