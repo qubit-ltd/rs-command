@@ -8,6 +8,7 @@
 use std::io;
 use std::io::Read;
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::thread;
 use std::time::Duration;
@@ -23,6 +24,7 @@ use super::output_capture_options::OutputCaptureOptions;
 use super::output_reader::OutputReader;
 use super::stdin_pipe::join_stdin_writer;
 use super::stdin_writer::OptionalStdinWriter;
+use crate::CommandCleanupFailure;
 use crate::CommandError;
 use crate::CommandErrorReason;
 use crate::CommandOutput;
@@ -321,51 +323,91 @@ pub(in crate::command_runner) fn collect_output_results(
     stderr_result: Result<CapturedOutput, OutputCaptureError>,
     stdin_result: Result<(), CommandError>,
 ) -> Result<CommandOutput, CommandError> {
+    let (stdout, stdout_failure) = split_output_result(stdout_result);
+    let (stderr, stderr_failure) = split_output_result(stderr_result);
+
+    let stdin_error = stdin_result.err();
     let elapsed = match elapsed_result {
         Err(source) => {
+            let mut cleanup_failures = Vec::new();
+            if let Some(failure) = stdout_failure {
+                cleanup_failures.push(output_cleanup_failure(
+                    OutputStream::Stdout,
+                    failure,
+                ));
+            }
+            if let Some(failure) = stderr_failure {
+                cleanup_failures.push(output_cleanup_failure(
+                    OutputStream::Stderr,
+                    failure,
+                ));
+            }
+            if let Some(error) = stdin_error
+                && let Some(failure) = error.into_cleanup_failure()
+            {
+                cleanup_failures.push(failure);
+            }
             return Err(CommandError::from_reason(
                 command,
                 CommandErrorReason::TimeFailed { source },
                 None,
-            ));
+            )
+            .with_cleanup_failures(cleanup_failures));
         }
         Ok(elapsed) => elapsed,
     };
-    let stdout = match stdout_result {
-        Err(error) => {
-            return Err(map_output_reader_error(
-                command,
-                status,
-                elapsed,
-                OutputStream::Stdout,
-                error,
-                Some(retained_output(stderr_result)),
-            ));
+
+    if let Some(failure) = stdout_failure {
+        let mut cleanup_failures = Vec::new();
+        if let Some(failure) = stderr_failure {
+            cleanup_failures
+                .push(output_cleanup_failure(OutputStream::Stderr, failure));
         }
-        Ok(stdout) => stdout,
-    };
-    let stderr = match stderr_result {
-        Err(error) => {
-            return Err(map_output_reader_error(
-                command,
-                status,
-                elapsed,
-                OutputStream::Stderr,
-                error,
-                Some(stdout),
-            ));
+        if let Some(error) = stdin_error
+            && let Some(failure) = error.into_cleanup_failure()
+        {
+            cleanup_failures.push(failure);
         }
-        Ok(stderr) => stderr,
-    };
+        return Err(map_output_reader_error(
+            command,
+            status,
+            elapsed,
+            OutputStream::Stdout,
+            failure,
+            stdout,
+            Some(stderr),
+        )
+        .with_cleanup_failures(cleanup_failures));
+    }
+
+    if let Some(failure) = stderr_failure {
+        let mut cleanup_failures = Vec::new();
+        if let Some(error) = stdin_error
+            && let Some(failure) = error.into_cleanup_failure()
+        {
+            cleanup_failures.push(failure);
+        }
+        return Err(map_output_reader_error(
+            command,
+            status,
+            elapsed,
+            OutputStream::Stderr,
+            failure,
+            stderr,
+            Some(stdout),
+        )
+        .with_cleanup_failures(cleanup_failures));
+    }
+
     let output = CommandOutput::new(
         status,
         (stdout.bytes, stdout.truncated, stdout.complete),
         (stderr.bytes, stderr.truncated, stderr.complete),
         elapsed,
     );
-    match stdin_result {
-        Ok(()) => Ok(output),
-        Err(error)
+    match stdin_error {
+        None => Ok(output),
+        Some(error)
             if matches!(
                 error.kind(),
                 crate::CommandErrorKind::WriteInputFailed
@@ -384,18 +426,64 @@ pub(in crate::command_runner) fn collect_output_results(
                 Some(Box::new(output)),
             ))
         }
-        Err(error) => Err(error),
+        Some(error) => Err(error),
     }
 }
 
-/// Extracts retained bytes from a completed or failed output reader.
-fn retained_output(
+/// Error details retained after separating partial output from a failed
+/// output reader.
+enum OutputCaptureFailure {
+    /// The child pipe could not be read.
+    Read {
+        /// Operating-system read error.
+        source: io::Error,
+    },
+    /// Writing retained output to a tee failed.
+    Write {
+        /// Configured tee path.
+        path: PathBuf,
+        /// Operating-system write error.
+        source: io::Error,
+    },
+}
+
+/// Separates retained bytes from an output-reader failure.
+fn split_output_result(
     result: Result<CapturedOutput, OutputCaptureError>,
-) -> CapturedOutput {
+) -> (CapturedOutput, Option<OutputCaptureFailure>) {
     match result {
-        Ok(output)
-        | Err(OutputCaptureError::Read { output, .. })
-        | Err(OutputCaptureError::Write { output, .. }) => output,
+        Ok(output) => (output, None),
+        Err(OutputCaptureError::Read { source, output }) => {
+            (output, Some(OutputCaptureFailure::Read { source }))
+        }
+        Err(OutputCaptureError::Write {
+            path,
+            source,
+            output,
+        }) => (output, Some(OutputCaptureFailure::Write { path, source })),
+    }
+}
+
+/// Converts a reader failure into the public cleanup-failure category.
+fn output_cleanup_failure(
+    stream: OutputStream,
+    failure: OutputCaptureFailure,
+) -> CommandCleanupFailure {
+    match (stream, failure) {
+        (OutputStream::Stdout, OutputCaptureFailure::Read { source }) => {
+            CommandCleanupFailure::StdoutRead { source }
+        }
+        (OutputStream::Stderr, OutputCaptureFailure::Read { source }) => {
+            CommandCleanupFailure::StderrRead { source }
+        }
+        (
+            OutputStream::Stdout,
+            OutputCaptureFailure::Write { path, source },
+        ) => CommandCleanupFailure::StdoutWrite { path, source },
+        (
+            OutputStream::Stderr,
+            OutputCaptureFailure::Write { path, source },
+        ) => CommandCleanupFailure::StderrWrite { path, source },
     }
 }
 
@@ -405,17 +493,18 @@ fn map_output_reader_error(
     status: ExitStatus,
     elapsed: Duration,
     stream: OutputStream,
-    error: OutputCaptureError,
+    error: OutputCaptureFailure,
+    failed_output: CapturedOutput,
     other_output: Option<CapturedOutput>,
 ) -> CommandError {
     match error {
-        OutputCaptureError::Read { source, output } => {
+        OutputCaptureFailure::Read { source } => {
             let (stdout, stderr) = match stream {
                 OutputStream::Stdout => {
-                    (output, other_output.unwrap_or_default())
+                    (failed_output, other_output.unwrap_or_default())
                 }
                 OutputStream::Stderr => {
-                    (other_output.unwrap_or_default(), output)
+                    (other_output.unwrap_or_default(), failed_output)
                 }
             };
             CommandError::from_reason(
@@ -429,17 +518,13 @@ fn map_output_reader_error(
                 ))),
             )
         }
-        OutputCaptureError::Write {
-            path,
-            source,
-            output,
-        } => {
+        OutputCaptureFailure::Write { path, source } => {
             let (stdout, stderr) = match stream {
                 OutputStream::Stdout => {
-                    (output, other_output.unwrap_or_default())
+                    (failed_output, other_output.unwrap_or_default())
                 }
                 OutputStream::Stderr => {
-                    (other_output.unwrap_or_default(), output)
+                    (other_output.unwrap_or_default(), failed_output)
                 }
             };
             CommandError::from_reason(
