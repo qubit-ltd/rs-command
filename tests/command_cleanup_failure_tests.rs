@@ -17,3 +17,17 @@ fn test_command_cleanup_failure_is_debuggable() {
 
     assert_debug::<CommandCleanupFailure>();
 }
+
+#[test]
+fn test_command_cleanup_failure_debug_redacts_paths() {
+    let secret_path = "/secret/output/diagnostic.log";
+    let failure = CommandCleanupFailure::StdoutWrite {
+        path: secret_path.into(),
+        source: std::io::Error::other("tee failed"),
+    };
+
+    let debug = format!("{failure:?}");
+    assert!(debug.contains("StdoutWrite"));
+    assert!(debug.contains("tee failed"));
+    assert!(!debug.contains(secret_path));
+}
