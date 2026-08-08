@@ -5,10 +5,24 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+// qubit-style: allow coverage-cfg
 use std::io;
 use std::process::ExitStatus;
+#[cfg(coverage)]
+use std::sync::atomic::AtomicBool;
+#[cfg(coverage)]
+use std::sync::atomic::Ordering;
 
 use process_wrap::std::ChildWrapper;
+
+#[cfg(coverage)]
+static FAIL_TREE_KILL: AtomicBool = AtomicBool::new(false);
+
+/// Enables deterministic process-tree termination failure injection.
+#[cfg(coverage)]
+pub(in crate::command_runner) fn __coverage_fail_tree_kill(enabled: bool) {
+    FAIL_TREE_KILL.store(enabled, Ordering::Relaxed);
+}
 
 /// Child process wrapper with explicit process-tree capability tracking.
 ///
@@ -58,6 +72,12 @@ impl ManagedChildProcess {
     pub(in crate::command_runner) fn start_kill_tree(
         &mut self,
     ) -> io::Result<()> {
+        #[cfg(coverage)]
+        if FAIL_TREE_KILL.load(Ordering::Relaxed) {
+            return Err(io::Error::other(
+                "coverage-injected process-tree termination failure",
+            ));
+        }
         self.child.start_kill()
     }
 
