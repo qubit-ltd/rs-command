@@ -80,6 +80,9 @@ pub enum CommandError {
         stream: OutputStream,
         /// I/O error reported while reading the stream.
         source: io::Error,
+        /// Output retained before the read failure, when collection state was
+        /// available to assemble.
+        output: Option<Box<CommandOutput>>,
     },
 
     /// Opening a stdin file failed.
@@ -213,6 +216,8 @@ pub enum CommandError {
         command: String,
         /// I/O error reported while writing stdin.
         source: io::Error,
+        /// Output retained before the stdin writer failure, when available.
+        output: Option<Box<CommandOutput>>,
     },
 
     /// Writing captured output to a redirection file failed.
@@ -318,6 +323,8 @@ fn unexpected_exit_detail(
     if let Some(signal) = output.termination_signal() {
         return format!("signal {signal}");
     }
+    #[cfg(not(unix))]
+    let _ = output;
     format!("code {exit_code:?}")
 }
 
@@ -344,9 +351,9 @@ impl CommandError {
     ///
     /// # Returns
     ///
-    /// `Some(output)` for timeout, cancellation, output-truncation,
-    /// unexpected-exit, and tee write errors that retained output; otherwise
-    /// `None`.
+    /// `Some(output)` when the error retained timeout, cancellation,
+    /// truncation, unexpected-exit, tee-write, output-read, or final stdin
+    /// write output; otherwise `None`.
     #[inline(always)]
     pub const fn output(&self) -> Option<&CommandOutput> {
         match self {
@@ -358,6 +365,14 @@ impl CommandError {
                 output: Some(output),
                 ..
             } => Some(output),
+            Self::ReadOutputFailed {
+                output: Some(output),
+                ..
+            }
+            | Self::WriteInputFailed {
+                output: Some(output),
+                ..
+            } => Some(output),
             _ => None,
         }
     }
@@ -366,9 +381,9 @@ impl CommandError {
     ///
     /// # Returns
     ///
-    /// `Some(output)` for timeout, cancellation, output-truncation,
-    /// unexpected-exit, and tee write errors that retained output; otherwise
-    /// `None`.
+    /// `Some(output)` when the error retained timeout, cancellation,
+    /// truncation, unexpected-exit, tee-write, output-read, or final stdin
+    /// write output; otherwise `None`.
     #[must_use]
     #[inline(always)]
     pub fn into_output(self) -> Option<CommandOutput> {
@@ -378,6 +393,14 @@ impl CommandError {
             | Self::OutputTruncated { output, .. }
             | Self::UnexpectedExit { output, .. } => Some(*output),
             Self::WriteOutputFailed {
+                output: Some(output),
+                ..
+            } => Some(*output),
+            Self::ReadOutputFailed {
+                output: Some(output),
+                ..
+            }
+            | Self::WriteInputFailed {
                 output: Some(output),
                 ..
             } => Some(*output),

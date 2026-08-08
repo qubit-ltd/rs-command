@@ -70,6 +70,7 @@ fn test_command_error_accessors_for_errors_without_output() {
         command: "read".to_owned(),
         stream: OutputStream::Stdout,
         source: io::Error::other("read failed"),
+        output: None,
     };
     assert_eq!(read.command(), "read");
     assert!(read.output().is_none());
@@ -118,6 +119,7 @@ fn test_command_error_accessors_for_errors_without_output() {
     let write_input = CommandError::WriteInputFailed {
         command: "write-input".to_owned(),
         source: io::Error::other("write input failed"),
+        output: None,
     };
     assert_eq!(write_input.command(), "write-input");
     assert!(write_input.output().is_none());
@@ -299,6 +301,27 @@ fn test_command_error_accessors_for_errors_with_output() {
             .expect("stdout should be valid UTF-8"),
         "before-timeout",
     );
+
+    let read_output = CommandError::ReadOutputFailed {
+        command: "read-output".to_owned(),
+        stream: OutputStream::Stdout,
+        source: io::Error::other("read failed"),
+        output: Some(Box::new(
+            unexpected.output().expect("output fixture").clone(),
+        )),
+    };
+    assert!(read_output.output().is_some());
+    assert!(read_output.into_output().is_some());
+
+    let write_input = CommandError::WriteInputFailed {
+        command: "write-input".to_owned(),
+        source: io::Error::other("write failed"),
+        output: Some(Box::new(
+            timed_out.output().expect("output fixture").clone(),
+        )),
+    };
+    assert!(write_input.output().is_some());
+    assert!(write_input.into_output().is_some());
 }
 
 #[test]

@@ -77,6 +77,7 @@ pub(in crate::command_runner) fn write_stdin_bytes(
                     CommandError::WriteInputFailed {
                         command: command.to_owned(),
                         source,
+                        output: None,
                     }
                 })?;
                 let (cancellation, token) =
@@ -97,6 +98,7 @@ pub(in crate::command_runner) fn write_stdin_bytes(
             None => Err(CommandError::WriteInputFailed {
                 command: command.to_owned(),
                 source: io::Error::other("stdin pipe was not created"),
+                output: None,
             }),
         },
         None => Ok(None),
@@ -159,10 +161,12 @@ pub(in crate::command_runner) fn join_stdin_writer(
             Ok(Err(source)) => Err(CommandError::WriteInputFailed {
                 command: command.to_owned(),
                 source,
+                output: None,
             }),
             Err(_) => Err(CommandError::WriteInputFailed {
                 command: command.to_owned(),
                 source: io::Error::other("stdin writer thread panicked"),
+                output: None,
             }),
         },
         None => Ok(()),
