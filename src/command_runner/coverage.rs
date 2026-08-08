@@ -42,6 +42,7 @@ use super::internal::io_files::open_input_candidate;
 #[cfg(unix)]
 use super::internal::io_files::open_output_candidate;
 use super::internal::io_files::truncate_output;
+use super::internal::managed_child_process::__coverage_fail_tree_kill;
 use super::internal::managed_child_process::ManagedChildProcess;
 use super::internal::output_capture_error::OutputCaptureError;
 use super::internal::output_capture_options::OutputCaptureOptions;
@@ -64,6 +65,8 @@ use crate::CommandCleanupFailure;
 use crate::CommandError;
 use crate::CommandErrorReason;
 use crate::CommandOutput;
+#[cfg(unix)]
+use crate::CommandRunner;
 use crate::OutputStream;
 use crate::command_stdin::CommandStdin;
 
@@ -323,6 +326,52 @@ pub fn __coverage_internal() {
     probe_error_container();
 
     #[cfg(unix)]
+    {
+        __coverage_fail_tree_kill(true);
+        let termination_error = CommandRunner::new(Duration::from_millis(20))
+            .run(crate::Command::shell("sleep 1"))
+            .expect_err("coverage timeout should retain its primary error");
+        __coverage_fail_tree_kill(false);
+        assert_eq!(termination_error.kind(), crate::CommandErrorKind::TimedOut);
+        assert!(termination_error.cleanup_failures().iter().any(|failure| {
+            matches!(
+                failure,
+                CommandCleanupFailure::ProcessTreeTermination { .. }
+            )
+        }));
+
+        let cancellation = crate::CommandCancellation::new();
+        let cancellation_request = cancellation.clone();
+        let canceller = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            cancellation_request.cancel();
+        });
+        __coverage_fail_tree_kill(true);
+        let cancellation_error = CommandRunner::without_timeout()
+            .run_with(
+                crate::Command::shell("sleep 1"),
+                crate::CommandRunOptions::new().cancellation(cancellation),
+            )
+            .expect_err(
+                "coverage cancellation should retain its primary error",
+            );
+        __coverage_fail_tree_kill(false);
+        canceller
+            .join()
+            .expect("coverage cancellation thread should finish");
+        assert_eq!(
+            cancellation_error.kind(),
+            crate::CommandErrorKind::Cancelled
+        );
+        assert!(cancellation_error.cleanup_failures().iter().any(|failure| {
+            matches!(
+                failure,
+                CommandCleanupFailure::ProcessTreeTermination { .. }
+            )
+        }));
+    }
+
+    #[cfg(unix)]
     probe_nonblocking_special_file_open();
 
     let default_captured = CapturedOutput::default();
@@ -552,6 +601,39 @@ pub fn __coverage_internal() {
     .expect_err("coverage elapsed failure should take precedence");
     assert_eq!(elapsed_error.kind(), crate::CommandErrorKind::TimeFailed);
 
+    let elapsed_with_helper_errors = collect_output(
+        "command",
+        status(),
+        || {
+            Err(TimeError::TimerUnavailable {
+                source: TimerUnavailableError::BackendUnavailable {
+                    backend: "coverage",
+                    source: Box::new(io::Error::other(
+                        "coverage timer failure with helpers",
+                    )),
+                },
+            })
+        },
+        output_reader(Err(OutputCaptureError::Read {
+            source: io::Error::other("coverage stdout failure with timer"),
+            output: CapturedOutput::default(),
+        })),
+        output_reader(Err(OutputCaptureError::Write {
+            path: "stderr.log".into(),
+            source: io::Error::other("coverage stderr failure with timer"),
+            output: CapturedOutput::default(),
+        })),
+        Some(stdin_writer(|| {
+            Err(io::Error::other("coverage stdin failure with timer"))
+        })),
+    )
+    .expect_err("coverage elapsed failure should retain helper failures");
+    assert_eq!(
+        elapsed_with_helper_errors.kind(),
+        crate::CommandErrorKind::TimeFailed
+    );
+    assert_eq!(elapsed_with_helper_errors.cleanup_failures().len(), 3);
+
     let stdout_error = collect_output(
         "command",
         status(),
@@ -586,6 +668,49 @@ pub fn __coverage_internal() {
     assert_eq!(stdout_output.stderr(), b"complete-stderr");
     assert!(!stdout_output.stdout_complete());
     assert!(stdout_output.stderr_complete());
+
+    let combined_helper_error = collect_output(
+        "command",
+        status(),
+        || Ok(Duration::from_secs(1)),
+        output_reader(Err(OutputCaptureError::Read {
+            source: io::Error::other("coverage combined stdout failure"),
+            output: CapturedOutput::default(),
+        })),
+        output_reader(Err(OutputCaptureError::Write {
+            path: "combined-stderr.log".into(),
+            source: io::Error::other("coverage combined stderr failure"),
+            output: CapturedOutput::default(),
+        })),
+        Some(stdin_writer(|| {
+            Err(io::Error::other("coverage combined stdin failure"))
+        })),
+    )
+    .expect_err("coverage stdout failure should retain other helper failures");
+    assert!(matches!(
+        combined_helper_error.reason(),
+        crate::CommandErrorReason::ReadOutputFailed {
+            stream: OutputStream::Stdout,
+            ..
+        }
+    ));
+    assert_eq!(combined_helper_error.cleanup_failures().len(), 2);
+    assert!(
+        combined_helper_error
+            .cleanup_failures()
+            .iter()
+            .any(|failure| {
+                matches!(failure, CommandCleanupFailure::StderrWrite { .. })
+            })
+    );
+    assert!(
+        combined_helper_error
+            .cleanup_failures()
+            .iter()
+            .any(|failure| {
+                matches!(failure, CommandCleanupFailure::Stdin { .. })
+            })
+    );
 
     let stderr_error = collect_output(
         "command",
