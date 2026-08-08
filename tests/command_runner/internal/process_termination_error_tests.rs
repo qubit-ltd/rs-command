@@ -12,12 +12,12 @@ use std::thread;
 #[cfg(not(windows))]
 use std::time::Duration;
 
-#[cfg(not(windows))]
 use qubit_command::Command;
 #[cfg(not(windows))]
 use qubit_command::CommandCancellation;
 #[cfg(not(windows))]
-use qubit_command::CommandError;
+use qubit_command::CommandErrorKind;
+#[cfg(not(windows))]
 #[cfg(not(windows))]
 use qubit_command::CommandRunOptions;
 #[cfg(not(windows))]
@@ -30,7 +30,7 @@ fn test_process_termination_maps_timeout_after_kill() {
         .run(Command::shell("sleep 1"))
         .expect_err("terminated command should report its timeout");
 
-    assert!(matches!(error, CommandError::TimedOut { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::TimedOut);
 }
 
 #[cfg(not(windows))]
@@ -53,5 +53,5 @@ fn test_process_termination_maps_cancellation_after_kill() {
         .join()
         .expect("cancellation request thread should finish");
 
-    assert!(matches!(error, CommandError::Cancelled { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::Cancelled);
 }

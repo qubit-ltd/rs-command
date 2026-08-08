@@ -15,7 +15,7 @@ use qubit_clock::test_util::FaultInjectingTimer;
 #[cfg(not(windows))]
 use qubit_clock::test_util::TimerFailurePoint;
 use qubit_command::Command;
-use qubit_command::CommandError;
+use qubit_command::CommandErrorKind;
 use qubit_command::CommandRunner;
 
 #[cfg(not(windows))]
@@ -44,7 +44,7 @@ fn test_running_command_reports_injected_timer_completion_failure() {
         .run(Command::shell("sleep 60"))
         .expect_err("timer completion failure should stop the command");
 
-    assert!(matches!(error, CommandError::TimeFailed { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
 }
 
 #[cfg(not(windows))]
@@ -61,7 +61,7 @@ fn test_running_command_reports_injected_timer_registration_failure() {
         .run(Command::shell("sleep 60"))
         .expect_err("timer registration failure should stop the command");
 
-    assert!(matches!(error, CommandError::TimeFailed { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
 }
 
 #[cfg(not(windows))]
@@ -72,7 +72,7 @@ fn test_running_command_reports_clock_domain_change_after_exit() {
         .run(Command::shell("printf done"))
         .expect_err("changing timer domains should reject elapsed time");
 
-    assert!(matches!(error, CommandError::TimeFailed { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
 }
 
 #[cfg(not(windows))]
@@ -88,7 +88,7 @@ fn test_running_command_rejects_inconsistent_timer_before_waiting() {
         )
         .expect_err("inconsistent timer should be rejected during startup");
 
-    assert!(matches!(error, CommandError::TimeFailed { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
     assert!(started.elapsed() < Duration::from_secs(2));
 }
 
@@ -100,5 +100,5 @@ fn test_running_command_cleans_up_inherited_output_after_time_failure() {
         .run(Command::shell("printf done; sleep 1 &"))
         .expect_err("changing timer domains should stop output collection");
 
-    assert!(matches!(error, CommandError::TimeFailed { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
 }

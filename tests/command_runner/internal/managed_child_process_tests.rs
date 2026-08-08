@@ -10,10 +10,10 @@
 #[cfg(not(windows))]
 use std::time::Duration;
 
-#[cfg(not(windows))]
 use qubit_command::Command;
 #[cfg(not(windows))]
-use qubit_command::CommandError;
+use qubit_command::CommandErrorKind;
+#[cfg(not(windows))]
 #[cfg(not(windows))]
 use qubit_command::CommandRunner;
 
@@ -24,5 +24,5 @@ fn test_managed_child_process_can_be_killed_on_timeout() {
         .run(Command::shell("sleep 1"))
         .expect_err("long-running command should time out");
 
-    assert!(matches!(error, CommandError::TimedOut { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::TimedOut);
 }

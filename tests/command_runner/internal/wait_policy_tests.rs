@@ -16,10 +16,11 @@ use std::time::Duration;
 use qubit_clock::ManualMonotonicClock;
 #[cfg(not(windows))]
 use qubit_clock::MonotonicClock;
-#[cfg(not(windows))]
 use qubit_command::Command;
 #[cfg(not(windows))]
-use qubit_command::CommandError;
+use qubit_command::CommandErrorKind;
+#[cfg(not(windows))]
+use qubit_command::CommandErrorReason;
 #[cfg(not(windows))]
 use qubit_command::CommandRunner;
 
@@ -31,10 +32,10 @@ fn test_wait_policy_enforces_configured_timeout() {
         .run(Command::shell("sleep 1"))
         .expect_err("long-running command should time out");
 
-    match error {
-        CommandError::TimedOut {
-            timeout: actual, ..
-        } => assert_eq!(actual, timeout),
+    match error.reason() {
+        CommandErrorReason::TimedOut { timeout: actual } => {
+            assert_eq!(*actual, timeout)
+        }
         other => panic!("expected timeout, got {other:?}"),
     }
 }
@@ -65,5 +66,5 @@ fn test_wait_policy_starts_timeout_polling_with_short_interval() {
         .join()
         .expect("runner thread should not panic")
         .expect_err("long-running command should time out");
-    assert!(matches!(error, CommandError::TimedOut { .. }));
+    assert_eq!(error.kind(), CommandErrorKind::TimedOut);
 }

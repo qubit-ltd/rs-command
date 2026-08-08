@@ -8,12 +8,15 @@
 //! Tests for command runner error mapping.
 
 #[cfg(not(windows))]
+use std::path::Path;
+#[cfg(not(windows))]
 use std::time::Duration;
 
 #[cfg(not(windows))]
 use qubit_command::Command;
 #[cfg(not(windows))]
-use qubit_command::CommandError;
+use qubit_command::CommandErrorKind;
+use qubit_command::CommandErrorReason;
 #[cfg(not(windows))]
 use qubit_command::CommandRunner;
 
@@ -29,16 +32,11 @@ fn test_error_mapping_preserves_unexpected_exit_output() {
         ))
         .expect_err("non-success exit should be mapped");
 
-    match error {
-        CommandError::UnexpectedExit {
-            exit_code, output, ..
-        } => {
-            assert_eq!(exit_code, Some(9));
-            assert_eq!(output.stdout(), b"mapped-out");
-            assert_eq!(output.stderr(), b"mapped-err");
-        }
-        other => panic!("expected unexpected-exit error, got {other:?}"),
-    }
+    assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
+    assert_eq!(error.exit_code(), Some(9));
+    let output = error.output().expect("unexpected exit output");
+    assert_eq!(output.stdout(), b"mapped-out");
+    assert_eq!(output.stderr(), b"mapped-err");
 }
 
 #[cfg(not(windows))]
@@ -52,9 +50,10 @@ fn test_error_mapping_redacts_io_paths_in_diagnostics() {
         .expect_err("missing private stdin file should fail");
     let path_text = path.to_string_lossy();
 
+    assert_eq!(error.kind(), CommandErrorKind::OpenInputFailed);
     assert!(matches!(
-        error,
-        CommandError::OpenInputFailed { ref path, .. } if path == path_text.as_ref()
+        error.reason(),
+        CommandErrorReason::OpenInputFailed { path, .. } if path == Path::new(path_text.as_ref())
     ));
     assert!(!error.to_string().contains(path_text.as_ref()));
     assert!(!format!("{error:?}").contains(path_text.as_ref()));
