@@ -8,16 +8,14 @@
 //! Tests for prepared command behavior.
 
 #[cfg(not(windows))]
-use std::{
-    fs,
-    time::Duration,
-};
+use std::fs;
+#[cfg(not(windows))]
+use std::time::Duration;
 
 #[cfg(not(windows))]
-use qubit_command::{
-    Command,
-    CommandRunner,
-};
+use qubit_command::Command;
+#[cfg(not(windows))]
+use qubit_command::CommandRunner;
 
 #[cfg(not(windows))]
 #[test]

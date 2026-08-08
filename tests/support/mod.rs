@@ -13,9 +13,8 @@ mod switching_timer;
 mod temp_dir;
 
 #[cfg(not(windows))]
-pub(crate) use captured_logger::{
-    captured_log_records_containing,
-    initialize_captured_logger,
-};
+pub(crate) use captured_logger::captured_log_records_containing;
+#[cfg(not(windows))]
+pub(crate) use captured_logger::initialize_captured_logger;
 pub(crate) use switching_timer::SwitchingTimer;
 pub(crate) use temp_dir::LocalTempDir;

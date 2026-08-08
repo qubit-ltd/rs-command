@@ -9,11 +9,9 @@
 
 use std::time::Duration;
 
-use qubit_command::{
-    Command,
-    CommandError,
-    CommandRunner,
-};
+use qubit_command::Command;
+use qubit_command::CommandError;
+use qubit_command::CommandRunner;
 
 #[test]
 fn test_process_launcher_maps_spawn_failure() {

@@ -9,10 +9,8 @@
 
 use std::path::Path;
 
-use qubit_command::{
-    CommandCancellation,
-    CommandRunOptions,
-};
+use qubit_command::CommandCancellation;
+use qubit_command::CommandRunOptions;
 
 #[test]
 fn test_command_run_options_store_cancellation_and_tee_paths() {

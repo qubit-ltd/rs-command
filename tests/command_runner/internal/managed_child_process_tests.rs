@@ -11,11 +11,11 @@
 use std::time::Duration;
 
 #[cfg(not(windows))]
-use qubit_command::{
-    Command,
-    CommandError,
-    CommandRunner,
-};
+use qubit_command::Command;
+#[cfg(not(windows))]
+use qubit_command::CommandError;
+#[cfg(not(windows))]
+use qubit_command::CommandRunner;
 
 #[cfg(not(windows))]
 #[test]

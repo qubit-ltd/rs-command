@@ -9,10 +9,8 @@
 
 use std::time::Duration;
 
-use qubit_command::{
-    Command,
-    CommandRunner,
-};
+use qubit_command::Command;
+use qubit_command::CommandRunner;
 
 #[test]
 fn test_captured_output_records_stdout_truncation() {

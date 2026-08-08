@@ -7,27 +7,21 @@
 // =============================================================================
 //! Tests for conflict-safe command I/O file preparation.
 
-use std::{
-    fs,
-    path::{
-        Path,
-        PathBuf,
-    },
-    time::Duration,
-};
-
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
 #[cfg(unix)]
 use std::process::Command as ProcessCommand;
+use std::time::Duration;
 
-use crate::support::LocalTempDir;
+use qubit_command::Command;
+use qubit_command::CommandError;
+use qubit_command::CommandRunOptions;
+use qubit_command::CommandRunner;
 #[cfg(target_os = "linux")]
 use qubit_command::OutputStream;
-use qubit_command::{
-    Command,
-    CommandError,
-    CommandRunOptions,
-    CommandRunner,
-};
+
+use crate::support::LocalTempDir;
 
 /// Creates a command that conflict tests must reject before spawning.
 ///

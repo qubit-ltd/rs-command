@@ -9,11 +9,9 @@
 
 use std::time::Duration;
 
-use qubit_command::{
-    Command,
-    CommandRunOptions,
-    CommandRunner,
-};
+use qubit_command::Command;
+use qubit_command::CommandRunOptions;
+use qubit_command::CommandRunner;
 
 #[test]
 fn test_command_run_options_parts_reach_runner() {

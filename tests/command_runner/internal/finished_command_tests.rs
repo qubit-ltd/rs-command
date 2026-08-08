@@ -9,10 +9,8 @@
 
 use std::time::Duration;
 
-use qubit_command::{
-    Command,
-    CommandRunner,
-};
+use qubit_command::Command;
+use qubit_command::CommandRunner;
 
 #[test]
 fn test_finished_command_preserves_elapsed_time() {

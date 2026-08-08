@@ -9,14 +9,13 @@
 
 use std::time::Duration;
 
+use qubit_command::Command;
+use qubit_command::CommandError;
+use qubit_command::CommandRunOptions;
+use qubit_command::CommandRunner;
+use qubit_command::OutputStream;
+
 use crate::support::LocalTempDir;
-use qubit_command::{
-    Command,
-    CommandError,
-    CommandRunOptions,
-    CommandRunner,
-    OutputStream,
-};
 
 #[test]
 fn test_output_capture_error_reports_unopenable_stdout_file() {
