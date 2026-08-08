@@ -5,10 +5,8 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::path::{
-    Path,
-    PathBuf,
-};
+use std::path::Path;
+use std::path::PathBuf;
 
 use crate::CommandCancellation;
 use crate::command_run_options_parts::CommandRunOptionsParts;

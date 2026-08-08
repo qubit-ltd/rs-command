@@ -5,36 +5,26 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::{
-    io,
-    process::ExitStatus,
-    sync::Arc,
-    thread,
-    time::Duration,
-};
+use std::io;
+use std::process::ExitStatus;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
-use qubit_clock::{
-    BlockingSleeper,
-    MonotonicInstant,
-    TimeError,
-    Timer,
-};
+use qubit_clock::BlockingSleeper;
+use qubit_clock::MonotonicInstant;
+use qubit_clock::TimeError;
+use qubit_clock::Timer;
 
-use super::{
-    command_io::CommandIo,
-    error_mapping::{
-        kill_failed,
-        wait_failed,
-    },
-    finished_command::FinishedCommand,
-    managed_child_process::ManagedChildProcess,
-    process_termination_error::ProcessTerminationError,
-    wait_policy::next_sleep,
-};
-use crate::{
-    CommandCancellation,
-    CommandError,
-};
+use super::command_io::CommandIo;
+use super::error_mapping::kill_failed;
+use super::error_mapping::wait_failed;
+use super::finished_command::FinishedCommand;
+use super::managed_child_process::ManagedChildProcess;
+use super::process_termination_error::ProcessTerminationError;
+use super::wait_policy::next_sleep;
+use crate::CommandCancellation;
+use crate::CommandError;
 
 /// Maximum delay before a cancellation-aware wait observes cancellation.
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);

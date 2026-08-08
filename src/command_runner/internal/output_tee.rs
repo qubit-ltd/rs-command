@@ -5,10 +5,8 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::{
-    io::Write,
-    path::PathBuf,
-};
+use std::io::Write;
+use std::path::PathBuf;
 
 /// Streaming destination for captured output.
 pub(in crate::command_runner) struct OutputTee {

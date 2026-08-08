@@ -5,10 +5,8 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::{
-    fs::File,
-    path::PathBuf,
-};
+use std::fs::File;
+use std::path::PathBuf;
 
 use super::output_tee::OutputTee;
 

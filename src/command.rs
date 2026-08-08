@@ -5,32 +5,22 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::{
-    ffi::{
-        OsStr,
-        OsString,
-    },
-    fmt,
-    path::{
-        Path,
-        PathBuf,
-    },
-};
+use std::ffi::OsStr;
+use std::ffi::OsString;
+use std::fmt;
+use std::path::Path;
+use std::path::PathBuf;
 
-use qubit_redact::{
-    ArgvRedactor,
-    DiagnosticLogBuilder,
-    EnvRedactor,
-    LogSafeText,
-    RedactionPolicy,
-    RedactionSession,
-    Redactor,
-    Sensitivity,
-    argv::{
-        ArgvItem,
-        RedactedArgv,
-    },
-};
+use qubit_redact::ArgvRedactor;
+use qubit_redact::DiagnosticLogBuilder;
+use qubit_redact::EnvRedactor;
+use qubit_redact::LogSafeText;
+use qubit_redact::RedactionPolicy;
+use qubit_redact::RedactionSession;
+use qubit_redact::Redactor;
+use qubit_redact::Sensitivity;
+use qubit_redact::argv::ArgvItem;
+use qubit_redact::argv::RedactedArgv;
 
 use crate::command_argument::CommandArgument;
 use crate::command_env::env_key_eq;

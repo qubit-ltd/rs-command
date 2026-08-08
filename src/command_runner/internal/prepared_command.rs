@@ -5,23 +5,17 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::{
-    fs::File,
-    path::{
-        Path,
-        PathBuf,
-    },
-    process::Command as ProcessCommand,
-};
+use std::fs::File;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command as ProcessCommand;
 
 use qubit_redact::RedactionPolicy;
 
 use super::io_files::IoFiles;
 use super::process_setup::configure_environment;
-use crate::{
-    Command,
-    CommandError,
-};
+use crate::Command;
+use crate::CommandError;
 
 /// Fully prepared standard-library command plus runner-side I/O resources.
 pub(in crate::command_runner) struct PreparedCommand {

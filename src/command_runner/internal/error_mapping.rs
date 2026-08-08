@@ -5,15 +5,11 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::{
-    io,
-    time::Duration,
-};
+use std::io;
+use std::time::Duration;
 
-use crate::{
-    CommandError,
-    OutputStream,
-};
+use crate::CommandError;
+use crate::OutputStream;
 
 /// Builds a process spawn failure.
 ///

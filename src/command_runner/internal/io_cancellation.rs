@@ -7,17 +7,11 @@
 // =============================================================================
 //! Cancellation notification for helper-thread pipe I/O.
 
-use std::{
-    io,
-    sync::{
-        Arc,
-        atomic::{
-            AtomicBool,
-            Ordering,
-        },
-    },
-    thread::JoinHandle,
-};
+use std::io;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::thread::JoinHandle;
 
 use super::io_cancellation_token::IoCancellationToken;
 

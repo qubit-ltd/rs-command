@@ -5,10 +5,8 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::{
-    io,
-    thread,
-};
+use std::io;
+use std::thread;
 
 use super::io_cancellation::IoCancellation;
 

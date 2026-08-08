@@ -5,10 +5,8 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::ffi::{
-    OsStr,
-    OsString,
-};
+use std::ffi::OsStr;
+use std::ffi::OsString;
 
 use qubit_redact::Sensitivity;
 

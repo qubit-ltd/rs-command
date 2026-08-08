@@ -7,10 +7,8 @@
 // =============================================================================
 //! Cancellation-aware writable stdin abstraction.
 
-use std::io::{
-    self,
-    Write,
-};
+use std::io;
+use std::io::Write;
 
 use super::io_cancellation_token::IoCancellationToken;
 

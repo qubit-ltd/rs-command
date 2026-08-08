@@ -7,11 +7,9 @@
 // =============================================================================
 use std::thread;
 
-use super::{
-    captured_output::CapturedOutput,
-    io_cancellation::IoCancellation,
-    output_capture_error::OutputCaptureError,
-};
+use super::captured_output::CapturedOutput;
+use super::io_cancellation::IoCancellation;
+use super::output_capture_error::OutputCaptureError;
 
 /// Output reader thread result type.
 #[derive(Debug)]

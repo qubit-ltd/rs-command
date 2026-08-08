@@ -5,10 +5,8 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::{
-    fmt,
-    path::PathBuf,
-};
+use std::fmt;
+use std::path::PathBuf;
 
 /// Standard input configuration for a command.
 ///

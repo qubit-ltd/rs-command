@@ -5,10 +5,8 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::{
-    io,
-    process::Command as ProcessCommand,
-};
+use std::io;
+use std::process::Command as ProcessCommand;
 
 use process_wrap::std::CommandWrap;
 #[cfg(windows)]
