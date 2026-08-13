@@ -214,7 +214,7 @@ fn test_runner_rejects_hard_linked_output_files() {
 #[test]
 fn test_runner_normalizes_relative_output_path_components() {
     let temp_dir = LocalTempDir::in_dir(
-        "target",
+        ".",
         Some("qubit-command-relative-output-"),
         128,
     )
@@ -225,7 +225,6 @@ fn test_runner_normalizes_relative_output_path_components() {
         .expect("temporary directory should have a file name")
         .to_owned();
     let path = PathBuf::from(".")
-        .join("target")
         .join(&dir_name)
         .join("..")
         .join(dir_name)
