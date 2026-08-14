@@ -213,12 +213,9 @@ fn test_runner_rejects_hard_linked_output_files() {
 #[cfg(not(windows))]
 #[test]
 fn test_runner_normalizes_relative_output_path_components() {
-    let temp_dir = LocalTempDir::in_dir(
-        ".",
-        Some("qubit-command-relative-output-"),
-        128,
-    )
-    .expect("relative output temp directory should be created");
+    let temp_dir =
+        LocalTempDir::in_dir(".", Some("qubit-command-relative-output-"), 128)
+            .expect("relative output temp directory should be created");
     let dir_name = temp_dir
         .path()
         .file_name()
