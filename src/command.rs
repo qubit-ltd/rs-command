@@ -83,7 +83,9 @@ impl fmt::Debug for Command {
             .argv()
             .redact_items(self.removed_environment_items());
         let unset_text = unset.as_log_safe_text().as_str();
-        let unset = if matches!(unset_text, "" | "[]") && !self.removed_envs.is_empty() {
+        let unset = if matches!(unset_text, "" | "[]")
+            && !self.removed_envs.is_empty()
+        {
             "<truncated>"
         } else {
             unset_text
@@ -574,7 +576,9 @@ impl Command {
                 .argv()
                 .redact_items(self.removed_environment_items());
             let unset_text = unset.as_log_safe_text().as_str();
-            let unset = if matches!(unset_text, "" | "[]") && !self.removed_envs.is_empty() {
+            let unset = if matches!(unset_text, "" | "[]")
+                && !self.removed_envs.is_empty()
+            {
                 "<truncated>"
             } else {
                 unset_text
@@ -625,13 +629,16 @@ impl Command {
             return None;
         }
         let first_arg = self.args.first()?.value();
-        if self.program.as_os_str() == OsStr::new("sh") && first_arg == OsStr::new("-c") {
+        if self.program.as_os_str() == OsStr::new("sh")
+            && first_arg == OsStr::new("-c")
+        {
             return Some(1);
         }
 
         let program = self.program.to_string_lossy();
         let first_arg = first_arg.to_string_lossy();
-        if (program.eq_ignore_ascii_case("cmd") || program.eq_ignore_ascii_case("cmd.exe"))
+        if (program.eq_ignore_ascii_case("cmd")
+            || program.eq_ignore_ascii_case("cmd.exe"))
             && first_arg.eq_ignore_ascii_case("/C")
         {
             return Some(1);
