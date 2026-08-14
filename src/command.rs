@@ -11,16 +11,11 @@ use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 
-use qubit_redact::ArgvRedactor;
 use qubit_redact::DiagnosticLogBuilder;
-use qubit_redact::EnvRedactor;
-use qubit_redact::LogSafeText;
 use qubit_redact::RedactionPolicy;
-use qubit_redact::RedactionSession;
 use qubit_redact::Redactor;
 use qubit_redact::Sensitivity;
 use qubit_redact::argv::ArgvItem;
-use qubit_redact::argv::RedactedArgv;
 
 use crate::command_argument::CommandArgument;
 use crate::command_env::env_key_eq;
@@ -79,15 +74,20 @@ impl fmt::Debug for Command {
     /// Formatting result after rendering redacted command metadata.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let redactor = Redactor::default();
-        let argv_redactor = ArgvRedactor::new(redactor.clone());
-        let env_redactor = EnvRedactor::new(redactor);
-        let session =
-            RedactionSession::diagnostic(argv_redactor.redactor().policy());
-        let argv = self.redacted_argv_with_session(&argv_redactor, &session);
-        let env = self.redacted_environment_assignments_with_session(
-            &env_redactor,
-            &session,
-        );
+        let mut session = redactor.session();
+        let argv = session
+            .argv()
+            .redact_heuristically(self.redaction_argv_items());
+        let env = session.env().redact_os_pairs(self.environment_pairs());
+        let unset = session
+            .argv()
+            .redact_items(self.removed_environment_items());
+        let unset_text = unset.as_log_safe_text().as_str();
+        let unset = if matches!(unset_text, "" | "[]") && !self.removed_envs.is_empty() {
+            "<truncated>"
+        } else {
+            unset_text
+        };
         formatter
             .debug_struct("Command")
             .field("argv", &format_args!("{argv}"))
@@ -97,10 +97,7 @@ impl fmt::Debug for Command {
             )
             .field("clear_environment", &self.clear_environment)
             .field("env", &format_args!("{env}"))
-            .field(
-                "unset",
-                &self.removed_environment_names_with_session(&session),
-            )
+            .field("unset", &format_args!("{unset}"))
             .field("stdin", &self.stdin)
             .finish()
     }
@@ -563,26 +560,31 @@ impl Command {
     #[must_use]
     pub(crate) fn display_command(&self, policy: &RedactionPolicy) -> String {
         let redactor = Redactor::new(policy.clone());
-        let argv_redactor = ArgvRedactor::new(redactor.clone());
-        let env_redactor = EnvRedactor::new(redactor);
         let budget = policy.limits().diagnostic_event();
-        let session = RedactionSession::diagnostic(policy);
+        let mut session = redactor.session();
         let mut builder = DiagnosticLogBuilder::new(budget);
-        let argv = self.redacted_argv_with_session(&argv_redactor, &session);
+        let argv = session
+            .argv()
+            .redact_heuristically(self.redaction_argv_items());
         if self.envs.is_empty() && self.removed_envs.is_empty() {
             let _ = builder.push_safe(argv.as_log_safe_text());
         } else {
-            let env = self.redacted_environment_assignments_with_session(
-                &env_redactor,
-                &session,
-            );
-            let unset = self.removed_environment_names_with_session(&session);
+            let env = session.env().redact_os_pairs(self.environment_pairs());
+            let unset = session
+                .argv()
+                .redact_items(self.removed_environment_items());
+            let unset_text = unset.as_log_safe_text().as_str();
+            let unset = if matches!(unset_text, "" | "[]") && !self.removed_envs.is_empty() {
+                "<truncated>"
+            } else {
+                unset_text
+            };
             builder
                 .push_fmt(format_args!("Command {{ env: "))
                 .expect("fixed command diagnostic prefix must format");
             let _ = builder.push_safe(&env);
             builder
-                .push_fmt(format_args!(", unset: {unset:?}, argv: "))
+                .push_fmt(format_args!(", unset: {unset}, argv: "))
                 .expect("fixed command diagnostic separator must format");
             let _ = builder.push_safe(argv.as_log_safe_text());
             builder
@@ -592,22 +594,12 @@ impl Command {
         builder.finish().to_string()
     }
 
-    /// Builds redacted argv tokens through one diagnostic session.
-    fn redacted_argv_with_session(
-        &self,
-        redactor: &ArgvRedactor,
-        session: &RedactionSession<'_>,
-    ) -> RedactedArgv {
-        redactor
-            .redact_heuristically_with_session(self.argv_for_display(), session)
-    }
-
     /// Builds argv tokens with opaque shell payloads hidden.
     ///
     /// # Returns
     ///
     /// Borrowed argv items suitable for structured redaction.
-    fn argv_for_display(&self) -> impl Iterator<Item = ArgvItem<'_>> {
+    fn redaction_argv_items(&self) -> impl Iterator<Item = ArgvItem<'_>> {
         let shell_payload_index = self.shell_payload_arg_index();
         std::iter::once(ArgvItem::plain(self.program.as_os_str())).chain(
             self.args.iter().enumerate().map(move |(index, arg)| {
@@ -633,16 +625,13 @@ impl Command {
             return None;
         }
         let first_arg = self.args.first()?.value();
-        if self.program.as_os_str() == OsStr::new("sh")
-            && first_arg == OsStr::new("-c")
-        {
+        if self.program.as_os_str() == OsStr::new("sh") && first_arg == OsStr::new("-c") {
             return Some(1);
         }
 
         let program = self.program.to_string_lossy();
         let first_arg = first_arg.to_string_lossy();
-        if (program.eq_ignore_ascii_case("cmd")
-            || program.eq_ignore_ascii_case("cmd.exe"))
+        if (program.eq_ignore_ascii_case("cmd") || program.eq_ignore_ascii_case("cmd.exe"))
             && first_arg.eq_ignore_ascii_case("/C")
         {
             return Some(1);
@@ -650,35 +639,17 @@ impl Command {
         None
     }
 
-    /// Builds redacted environment assignments through one diagnostic session.
-    fn redacted_environment_assignments_with_session(
-        &self,
-        redactor: &EnvRedactor,
-        session: &RedactionSession<'_>,
-    ) -> LogSafeText<'static> {
-        redactor.redact_os_pairs_with_session(
-            self.envs
-                .iter()
-                .map(|(key, value)| (key.as_os_str(), value.as_os_str())),
-            session,
-        )
+    /// Returns environment pairs as borrowed operating-system strings.
+    fn environment_pairs(&self) -> impl Iterator<Item = (&OsStr, &OsStr)> {
+        self.envs
+            .iter()
+            .map(|(key, value)| (key.as_os_str(), value.as_os_str()))
     }
 
-    /// Builds removed environment-variable names through one diagnostic
-    /// session.
-    #[must_use]
-    fn removed_environment_names_with_session(
-        &self,
-        session: &RedactionSession<'_>,
-    ) -> Vec<String> {
-        let mut names = Vec::new();
-        for key in &self.removed_envs {
-            if !session.consume_input(key.as_encoded_bytes().len()) {
-                names.push("<truncated>".to_owned());
-                break;
-            }
-            names.push(key.to_string_lossy().into_owned());
-        }
-        names
+    /// Returns removed environment names as borrowed argv items.
+    fn removed_environment_items(&self) -> impl Iterator<Item = ArgvItem<'_>> {
+        self.removed_envs
+            .iter()
+            .map(|key| ArgvItem::plain(key.as_os_str()))
     }
 }

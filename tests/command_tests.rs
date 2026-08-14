@@ -183,11 +183,7 @@ fn test_command_debug_redacts_sensitive_display_values() {
 
     let debug = format!("{command:?}");
 
-    assert!(
-        debug.contains(
-            r#"argv: ["docker", "login", "--password", "<redacted>"]"#
-        )
-    );
+    assert!(debug.contains(r#"argv: ["docker", "login", "--password", "<redacted>"]"#));
     assert!(debug.contains(r#"env: ["OPENAI_API_KEY=****"]"#));
     assert!(debug.contains("stdin: Bytes(12 bytes)"));
     assert!(!debug.contains("secret"));
@@ -196,13 +192,23 @@ fn test_command_debug_redacts_sensitive_display_values() {
 }
 
 #[test]
+fn test_debug_uses_structured_argv_and_env_projection() {
+    let command = Command::new("sh")
+        .arg("-c")
+        .arg("printf '%s' shell-secret")
+        .sensitive_arg("explicit-secret")
+        .env("PASSWORD", "env-secret");
+
+    let rendered = format!("{command:?}");
+
+    assert!(!rendered.contains("shell-secret"));
+    assert!(!rendered.contains("explicit-secret"));
+    assert!(!rendered.contains("env-secret"));
+}
+
+#[test]
 fn test_command_debug_masks_sensitive_option_after_double_dash() {
-    let command = Command::new("wrapper").args(&[
-        "--",
-        "child",
-        "--password",
-        "raw-secret",
-    ]);
+    let command = Command::new("wrapper").args(&["--", "child", "--password", "raw-secret"]);
 
     let debug = format!("{command:?}");
 
@@ -213,8 +219,7 @@ fn test_command_debug_masks_sensitive_option_after_double_dash() {
 #[test]
 fn test_command_shell_payload_and_explicit_sensitive_argument_never_leak() {
     let shell = format!("{:?}", Command::shell("echo raw-shell-secret"));
-    let explicit =
-        format!("{:?}", Command::new("tool").sensitive_arg("raw-arg-secret"));
+    let explicit = format!("{:?}", Command::new("tool").sensitive_arg("raw-arg-secret"));
 
     assert!(!shell.contains("raw-shell-secret"));
     assert!(!explicit.contains("raw-arg-secret"));
@@ -224,8 +229,7 @@ fn test_command_shell_payload_and_explicit_sensitive_argument_never_leak() {
 #[test]
 fn test_command_debug_fails_closed_for_non_utf8_argument_and_environment() {
     let argument = OsString::from_vec(b"argument-secret-\xFF-suffix".to_vec());
-    let environment =
-        OsString::from_vec(b"environment-secret-\xFF-suffix".to_vec());
+    let environment = OsString::from_vec(b"environment-secret-\xFF-suffix".to_vec());
     let command = Command::new("tool")
         .arg_os(&argument)
         .env_os("MODE", &environment);
@@ -280,9 +284,7 @@ fn test_command_debug_formats_stdin_without_inline_bytes() {
     assert!(null_input.contains("stdin: Null"));
     assert!(inherited_input.contains("stdin: Inherit"));
     assert!(file_input.contains(r#"stdin: File("<redacted path>")"#));
-    assert!(
-        file_input.contains("working_directory: Some(\"<redacted path>\")")
-    );
+    assert!(file_input.contains("working_directory: Some(\"<redacted path>\")"));
     assert!(!file_input.contains("customer/working-directory"));
     assert!(!file_input.contains("customer/private-input.txt"));
 }
