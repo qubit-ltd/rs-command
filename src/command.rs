@@ -12,6 +12,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use qubit_redact::DiagnosticLogBuilder;
+use qubit_redact::LogSafeText;
+use qubit_redact::RedactionCompletion;
 use qubit_redact::RedactionPolicy;
 use qubit_redact::Redactor;
 use qubit_redact::Sensitivity;
@@ -22,6 +24,40 @@ use crate::command_env::env_key_eq;
 use crate::command_stdin::CommandStdin;
 
 const REDACTED_PATH: &str = "<redacted path>";
+const TRUNCATED_REDACTION: &str = "<truncated>";
+
+/// Maps adapter completion to the command diagnostic representation.
+///
+/// A complete result preserves its log-safe text. `Truncated` means the
+/// redactor omitted input or output but emitted a safe substitute, while
+/// `Exhausted` means no safe substitute fit and processing stopped without
+/// advancing further input. Command diagnostics deliberately collapse both
+/// incomplete states to [`TRUNCATED_REDACTION`]; the mapping never infers
+/// completion from rendered text. A caller receiving either incomplete state
+/// must stop invoking later adapters in the shared session and map their
+/// fields to the same command-level marker.
+///
+/// # Parameters
+///
+/// * `completion` - Exact completion reported by the redaction adapter.
+/// * `safe_text` - Log-safe adapter text used only for complete results.
+///
+/// # Returns
+///
+/// The complete log-safe text, or the command-level truncation marker for
+/// either incomplete state.
+#[inline(always)]
+fn command_redaction_text<'text>(
+    completion: RedactionCompletion,
+    safe_text: &'text LogSafeText<'_>,
+) -> &'text str {
+    match completion {
+        RedactionCompletion::Complete => safe_text.as_str(),
+        RedactionCompletion::Truncated | RedactionCompletion::Exhausted => {
+            TRUNCATED_REDACTION
+        }
+    }
+}
 
 /// Structured description of an external command to run.
 ///
@@ -78,28 +114,45 @@ impl fmt::Debug for Command {
         let argv = session
             .argv()
             .redact_heuristically(self.redaction_argv_items());
-        let env = session.env().redact_os_pairs(self.environment_pairs());
-        let unset = session
-            .argv()
-            .redact_items(self.removed_environment_items());
-        let unset_text = unset.as_log_safe_text().as_str();
-        let unset = if matches!(unset_text, "" | "[]")
-            && !self.removed_envs.is_empty()
-        {
-            "<truncated>"
-        } else {
-            unset_text
-        };
+        let argv_text =
+            command_redaction_text(argv.completion(), argv.log_safe_text());
+        let mut env = None;
+        let mut unset = None;
+        if argv.completion() == RedactionCompletion::Complete {
+            env = Some(session.env().redact_os_pairs(self.environment_pairs()));
+            if env.as_ref().is_some_and(|redacted| {
+                redacted.completion() == RedactionCompletion::Complete
+            }) {
+                unset = Some(
+                    session
+                        .argv()
+                        .redact_items(self.removed_environment_items()),
+                );
+            }
+        }
+        let env_text = env.as_ref().map_or(TRUNCATED_REDACTION, |redacted| {
+            command_redaction_text(
+                redacted.completion(),
+                redacted.log_safe_text(),
+            )
+        });
+        let unset_text =
+            unset.as_ref().map_or(TRUNCATED_REDACTION, |redacted| {
+                command_redaction_text(
+                    redacted.completion(),
+                    redacted.log_safe_text(),
+                )
+            });
         formatter
             .debug_struct("Command")
-            .field("argv", &format_args!("{argv}"))
+            .field("argv", &format_args!("{argv_text}"))
             .field(
                 "working_directory",
                 &self.working_directory.as_ref().map(|_| REDACTED_PATH),
             )
             .field("clear_environment", &self.clear_environment)
-            .field("env", &format_args!("{env}"))
-            .field("unset", &format_args!("{unset}"))
+            .field("env", &format_args!("{env_text}"))
+            .field("unset", &format_args!("{unset_text}"))
             .field("stdin", &self.stdin)
             .finish()
     }
@@ -568,29 +621,49 @@ impl Command {
         let argv = session
             .argv()
             .redact_heuristically(self.redaction_argv_items());
+        let argv_text =
+            command_redaction_text(argv.completion(), argv.log_safe_text());
         if self.envs.is_empty() && self.removed_envs.is_empty() {
-            let _ = builder.push_safe(argv.as_log_safe_text());
+            let _ = builder.push_fmt(format_args!("{argv_text}"));
         } else {
-            let env = session.env().redact_os_pairs(self.environment_pairs());
-            let unset = session
-                .argv()
-                .redact_items(self.removed_environment_items());
-            let unset_text = unset.as_log_safe_text().as_str();
-            let unset = if matches!(unset_text, "" | "[]")
-                && !self.removed_envs.is_empty()
-            {
-                "<truncated>"
-            } else {
-                unset_text
-            };
+            let mut env = None;
+            let mut unset = None;
+            if argv.completion() == RedactionCompletion::Complete {
+                env = Some(
+                    session.env().redact_os_pairs(self.environment_pairs()),
+                );
+                if env.as_ref().is_some_and(|redacted| {
+                    redacted.completion() == RedactionCompletion::Complete
+                }) {
+                    unset = Some(
+                        session
+                            .argv()
+                            .redact_items(self.removed_environment_items()),
+                    );
+                }
+            }
+            let env_text =
+                env.as_ref().map_or(TRUNCATED_REDACTION, |redacted| {
+                    command_redaction_text(
+                        redacted.completion(),
+                        redacted.log_safe_text(),
+                    )
+                });
+            let unset_text =
+                unset.as_ref().map_or(TRUNCATED_REDACTION, |redacted| {
+                    command_redaction_text(
+                        redacted.completion(),
+                        redacted.log_safe_text(),
+                    )
+                });
             builder
                 .push_fmt(format_args!("Command {{ env: "))
                 .expect("fixed command diagnostic prefix must format");
-            let _ = builder.push_safe(&env);
+            let _ = builder.push_fmt(format_args!("{env_text}"));
             builder
-                .push_fmt(format_args!(", unset: {unset}, argv: "))
+                .push_fmt(format_args!(", unset: {unset_text}, argv: "))
                 .expect("fixed command diagnostic separator must format");
-            let _ = builder.push_safe(argv.as_log_safe_text());
+            let _ = builder.push_fmt(format_args!("{argv_text}"));
             builder
                 .push_fmt(format_args!(" }}"))
                 .expect("fixed command diagnostic suffix must format");
