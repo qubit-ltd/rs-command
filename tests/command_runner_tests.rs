@@ -7,6 +7,8 @@
 // =============================================================================
 //! Tests for [`CommandRunner`](qubit_command::CommandRunner).
 
+#[cfg(not(windows))]
+use std::ffi::OsStr;
 use std::fs;
 use std::time::Duration;
 use std::time::Instant;
@@ -24,9 +26,15 @@ use qubit_command::OutputStream;
 #[cfg(not(windows))]
 use qubit_redact::InputOutputLimit;
 #[cfg(not(windows))]
+use qubit_redact::RedactionCompletion;
+#[cfg(not(windows))]
 use qubit_redact::RedactionPolicy;
 #[cfg(not(windows))]
+use qubit_redact::Redactor;
+#[cfg(not(windows))]
 use qubit_redact::Sensitivity;
+#[cfg(not(windows))]
+use qubit_redact::argv::ArgvItem;
 
 mod command_runner;
 mod support;
@@ -135,6 +143,7 @@ fn test_command_runner_rejects_directory_as_stderr_tee() {
 
 #[cfg(not(windows))]
 mod unix {
+    use super::ArgvItem;
     use super::Command;
     use super::CommandCancellation;
     use super::CommandErrorKind;
@@ -146,8 +155,11 @@ mod unix {
     use super::InputOutputLimit;
     use super::Instant;
     use super::LocalTempDir;
+    use super::OsStr;
     use super::OutputStream;
+    use super::RedactionCompletion;
     use super::RedactionPolicy;
+    use super::Redactor;
     use super::Sensitivity;
     use super::fs;
     use super::support::captured_log_records_containing;
@@ -224,12 +236,14 @@ mod unix {
 
     #[test]
     fn test_runner_accepts_a_complete_diagnostic_redaction_policy() {
-        let policy = RedactionPolicy::default()
-            .to_builder()
+        let mut builder = RedactionPolicy::default().to_builder();
+        builder
+            .fields()
             .raise("tenant_option", Sensitivity::Secret)
             .expect("the test policy field must be valid")
-            .allow_canonical_exact("username")
-            .expect("the test policy field must be valid")
+            .allow_exact("username")
+            .expect("the test policy field must be valid");
+        let policy = builder
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let runner = CommandRunner::new(Duration::from_secs(10))
@@ -240,11 +254,11 @@ mod unix {
 
     #[test]
     fn test_command_runner_shares_configured_diagnostic_input_budget() {
-        let budget = InputOutputLimit::new(3, 128)
+        let budget = InputOutputLimit::new(4, 128)
             .expect("the small diagnostic budget should be valid");
-        let policy = RedactionPolicy::default()
-            .to_builder()
-            .diagnostic_event(budget)
+        let mut builder = RedactionPolicy::default().to_builder();
+        builder.limits().diagnostic_event(budget);
+        let policy = builder
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let error = CommandRunner::new(Duration::from_secs(10))
@@ -262,9 +276,9 @@ mod unix {
     fn test_command_runner_applies_one_output_budget_to_full_diagnostic() {
         let budget = InputOutputLimit::new(512, 48)
             .expect("the small diagnostic budget should be valid");
-        let policy = RedactionPolicy::default()
-            .to_builder()
-            .diagnostic_event(budget)
+        let mut builder = RedactionPolicy::default().to_builder();
+        builder.limits().diagnostic_event(budget);
+        let policy = builder
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let error =
@@ -278,6 +292,39 @@ mod unix {
         assert!(error.command().len() <= budget.max_output_bytes());
         assert!(error.command().ends_with("<truncated>"));
         assert!(!error.command().contains("argument-that-forces"));
+    }
+
+    #[test]
+    fn test_command_runner_maps_exhausted_environment_to_marker() {
+        let budget = InputOutputLimit::new(256, 80)
+            .expect("the diagnostic budget should be valid");
+        let mut builder = RedactionPolicy::default().to_builder();
+        builder.limits().diagnostic_event(budget);
+        let policy = builder
+            .build()
+            .expect("the diagnostic redaction policy should be valid");
+        let missing_program = "x".repeat(46);
+
+        let redactor = Redactor::new(policy.clone());
+        let mut session = redactor.session();
+        let argv =
+            session
+                .argv()
+                .redact_heuristically([ArgvItem::plain(OsStr::new(
+                    &missing_program,
+                ))]);
+        assert_eq!(argv.completion(), RedactionCompletion::Complete);
+        let env = session
+            .env()
+            .redact_os_pairs([(OsStr::new("MODE"), OsStr::new("debug"))]);
+        assert_eq!(env.completion(), RedactionCompletion::Exhausted);
+
+        let error = CommandRunner::new(Duration::from_secs(10))
+            .diagnostic_redaction_policy(policy)
+            .run(Command::new(&missing_program).env("MODE", "debug"))
+            .expect_err("the missing executable should fail to spawn");
+
+        assert!(error.command().starts_with("Command { env: <truncated>"));
     }
 
     #[test]
@@ -1425,10 +1472,12 @@ mod unix {
 
     #[test]
     fn test_command_runner_error_redacts_configured_sensitive_field() {
-        let policy = RedactionPolicy::default()
-            .to_builder()
+        let mut builder = RedactionPolicy::default().to_builder();
+        builder
+            .fields()
             .raise("tenant_option", Sensitivity::Secret)
-            .expect("the test policy field must be valid")
+            .expect("the test policy field must be valid");
+        let policy = builder
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let error = CommandRunner::new(Duration::from_secs(10))
@@ -1452,12 +1501,14 @@ mod unix {
     #[test]
     fn test_command_runner_error_redacts_multiple_configured_sensitive_fields()
     {
-        let policy = RedactionPolicy::default()
-            .to_builder()
+        let mut builder = RedactionPolicy::default().to_builder();
+        builder
+            .fields()
             .raise("tenant_option", Sensitivity::Secret)
             .expect("the test policy field must be valid")
             .raise("tenant_env", Sensitivity::Secret)
-            .expect("the test policy field must be valid")
+            .expect("the test policy field must be valid");
+        let policy = builder
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let error = CommandRunner::new(Duration::from_secs(10))
@@ -1481,12 +1532,14 @@ mod unix {
     #[test]
     fn test_command_runner_floor_overrides_exact_allow_for_default_sensitive_fields()
      {
-        let policy = RedactionPolicy::default()
-            .to_builder()
-            .allow_canonical_exact("sig")
+        let mut builder = RedactionPolicy::default().to_builder();
+        builder
+            .fields()
+            .allow_exact("sig")
             .expect("the test policy field must be valid")
-            .allow_canonical_exact("signature")
-            .expect("the test policy field must be valid")
+            .allow_exact("signature")
+            .expect("the test policy field must be valid");
+        let policy = builder
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let error = CommandRunner::new(Duration::from_secs(10))
@@ -1506,10 +1559,12 @@ mod unix {
     #[test]
     fn test_command_runner_floor_overrides_suffix_allow_for_default_sensitive_fields()
      {
-        let policy = RedactionPolicy::default()
-            .to_builder()
+        let mut builder = RedactionPolicy::default().to_builder();
+        builder
+            .fields()
             .allow_suffix("access_token")
-            .expect("the test policy field must be valid")
+            .expect("the test policy field must be valid");
+        let policy = builder
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let error = CommandRunner::new(Duration::from_secs(10))

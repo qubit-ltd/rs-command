@@ -15,11 +15,12 @@ use qubit_redact::Sensitivity;
 
 #[test]
 fn test_command_runner_default_uses_installed_global_policy() {
-    let policy = RedactionPolicy::builder()
+    let mut builder = RedactionPolicy::builder();
+    builder
+        .fields()
         .raise("tenant_option", Sensitivity::Secret)
-        .expect("the test field should be valid")
-        .build()
-        .expect("the test policy should build");
+        .expect("the test field should be valid");
+    let policy = builder.build().expect("the test policy should build");
     RedactionPolicy::install_global(policy.clone())
         .expect("this test process installs its default only once");
 
