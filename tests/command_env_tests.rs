@@ -34,9 +34,11 @@ fn test_command_env_readding_removed_key_clears_removal() {
 /// Verifies incomplete unset redaction is mapped from completion state.
 #[test]
 fn test_command_debug_maps_incomplete_unset_redaction_to_marker() {
-    let limit =
-        InputOutputLimit::new(512, InputOutputLimit::MIN_OUTPUT_BYTES + 7)
-            .expect("the test diagnostic limit should be valid");
+    let limit = InputOutputLimit::builder()
+        .max_input_bytes(512)
+        .max_output_bytes(InputOutputLimit::MIN_OUTPUT_BYTES + 7)
+        .build()
+        .expect("the test diagnostic limit should be valid");
     let mut builder = RedactionPolicy::builder();
     builder.limits().diagnostic_event(limit);
     let policy = builder.build().expect("the test policy should build");
