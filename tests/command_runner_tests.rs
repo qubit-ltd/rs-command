@@ -254,7 +254,10 @@ mod unix {
 
     #[test]
     fn test_command_runner_shares_configured_diagnostic_input_budget() {
-        let budget = InputOutputLimit::new(4, 128)
+        let budget = InputOutputLimit::builder()
+            .max_input_bytes(4)
+            .max_output_bytes(128)
+            .build()
             .expect("the small diagnostic budget should be valid");
         let mut builder = RedactionPolicy::default().to_builder();
         builder.limits().diagnostic_event(budget);
@@ -274,7 +277,10 @@ mod unix {
 
     #[test]
     fn test_command_runner_applies_one_output_budget_to_full_diagnostic() {
-        let budget = InputOutputLimit::new(512, 48)
+        let budget = InputOutputLimit::builder()
+            .max_input_bytes(512)
+            .max_output_bytes(48)
+            .build()
             .expect("the small diagnostic budget should be valid");
         let mut builder = RedactionPolicy::default().to_builder();
         builder.limits().diagnostic_event(budget);
@@ -296,7 +302,10 @@ mod unix {
 
     #[test]
     fn test_command_runner_maps_exhausted_environment_to_marker() {
-        let budget = InputOutputLimit::new(256, 80)
+        let budget = InputOutputLimit::builder()
+            .max_input_bytes(256)
+            .max_output_bytes(80)
+            .build()
             .expect("the diagnostic budget should be valid");
         let mut builder = RedactionPolicy::default().to_builder();
         builder.limits().diagnostic_event(budget);
