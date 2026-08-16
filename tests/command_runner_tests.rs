@@ -34,7 +34,7 @@ use qubit_redact::Redactor;
 #[cfg(not(windows))]
 use qubit_redact::Sensitivity;
 #[cfg(not(windows))]
-use qubit_redact::argv::ArgvItem;
+use qubit_redact::formats::argv::ArgvItem;
 
 mod command_runner;
 mod support;
