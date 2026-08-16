@@ -14,7 +14,7 @@ use qubit_redact::InputOutputLimit;
 use qubit_redact::RedactionCompletion;
 use qubit_redact::RedactionPolicy;
 use qubit_redact::Redactor;
-use qubit_redact::argv::ArgvItem;
+use qubit_redact::formats::argv::ArgvItem;
 
 #[test]
 fn test_command_env_readding_removed_key_clears_removal() {
