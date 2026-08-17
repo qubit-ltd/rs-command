@@ -238,7 +238,7 @@ mod unix {
     fn test_runner_accepts_a_complete_diagnostic_redaction_policy() {
         let mut builder = RedactionPolicy::default().to_builder();
         builder
-            .fields()
+            .legacy_fields()
             .raise("tenant_option", Sensitivity::Secret)
             .expect("the test policy field must be valid")
             .allow_exact("username")
@@ -1483,7 +1483,7 @@ mod unix {
     fn test_command_runner_error_redacts_configured_sensitive_field() {
         let mut builder = RedactionPolicy::default().to_builder();
         builder
-            .fields()
+            .legacy_fields()
             .raise("tenant_option", Sensitivity::Secret)
             .expect("the test policy field must be valid");
         let policy = builder
@@ -1512,7 +1512,7 @@ mod unix {
     {
         let mut builder = RedactionPolicy::default().to_builder();
         builder
-            .fields()
+            .legacy_fields()
             .raise("tenant_option", Sensitivity::Secret)
             .expect("the test policy field must be valid")
             .raise("tenant_env", Sensitivity::Secret)
@@ -1543,7 +1543,7 @@ mod unix {
      {
         let mut builder = RedactionPolicy::default().to_builder();
         builder
-            .fields()
+            .legacy_fields()
             .allow_exact("sig")
             .expect("the test policy field must be valid")
             .allow_exact("signature")
@@ -1570,7 +1570,7 @@ mod unix {
      {
         let mut builder = RedactionPolicy::default().to_builder();
         builder
-            .fields()
+            .legacy_fields()
             .allow_suffix("access_token")
             .expect("the test policy field must be valid");
         let policy = builder

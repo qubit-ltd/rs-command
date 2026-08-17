@@ -17,7 +17,7 @@ use qubit_redact::Sensitivity;
 fn test_command_runner_default_uses_installed_global_policy() {
     let mut builder = RedactionPolicy::builder();
     builder
-        .fields()
+        .legacy_fields()
         .raise("tenant_option", Sensitivity::Secret)
         .expect("the test field should be valid");
     let policy = builder.build().expect("the test policy should build");
