@@ -48,13 +48,13 @@ fn test_command_debug_maps_incomplete_unset_redaction_to_marker() {
 
     let redactor = Redactor::new(policy.clone());
     let mut session = redactor.session();
-    let _ = session
-        .argv()
-        .redact_items([ArgvItem::plain(OsStr::new("x"))]);
-    let _ = session.env().redact_os_pairs(std::iter::empty());
-    let truncated = session
-        .argv()
-        .redact_items([ArgvItem::plain(OsStr::new(&oversized_removed))]);
+    let _ = session.argv_with_mut(|argv| {
+        argv.redact_items([ArgvItem::plain(OsStr::new("x"))])
+    });
+    let _ = session.env_with_mut(|env| env.redact_os_pairs(std::iter::empty()));
+    let truncated = session.argv_with_mut(|argv| {
+        argv.redact_items([ArgvItem::plain(OsStr::new(&oversized_removed))])
+    });
     assert!(matches!(
         truncated.completion(),
         RedactionCompletion::Truncated
@@ -62,22 +62,21 @@ fn test_command_debug_maps_incomplete_unset_redaction_to_marker() {
 
     let redactor = Redactor::new(policy.clone());
     let mut session = redactor.session();
-    let _ = session
-        .argv()
-        .redact_items([ArgvItem::plain(OsStr::new("x"))]);
-    let _ = session
-        .env()
-        .redact_os_pairs([(OsStr::new("A"), OsStr::new(&oversized_value))]);
-    let exhausted = session
-        .argv()
-        .redact_items([ArgvItem::plain(OsStr::new("REMOVED"))]);
+    let _ = session.argv_with_mut(|argv| {
+        argv.redact_items([ArgvItem::plain(OsStr::new("x"))])
+    });
+    let _ = session.env_with_mut(|env| {
+        env.redact_os_pairs([(OsStr::new("A"), OsStr::new(&oversized_value))])
+    });
+    let exhausted = session.argv_with_mut(|argv| {
+        argv.redact_items([ArgvItem::plain(OsStr::new("REMOVED"))])
+    });
     assert!(matches!(
         exhausted.completion(),
         RedactionCompletion::Exhausted
     ));
 
-    RedactionPolicy::install_global(policy)
-        .expect("this test process installs its default only once");
+    let previous = Redactor::set_default(Redactor::new(policy));
     let truncated_debug =
         format!("{:?}", Command::new("x").env_remove(&oversized_removed));
     let argv_truncated_debug = format!(
@@ -92,6 +91,7 @@ fn test_command_debug_maps_incomplete_unset_redaction_to_marker() {
             .env("A", &oversized_value)
             .env_remove("REMOVED"),
     );
+    let _ = Redactor::set_default(previous);
 
     assert!(truncated_debug.contains("unset: <truncated>"));
     assert!(!truncated_debug.contains(r#"unset: ["<truncated>"]"#));

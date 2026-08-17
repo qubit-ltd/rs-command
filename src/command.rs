@@ -111,23 +111,28 @@ impl fmt::Debug for Command {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let redactor = Redactor::default();
         let mut session = redactor.session();
-        let argv = session
-            .argv()
-            .redact_heuristically(self.redaction_argv_items());
+        let mut argv = None;
+        session = session.argv_with(|adapter| {
+            argv =
+                Some(adapter.redact_heuristically(self.redaction_argv_items()));
+        });
+        let argv = argv.expect("argv adapter must run exactly once");
         let argv_text =
             command_redaction_text(argv.completion(), argv.log_safe_text());
         let mut env = None;
         let mut unset = None;
         if argv.completion() == RedactionCompletion::Complete {
-            env = Some(session.env().redact_os_pairs(self.environment_pairs()));
+            session = session.env_with(|adapter| {
+                env = Some(adapter.redact_os_pairs(self.environment_pairs()));
+            });
             if env.as_ref().is_some_and(|redacted| {
                 redacted.completion() == RedactionCompletion::Complete
             }) {
-                unset = Some(
-                    session
-                        .argv()
-                        .redact_items(self.removed_environment_items()),
-                );
+                let _ = session.argv_with(|adapter| {
+                    unset = Some(
+                        adapter.redact_items(self.removed_environment_items()),
+                    );
+                });
             }
         }
         let env_text = env.as_ref().map_or(TRUNCATED_REDACTION, |redacted| {
@@ -618,9 +623,12 @@ impl Command {
         let budget = policy.limits().diagnostic_event();
         let mut session = redactor.session();
         let mut builder = DiagnosticLogBuilder::new(budget);
-        let argv = session
-            .argv()
-            .redact_heuristically(self.redaction_argv_items());
+        let mut argv = None;
+        session = session.argv_with(|adapter| {
+            argv =
+                Some(adapter.redact_heuristically(self.redaction_argv_items()));
+        });
+        let argv = argv.expect("argv adapter must run exactly once");
         let argv_text =
             command_redaction_text(argv.completion(), argv.log_safe_text());
         if self.envs.is_empty() && self.removed_envs.is_empty() {
@@ -629,17 +637,19 @@ impl Command {
             let mut env = None;
             let mut unset = None;
             if argv.completion() == RedactionCompletion::Complete {
-                env = Some(
-                    session.env().redact_os_pairs(self.environment_pairs()),
-                );
+                session = session.env_with(|adapter| {
+                    env =
+                        Some(adapter.redact_os_pairs(self.environment_pairs()));
+                });
                 if env.as_ref().is_some_and(|redacted| {
                     redacted.completion() == RedactionCompletion::Complete
                 }) {
-                    unset = Some(
-                        session
-                            .argv()
-                            .redact_items(self.removed_environment_items()),
-                    );
+                    let _ = session.argv_with(|adapter| {
+                        unset = Some(
+                            adapter
+                                .redact_items(self.removed_environment_items()),
+                        );
+                    });
                 }
             }
             let env_text =

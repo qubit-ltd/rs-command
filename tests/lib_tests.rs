@@ -23,7 +23,7 @@ fn test_lib_exports_public_api() {
     let command = Command::new("printf").arg("hello");
     let mut builder = RedactionPolicy::default().to_builder();
     builder
-        .legacy_fields()
+        .edit_fields()
         .raise("tenant_option", Sensitivity::Secret)
         .expect("the test policy field must be valid");
     let policy = builder
