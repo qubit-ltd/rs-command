@@ -11,20 +11,21 @@ use std::time::Duration;
 
 use qubit_command::CommandRunner;
 use qubit_redact::RedactionPolicy;
+use qubit_redact::Redactor;
 use qubit_redact::Sensitivity;
 
 #[test]
 fn test_command_runner_default_uses_installed_global_policy() {
     let mut builder = RedactionPolicy::builder();
     builder
-        .legacy_fields()
+        .edit_fields()
         .raise("tenant_option", Sensitivity::Secret)
         .expect("the test field should be valid");
     let policy = builder.build().expect("the test policy should build");
-    RedactionPolicy::install_global(policy.clone())
-        .expect("this test process installs its default only once");
+    let previous = Redactor::set_default(Redactor::new(policy.clone()));
 
     let runner = CommandRunner::new(Duration::from_secs(10));
 
     assert_eq!(runner.configured_diagnostic_redaction_policy(), &policy);
+    let _ = Redactor::set_default(previous);
 }
