@@ -11,9 +11,7 @@ use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 
-use qubit_redact::DiagnosticLogBuilder;
 use qubit_redact::RedactedText;
-use qubit_redact::RedactionCompletion;
 use qubit_redact::RedactionPolicy;
 use qubit_redact::Redactor;
 use qubit_redact::Sensitivity;
@@ -26,7 +24,7 @@ use crate::command_stdin::CommandStdin;
 const REDACTED_PATH: &str = "<redacted path>";
 const TRUNCATED_REDACTION: &str = "<truncated>";
 
-/// Maps adapter completion to the command diagnostic representation.
+/// Maps a staged result to the command diagnostic representation.
 ///
 /// A complete result preserves its log-safe text. `Truncated` means the
 /// redactor omitted input or output but emitted a safe substitute, while
@@ -47,16 +45,8 @@ const TRUNCATED_REDACTION: &str = "<truncated>";
 /// The complete log-safe text, or the command-level truncation marker for
 /// either incomplete state.
 #[inline(always)]
-fn command_redaction_text(
-    completion: RedactionCompletion,
-    safe_text: &RedactedText,
-) -> &str {
-    match completion {
-        RedactionCompletion::Complete => safe_text.as_str(),
-        RedactionCompletion::Truncated | RedactionCompletion::Exhausted => {
-            TRUNCATED_REDACTION
-        }
-    }
+fn command_redaction_text(safe_text: Option<&RedactedText>) -> &str {
+    safe_text.map_or(TRUNCATED_REDACTION, RedactedText::as_str)
 }
 
 /// Structured description of an external command to run.
@@ -111,43 +101,29 @@ impl fmt::Debug for Command {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let redactor = Redactor::default();
         let mut session = redactor.session();
-        let mut argv = None;
-        session.argv(|adapter| {
-            argv =
-                Some(adapter.redact_heuristically(self.redaction_argv_items()));
-        });
-        let argv = argv.expect("argv adapter must run exactly once");
-        let argv_text =
-            command_redaction_text(argv.completion(), argv.log_safe_text());
-        let mut env = None;
-        let mut unset = None;
-        if argv.completion() == RedactionCompletion::Complete {
-            session.env(|adapter| {
-                env = Some(adapter.redact_os_pairs(self.environment_pairs()));
+        session
+            .argv(|adapter| {
+                adapter.redact_heuristically_as(
+                    "argv",
+                    self.redaction_argv_items(),
+                );
+            })
+            .env(|adapter| {
+                adapter.redact_os_pairs_as("env", self.environment_pairs());
+            })
+            .argv(|adapter| {
+                adapter
+                    .redact_items_as("unset", self.removed_environment_items());
             });
-            if env.as_ref().is_some_and(|redacted| {
-                redacted.completion() == RedactionCompletion::Complete
-            }) {
-                session.argv(|adapter| {
-                    unset = Some(
-                        adapter.redact_items(self.removed_environment_items()),
-                    );
-                });
-            }
-        }
-        let env_text = env.as_ref().map_or(TRUNCATED_REDACTION, |redacted| {
-            command_redaction_text(
-                redacted.completion(),
-                redacted.log_safe_text(),
-            )
-        });
-        let unset_text =
-            unset.as_ref().map_or(TRUNCATED_REDACTION, |redacted| {
-                command_redaction_text(
-                    redacted.completion(),
-                    redacted.log_safe_text(),
-                )
-            });
+        let output = session.finish().map_err(|_| fmt::Error)?;
+        let argv_text = command_redaction_text(
+            output.get("argv").map(|value| value.text()),
+        );
+        let env_text =
+            command_redaction_text(output.get("env").map(|value| value.text()));
+        let unset_text = command_redaction_text(
+            output.get("unset").map(|value| value.text()),
+        );
         formatter
             .debug_struct("Command")
             .field("argv", &format_args!("{argv_text}"))
@@ -621,56 +597,39 @@ impl Command {
     pub(crate) fn display_command(&self, policy: &RedactionPolicy) -> String {
         let redactor = Redactor::new(policy.clone());
         let mut session = redactor.session();
-        let mut builder =
-            DiagnosticLogBuilder::new(policy.limits().diagnostic_event());
-        let mut argv = None;
-        session.argv(|adapter| {
-            argv =
-                Some(adapter.redact_heuristically(self.redaction_argv_items()));
-        });
-        let argv = argv.expect("argv adapter must run exactly once");
-        let argv_text =
-            command_redaction_text(argv.completion(), argv.log_safe_text());
+        session
+            .argv(|adapter| {
+                adapter.redact_heuristically_as(
+                    "argv",
+                    self.redaction_argv_items(),
+                );
+            })
+            .env(|adapter| {
+                adapter.redact_os_pairs_as("env", self.environment_pairs());
+            })
+            .argv(|adapter| {
+                adapter
+                    .redact_items_as("unset", self.removed_environment_items());
+            });
+        let Ok(output) = session.finish() else {
+            return TRUNCATED_REDACTION.to_owned();
+        };
+        let argv_text = command_redaction_text(
+            output.get("argv").map(|value| value.text()),
+        );
         if self.envs.is_empty() && self.removed_envs.is_empty() {
-            let _ = builder.push_fmt(format_args!("{argv_text}"));
+            argv_text.to_owned()
         } else {
-            let mut env = None;
-            let mut unset = None;
-            if argv.completion() == RedactionCompletion::Complete {
-                session.env(|adapter| {
-                    env =
-                        Some(adapter.redact_os_pairs(self.environment_pairs()));
-                });
-                if env.as_ref().is_some_and(|redacted| {
-                    redacted.completion() == RedactionCompletion::Complete
-                }) {
-                    session.argv(|adapter| {
-                        unset = Some(
-                            adapter
-                                .redact_items(self.removed_environment_items()),
-                        );
-                    });
-                }
-            }
-            let env_text =
-                env.as_ref().map_or(TRUNCATED_REDACTION, |redacted| {
-                    command_redaction_text(
-                        redacted.completion(),
-                        redacted.log_safe_text(),
-                    )
-                });
-            let unset_text =
-                unset.as_ref().map_or(TRUNCATED_REDACTION, |redacted| {
-                    command_redaction_text(
-                        redacted.completion(),
-                        redacted.log_safe_text(),
-                    )
-                });
-            let _ = builder.push_fmt(format_args!(
+            let env_text = command_redaction_text(
+                output.get("env").map(|value| value.text()),
+            );
+            let unset_text = command_redaction_text(
+                output.get("unset").map(|value| value.text()),
+            );
+            format!(
                 "Command {{ env: {env_text}, unset: {unset_text}, argv: {argv_text} }}"
-            ));
+            )
         }
-        builder.finish().into_string()
     }
 
     /// Builds argv tokens with opaque shell payloads hidden.
@@ -678,10 +637,10 @@ impl Command {
     /// # Returns
     ///
     /// Borrowed argv items suitable for structured redaction.
-    fn redaction_argv_items(&self) -> impl Iterator<Item = ArgvItem<'_>> {
+    fn redaction_argv_items(&self) -> Vec<ArgvItem<'_>> {
         let shell_payload_index = self.shell_payload_arg_index();
-        std::iter::once(ArgvItem::plain(self.program.as_os_str())).chain(
-            self.args.iter().enumerate().map(move |(index, arg)| {
+        std::iter::once(ArgvItem::plain(self.program.as_os_str()))
+            .chain(self.args.iter().enumerate().map(move |(index, arg)| {
                 if Some(index) == shell_payload_index {
                     ArgvItem::sensitive(arg.value(), Sensitivity::Secret)
                 } else if let Some(sensitivity) = arg.sensitivity() {
@@ -689,8 +648,8 @@ impl Command {
                 } else {
                     ArgvItem::plain(arg.value())
                 }
-            }),
-        )
+            }))
+            .collect()
     }
 
     /// Locates the shell script argument generated by [`Self::shell`].
@@ -722,16 +681,18 @@ impl Command {
     }
 
     /// Returns environment pairs as borrowed operating-system strings.
-    fn environment_pairs(&self) -> impl Iterator<Item = (&OsStr, &OsStr)> {
+    fn environment_pairs(&self) -> Vec<(&OsStr, &OsStr)> {
         self.envs
             .iter()
             .map(|(key, value)| (key.as_os_str(), value.as_os_str()))
+            .collect()
     }
 
     /// Returns removed environment names as borrowed argv items.
-    fn removed_environment_items(&self) -> impl Iterator<Item = ArgvItem<'_>> {
+    fn removed_environment_items(&self) -> Vec<ArgvItem<'_>> {
         self.removed_envs
             .iter()
             .map(|key| ArgvItem::plain(key.as_os_str()))
+            .collect()
     }
 }
