@@ -24,10 +24,6 @@ use qubit_command::DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM;
 #[cfg(not(windows))]
 use qubit_command::OutputStream;
 #[cfg(not(windows))]
-use qubit_redact::InputOutputLimit;
-#[cfg(not(windows))]
-use qubit_redact::RedactionCompletion;
-#[cfg(not(windows))]
 use qubit_redact::RedactionPolicy;
 #[cfg(not(windows))]
 use qubit_redact::Redactor;
@@ -152,12 +148,10 @@ mod unix {
     use super::CommandRunner;
     use super::DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM;
     use super::Duration;
-    
     use super::Instant;
     use super::LocalTempDir;
     use super::OsStr;
     use super::OutputStream;
-    
     use super::RedactionPolicy;
     use super::Redactor;
     use super::Sensitivity;
