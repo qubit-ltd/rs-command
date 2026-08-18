@@ -152,12 +152,12 @@ mod unix {
     use super::CommandRunner;
     use super::DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM;
     use super::Duration;
-    use super::InputOutputLimit;
+    
     use super::Instant;
     use super::LocalTempDir;
     use super::OsStr;
     use super::OutputStream;
-    use super::RedactionCompletion;
+    
     use super::RedactionPolicy;
     use super::Redactor;
     use super::Sensitivity;
@@ -287,12 +287,20 @@ mod unix {
         let redactor = Redactor::new(policy.clone());
         let mut session = redactor.session();
         session.argv(|argv| {
-            argv.redact_heuristically("argv", [ArgvItem::plain(OsStr::new(&missing_program))]);
+            argv.redact_heuristically(
+                "argv",
+                [ArgvItem::plain(OsStr::new(&missing_program))],
+            );
         });
         session.env(|env| {
-            env.redact_os_pairs("env", [(OsStr::new("MODE"), OsStr::new("debug"))]);
+            env.redact_os_pairs(
+                "env",
+                [(OsStr::new("MODE"), OsStr::new("debug"))],
+            );
         });
-        let output = session.finish().expect("named adapter results commit atomically");
+        let output = session
+            .finish()
+            .expect("named adapter results commit atomically");
         assert!(output.get("argv").is_some());
         assert!(output.get("env").is_some());
 
