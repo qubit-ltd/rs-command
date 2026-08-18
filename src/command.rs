@@ -103,17 +103,17 @@ impl fmt::Debug for Command {
         let mut session = redactor.session();
         session
             .argv(|adapter| {
-                adapter.redact_heuristically_as(
+                adapter.redact_heuristically(
                     "argv",
                     self.redaction_argv_items(),
                 );
             })
             .env(|adapter| {
-                adapter.redact_os_pairs_as("env", self.environment_pairs());
+                adapter.redact_os_pairs("env", self.environment_pairs());
             })
             .argv(|adapter| {
                 adapter
-                    .redact_items_as("unset", self.removed_environment_items());
+                    .redact_items("unset", self.removed_environment_items());
             });
         let output = session.finish().map_err(|_| fmt::Error)?;
         let argv_text = command_redaction_text(
@@ -599,17 +599,17 @@ impl Command {
         let mut session = redactor.session();
         session
             .argv(|adapter| {
-                adapter.redact_heuristically_as(
+                adapter.redact_heuristically(
                     "argv",
                     self.redaction_argv_items(),
                 );
             })
             .env(|adapter| {
-                adapter.redact_os_pairs_as("env", self.environment_pairs());
+                adapter.redact_os_pairs("env", self.environment_pairs());
             })
             .argv(|adapter| {
                 adapter
-                    .redact_items_as("unset", self.removed_environment_items());
+                    .redact_items("unset", self.removed_environment_items());
             });
         let Ok(output) = session.finish() else {
             return TRUNCATED_REDACTION.to_owned();
