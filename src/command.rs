@@ -12,7 +12,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use qubit_redact::DiagnosticLogBuilder;
-use qubit_redact::LogSafeText;
+use qubit_redact::RedactedText;
 use qubit_redact::RedactionCompletion;
 use qubit_redact::RedactionPolicy;
 use qubit_redact::Redactor;
@@ -47,10 +47,10 @@ const TRUNCATED_REDACTION: &str = "<truncated>";
 /// The complete log-safe text, or the command-level truncation marker for
 /// either incomplete state.
 #[inline(always)]
-fn command_redaction_text<'text>(
+fn command_redaction_text(
     completion: RedactionCompletion,
-    safe_text: &'text LogSafeText<'_>,
-) -> &'text str {
+    safe_text: &RedactedText,
+) -> &str {
     match completion {
         RedactionCompletion::Complete => safe_text.as_str(),
         RedactionCompletion::Truncated | RedactionCompletion::Exhausted => {
@@ -112,7 +112,7 @@ impl fmt::Debug for Command {
         let redactor = Redactor::default();
         let mut session = redactor.session();
         let mut argv = None;
-        session = session.argv_with(|adapter| {
+        session.argv(|adapter| {
             argv =
                 Some(adapter.redact_heuristically(self.redaction_argv_items()));
         });
@@ -122,13 +122,13 @@ impl fmt::Debug for Command {
         let mut env = None;
         let mut unset = None;
         if argv.completion() == RedactionCompletion::Complete {
-            session = session.env_with(|adapter| {
+            session.env(|adapter| {
                 env = Some(adapter.redact_os_pairs(self.environment_pairs()));
             });
             if env.as_ref().is_some_and(|redacted| {
                 redacted.completion() == RedactionCompletion::Complete
             }) {
-                let _ = session.argv_with(|adapter| {
+                session.argv(|adapter| {
                     unset = Some(
                         adapter.redact_items(self.removed_environment_items()),
                     );
@@ -620,11 +620,11 @@ impl Command {
     #[must_use]
     pub(crate) fn display_command(&self, policy: &RedactionPolicy) -> String {
         let redactor = Redactor::new(policy.clone());
-        let budget = policy.limits().diagnostic_event();
         let mut session = redactor.session();
-        let mut builder = DiagnosticLogBuilder::new(budget);
+        let mut builder =
+            DiagnosticLogBuilder::new(policy.limits().diagnostic_event());
         let mut argv = None;
-        session = session.argv_with(|adapter| {
+        session.argv(|adapter| {
             argv =
                 Some(adapter.redact_heuristically(self.redaction_argv_items()));
         });
@@ -637,14 +637,14 @@ impl Command {
             let mut env = None;
             let mut unset = None;
             if argv.completion() == RedactionCompletion::Complete {
-                session = session.env_with(|adapter| {
+                session.env(|adapter| {
                     env =
                         Some(adapter.redact_os_pairs(self.environment_pairs()));
                 });
                 if env.as_ref().is_some_and(|redacted| {
                     redacted.completion() == RedactionCompletion::Complete
                 }) {
-                    let _ = session.argv_with(|adapter| {
+                    session.argv(|adapter| {
                         unset = Some(
                             adapter
                                 .redact_items(self.removed_environment_items()),
@@ -666,19 +666,11 @@ impl Command {
                         redacted.log_safe_text(),
                     )
                 });
-            builder
-                .push_fmt(format_args!("Command {{ env: "))
-                .expect("fixed command diagnostic prefix must format");
-            let _ = builder.push_fmt(format_args!("{env_text}"));
-            builder
-                .push_fmt(format_args!(", unset: {unset_text}, argv: "))
-                .expect("fixed command diagnostic separator must format");
-            let _ = builder.push_fmt(format_args!("{argv_text}"));
-            builder
-                .push_fmt(format_args!(" }}"))
-                .expect("fixed command diagnostic suffix must format");
+            let _ = builder.push_fmt(format_args!(
+                "Command {{ env: {env_text}, unset: {unset_text}, argv: {argv_text} }}"
+            ));
         }
-        builder.finish().to_string()
+        builder.finish().into_string()
     }
 
     /// Builds argv tokens with opaque shell payloads hidden.
