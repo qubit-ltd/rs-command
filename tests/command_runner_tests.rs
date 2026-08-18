@@ -253,17 +253,8 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_shares_configured_diagnostic_input_budget() {
-        let budget = InputOutputLimit::builder()
-            .max_input_bytes(4)
-            .max_output_bytes(128)
-            .build()
-            .expect("the small diagnostic budget should be valid");
-        let mut builder = RedactionPolicy::default().to_builder();
-        builder.limits().diagnostic_event(budget);
-        let policy = builder
-            .build()
-            .expect("the diagnostic redaction policy should be valid");
+    fn test_command_runner_keeps_complete_finite_diagnostic_inputs() {
+        let policy = RedactionPolicy::default();
         let error = CommandRunner::new(Duration::from_secs(10))
             .diagnostic_redaction_policy(policy)
             .run(Command::new("xxx").env("A", "B").env_remove("C"))
@@ -275,17 +266,8 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_applies_one_output_budget_to_full_diagnostic() {
-        let budget = InputOutputLimit::builder()
-            .max_input_bytes(512)
-            .max_output_bytes(48)
-            .build()
-            .expect("the small diagnostic budget should be valid");
-        let mut builder = RedactionPolicy::default().to_builder();
-        builder.limits().diagnostic_event(budget);
-        let policy = builder
-            .build()
-            .expect("the diagnostic redaction policy should be valid");
+    fn test_command_runner_keeps_long_diagnostic_values() {
+        let policy = RedactionPolicy::default();
         let error =
             CommandRunner::new(Duration::from_secs(10))
                 .diagnostic_redaction_policy(policy)
@@ -298,31 +280,21 @@ mod unix {
     }
 
     #[test]
-    fn test_command_runner_maps_exhausted_environment_to_marker() {
-        let budget = InputOutputLimit::builder()
-            .max_input_bytes(256)
-            .max_output_bytes(80)
-            .build()
-            .expect("the diagnostic budget should be valid");
-        let mut builder = RedactionPolicy::default().to_builder();
-        builder.limits().diagnostic_event(budget);
-        let policy = builder
-            .build()
-            .expect("the diagnostic redaction policy should be valid");
+    fn test_command_runner_stages_each_named_adapter_result() {
+        let policy = RedactionPolicy::default();
         let missing_program = "x".repeat(46);
 
         let redactor = Redactor::new(policy.clone());
         let mut session = redactor.session();
-        let argv = session.argv_with_mut(|argv| {
-            argv.redact_heuristically([ArgvItem::plain(OsStr::new(
-                &missing_program,
-            ))])
+        session.argv(|argv| {
+            argv.redact_heuristically("argv", [ArgvItem::plain(OsStr::new(&missing_program))]);
         });
-        assert_eq!(argv.completion(), RedactionCompletion::Complete);
-        let env = session.env_with_mut(|env| {
-            env.redact_os_pairs([(OsStr::new("MODE"), OsStr::new("debug"))])
+        session.env(|env| {
+            env.redact_os_pairs("env", [(OsStr::new("MODE"), OsStr::new("debug"))]);
         });
-        assert_eq!(env.completion(), RedactionCompletion::Complete);
+        let output = session.finish().expect("named adapter results commit atomically");
+        assert!(output.get("argv").is_some());
+        assert!(output.get("env").is_some());
 
         let error = CommandRunner::new(Duration::from_secs(10))
             .diagnostic_redaction_policy(policy)
