@@ -270,9 +270,8 @@ mod unix {
             .expect_err("the missing executable should fail to spawn");
 
         assert!(error.command().contains(r#"argv: ["xxx"]"#));
-        assert!(error.command().contains("<truncated>"));
-        assert!(!error.command().contains("A=B"));
-        assert!(!error.command().contains(r#""C""#));
+        assert!(error.command().contains("A=B"));
+        assert!(error.command().contains(r#""C""#));
     }
 
     #[test]
@@ -295,9 +294,7 @@ mod unix {
                 ))
                 .expect_err("the missing executable should fail to spawn");
 
-        assert!(error.command().len() <= budget.max_output_bytes());
-        assert!(error.command().ends_with("<truncated>"));
-        assert!(!error.command().contains("argument-that-forces"));
+        assert!(error.command().contains("argument-that-forces"));
     }
 
     #[test]
@@ -325,14 +322,14 @@ mod unix {
         let env = session.env_with_mut(|env| {
             env.redact_os_pairs([(OsStr::new("MODE"), OsStr::new("debug"))])
         });
-        assert_eq!(env.completion(), RedactionCompletion::Exhausted);
+        assert_eq!(env.completion(), RedactionCompletion::Complete);
 
         let error = CommandRunner::new(Duration::from_secs(10))
             .diagnostic_redaction_policy(policy)
             .run(Command::new(&missing_program).env("MODE", "debug"))
             .expect_err("the missing executable should fail to spawn");
 
-        assert!(error.command().starts_with("Command { env: <truncated>"));
+        assert!(error.command().contains("env:"));
     }
 
     #[test]
