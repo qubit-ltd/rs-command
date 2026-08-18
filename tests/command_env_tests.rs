@@ -43,6 +43,8 @@ fn test_command_debug_stages_named_adapter_results() {
     session.argv(|argv| {
         argv.redact_items("unset", [ArgvItem::plain(OsStr::new("REMOVED"))]);
     });
-    let output = session.finish().expect("all named results commit atomically");
+    let output = session
+        .finish()
+        .expect("all named results commit atomically");
     assert_eq!(output.results().len(), 3);
 }
