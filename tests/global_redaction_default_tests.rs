@@ -16,16 +16,18 @@ use qubit_redact::Sensitivity;
 
 #[test]
 fn test_command_runner_default_uses_installed_global_policy() {
-    let mut builder = RedactionPolicy::builder();
-    builder
-        .edit_fields()
-        .raise("tenant_option", Sensitivity::Secret)
-        .expect("the test field should be valid");
-    let policy = builder.build().expect("the test policy should build");
-    let previous = Redactor::set_default(Redactor::new(policy.clone()));
+    let policy = RedactionPolicy::builder()
+        .fields(|fields| {
+            fields.raise("tenant_option", Sensitivity::Secret);
+        })
+        .expect("the test field should be valid")
+        .build()
+        .expect("the test policy should build");
+    let previous =
+        Redactor::replace_application_default(Redactor::new(policy.clone()));
 
     let runner = CommandRunner::new(Duration::from_secs(10));
 
     assert_eq!(runner.configured_diagnostic_redaction_policy(), &policy);
-    let _ = Redactor::set_default(previous);
+    let _ = Redactor::replace_application_default(previous);
 }

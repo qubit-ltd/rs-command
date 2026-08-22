@@ -13,7 +13,15 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use qubit_clock::TimeError;
-use qubit_redact::redacted_debug;
+use qubit_redact::Redactor;
+
+/// Redacts one debug-only value before it crosses the diagnostic boundary.
+fn redacted_debug_text(value: &impl fmt::Debug) -> String {
+    Redactor::strict()
+        .redact_field("command_path", &format!("{value:?}"))
+        .into_text()
+        .into_string()
+}
 
 use crate::OutputStream;
 
@@ -186,12 +194,12 @@ impl fmt::Debug for CommandErrorReason {
                 .finish(),
             Self::OpenInputFailed { path, source } => formatter
                 .debug_struct("OpenInputFailed")
-                .field("path", &redacted_debug(path))
+                .field("path", &redacted_debug_text(path))
                 .field("source", source)
                 .finish(),
             Self::NonRegularInputFile { path } => formatter
                 .debug_struct("NonRegularInputFile")
-                .field("path", &redacted_debug(path))
+                .field("path", &redacted_debug_text(path))
                 .finish(),
             Self::OpenOutputFailed {
                 stream,
@@ -200,13 +208,13 @@ impl fmt::Debug for CommandErrorReason {
             } => formatter
                 .debug_struct("OpenOutputFailed")
                 .field("stream", stream)
-                .field("path", &redacted_debug(path))
+                .field("path", &redacted_debug_text(path))
                 .field("source", source)
                 .finish(),
             Self::NonRegularOutputFile { stream, path } => formatter
                 .debug_struct("NonRegularOutputFile")
                 .field("stream", stream)
-                .field("path", &redacted_debug(path))
+                .field("path", &redacted_debug_text(path))
                 .finish(),
             Self::InputOutputConflict {
                 input_path,
@@ -214,21 +222,21 @@ impl fmt::Debug for CommandErrorReason {
                 output_path,
             } => formatter
                 .debug_struct("InputOutputConflict")
-                .field("input_path", &redacted_debug(input_path))
+                .field("input_path", &redacted_debug_text(input_path))
                 .field("output_stream", output_stream)
-                .field("output_path", &redacted_debug(output_path))
+                .field("output_path", &redacted_debug_text(output_path))
                 .finish(),
             Self::OutputFilesConflict {
                 stdout_path,
                 stderr_path,
             } => formatter
                 .debug_struct("OutputFilesConflict")
-                .field("stdout_path", &redacted_debug(stdout_path))
-                .field("stderr_path", &redacted_debug(stderr_path))
+                .field("stdout_path", &redacted_debug_text(stdout_path))
+                .field("stderr_path", &redacted_debug_text(stderr_path))
                 .finish(),
             Self::InspectIoFileFailed { path, source } => formatter
                 .debug_struct("InspectIoFileFailed")
-                .field("path", &redacted_debug(path))
+                .field("path", &redacted_debug_text(path))
                 .field("source", source)
                 .finish(),
             Self::StartInputThreadFailed { source } => formatter
@@ -255,7 +263,7 @@ impl fmt::Debug for CommandErrorReason {
             } => formatter
                 .debug_struct("WriteOutputFailed")
                 .field("stream", stream)
-                .field("path", &redacted_debug(path))
+                .field("path", &redacted_debug_text(path))
                 .field("source", source)
                 .finish(),
             Self::TimedOut { timeout } => formatter
