@@ -11,7 +11,15 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
-use qubit_redact::redacted_debug;
+use qubit_redact::Redactor;
+
+/// Redacts one debug-only value before it crosses the diagnostic boundary.
+fn redacted_debug_text(value: &impl fmt::Debug) -> String {
+    Redactor::strict()
+        .redact_field("command_path", &format!("{value:?}"))
+        .into_text()
+        .into_string()
+}
 
 /// Failure observed while cleaning up after a command's primary result was
 /// already determined.
@@ -88,7 +96,7 @@ impl fmt::Debug for CommandCleanupFailure {
                 .finish(),
             Self::StdoutWrite { path, source } => formatter
                 .debug_struct("StdoutWrite")
-                .field("path", &redacted_debug(path))
+                .field("path", &redacted_debug_text(path))
                 .field("source", source)
                 .finish(),
             Self::StderrRead { source } => formatter
@@ -97,7 +105,7 @@ impl fmt::Debug for CommandCleanupFailure {
                 .finish(),
             Self::StderrWrite { path, source } => formatter
                 .debug_struct("StderrWrite")
-                .field("path", &redacted_debug(path))
+                .field("path", &redacted_debug_text(path))
                 .field("source", source)
                 .finish(),
         }

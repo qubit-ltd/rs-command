@@ -13,7 +13,15 @@ use std::process::ExitStatus;
 use std::str;
 use std::time::Duration;
 
-use qubit_redact::redacted_debug;
+use qubit_redact::Redactor;
+
+/// Redacts one debug-only value before it crosses the diagnostic boundary.
+fn redacted_debug_text(value: &impl fmt::Debug) -> String {
+    Redactor::strict()
+        .redact_field("command_output", &format!("{value:?}"))
+        .into_text()
+        .into_string()
+}
 
 /// Captured output and status information from a finished command.
 ///
@@ -79,11 +87,11 @@ impl fmt::Debug for CommandOutput {
         formatter
             .debug_struct("CommandOutput")
             .field("status", &self.status)
-            .field("stdout", &redacted_debug(&self.stdout))
+            .field("stdout", &redacted_debug_text(&self.stdout))
             .field("stdout_len", &self.stdout.len())
             .field("stdout_truncated", &self.stdout_truncated)
             .field("stdout_complete", &self.stdout_complete)
-            .field("stderr", &redacted_debug(&self.stderr))
+            .field("stderr", &redacted_debug_text(&self.stderr))
             .field("stderr_len", &self.stderr.len())
             .field("stderr_truncated", &self.stderr_truncated)
             .field("stderr_complete", &self.stderr_complete)

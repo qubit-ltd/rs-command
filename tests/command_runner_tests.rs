@@ -230,14 +230,14 @@ mod unix {
 
     #[test]
     fn test_runner_accepts_a_complete_diagnostic_redaction_policy() {
-        let mut builder = RedactionPolicy::default().to_builder();
-        builder
-            .edit_fields()
-            .raise("tenant_option", Sensitivity::Secret)
+        let policy = RedactionPolicy::default()
+            .to_builder()
+            .fields(|fields| {
+                fields
+                    .raise("tenant_option", Sensitivity::Secret)
+                    .allow_exact("username");
+            })
             .expect("the test policy field must be valid")
-            .allow_exact("username")
-            .expect("the test policy field must be valid");
-        let policy = builder
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let runner = CommandRunner::new(Duration::from_secs(10))
@@ -279,24 +279,15 @@ mod unix {
         let missing_program = "x".repeat(46);
 
         let redactor = Redactor::new(policy.clone());
-        let mut session = redactor.session();
-        session.argv(|argv| {
-            argv.redact_heuristically(
-                "argv",
-                [ArgvItem::plain(OsStr::new(&missing_program))],
-            );
-        });
-        session.env(|env| {
-            env.redact_os_pairs(
-                "env",
-                [(OsStr::new("MODE"), OsStr::new("debug"))],
-            );
-        });
-        let output = session
-            .finish()
-            .expect("named adapter results commit atomically");
-        assert!(output.get("argv").is_some());
-        assert!(output.get("env").is_some());
+        let mut batch = redactor.batch();
+        let argv = batch.redact_heuristic_argv([ArgvItem::plain(OsStr::new(
+            &missing_program,
+        ))]);
+        let env =
+            batch.redact_env_pairs([(OsStr::new("MODE"), OsStr::new("debug"))]);
+        let output = batch.finish();
+        assert!(output.resolve(argv).is_ok());
+        assert!(output.resolve(env).is_ok());
 
         let error = CommandRunner::new(Duration::from_secs(10))
             .diagnostic_redaction_policy(policy)
@@ -1451,12 +1442,12 @@ mod unix {
 
     #[test]
     fn test_command_runner_error_redacts_configured_sensitive_field() {
-        let mut builder = RedactionPolicy::default().to_builder();
-        builder
-            .edit_fields()
-            .raise("tenant_option", Sensitivity::Secret)
-            .expect("the test policy field must be valid");
-        let policy = builder
+        let policy = RedactionPolicy::default()
+            .to_builder()
+            .fields(|fields| {
+                fields.raise("tenant_option", Sensitivity::Secret);
+            })
+            .expect("the test policy field must be valid")
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let error = CommandRunner::new(Duration::from_secs(10))
@@ -1480,14 +1471,14 @@ mod unix {
     #[test]
     fn test_command_runner_error_redacts_multiple_configured_sensitive_fields()
     {
-        let mut builder = RedactionPolicy::default().to_builder();
-        builder
-            .edit_fields()
-            .raise("tenant_option", Sensitivity::Secret)
+        let policy = RedactionPolicy::default()
+            .to_builder()
+            .fields(|fields| {
+                fields
+                    .raise("tenant_option", Sensitivity::Secret)
+                    .raise("tenant_env", Sensitivity::Secret);
+            })
             .expect("the test policy field must be valid")
-            .raise("tenant_env", Sensitivity::Secret)
-            .expect("the test policy field must be valid");
-        let policy = builder
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let error = CommandRunner::new(Duration::from_secs(10))
@@ -1511,14 +1502,12 @@ mod unix {
     #[test]
     fn test_command_runner_floor_overrides_exact_allow_for_default_sensitive_fields()
      {
-        let mut builder = RedactionPolicy::default().to_builder();
-        builder
-            .edit_fields()
-            .allow_exact("sig")
+        let policy = RedactionPolicy::default()
+            .to_builder()
+            .fields(|fields| {
+                fields.allow_exact("sig").allow_exact("signature");
+            })
             .expect("the test policy field must be valid")
-            .allow_exact("signature")
-            .expect("the test policy field must be valid");
-        let policy = builder
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let error = CommandRunner::new(Duration::from_secs(10))
@@ -1538,12 +1527,12 @@ mod unix {
     #[test]
     fn test_command_runner_floor_overrides_suffix_allow_for_default_sensitive_fields()
      {
-        let mut builder = RedactionPolicy::default().to_builder();
-        builder
-            .edit_fields()
-            .allow_suffix("access_token")
-            .expect("the test policy field must be valid");
-        let policy = builder
+        let policy = RedactionPolicy::default()
+            .to_builder()
+            .fields(|fields| {
+                fields.allow_suffix("access_token");
+            })
+            .expect("the test policy field must be valid")
             .build()
             .expect("the diagnostic redaction policy should be valid");
         let error = CommandRunner::new(Duration::from_secs(10))

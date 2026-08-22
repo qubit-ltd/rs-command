@@ -21,12 +21,12 @@ use qubit_redact::Sensitivity;
 #[test]
 fn test_lib_exports_public_api() {
     let command = Command::new("printf").arg("hello");
-    let mut builder = RedactionPolicy::default().to_builder();
-    builder
-        .edit_fields()
-        .raise("tenant_option", Sensitivity::Secret)
-        .expect("the test policy field must be valid");
-    let policy = builder
+    let policy = RedactionPolicy::default()
+        .to_builder()
+        .fields(|fields| {
+            fields.raise("tenant_option", Sensitivity::Secret);
+        })
+        .expect("the test policy field must be valid")
         .build()
         .expect("the diagnostic redaction policy should be valid");
     let runner = CommandRunner::new(Duration::from_secs(10))

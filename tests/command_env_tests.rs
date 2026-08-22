@@ -33,18 +33,12 @@ fn test_command_env_readding_removed_key_clears_removal() {
 #[test]
 fn test_command_debug_stages_named_adapter_results() {
     let redactor = Redactor::new(RedactionPolicy::default());
-    let mut session = redactor.session();
-    session.argv(|argv| {
-        argv.redact_items("argv", [ArgvItem::plain(OsStr::new("x"))]);
-    });
-    session.env(|env| {
-        env.redact_os_pairs("env", std::iter::empty());
-    });
-    session.argv(|argv| {
-        argv.redact_items("unset", [ArgvItem::plain(OsStr::new("REMOVED"))]);
-    });
-    let output = session
-        .finish()
-        .expect("all named results commit atomically");
-    assert_eq!(output.results().len(), 3);
+    let mut batch = redactor.batch();
+    let argv = batch.redact_argv([ArgvItem::plain(OsStr::new("x"))]);
+    let env = batch.redact_env_pairs(std::iter::empty());
+    let unset = batch.redact_argv([ArgvItem::plain(OsStr::new("REMOVED"))]);
+    let output = batch.finish();
+    assert!(output.resolve(argv).is_ok());
+    assert!(output.resolve(env).is_ok());
+    assert!(output.resolve(unset).is_ok());
 }

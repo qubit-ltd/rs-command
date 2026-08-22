@@ -11,8 +11,9 @@ use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 
-use qubit_redact::RedactedText;
+use qubit_redact::RedactionCompletion;
 use qubit_redact::RedactionPolicy;
+use qubit_redact::RedactionTextOutput;
 use qubit_redact::Redactor;
 use qubit_redact::Sensitivity;
 use qubit_redact::formats::argv::ArgvItem;
@@ -45,8 +46,12 @@ const TRUNCATED_REDACTION: &str = "<truncated>";
 /// The complete log-safe text, or the command-level truncation marker for
 /// either incomplete state.
 #[inline(always)]
-fn command_redaction_text(safe_text: Option<&RedactedText>) -> &str {
-    safe_text.map_or(TRUNCATED_REDACTION, RedactedText::as_str)
+fn command_redaction_text(output: Option<&RedactionTextOutput>) -> &str {
+    output
+        .filter(|output| {
+            output.summary().completion() == RedactionCompletion::Complete
+        })
+        .map_or(TRUNCATED_REDACTION, |output| output.text().as_str())
 }
 
 /// Structured description of an external command to run.
@@ -99,28 +104,15 @@ impl fmt::Debug for Command {
     ///
     /// Formatting result after rendering redacted command metadata.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let redactor = Redactor::default();
-        let mut session = redactor.session();
-        session
-            .argv(|adapter| {
-                adapter
-                    .redact_heuristically("argv", self.redaction_argv_items());
-            })
-            .env(|adapter| {
-                adapter.redact_os_pairs("env", self.environment_pairs());
-            })
-            .argv(|adapter| {
-                adapter.redact_items("unset", self.removed_environment_items());
-            });
-        let output = session.finish().map_err(|_| fmt::Error)?;
-        let argv_text = command_redaction_text(
-            output.get("argv").map(|value| value.text()),
-        );
-        let env_text =
-            command_redaction_text(output.get("env").map(|value| value.text()));
-        let unset_text = command_redaction_text(
-            output.get("unset").map(|value| value.text()),
-        );
+        let redactor = Redactor::application_default();
+        let mut batch = redactor.batch();
+        let argv = batch.redact_heuristic_argv(self.redaction_argv_items());
+        let env = batch.redact_env_pairs(self.environment_pairs());
+        let unset = batch.redact_argv(self.removed_environment_items());
+        let output = batch.finish();
+        let argv_text = command_redaction_text(output.resolve(argv).ok());
+        let env_text = command_redaction_text(output.resolve(env).ok());
+        let unset_text = command_redaction_text(output.resolve(unset).ok());
         formatter
             .debug_struct("Command")
             .field("argv", &format_args!("{argv_text}"))
@@ -593,33 +585,17 @@ impl Command {
     #[must_use]
     pub(crate) fn display_command(&self, policy: &RedactionPolicy) -> String {
         let redactor = Redactor::new(policy.clone());
-        let mut session = redactor.session();
-        session
-            .argv(|adapter| {
-                adapter
-                    .redact_heuristically("argv", self.redaction_argv_items());
-            })
-            .env(|adapter| {
-                adapter.redact_os_pairs("env", self.environment_pairs());
-            })
-            .argv(|adapter| {
-                adapter.redact_items("unset", self.removed_environment_items());
-            });
-        let Ok(output) = session.finish() else {
-            return TRUNCATED_REDACTION.to_owned();
-        };
-        let argv_text = command_redaction_text(
-            output.get("argv").map(|value| value.text()),
-        );
+        let mut batch = redactor.batch();
+        let argv = batch.redact_heuristic_argv(self.redaction_argv_items());
+        let env = batch.redact_env_pairs(self.environment_pairs());
+        let unset = batch.redact_argv(self.removed_environment_items());
+        let output = batch.finish();
+        let argv_text = command_redaction_text(output.resolve(argv).ok());
         if self.envs.is_empty() && self.removed_envs.is_empty() {
             argv_text.to_owned()
         } else {
-            let env_text = command_redaction_text(
-                output.get("env").map(|value| value.text()),
-            );
-            let unset_text = command_redaction_text(
-                output.get("unset").map(|value| value.text()),
-            );
+            let env_text = command_redaction_text(output.resolve(env).ok());
+            let unset_text = command_redaction_text(output.resolve(unset).ok());
             format!(
                 "Command {{ env: {env_text}, unset: {unset_text}, argv: {argv_text} }}"
             )
