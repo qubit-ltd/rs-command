@@ -19,7 +19,7 @@ use qubit_redact::Redactor;
 fn redacted_debug_text(value: &impl fmt::Debug) -> String {
     Redactor::strict()
         .redact_field("command_path", &format!("{value:?}"))
-        .into_text()
+        .into_text_or_marker("<redaction incomplete>")
         .into_string()
 }
 
