@@ -16,7 +16,7 @@ use qubit_redact::Redactor;
 /// Redacts one debug-only value before it crosses the diagnostic boundary.
 fn redacted_debug_text(value: &impl fmt::Debug) -> String {
     Redactor::strict()
-        .redact_field("command_path", &format!("{value:?}"))
+        .redact_field("command_path", &format_args!("{value:?}"))
         .into_text_or_marker("<redaction incomplete>")
         .into_string()
 }
