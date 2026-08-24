@@ -5,15 +5,16 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 
-use qubit_redact::RedactionCompletion;
+use qubit_redact::RedactionBatchHandle;
+use qubit_redact::RedactionBatchOutput;
 use qubit_redact::RedactionPolicy;
-use qubit_redact::RedactionTextOutput;
 use qubit_redact::Redactor;
 use qubit_redact::Sensitivity;
 use qubit_redact::formats::argv::ArgvItem;
@@ -46,12 +47,13 @@ const TRUNCATED_REDACTION: &str = "<truncated>";
 /// The complete log-safe text, or the command-level truncation marker for
 /// either incomplete state.
 #[inline(always)]
-fn command_redaction_text(output: Option<&RedactionTextOutput>) -> &str {
+fn command_redaction_text(
+    output: &RedactionBatchOutput,
+    handle: RedactionBatchHandle,
+) -> Cow<'_, str> {
     output
-        .filter(|output| {
-            output.summary().completion() == RedactionCompletion::Complete
-        })
-        .map_or(TRUNCATED_REDACTION, |output| output.text().as_str())
+        .resolve_text_or_marker(handle, TRUNCATED_REDACTION)
+        .unwrap_or(Cow::Borrowed(TRUNCATED_REDACTION))
 }
 
 /// Structured description of an external command to run.
@@ -110,9 +112,9 @@ impl fmt::Debug for Command {
         let env = batch.redact_env_pairs(self.environment_pairs());
         let unset = batch.redact_argv(self.removed_environment_items());
         let output = batch.finish();
-        let argv_text = command_redaction_text(output.resolve(argv).ok());
-        let env_text = command_redaction_text(output.resolve(env).ok());
-        let unset_text = command_redaction_text(output.resolve(unset).ok());
+        let argv_text = command_redaction_text(&output, argv);
+        let env_text = command_redaction_text(&output, env);
+        let unset_text = command_redaction_text(&output, unset);
         formatter
             .debug_struct("Command")
             .field("argv", &format_args!("{argv_text}"))
@@ -590,12 +592,12 @@ impl Command {
         let env = batch.redact_env_pairs(self.environment_pairs());
         let unset = batch.redact_argv(self.removed_environment_items());
         let output = batch.finish();
-        let argv_text = command_redaction_text(output.resolve(argv).ok());
+        let argv_text = command_redaction_text(&output, argv);
         if self.envs.is_empty() && self.removed_envs.is_empty() {
-            argv_text.to_owned()
+            argv_text.into_owned()
         } else {
-            let env_text = command_redaction_text(output.resolve(env).ok());
-            let unset_text = command_redaction_text(output.resolve(unset).ok());
+            let env_text = command_redaction_text(&output, env);
+            let unset_text = command_redaction_text(&output, unset);
             format!(
                 "Command {{ env: {env_text}, unset: {unset_text}, argv: {argv_text} }}"
             )
