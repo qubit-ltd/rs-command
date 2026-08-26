@@ -5,15 +5,12 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 
-use qubit_redact::RedactionBatchHandle;
-use qubit_redact::RedactionBatchOutput;
 use qubit_redact::RedactionPolicy;
 use qubit_redact::Redactor;
 use qubit_redact::Sensitivity;
@@ -25,36 +22,6 @@ use crate::command_stdin::CommandStdin;
 
 const REDACTED_PATH: &str = "<redacted path>";
 const TRUNCATED_REDACTION: &str = "<truncated>";
-
-/// Maps a staged result to the command diagnostic representation.
-///
-/// A complete result preserves its log-safe text. `Truncated` means the
-/// redactor omitted input or output but emitted a safe substitute, while
-/// `Exhausted` means no safe substitute fit and processing stopped without
-/// advancing further input. Command diagnostics deliberately collapse both
-/// incomplete states to [`TRUNCATED_REDACTION`]; the mapping never infers
-/// completion from rendered text. A caller receiving either incomplete state
-/// must stop invoking later adapters in the shared session and map their
-/// fields to the same command-level marker.
-///
-/// # Parameters
-///
-/// * `completion` - Exact completion reported by the redaction adapter.
-/// * `safe_text` - Log-safe adapter text used only for complete results.
-///
-/// # Returns
-///
-/// The complete log-safe text, or the command-level truncation marker for
-/// either incomplete state.
-#[inline(always)]
-fn command_redaction_text(
-    output: &RedactionBatchOutput,
-    handle: RedactionBatchHandle,
-) -> Cow<'_, str> {
-    output
-        .resolve_text_or_marker(handle, TRUNCATED_REDACTION)
-        .unwrap_or(Cow::Borrowed(TRUNCATED_REDACTION))
-}
 
 /// Structured description of an external command to run.
 ///
@@ -111,10 +78,10 @@ impl fmt::Debug for Command {
         let argv = batch.redact_heuristic_argv(self.redaction_argv_items());
         let env = batch.redact_env_pairs(self.environment_pairs());
         let unset = batch.redact_argv(self.removed_environment_items());
-        let output = batch.finish();
-        let argv_text = command_redaction_text(&output, argv);
-        let env_text = command_redaction_text(&output, env);
-        let unset_text = command_redaction_text(&output, unset);
+        let output = batch.finish_for_diagnostics(TRUNCATED_REDACTION);
+        let argv_text = output.text(argv);
+        let env_text = output.text(env);
+        let unset_text = output.text(unset);
         formatter
             .debug_struct("Command")
             .field("argv", &format_args!("{argv_text}"))
@@ -591,13 +558,13 @@ impl Command {
         let argv = batch.redact_heuristic_argv(self.redaction_argv_items());
         let env = batch.redact_env_pairs(self.environment_pairs());
         let unset = batch.redact_argv(self.removed_environment_items());
-        let output = batch.finish();
-        let argv_text = command_redaction_text(&output, argv);
+        let output = batch.finish_for_diagnostics(TRUNCATED_REDACTION);
+        let argv_text = output.text(argv);
         if self.envs.is_empty() && self.removed_envs.is_empty() {
-            argv_text.into_owned()
+            argv_text.as_str().to_owned()
         } else {
-            let env_text = command_redaction_text(&output, env);
-            let unset_text = command_redaction_text(&output, unset);
+            let env_text = output.text(env);
+            let unset_text = output.text(unset);
             format!(
                 "Command {{ env: {env_text}, unset: {unset_text}, argv: {argv_text} }}"
             )
