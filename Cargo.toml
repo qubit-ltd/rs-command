@@ -43,7 +43,7 @@ log = "0.4"
 process-wrap = { version = "9.1", default-features = false, features = ["std", "process-group", "job-object"] }
 same-file = "1.0"
 thiserror = "2.0"
-qubit-clock = "0.12"
+qubit-clock = { version = "0.13", path = "../rs-clock" }
 qubit-redact = { version = "0.5", path = "../rs-redact", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
@@ -52,4 +52,4 @@ libc = "0.2"
 [dev-dependencies]
 criterion = { version = "0.8", default-features = false }
 tempfile = "3.27"
-qubit-clock = { version = "0.12", features = ["test-util"] }
+qubit-clock = { version = "0.13", path = "../rs-clock", features = ["test-util"] }
