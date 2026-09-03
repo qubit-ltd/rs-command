@@ -285,9 +285,9 @@ mod unix {
         ))]);
         let env =
             batch.redact_env_pairs([(OsStr::new("MODE"), OsStr::new("debug"))]);
-        let output = batch.finish();
-        assert!(output.resolve(argv).is_ok());
-        assert!(output.resolve(env).is_ok());
+        let output = batch.finish_for_diagnostics("<redaction incomplete>");
+        assert_ne!(output.text(argv).as_str(), "<redaction incomplete>");
+        assert_ne!(output.text(env).as_str(), "<redaction incomplete>");
 
         let error = CommandRunner::new(Duration::from_secs(10))
             .diagnostic_redaction_policy(policy)
