@@ -29,7 +29,7 @@ fn test_command_env_readding_removed_key_clears_removal() {
     assert_eq!(command.environment()[0].1.to_string_lossy(), "restored");
 }
 
-/// Verifies finite adapter results are staged and published on finish.
+/// Verifies finite adapter results are staged and published for diagnostics.
 #[test]
 fn test_command_debug_stages_named_adapter_results() {
     let redactor = Redactor::new(RedactionPolicy::default());
@@ -37,8 +37,8 @@ fn test_command_debug_stages_named_adapter_results() {
     let argv = batch.redact_argv([ArgvItem::plain(OsStr::new("x"))]);
     let env = batch.redact_env_pairs(std::iter::empty());
     let unset = batch.redact_argv([ArgvItem::plain(OsStr::new("REMOVED"))]);
-    let output = batch.finish();
-    assert!(output.resolve(argv).is_ok());
-    assert!(output.resolve(env).is_ok());
-    assert!(output.resolve(unset).is_ok());
+    let output = batch.finish_for_diagnostics("<redaction incomplete>");
+    assert_ne!(output.text(argv).as_str(), "<redaction incomplete>");
+    assert_ne!(output.text(env).as_str(), "<redaction incomplete>");
+    assert_ne!(output.text(unset).as_str(), "<redaction incomplete>");
 }
