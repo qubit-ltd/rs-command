@@ -63,9 +63,7 @@ type PreparedInputParts = (Option<PathBuf>, Option<File>, Option<Vec<u8>>);
 ///
 /// Returns the operating-system error reported while opening `path`.
 #[cfg(unix)]
-pub(in crate::command_runner) fn open_input_candidate(
-    path: &Path,
-) -> io::Result<File> {
+pub(in crate::command_runner) fn open_input_candidate(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).custom_flags(libc::O_NONBLOCK);
     options.open(path)
@@ -73,9 +71,7 @@ pub(in crate::command_runner) fn open_input_candidate(
 
 /// Opens a stdin candidate on platforms without Unix open flags.
 #[cfg(not(unix))]
-pub(in crate::command_runner) fn open_input_candidate(
-    path: &Path,
-) -> io::Result<File> {
+pub(in crate::command_runner) fn open_input_candidate(path: &Path) -> io::Result<File> {
     File::open(path)
 }
 
@@ -93,9 +89,7 @@ pub(in crate::command_runner) fn open_input_candidate(
 ///
 /// Returns the operating-system error reported while opening `path`.
 #[cfg(unix)]
-pub(in crate::command_runner) fn open_output_candidate(
-    path: &Path,
-) -> io::Result<File> {
+pub(in crate::command_runner) fn open_output_candidate(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options
         .create(true)
@@ -107,14 +101,8 @@ pub(in crate::command_runner) fn open_output_candidate(
 
 /// Opens an output candidate on platforms without Unix open flags.
 #[cfg(not(unix))]
-pub(in crate::command_runner) fn open_output_candidate(
-    path: &Path,
-) -> io::Result<File> {
-    OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(path)
+pub(in crate::command_runner) fn open_output_candidate(path: &Path) -> io::Result<File> {
+    OpenOptions::new().create(true).write(true).truncate(false).open(path)
 }
 
 /// Clears the temporary nonblocking flag from a validated Unix file handle.
@@ -144,9 +132,7 @@ fn clear_nonblocking(file: &File) -> io::Result<()> {
     }
     // SAFETY: `F_SETFL` accepts the status flags returned by `F_GETFL` with
     // only `O_NONBLOCK` cleared, and the descriptor remains live.
-    let result = unsafe {
-        libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags & !libc::O_NONBLOCK)
-    };
+    let result = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags & !libc::O_NONBLOCK) };
     if result == -1 {
         return Err(io::Error::last_os_error());
     }
@@ -200,14 +186,8 @@ impl IoFiles {
         stderr_path: Option<&Path>,
         process_command: &mut ProcessCommand,
     ) -> Result<Self, CommandError> {
-        let (stdin_path, stdin_file, stdin_bytes) =
-            open_input(command, stdin, process_command)?;
-        validate_normalized_paths(
-            command,
-            stdin_path.as_deref(),
-            stdout_path,
-            stderr_path,
-        )?;
+        let (stdin_path, stdin_file, stdin_bytes) = open_input(command, stdin, process_command)?;
+        validate_normalized_paths(command, stdin_path.as_deref(), stdout_path, stderr_path)?;
 
         if let Some(path) = stdout_path {
             ensure_regular_output(command, OutputStream::Stdout, path)?;
@@ -233,28 +213,16 @@ impl IoFiles {
         stderr_path: Option<&Path>,
         process_command: &mut ProcessCommand,
     ) -> Result<(), CommandError> {
-        let stdout_file =
-            open_output(command, OutputStream::Stdout, stdout_path)?;
-        let stderr_file =
-            open_output(command, OutputStream::Stderr, stderr_path)?;
+        let stdout_file = open_output(command, OutputStream::Stdout, stdout_path)?;
+        let stderr_file = open_output(command, OutputStream::Stderr, stderr_path)?;
         validate_file_identities(
             command,
             self.stdin_path.as_deref().zip(self.stdin_file.as_ref()),
             stdout_path.zip(stdout_file.as_ref()),
             stderr_path.zip(stderr_file.as_ref()),
         )?;
-        truncate_output(
-            command,
-            OutputStream::Stdout,
-            stdout_path,
-            stdout_file.as_ref(),
-        )?;
-        truncate_output(
-            command,
-            OutputStream::Stderr,
-            stderr_path,
-            stderr_file.as_ref(),
-        )?;
+        truncate_output(command, OutputStream::Stdout, stdout_path, stdout_file.as_ref())?;
+        truncate_output(command, OutputStream::Stderr, stderr_path, stderr_file.as_ref())?;
         if let Some(file) = self.stdin_file.take() {
             process_command.stdin(Stdio::from(file));
         }
@@ -300,11 +268,9 @@ fn open_input(
         }
         CommandStdin::File(path) => {
             ensure_regular_input(command, &path)?;
-            let file = open_input_candidate(&path)
-                .map_err(|source| open_input_error(command, &path, source))?;
+            let file = open_input_candidate(&path).map_err(|source| open_input_error(command, &path, source))?;
             ensure_regular_input_handle(command, &path, &file)?;
-            clear_nonblocking(&file)
-                .map_err(|source| open_input_error(command, &path, source))?;
+            clear_nonblocking(&file).map_err(|source| open_input_error(command, &path, source))?;
             Ok((Some(path), Some(file), None))
         }
     }
@@ -325,20 +291,12 @@ fn open_input(
 /// # Errors
 ///
 /// Returns [CommandError] when the file cannot be opened.
-fn open_output(
-    command: &str,
-    stream: OutputStream,
-    path: Option<&Path>,
-) -> Result<Option<File>, CommandError> {
+fn open_output(command: &str, stream: OutputStream, path: Option<&Path>) -> Result<Option<File>, CommandError> {
     path.map(|path| {
         ensure_regular_output(command, stream, path)?;
-        let file = open_output_candidate(path).map_err(|source| {
-            open_output_error(command, stream, path, source)
-        })?;
+        let file = open_output_candidate(path).map_err(|source| open_output_error(command, stream, path, source))?;
         ensure_regular_output_handle(command, stream, path, &file)?;
-        clear_nonblocking(&file).map_err(|source| {
-            open_output_error(command, stream, path, source)
-        })?;
+        clear_nonblocking(&file).map_err(|source| open_output_error(command, stream, path, source))?;
         Ok(file)
     })
     .transpose()
@@ -424,12 +382,8 @@ pub(in crate::command_runner) fn ensure_regular_output_handle(
 /// Returns [`CommandError`] when metadata cannot be read, or
 /// [`CommandError`] when the path identifies another file
 /// type.
-fn ensure_regular_input(
-    command: &str,
-    path: &Path,
-) -> Result<(), CommandError> {
-    let metadata = fs::metadata(path)
-        .map_err(|source| open_input_error(command, path, source))?;
+fn ensure_regular_input(command: &str, path: &Path) -> Result<(), CommandError> {
+    let metadata = fs::metadata(path).map_err(|source| open_input_error(command, path, source))?;
     if metadata.file_type().is_file() {
         Ok(())
     } else {
@@ -455,27 +409,15 @@ fn ensure_regular_input(
 /// Returns [`CommandError`] when an existing path is not
 /// an ordinary file, or [`CommandError`] when metadata
 /// inspection fails for a reason other than absence.
-fn ensure_regular_output(
-    command: &str,
-    stream: OutputStream,
-    path: &Path,
-) -> Result<(), CommandError> {
+fn ensure_regular_output(command: &str, stream: OutputStream, path: &Path) -> Result<(), CommandError> {
     match fs::metadata(path) {
         Ok(metadata) if metadata.file_type().is_file() => Ok(()),
         Ok(_) => Err(non_regular_output_error(command, stream, path)),
-        Err(source) if source.kind() == io::ErrorKind::NotFound => {
-            match fs::symlink_metadata(path) {
-                Ok(_) => Err(non_regular_output_error(command, stream, path)),
-                Err(link_source)
-                    if link_source.kind() == io::ErrorKind::NotFound =>
-                {
-                    Ok(())
-                }
-                Err(link_source) => {
-                    Err(inspect_error(command, path, link_source))
-                }
-            }
-        }
+        Err(source) if source.kind() == io::ErrorKind::NotFound => match fs::symlink_metadata(path) {
+            Ok(_) => Err(non_regular_output_error(command, stream, path)),
+            Err(link_source) if link_source.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(link_source) => Err(inspect_error(command, path, link_source)),
+        },
         Err(source) => Err(inspect_error(command, path, source)),
     }
 }
@@ -559,10 +501,7 @@ fn validate_normalized_paths(
 ///
 /// Returns [CommandError] when the current directory or
 /// an existing path cannot be resolved.
-fn normalized_path(
-    command: &str,
-    path: Option<&Path>,
-) -> Result<Option<PathBuf>, CommandError> {
+fn normalized_path(command: &str, path: Option<&Path>) -> Result<Option<PathBuf>, CommandError> {
     path.map(|path| {
         let absolute = if path.is_absolute() {
             path.to_path_buf()
@@ -573,9 +512,7 @@ fn normalized_path(
         };
         match fs::canonicalize(&absolute) {
             Ok(path) => Ok(path),
-            Err(source) if source.kind() == io::ErrorKind::NotFound => {
-                Ok(normalize_lexically(&absolute))
-            }
+            Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(normalize_lexically(&absolute)),
             Err(source) => Err(inspect_error(command, path, source)),
         }
     })
@@ -642,8 +579,7 @@ fn validate_file_identities(
         && input == output
     {
         let (input_path, _) = stdin.expect("stdin handle has an original path");
-        let (output_path, _) =
-            stdout.expect("stdout handle has an original path");
+        let (output_path, _) = stdout.expect("stdout handle has an original path");
         return Err(input_output_conflict(
             command,
             input_path,
@@ -655,8 +591,7 @@ fn validate_file_identities(
         && input == output
     {
         let (input_path, _) = stdin.expect("stdin handle has an original path");
-        let (output_path, _) =
-            stderr.expect("stderr handle has an original path");
+        let (output_path, _) = stderr.expect("stderr handle has an original path");
         return Err(input_output_conflict(
             command,
             input_path,
@@ -664,14 +599,11 @@ fn validate_file_identities(
             output_path,
         ));
     }
-    if let (Some(stdout_handle), Some(stderr_handle)) =
-        (&stdout_handle, &stderr_handle)
+    if let (Some(stdout_handle), Some(stderr_handle)) = (&stdout_handle, &stderr_handle)
         && stdout_handle == stderr_handle
     {
-        let (stdout_path, _) =
-            stdout.expect("stdout handle has an original path");
-        let (stderr_path, _) =
-            stderr.expect("stderr handle has an original path");
+        let (stdout_path, _) = stdout.expect("stdout handle has an original path");
+        let (stderr_path, _) = stderr.expect("stderr handle has an original path");
         return Err(output_files_conflict(command, stdout_path, stderr_path));
     }
     Ok(())
@@ -692,16 +624,12 @@ fn validate_file_identities(
 ///
 /// Returns [CommandError] when cloning or inspecting
 /// the file fails.
-fn file_handle(
-    command: &str,
-    file: Option<(&Path, &File)>,
-) -> Result<Option<Handle>, CommandError> {
+fn file_handle(command: &str, file: Option<(&Path, &File)>) -> Result<Option<Handle>, CommandError> {
     file.map(|(path, file)| {
         let clone = file
             .try_clone()
             .map_err(|source| inspect_error(command, path, source))?;
-        Handle::from_file(clone)
-            .map_err(|source| inspect_error(command, path, source))
+        Handle::from_file(clone).map_err(|source| inspect_error(command, path, source))
     })
     .transpose()
 }
@@ -752,9 +680,8 @@ pub(in crate::command_runner) fn truncate_output(
                 io::Error::other("coverage-injected output truncation failure"),
             ));
         }
-        file.set_len(0).map_err(|source| {
-            open_output_error(command, stream, path, source)
-        })?;
+        file.set_len(0)
+            .map_err(|source| open_output_error(command, stream, path, source))?;
     }
     Ok(())
 }
@@ -803,11 +730,7 @@ fn input_output_conflict(
 /// Structured conflict error retaining both configured paths.
 #[must_use]
 #[inline]
-fn output_files_conflict(
-    command: &str,
-    stdout_path: &Path,
-    stderr_path: &Path,
-) -> CommandError {
+fn output_files_conflict(command: &str, stdout_path: &Path, stderr_path: &Path) -> CommandError {
     CommandError::from_reason(
         command,
         CommandErrorReason::OutputFilesConflict {
@@ -831,11 +754,7 @@ fn output_files_conflict(
 /// Structured inspection error retaining the configured path.
 #[must_use]
 #[inline]
-fn inspect_error(
-    command: &str,
-    path: &Path,
-    source: io::Error,
-) -> CommandError {
+fn inspect_error(command: &str, path: &Path, source: io::Error) -> CommandError {
     CommandError::from_reason(
         command,
         CommandErrorReason::InspectIoFileFailed {
@@ -847,11 +766,7 @@ fn inspect_error(
 }
 
 /// Builds an input-opening failure.
-fn open_input_error(
-    command: &str,
-    path: &Path,
-    source: io::Error,
-) -> CommandError {
+fn open_input_error(command: &str, path: &Path, source: io::Error) -> CommandError {
     CommandError::from_reason(
         command,
         CommandErrorReason::OpenInputFailed {
@@ -863,12 +778,7 @@ fn open_input_error(
 }
 
 /// Builds an output-opening failure.
-fn open_output_error(
-    command: &str,
-    stream: OutputStream,
-    path: &Path,
-    source: io::Error,
-) -> CommandError {
+fn open_output_error(command: &str, stream: OutputStream, path: &Path, source: io::Error) -> CommandError {
     CommandError::from_reason(
         command,
         CommandErrorReason::OpenOutputFailed {
@@ -892,11 +802,7 @@ fn non_regular_input_error(command: &str, path: &Path) -> CommandError {
 }
 
 /// Builds a non-regular output failure.
-fn non_regular_output_error(
-    command: &str,
-    stream: OutputStream,
-    path: &Path,
-) -> CommandError {
+fn non_regular_output_error(command: &str, stream: OutputStream, path: &Path) -> CommandError {
     CommandError::from_reason(
         command,
         CommandErrorReason::NonRegularOutputFile {

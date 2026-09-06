@@ -44,10 +44,7 @@ impl<'a> StartingCommand<'a> {
     ///
     /// A guard that terminates the child unless initialization finishes.
     #[inline]
-    pub(in crate::command_runner) const fn new(
-        command: &'a str,
-        child_process: ManagedChildProcess,
-    ) -> Self {
+    pub(in crate::command_runner) const fn new(command: &'a str, child_process: ManagedChildProcess) -> Self {
         Self {
             command,
             child_process: Some(child_process),
@@ -68,9 +65,7 @@ impl<'a> StartingCommand<'a> {
     /// Panics after ownership has transferred to a running command.
     #[must_use]
     #[inline(always)]
-    pub(in crate::command_runner) fn child_process(
-        &mut self,
-    ) -> &mut dyn ChildWrapper {
+    pub(in crate::command_runner) fn child_process(&mut self) -> &mut dyn ChildWrapper {
         self.child_process
             .as_mut()
             .expect("a starting command always owns its child")
@@ -83,10 +78,7 @@ impl<'a> StartingCommand<'a> {
     ///
     /// * `writer` - Optional stdin writer helper.
     #[inline(always)]
-    pub(in crate::command_runner) fn set_stdin_writer(
-        &mut self,
-        writer: OptionalStdinWriter,
-    ) {
+    pub(in crate::command_runner) fn set_stdin_writer(&mut self, writer: OptionalStdinWriter) {
         self.stdin_writer = writer;
     }
 
@@ -96,10 +88,7 @@ impl<'a> StartingCommand<'a> {
     ///
     /// * `reader` - Stdout reader helper.
     #[inline(always)]
-    pub(in crate::command_runner) fn set_stdout_reader(
-        &mut self,
-        reader: OutputReader,
-    ) {
+    pub(in crate::command_runner) fn set_stdout_reader(&mut self, reader: OutputReader) {
         self.stdout_reader = Some(reader);
     }
 
@@ -109,10 +98,7 @@ impl<'a> StartingCommand<'a> {
     ///
     /// * `reader` - Stderr reader helper.
     #[inline(always)]
-    pub(in crate::command_runner) fn set_stderr_reader(
-        &mut self,
-        reader: OutputReader,
-    ) {
+    pub(in crate::command_runner) fn set_stderr_reader(&mut self, reader: OutputReader) {
         self.stderr_reader = Some(reader);
     }
 
@@ -128,9 +114,7 @@ impl<'a> StartingCommand<'a> {
     /// registered.
     #[must_use = "transfer both the child and its I/O helpers to running state"]
     #[inline]
-    pub(in crate::command_runner) fn finish(
-        mut self,
-    ) -> (ManagedChildProcess, CommandIo) {
+    pub(in crate::command_runner) fn finish(mut self) -> (ManagedChildProcess, CommandIo) {
         let child_process = self
             .child_process
             .take()
@@ -178,12 +162,11 @@ impl Drop for StartingCommand<'_> {
         let tree_managed = child_process.process_tree_managed();
         if tree_managed {
             if let Err(process_tree_source) = child_process.start_kill_tree() {
-                let child_result =
-                    if child_process.try_wait().ok().flatten().is_none() {
-                        child_process.start_kill_child()
-                    } else {
-                        Ok(())
-                    };
+                let child_result = if child_process.try_wait().ok().flatten().is_none() {
+                    child_process.start_kill_child()
+                } else {
+                    Ok(())
+                };
                 match child_result {
                     Ok(()) => {
                         log::error!(

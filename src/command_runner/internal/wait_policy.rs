@@ -17,8 +17,7 @@ const TIMEOUT_POLL_INTERVALS: [Duration; 5] = [
 ];
 
 /// Index of the steady-state timeout polling delay.
-const LAST_TIMEOUT_POLL_INTERVAL_INDEX: usize =
-    TIMEOUT_POLL_INTERVALS.len() - 1;
+const LAST_TIMEOUT_POLL_INTERVAL_INDEX: usize = TIMEOUT_POLL_INTERVALS.len() - 1;
 
 /// Calculates how long to sleep before polling the child again.
 ///
@@ -33,12 +32,7 @@ const LAST_TIMEOUT_POLL_INTERVAL_INDEX: usize =
 /// The lesser of the adaptive polling interval and the remaining timeout.
 #[must_use]
 #[inline]
-pub(in crate::command_runner) fn next_sleep(
-    timeout: Duration,
-    elapsed: Duration,
-    poll_count: usize,
-) -> Duration {
-    let interval = TIMEOUT_POLL_INTERVALS
-        [poll_count.min(LAST_TIMEOUT_POLL_INTERVAL_INDEX)];
+pub(in crate::command_runner) fn next_sleep(timeout: Duration, elapsed: Duration, poll_count: usize) -> Duration {
+    let interval = TIMEOUT_POLL_INTERVALS[poll_count.min(LAST_TIMEOUT_POLL_INTERVAL_INDEX)];
     timeout.saturating_sub(elapsed).min(interval)
 }

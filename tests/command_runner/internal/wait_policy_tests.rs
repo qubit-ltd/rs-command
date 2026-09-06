@@ -44,8 +44,7 @@ fn test_wait_policy_enforces_configured_timeout() {
 #[test]
 fn test_wait_policy_starts_timeout_polling_with_short_interval() {
     let clock = ManualMonotonicClock::new_shared();
-    let runner =
-        CommandRunner::new(Duration::from_secs(30)).timer(clock.new_timer());
+    let runner = CommandRunner::new(Duration::from_secs(30)).timer(clock.new_timer());
     let worker = thread::spawn(move || runner.run(Command::shell("sleep 60")));
 
     assert!(clock.wait_for_waiters(1, Duration::from_secs(2)));

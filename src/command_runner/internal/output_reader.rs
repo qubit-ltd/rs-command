@@ -52,9 +52,7 @@ impl OutputReader {
     /// # Returns
     ///
     /// The worker result or a panic payload from the worker thread.
-    pub(in crate::command_runner) fn join(
-        self,
-    ) -> thread::Result<Result<CapturedOutput, OutputCaptureError>> {
+    pub(in crate::command_runner) fn join(self) -> thread::Result<Result<CapturedOutput, OutputCaptureError>> {
         self.join.join()
     }
 }

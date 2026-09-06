@@ -60,11 +60,7 @@ impl IoCancellationToken {
                 return Ok(false);
             }
             let mut descriptors = [
-                libc::pollfd {
-                    fd,
-                    events,
-                    revents: 0,
-                },
+                libc::pollfd { fd, events, revents: 0 },
                 libc::pollfd {
                     fd: self.wakeup.as_raw_fd(),
                     events: libc::POLLIN,

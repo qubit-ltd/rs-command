@@ -30,8 +30,7 @@ fn test_command_runner_default_uses_installed_global_policy() {
         .expect("the test field should be valid")
         .build()
         .expect("the test policy should build");
-    let previous =
-        Redactor::replace_application_default(Redactor::new(policy.clone()));
+    let previous = Redactor::replace_application_default(Redactor::new(policy.clone()));
 
     let runner = CommandRunner::new(Duration::from_secs(10));
 

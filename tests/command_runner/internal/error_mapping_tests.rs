@@ -27,9 +27,7 @@ use crate::support::LocalTempDir;
 #[test]
 fn test_error_mapping_preserves_unexpected_exit_output() {
     let error = CommandRunner::new(Duration::from_secs(10))
-        .run(Command::shell(
-            "printf mapped-out; printf mapped-err >&2; exit 9",
-        ))
+        .run(Command::shell("printf mapped-out; printf mapped-err >&2; exit 9"))
         .expect_err("non-success exit should be mapped");
 
     assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);

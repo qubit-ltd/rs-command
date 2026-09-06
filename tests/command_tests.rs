@@ -24,9 +24,7 @@ fn test_command_new_stores_program() {
 
 #[test]
 fn test_command_args_appends_in_order() {
-    let command = Command::new("git")
-        .arg("status")
-        .args(&["--short", "--branch"]);
+    let command = Command::new("git").arg("status").args(&["--short", "--branch"]);
 
     let args = command
         .arguments()
@@ -79,10 +77,7 @@ fn test_command_env_os_removes_prior_removal() {
 
     assert!(command.removed_environment().is_empty());
     assert_eq!(command.environment().len(), 1);
-    assert_eq!(
-        command.environment()[0].0.to_string_lossy(),
-        "QUBIT_COMMAND_TEST",
-    );
+    assert_eq!(command.environment()[0].0.to_string_lossy(), "QUBIT_COMMAND_TEST",);
 }
 
 #[test]
@@ -92,10 +87,7 @@ fn test_command_env_remove_records_removal() {
         .env_remove("QUBIT_COMMAND_TEST");
 
     assert!(command.environment().is_empty());
-    assert_eq!(
-        command.removed_environment()[0].to_string_lossy(),
-        "QUBIT_COMMAND_TEST",
-    );
+    assert_eq!(command.removed_environment()[0].to_string_lossy(), "QUBIT_COMMAND_TEST",);
 }
 
 #[test]
@@ -105,10 +97,7 @@ fn test_command_env_remove_deduplicates_removals() {
         .env_remove("QUBIT_COMMAND_TEST");
 
     assert_eq!(command.removed_environment().len(), 1);
-    assert_eq!(
-        command.removed_environment()[0].to_string_lossy(),
-        "QUBIT_COMMAND_TEST",
-    );
+    assert_eq!(command.removed_environment()[0].to_string_lossy(), "QUBIT_COMMAND_TEST",);
 }
 
 #[test]
@@ -120,14 +109,8 @@ fn test_command_env_names_are_case_sensitive_on_unix() {
         .env_remove("QUBIT_COMMAND_TEST");
 
     assert_eq!(command.environment().len(), 1);
-    assert_eq!(
-        command.environment()[0].0.to_string_lossy(),
-        "qubit_command_test",
-    );
-    assert_eq!(
-        command.removed_environment()[0].to_string_lossy(),
-        "QUBIT_COMMAND_TEST",
-    );
+    assert_eq!(command.environment()[0].0.to_string_lossy(), "qubit_command_test",);
+    assert_eq!(command.removed_environment()[0].to_string_lossy(), "QUBIT_COMMAND_TEST",);
 }
 
 #[test]
@@ -139,10 +122,7 @@ fn test_command_env_names_are_case_insensitive_on_windows() {
         .env_remove("QUBIT_COMMAND_TEST");
 
     assert!(command.environment().is_empty());
-    assert_eq!(
-        command.removed_environment()[0].to_string_lossy(),
-        "QUBIT_COMMAND_TEST",
-    );
+    assert_eq!(command.removed_environment()[0].to_string_lossy(), "QUBIT_COMMAND_TEST",);
 }
 
 #[test]
@@ -183,11 +163,7 @@ fn test_command_debug_redacts_sensitive_display_values() {
 
     let debug = format!("{command:?}");
 
-    assert!(
-        debug.contains(
-            r#"argv: ["docker", "login", "--password", "<redacted>"]"#
-        )
-    );
+    assert!(debug.contains(r#"argv: ["docker", "login", "--password", "<redacted>"]"#));
     assert!(debug.contains(r#"env: ["OPENAI_API_KEY=****"]"#));
     assert!(debug.contains("stdin: Bytes(12 bytes)"));
     assert!(!debug.contains("secret"));
@@ -212,12 +188,7 @@ fn test_debug_uses_structured_argv_and_env_projection() {
 
 #[test]
 fn test_command_debug_masks_sensitive_option_after_double_dash() {
-    let command = Command::new("wrapper").args(&[
-        "--",
-        "child",
-        "--password",
-        "raw-secret",
-    ]);
+    let command = Command::new("wrapper").args(&["--", "child", "--password", "raw-secret"]);
 
     let debug = format!("{command:?}");
 
@@ -228,8 +199,7 @@ fn test_command_debug_masks_sensitive_option_after_double_dash() {
 #[test]
 fn test_command_shell_payload_and_explicit_sensitive_argument_never_leak() {
     let shell = format!("{:?}", Command::shell("echo raw-shell-secret"));
-    let explicit =
-        format!("{:?}", Command::new("tool").sensitive_arg("raw-arg-secret"));
+    let explicit = format!("{:?}", Command::new("tool").sensitive_arg("raw-arg-secret"));
 
     assert!(!shell.contains("raw-shell-secret"));
     assert!(!explicit.contains("raw-arg-secret"));
@@ -239,11 +209,8 @@ fn test_command_shell_payload_and_explicit_sensitive_argument_never_leak() {
 #[test]
 fn test_command_debug_fails_closed_for_non_utf8_argument_and_environment() {
     let argument = OsString::from_vec(b"argument-secret-\xFF-suffix".to_vec());
-    let environment =
-        OsString::from_vec(b"environment-secret-\xFF-suffix".to_vec());
-    let command = Command::new("tool")
-        .arg_os(&argument)
-        .env_os("MODE", &environment);
+    let environment = OsString::from_vec(b"environment-secret-\xFF-suffix".to_vec());
+    let command = Command::new("tool").arg_os(&argument).env_os("MODE", &environment);
 
     let debug = format!("{command:?}");
 
@@ -257,10 +224,7 @@ fn test_command_debug_redacts_credential_containers() {
     let command = Command::new("worker")
         .arg("--redis-url")
         .arg("redis://:argv-password@example.com")
-        .env(
-            "HTTPS_PROXY",
-            "http://proxy-user:proxy-password@example.com",
-        )
+        .env("HTTPS_PROXY", "http://proxy-user:proxy-password@example.com")
         .env("DOCKER_AUTH_CONFIG", r#"{"auths":{"secret":"value"}}"#);
 
     let debug = format!("{command:?}");
@@ -295,9 +259,7 @@ fn test_command_debug_formats_stdin_without_inline_bytes() {
     assert!(null_input.contains("stdin: Null"));
     assert!(inherited_input.contains("stdin: Inherit"));
     assert!(file_input.contains(r#"stdin: File("<redacted path>")"#));
-    assert!(
-        file_input.contains("working_directory: Some(\"<redacted path>\")")
-    );
+    assert!(file_input.contains("working_directory: Some(\"<redacted path>\")"));
     assert!(!file_input.contains("customer/working-directory"));
     assert!(!file_input.contains("customer/private-input.txt"));
 }

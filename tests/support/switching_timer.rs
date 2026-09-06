@@ -43,25 +43,18 @@ impl SwitchingTimer {
 
 impl Timer for SwitchingTimer {
     fn clock(&self) -> &dyn MonotonicClock {
-        if self.observations.fetch_add(1, Ordering::Relaxed)
-            < self.stable_observations
-        {
+        if self.observations.fetch_add(1, Ordering::Relaxed) < self.stable_observations {
             &self.first
         } else {
             &self.second
         }
     }
 
-    fn at(
-        &self,
-        _deadline: MonotonicInstant,
-    ) -> Result<TimerFuture, TimeError> {
+    fn at(&self, _deadline: MonotonicInstant) -> Result<TimerFuture, TimeError> {
         Err(TimeError::TimerUnavailable {
             source: TimerUnavailableError::BackendUnavailable {
                 backend: "test",
-                source: Box::new(io::Error::other(
-                    "test timer backend unavailable",
-                )),
+                source: Box::new(io::Error::other("test timer backend unavailable")),
             },
         })
     }

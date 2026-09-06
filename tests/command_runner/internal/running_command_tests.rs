@@ -34,13 +34,11 @@ fn test_running_command_completes_before_timeout() {
 #[test]
 fn test_running_command_reports_injected_timer_completion_failure() {
     let error = CommandRunner::new(Duration::from_secs(30))
-        .timer(std::sync::Arc::new(
-            FaultInjectingTimer::backend_unavailable(
-                TimerFailurePoint::Completion,
-                "test",
-                "test timer completion failed",
-            ),
-        ))
+        .timer(std::sync::Arc::new(FaultInjectingTimer::backend_unavailable(
+            TimerFailurePoint::Completion,
+            "test",
+            "test timer completion failed",
+        )))
         .run(Command::shell("sleep 60"))
         .expect_err("timer completion failure should stop the command");
 
@@ -51,13 +49,11 @@ fn test_running_command_reports_injected_timer_completion_failure() {
 #[test]
 fn test_running_command_reports_injected_timer_registration_failure() {
     let error = CommandRunner::new(Duration::from_secs(30))
-        .timer(std::sync::Arc::new(
-            FaultInjectingTimer::backend_unavailable(
-                TimerFailurePoint::Registration,
-                "test",
-                "test timer backend unavailable",
-            ),
-        ))
+        .timer(std::sync::Arc::new(FaultInjectingTimer::backend_unavailable(
+            TimerFailurePoint::Registration,
+            "test",
+            "test timer backend unavailable",
+        )))
         .run(Command::shell("sleep 60"))
         .expect_err("timer registration failure should stop the command");
 
@@ -81,11 +77,7 @@ fn test_running_command_rejects_inconsistent_timer_before_waiting() {
     let started = Instant::now();
     let error = CommandRunner::without_timeout()
         .timer(std::sync::Arc::new(SwitchingTimer::new()))
-        .run(
-            Command::new("sleep")
-                .arg("5")
-                .stdin_bytes(b"ignored".to_vec()),
-        )
+        .run(Command::new("sleep").arg("5").stdin_bytes(b"ignored".to_vec()))
         .expect_err("inconsistent timer should be rejected during startup");
 
     assert_eq!(error.kind(), CommandErrorKind::TimeFailed);

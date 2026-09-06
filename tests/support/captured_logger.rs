@@ -74,8 +74,7 @@ static INSTALL_LOGGER: Once = Once::new();
 /// logger, and later calls only observe the completed initialization.
 pub(crate) fn initialize_captured_logger() {
     INSTALL_LOGGER.call_once(|| {
-        set_logger(&CAPTURED_LOGGER)
-            .expect("captured test logger should install exactly once");
+        set_logger(&CAPTURED_LOGGER).expect("captured test logger should install exactly once");
         set_max_level(LevelFilter::Trace);
     });
 }
@@ -92,9 +91,7 @@ pub(crate) fn initialize_captured_logger() {
 /// # Returns
 ///
 /// Cloned level and message pairs containing `marker`.
-pub(crate) fn captured_log_records_containing(
-    marker: &str,
-) -> Vec<(Level, String)> {
+pub(crate) fn captured_log_records_containing(marker: &str) -> Vec<(Level, String)> {
     CAPTURED_LOGGER
         .records
         .lock()

@@ -150,10 +150,7 @@ impl fmt::Debug for CommandRunner {
             .field("success_exit_codes", &self.success_exit_codes)
             .field("disable_logging", &self.disable_logging)
             .field("fail_on_output_truncation", &self.fail_on_output_truncation)
-            .field(
-                "diagnostic_redaction_policy",
-                &self.diagnostic_redaction_policy,
-            )
+            .field("diagnostic_redaction_policy", &self.diagnostic_redaction_policy)
             .field("max_stdout_bytes", &self.max_stdout_bytes)
             .field("max_stderr_bytes", &self.max_stderr_bytes)
             .finish()
@@ -171,9 +168,7 @@ impl CommandRunner {
             success_exit_codes: vec![0],
             disable_logging: false,
             fail_on_output_truncation: true,
-            diagnostic_redaction_policy: Redactor::application_default()
-                .policy()
-                .clone(),
+            diagnostic_redaction_policy: Redactor::application_default().policy().clone(),
             max_stdout_bytes: Some(DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM),
             max_stderr_bytes: Some(DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM),
         }
@@ -243,11 +238,7 @@ impl CommandRunner {
     /// cancellation handle has already been requested before command
     /// preparation, and maps all process, I/O, and timeout failures as
     /// described by [`CommandRunner::run`].
-    pub fn run_with(
-        &self,
-        command: Command,
-        options: CommandRunOptions,
-    ) -> Result<CommandOutput, CommandError> {
+    pub fn run_with(&self, command: Command, options: CommandRunOptions) -> Result<CommandOutput, CommandError> {
         let CommandRunOptionsParts {
             cancellation,
             stdout_file,
@@ -260,10 +251,7 @@ impl CommandRunner {
             stdout_file.as_deref(),
             stderr_file.as_deref(),
         )?;
-        if cancellation
-            .as_ref()
-            .is_some_and(CommandCancellation::is_cancelled)
-        {
+        if cancellation.as_ref().is_some_and(CommandCancellation::is_cancelled) {
             return Err(CommandError::from_reason(
                 prepared.command_text,
                 CommandErrorReason::CancelledBeforeStart,
@@ -285,58 +273,38 @@ impl CommandRunner {
             log::debug!("Running command: {command_text}");
         }
 
-        let manage_process_tree =
-            self.timeout.is_some() || cancellation.is_some();
-        let child_process =
-            match spawn_child(process_command, manage_process_tree) {
-                Ok(child_process) => child_process,
-                Err(source) => return Err(spawn_failed(&command_text, source)),
-            };
-        let mut starting_command =
-            StartingCommand::new(&command_text, child_process);
+        let manage_process_tree = self.timeout.is_some() || cancellation.is_some();
+        let child_process = match spawn_child(process_command, manage_process_tree) {
+            Ok(child_process) => child_process,
+            Err(source) => return Err(spawn_failed(&command_text, source)),
+        };
+        let mut starting_command = StartingCommand::new(&command_text, child_process);
         let started_at = self.timer.clock().now();
 
-        let stdin_writer = write_stdin_bytes(
-            &command_text,
-            starting_command.child_process(),
-            stdin_bytes,
-        )?;
+        let stdin_writer = write_stdin_bytes(&command_text, starting_command.child_process(), stdin_bytes)?;
         starting_command.set_stdin_writer(stdin_writer);
 
-        let stdout =
-            take_output_pipe(&command_text, OutputStream::Stdout, || {
-                starting_command.child_process().stdout().take()
-            })?;
-        let stderr =
-            take_output_pipe(&command_text, OutputStream::Stderr, || {
-                starting_command.child_process().stderr().take()
-            })?;
-        let stdout_reader =
-            start_output_reader(&command_text, OutputStream::Stdout, || {
-                read_output_stream(
-                    stdout,
-                    OutputCaptureOptions::new(
-                        self.max_stdout_bytes,
-                        stdout_file,
-                        stdout_file_path,
-                    ),
-                )
-            })?;
+        let stdout = take_output_pipe(&command_text, OutputStream::Stdout, || {
+            starting_command.child_process().stdout().take()
+        })?;
+        let stderr = take_output_pipe(&command_text, OutputStream::Stderr, || {
+            starting_command.child_process().stderr().take()
+        })?;
+        let stdout_reader = start_output_reader(&command_text, OutputStream::Stdout, || {
+            read_output_stream(
+                stdout,
+                OutputCaptureOptions::new(self.max_stdout_bytes, stdout_file, stdout_file_path),
+            )
+        })?;
         starting_command.set_stdout_reader(stdout_reader);
-        let stderr_reader =
-            start_output_reader(&command_text, OutputStream::Stderr, || {
-                read_output_stream(
-                    stderr,
-                    OutputCaptureOptions::new(
-                        self.max_stderr_bytes,
-                        stderr_file,
-                        stderr_file_path,
-                    ),
-                )
-            })?;
+        let stderr_reader = start_output_reader(&command_text, OutputStream::Stderr, || {
+            read_output_stream(
+                stderr,
+                OutputCaptureOptions::new(self.max_stderr_bytes, stderr_file, stderr_file_path),
+            )
+        })?;
         starting_command.set_stderr_reader(stderr_reader);
-        if let Err(source) = self.timer.clock().now().duration_since(started_at)
-        {
+        if let Err(source) = self.timer.clock().now().duration_since(started_at) {
             return Err(CommandError::from_reason(
                 command_text.clone(),
                 CommandErrorReason::TimeFailed { source },
@@ -354,17 +322,13 @@ impl CommandRunner {
             cancellation,
         )
         .wait_for_completion(self.timeout)?;
-        let FinishedCommand {
-            command_text,
-            output,
-        } = finished;
+        let FinishedCommand { command_text, output } = finished;
 
-        if output.exit_code().is_some_and(|exit_code| {
-            self.success_exit_codes.contains(&exit_code)
-        }) {
-            if self.fail_on_output_truncation
-                && (output.stdout_truncated() || output.stderr_truncated())
-            {
+        if output
+            .exit_code()
+            .is_some_and(|exit_code| self.success_exit_codes.contains(&exit_code))
+        {
+            if self.fail_on_output_truncation && (output.stdout_truncated() || output.stderr_truncated()) {
                 if !self.disable_logging {
                     log::debug!(
                         "Finished command `{}` with truncated output in {:?}.",
@@ -379,20 +343,12 @@ impl CommandRunner {
                 ));
             }
             if !self.disable_logging {
-                log::debug!(
-                    "Finished command `{}` in {:?}.",
-                    command_text,
-                    output.elapsed()
-                );
+                log::debug!("Finished command `{}` in {:?}.", command_text, output.elapsed());
             }
             Ok(output)
         } else {
             if !self.disable_logging {
-                log::debug!(
-                    "Command `{}` exited with code {:?}.",
-                    command_text,
-                    output.exit_code()
-                );
+                log::debug!("Command `{}` exited with code {:?}.", command_text, output.exit_code());
             }
             Err(CommandError::from_reason(
                 command_text,
@@ -568,10 +524,7 @@ impl CommandRunner {
     ///
     /// The updated command runner.
     #[inline(always)]
-    pub const fn fail_on_output_truncation(
-        mut self,
-        fail_on_output_truncation: bool,
-    ) -> Self {
+    pub const fn fail_on_output_truncation(mut self, fail_on_output_truncation: bool) -> Self {
         self.fail_on_output_truncation = fail_on_output_truncation;
         self
     }
@@ -582,9 +535,7 @@ impl CommandRunner {
     ///
     /// The complete configured diagnostic redaction policy.
     #[inline(always)]
-    pub const fn configured_diagnostic_redaction_policy(
-        &self,
-    ) -> &RedactionPolicy {
+    pub const fn configured_diagnostic_redaction_policy(&self) -> &RedactionPolicy {
         &self.diagnostic_redaction_policy
     }
 
@@ -603,10 +554,7 @@ impl CommandRunner {
     ///
     /// The updated command runner.
     #[inline(always)]
-    pub fn diagnostic_redaction_policy(
-        mut self,
-        policy: RedactionPolicy,
-    ) -> Self {
+    pub fn diagnostic_redaction_policy(mut self, policy: RedactionPolicy) -> Self {
         self.diagnostic_redaction_policy = policy;
         self
     }

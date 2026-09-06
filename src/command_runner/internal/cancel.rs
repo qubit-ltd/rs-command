@@ -10,9 +10,7 @@
 use std::thread::JoinHandle;
 
 /// Requests cancellation of one synchronous I/O operation on Windows.
-pub(in crate::command_runner) fn cancel_synchronous_io<T>(
-    handle: &JoinHandle<T>,
-) {
+pub(in crate::command_runner) fn cancel_synchronous_io<T>(handle: &JoinHandle<T>) {
     #[cfg(windows)]
     {
         use std::os::windows::io::AsRawHandle;

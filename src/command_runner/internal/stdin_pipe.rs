@@ -62,35 +62,20 @@ pub(in crate::command_runner) fn write_stdin_bytes(
                     return Err(CommandError::from_reason(
                         command,
                         CommandErrorReason::StartInputThreadFailed {
-                            source: io::Error::other(
-                                "coverage-injected stdin thread failure",
-                            ),
+                            source: io::Error::other("coverage-injected stdin thread failure"),
                         },
                         None,
                     ));
                 }
                 prepare_stdin_pipe(&stdin).map_err(|source| {
-                    CommandError::from_reason(
-                        command,
-                        CommandErrorReason::WriteInputFailed { source },
-                        None,
-                    )
+                    CommandError::from_reason(command, CommandErrorReason::WriteInputFailed { source }, None)
                 })?;
-                let (cancellation, token) =
-                    IoCancellation::pair().map_err(|source| {
-                        CommandError::from_reason(
-                            command,
-                            CommandErrorReason::StartInputThreadFailed {
-                                source,
-                            },
-                            None,
-                        )
-                    })?;
+                let (cancellation, token) = IoCancellation::pair().map_err(|source| {
+                    CommandError::from_reason(command, CommandErrorReason::StartInputThreadFailed { source }, None)
+                })?;
                 let writer = thread::Builder::new()
                     .name("qubit-command-stdin-writer".to_owned())
-                    .spawn(move || {
-                        write_stdin_until_cancelled(&mut stdin, &bytes, token)
-                    })
+                    .spawn(move || write_stdin_until_cancelled(&mut stdin, &bytes, token))
                     .map(|join| Some(StdinWriter::new(join, cancellation)));
                 map_stdin_thread_result(command, writer)
             }
@@ -126,11 +111,7 @@ pub(in crate::command_runner) fn map_stdin_thread_result(
     result: io::Result<OptionalStdinWriter>,
 ) -> Result<OptionalStdinWriter, CommandError> {
     result.map_err(|source| {
-        CommandError::from_reason(
-            command,
-            CommandErrorReason::StartInputThreadFailed { source },
-            None,
-        )
+        CommandError::from_reason(command, CommandErrorReason::StartInputThreadFailed { source }, None)
     })
 }
 
@@ -159,9 +140,7 @@ pub(in crate::command_runner) fn join_stdin_writer(
     match writer {
         Some(writer) => match writer.join() {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(source)) if source.kind() == io::ErrorKind::BrokenPipe => {
-                Ok(())
-            }
+            Ok(Err(source)) if source.kind() == io::ErrorKind::BrokenPipe => Ok(()),
             Ok(Err(source)) => Err(CommandError::from_reason(
                 command,
                 CommandErrorReason::WriteInputFailed { source },
@@ -195,10 +174,7 @@ fn write_stdin_until_cancelled<W: PollableStdin>(
         }
         match stdin.write(&bytes[offset..]) {
             Ok(0) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::WriteZero,
-                    "stdin write made no progress",
-                ));
+                return Err(io::Error::new(io::ErrorKind::WriteZero, "stdin write made no progress"));
             }
             Ok(written) => offset += written,
             Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
@@ -221,12 +197,7 @@ fn prepare_stdin_pipe<T: std::os::fd::AsRawFd>(pipe: &T) -> io::Result<()> {
         if flags < 0 {
             return Err(io::Error::last_os_error());
         }
-        if libc::fcntl(
-            pipe.as_raw_fd(),
-            libc::F_SETFL,
-            flags | libc::O_NONBLOCK,
-        ) < 0
-        {
+        if libc::fcntl(pipe.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
             return Err(io::Error::last_os_error());
         }
     }

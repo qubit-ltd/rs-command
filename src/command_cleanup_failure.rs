@@ -74,10 +74,7 @@ pub enum CommandCleanupFailure {
 impl fmt::Debug for CommandCleanupFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Wait { source } => formatter
-                .debug_struct("Wait")
-                .field("source", source)
-                .finish(),
+            Self::Wait { source } => formatter.debug_struct("Wait").field("source", source).finish(),
             Self::ProcessTreeTermination { source } => formatter
                 .debug_struct("ProcessTreeTermination")
                 .field("source", source)
@@ -86,23 +83,14 @@ impl fmt::Debug for CommandCleanupFailure {
                 .debug_struct("ChildTermination")
                 .field("source", source)
                 .finish(),
-            Self::Stdin { source } => formatter
-                .debug_struct("Stdin")
-                .field("source", source)
-                .finish(),
-            Self::StdoutRead { source } => formatter
-                .debug_struct("StdoutRead")
-                .field("source", source)
-                .finish(),
+            Self::Stdin { source } => formatter.debug_struct("Stdin").field("source", source).finish(),
+            Self::StdoutRead { source } => formatter.debug_struct("StdoutRead").field("source", source).finish(),
             Self::StdoutWrite { path, source } => formatter
                 .debug_struct("StdoutWrite")
                 .field("path", &redacted_debug_text(path))
                 .field("source", source)
                 .finish(),
-            Self::StderrRead { source } => formatter
-                .debug_struct("StderrRead")
-                .field("source", source)
-                .finish(),
+            Self::StderrRead { source } => formatter.debug_struct("StderrRead").field("source", source).finish(),
             Self::StderrWrite { path, source } => formatter
                 .debug_struct("StderrWrite")
                 .field("path", &redacted_debug_text(path))
