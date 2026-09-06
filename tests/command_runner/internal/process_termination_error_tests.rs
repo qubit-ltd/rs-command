@@ -49,9 +49,7 @@ fn test_process_termination_maps_cancellation_after_kill() {
             CommandRunOptions::new().cancellation(cancellation),
         )
         .expect_err("terminated command should report cancellation");
-    canceller
-        .join()
-        .expect("cancellation request thread should finish");
+    canceller.join().expect("cancellation request thread should finish");
 
     assert_eq!(error.kind(), CommandErrorKind::Cancelled);
 }

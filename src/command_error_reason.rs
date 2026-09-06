@@ -166,17 +166,9 @@ pub enum CommandErrorReason {
 impl fmt::Debug for CommandErrorReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SpawnFailed { source } => formatter
-                .debug_struct("SpawnFailed")
-                .field("source", source)
-                .finish(),
-            Self::WaitFailed { source } => formatter
-                .debug_struct("WaitFailed")
-                .field("source", source)
-                .finish(),
-            Self::CancelledBeforeStart => {
-                formatter.write_str("CancelledBeforeStart")
-            }
+            Self::SpawnFailed { source } => formatter.debug_struct("SpawnFailed").field("source", source).finish(),
+            Self::WaitFailed { source } => formatter.debug_struct("WaitFailed").field("source", source).finish(),
+            Self::CancelledBeforeStart => formatter.write_str("CancelledBeforeStart"),
             Self::KillFailed {
                 timeout,
                 process_tree_source,
@@ -201,11 +193,7 @@ impl fmt::Debug for CommandErrorReason {
                 .debug_struct("NonRegularInputFile")
                 .field("path", &redacted_debug_text(path))
                 .finish(),
-            Self::OpenOutputFailed {
-                stream,
-                path,
-                source,
-            } => formatter
+            Self::OpenOutputFailed { stream, path, source } => formatter
                 .debug_struct("OpenOutputFailed")
                 .field("stream", stream)
                 .field("path", &redacted_debug_text(path))
@@ -248,28 +236,18 @@ impl fmt::Debug for CommandErrorReason {
                 .field("stream", stream)
                 .field("source", source)
                 .finish(),
-            Self::TimeFailed { source } => formatter
-                .debug_struct("TimeFailed")
-                .field("source", source)
-                .finish(),
+            Self::TimeFailed { source } => formatter.debug_struct("TimeFailed").field("source", source).finish(),
             Self::WriteInputFailed { source } => formatter
                 .debug_struct("WriteInputFailed")
                 .field("source", source)
                 .finish(),
-            Self::WriteOutputFailed {
-                stream,
-                path,
-                source,
-            } => formatter
+            Self::WriteOutputFailed { stream, path, source } => formatter
                 .debug_struct("WriteOutputFailed")
                 .field("stream", stream)
                 .field("path", &redacted_debug_text(path))
                 .field("source", source)
                 .finish(),
-            Self::TimedOut { timeout } => formatter
-                .debug_struct("TimedOut")
-                .field("timeout", timeout)
-                .finish(),
+            Self::TimedOut { timeout } => formatter.debug_struct("TimedOut").field("timeout", timeout).finish(),
             Self::Cancelled => formatter.write_str("Cancelled"),
             Self::CancelFailed {
                 process_tree_source,
@@ -280,10 +258,7 @@ impl fmt::Debug for CommandErrorReason {
                 .field("child_source", child_source)
                 .finish(),
             Self::OutputTruncated => formatter.write_str("OutputTruncated"),
-            Self::UnexpectedExit {
-                exit_code,
-                expected,
-            } => formatter
+            Self::UnexpectedExit { exit_code, expected } => formatter
                 .debug_struct("UnexpectedExit")
                 .field("exit_code", exit_code)
                 .field("expected", expected)

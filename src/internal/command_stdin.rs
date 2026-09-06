@@ -29,10 +29,7 @@ impl fmt::Debug for CommandStdin {
             Self::Bytes(bytes) => {
                 write!(formatter, "Bytes({} bytes)", bytes.len())
             }
-            Self::File(_) => formatter
-                .debug_tuple("File")
-                .field(&"<redacted path>")
-                .finish(),
+            Self::File(_) => formatter.debug_tuple("File").field(&"<redacted path>").finish(),
         }
     }
 }

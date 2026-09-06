@@ -34,14 +34,8 @@ impl std::fmt::Debug for CommandRunOptions {
         formatter
             .debug_struct("CommandRunOptions")
             .field("cancellation_configured", &self.cancellation.is_some())
-            .field(
-                "stdout_file",
-                &self.stdout_file.as_ref().map(|_| "<redacted path>"),
-            )
-            .field(
-                "stderr_file",
-                &self.stderr_file.as_ref().map(|_| "<redacted path>"),
-            )
+            .field("stdout_file", &self.stdout_file.as_ref().map(|_| "<redacted path>"))
+            .field("stderr_file", &self.stderr_file.as_ref().map(|_| "<redacted path>"))
             .finish()
     }
 }

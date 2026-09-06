@@ -88,19 +88,9 @@ pub(crate) fn env_key_eq(left: &OsStr, right: &OsStr) -> bool {
     };
     // SAFETY: The pointers refer to the collected UTF-16 buffers and remain
     // valid for the duration of the call. The lengths are checked above.
-    let comparison = unsafe {
-        compare_string_ordinal(
-            left.as_ptr(),
-            left_len,
-            right.as_ptr(),
-            right_len,
-            1,
-        )
-    };
+    let comparison = unsafe { compare_string_ordinal(left.as_ptr(), left_len, right.as_ptr(), right_len, 1) };
     if comparison == 0 {
-        log::debug!(
-            "failed to compare Windows environment variable names; treating keys as distinct"
-        );
+        log::debug!("failed to compare Windows environment variable names; treating keys as distinct");
     }
     comparison == CSTR_EQUAL
 }

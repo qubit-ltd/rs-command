@@ -73,10 +73,7 @@ impl PreparedCommand {
         process_command.stdout(std::process::Stdio::piped());
         process_command.stderr(std::process::Stdio::piped());
 
-        if let Some(working_directory) = command
-            .working_directory_override()
-            .or(default_working_directory)
-        {
+        if let Some(working_directory) = command.working_directory_override().or(default_working_directory) {
             process_command.current_dir(working_directory);
         }
 
@@ -109,9 +106,7 @@ impl PreparedCommand {
     }
 
     /// Commits tee file creation and attaches the validated stdin file.
-    pub(in crate::command_runner) fn commit(
-        mut self,
-    ) -> Result<Self, CommandError> {
+    pub(in crate::command_runner) fn commit(mut self) -> Result<Self, CommandError> {
         let mut io_files = IoFiles {
             stdin_bytes: self.stdin_bytes.take(),
             stdin_path: self.stdin_path.take(),

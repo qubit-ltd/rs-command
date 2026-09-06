@@ -18,10 +18,7 @@ use crate::Command;
 ///
 /// This mutates only the process builder; the operating-system environment is
 /// not changed until that command is spawned.
-pub(super) fn configure_environment(
-    command: &Command,
-    process_command: &mut ProcessCommand,
-) {
+pub(super) fn configure_environment(command: &Command, process_command: &mut ProcessCommand) {
     if command.clears_environment() {
         process_command.env_clear();
     }

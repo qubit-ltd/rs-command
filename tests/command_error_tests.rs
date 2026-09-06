@@ -24,10 +24,7 @@ fn test_command_error_kind_and_reason_are_stable() {
         .run(Command::new("__qubit_command_missing_executable__"))
         .expect_err("missing executable should fail");
     assert_eq!(spawn.kind(), CommandErrorKind::SpawnFailed);
-    assert!(matches!(
-        spawn.reason(),
-        CommandErrorReason::SpawnFailed { .. }
-    ));
+    assert!(matches!(spawn.reason(), CommandErrorReason::SpawnFailed { .. }));
     assert!(spawn.source().is_some());
     assert!(spawn.cleanup_failures().is_empty());
 
@@ -40,10 +37,7 @@ fn test_command_error_kind_and_reason_are_stable() {
     assert_eq!(unexpected.output().expect("output").stdout(), b"output");
     assert!(matches!(
         unexpected.reason(),
-        CommandErrorReason::UnexpectedExit {
-            exit_code: Some(9),
-            ..
-        }
+        CommandErrorReason::UnexpectedExit { exit_code: Some(9), .. }
     ));
 
     let truncated = CommandRunner::without_timeout()
@@ -67,19 +61,14 @@ fn test_command_error_cancelled_before_start_has_no_output() {
         )
         .expect_err("pre-cancelled command should fail");
     assert_eq!(error.kind(), CommandErrorKind::CancelledBeforeStart);
-    assert!(matches!(
-        error.reason(),
-        CommandErrorReason::CancelledBeforeStart
-    ));
+    assert!(matches!(error.reason(), CommandErrorReason::CancelledBeforeStart));
     assert!(error.output().is_none());
 }
 
 #[test]
 fn test_command_error_debug_redacts_output_and_paths() {
     let error = CommandRunner::without_timeout()
-        .run(Command::shell(
-            "printf stdout-secret; printf stderr-secret >&2; exit 7",
-        ))
+        .run(Command::shell("printf stdout-secret; printf stderr-secret >&2; exit 7"))
         .expect_err("command should fail");
     let debug = format!("{error:?}");
     assert!(!debug.contains("stdout-secret"));

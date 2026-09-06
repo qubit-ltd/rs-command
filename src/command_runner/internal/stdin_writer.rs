@@ -51,9 +51,7 @@ impl StdinWriter {
     /// # Returns
     ///
     /// The worker result or a panic payload from the worker thread.
-    pub(in crate::command_runner) fn join(
-        self,
-    ) -> thread::Result<io::Result<()>> {
+    pub(in crate::command_runner) fn join(self) -> thread::Result<io::Result<()>> {
         self.join.join()
     }
 }

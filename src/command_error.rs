@@ -68,30 +68,14 @@ impl CommandError {
     /// Converts a helper error into its cleanup representation.
     pub(crate) fn into_cleanup_failure(self) -> Option<CommandCleanupFailure> {
         match self.reason {
-            CommandErrorReason::WriteInputFailed { source } => {
-                Some(CommandCleanupFailure::Stdin { source })
-            }
-            CommandErrorReason::ReadOutputFailed { stream, source } => {
-                match stream {
-                    OutputStream::Stdout => {
-                        Some(CommandCleanupFailure::StdoutRead { source })
-                    }
-                    OutputStream::Stderr => {
-                        Some(CommandCleanupFailure::StderrRead { source })
-                    }
-                }
-            }
-            CommandErrorReason::WriteOutputFailed {
-                stream,
-                path,
-                source,
-            } => match stream {
-                OutputStream::Stdout => {
-                    Some(CommandCleanupFailure::StdoutWrite { path, source })
-                }
-                OutputStream::Stderr => {
-                    Some(CommandCleanupFailure::StderrWrite { path, source })
-                }
+            CommandErrorReason::WriteInputFailed { source } => Some(CommandCleanupFailure::Stdin { source }),
+            CommandErrorReason::ReadOutputFailed { stream, source } => match stream {
+                OutputStream::Stdout => Some(CommandCleanupFailure::StdoutRead { source }),
+                OutputStream::Stderr => Some(CommandCleanupFailure::StderrRead { source }),
+            },
+            CommandErrorReason::WriteOutputFailed { stream, path, source } => match stream {
+                OutputStream::Stdout => Some(CommandCleanupFailure::StdoutWrite { path, source }),
+                OutputStream::Stderr => Some(CommandCleanupFailure::StderrWrite { path, source }),
             },
             _ => None,
         }
@@ -160,24 +144,18 @@ impl CommandError {
     #[must_use]
     pub fn process_tree_source(&self) -> Option<&io::Error> {
         if let CommandErrorReason::KillFailed {
-            process_tree_source,
-            ..
+            process_tree_source, ..
         }
         | CommandErrorReason::CancelFailed {
-            process_tree_source,
-            ..
+            process_tree_source, ..
         } = &self.reason
         {
             return Some(process_tree_source);
         }
-        self.cleanup_failures
-            .iter()
-            .find_map(|failure| match failure {
-                CommandCleanupFailure::ProcessTreeTermination { source } => {
-                    Some(source)
-                }
-                _ => None,
-            })
+        self.cleanup_failures.iter().find_map(|failure| match failure {
+            CommandCleanupFailure::ProcessTreeTermination { source } => Some(source),
+            _ => None,
+        })
     }
 
     /// Returns the direct-child termination source from the primary or cleanup
@@ -185,19 +163,14 @@ impl CommandError {
     #[must_use]
     pub fn child_source(&self) -> Option<&io::Error> {
         if let CommandErrorReason::KillFailed { child_source, .. }
-        | CommandErrorReason::CancelFailed { child_source, .. } =
-            &self.reason
+        | CommandErrorReason::CancelFailed { child_source, .. } = &self.reason
         {
             return Some(child_source);
         }
-        self.cleanup_failures
-            .iter()
-            .find_map(|failure| match failure {
-                CommandCleanupFailure::ChildTermination { source } => {
-                    Some(source)
-                }
-                _ => None,
-            })
+        self.cleanup_failures.iter().find_map(|failure| match failure {
+            CommandCleanupFailure::ChildTermination { source } => Some(source),
+            _ => None,
+        })
     }
 }
 
@@ -206,22 +179,13 @@ impl fmt::Display for CommandError {
         let command = &self.command;
         match (&self.reason, self.output.as_deref()) {
             (CommandErrorReason::SpawnFailed { source }, _) => {
-                write!(
-                    formatter,
-                    "failed to spawn command `{command}`: {source}"
-                )
+                write!(formatter, "failed to spawn command `{command}`: {source}")
             }
             (CommandErrorReason::WaitFailed { source }, _) => {
-                write!(
-                    formatter,
-                    "failed to wait for command `{command}`: {source}"
-                )
+                write!(formatter, "failed to wait for command `{command}`: {source}")
             }
             (CommandErrorReason::CancelledBeforeStart, _) => {
-                write!(
-                    formatter,
-                    "command `{command}` was cancelled before it started"
-                )
+                write!(formatter, "command `{command}` was cancelled before it started")
             }
             (
                 CommandErrorReason::KillFailed {
@@ -235,10 +199,7 @@ impl fmt::Display for CommandError {
                 "failed to terminate timed-out command `{command}` after {timeout:?}; process-tree source: {process_tree_source}; child source: {child_source}"
             ),
             (CommandErrorReason::ReadOutputFailed { stream, source }, _) => {
-                write!(
-                    formatter,
-                    "failed to read {stream} for command `{command}`: {source}"
-                )
+                write!(formatter, "failed to read {stream} for command `{command}`: {source}")
             }
             (CommandErrorReason::OpenInputFailed { source, .. }, _) => write!(
                 formatter,
@@ -248,10 +209,7 @@ impl fmt::Display for CommandError {
                 formatter,
                 "stdin path `<redacted path>` for command `{command}` is not an ordinary file"
             ),
-            (
-                CommandErrorReason::OpenOutputFailed { stream, source, .. },
-                _,
-            ) => write!(
+            (CommandErrorReason::OpenOutputFailed { stream, source, .. }, _) => write!(
                 formatter,
                 "failed to open {stream} file `<redacted path>` for command `{command}`: {source}"
             ),
@@ -261,12 +219,7 @@ impl fmt::Display for CommandError {
                     "{stream} path `<redacted path>` for command `{command}` is not an ordinary file"
                 )
             }
-            (
-                CommandErrorReason::InputOutputConflict {
-                    output_stream, ..
-                },
-                _,
-            ) => write!(
+            (CommandErrorReason::InputOutputConflict { output_stream, .. }, _) => write!(
                 formatter,
                 "stdin file '<redacted path>' conflicts with {output_stream} file '<redacted path>' for command '{command}'"
             ),
@@ -286,35 +239,22 @@ impl fmt::Display for CommandError {
                     "failed to start stdin writer for command '{command}': {source}"
                 )
             }
-            (
-                CommandErrorReason::StartOutputThreadFailed { stream, source },
-                _,
-            ) => write!(
+            (CommandErrorReason::StartOutputThreadFailed { stream, source }, _) => write!(
                 formatter,
                 "failed to start {stream} reader for command '{command}': {source}"
             ),
-            (CommandErrorReason::TimeFailed { source }, _) => write!(
-                formatter,
-                "time handling failed for command '{command}': {source}"
-            ),
-            (CommandErrorReason::WriteInputFailed { source }, _) => write!(
-                formatter,
-                "failed to write stdin for command `{command}`: {source}"
-            ),
-            (
-                CommandErrorReason::WriteOutputFailed {
-                    stream, source, ..
-                },
-                _,
-            ) => write!(
+            (CommandErrorReason::TimeFailed { source }, _) => {
+                write!(formatter, "time handling failed for command '{command}': {source}")
+            }
+            (CommandErrorReason::WriteInputFailed { source }, _) => {
+                write!(formatter, "failed to write stdin for command `{command}`: {source}")
+            }
+            (CommandErrorReason::WriteOutputFailed { stream, source, .. }, _) => write!(
                 formatter,
                 "failed to write {stream} for command `{command}` to `<redacted path>`: {source}"
             ),
             (CommandErrorReason::TimedOut { timeout }, _) => {
-                write!(
-                    formatter,
-                    "command `{command}` timed out after {timeout:?}"
-                )
+                write!(formatter, "command `{command}` timed out after {timeout:?}")
             }
             (CommandErrorReason::Cancelled, _) => {
                 write!(formatter, "command `{command}` was cancelled")
@@ -333,24 +273,14 @@ impl fmt::Display for CommandError {
                 formatter,
                 "command `{command}` completed successfully, but captured output was truncated"
             ),
-            (
-                CommandErrorReason::UnexpectedExit {
-                    exit_code,
-                    expected,
-                },
-                output,
-            ) => write!(
+            (CommandErrorReason::UnexpectedExit { exit_code, expected }, output) => write!(
                 formatter,
                 "command `{command}` exited with {}; expected one of {expected:?}",
                 unexpected_exit_detail(exit_code, output),
             ),
         }?;
         if !self.cleanup_failures.is_empty() {
-            write!(
-                formatter,
-                "; {} cleanup failure(s)",
-                self.cleanup_failures.len()
-            )?;
+            write!(formatter, "; {} cleanup failure(s)", self.cleanup_failures.len())?;
         }
         Ok(())
     }
@@ -368,16 +298,12 @@ impl Error for CommandError {
             | CommandErrorReason::StartInputThreadFailed { source }
             | CommandErrorReason::StartOutputThreadFailed { source, .. }
             | CommandErrorReason::WriteInputFailed { source }
-            | CommandErrorReason::WriteOutputFailed { source, .. } => {
-                Some(source)
-            }
+            | CommandErrorReason::WriteOutputFailed { source, .. } => Some(source),
             CommandErrorReason::KillFailed {
-                process_tree_source,
-                ..
+                process_tree_source, ..
             }
             | CommandErrorReason::CancelFailed {
-                process_tree_source,
-                ..
+                process_tree_source, ..
             } => Some(process_tree_source),
             CommandErrorReason::TimeFailed { source } => Some(source),
             _ => None,
@@ -390,45 +316,21 @@ impl From<&CommandErrorReason> for CommandErrorKind {
         match reason {
             CommandErrorReason::SpawnFailed { .. } => Self::SpawnFailed,
             CommandErrorReason::WaitFailed { .. } => Self::WaitFailed,
-            CommandErrorReason::CancelledBeforeStart => {
-                Self::CancelledBeforeStart
-            }
+            CommandErrorReason::CancelledBeforeStart => Self::CancelledBeforeStart,
             CommandErrorReason::KillFailed { .. } => Self::KillFailed,
-            CommandErrorReason::ReadOutputFailed { .. } => {
-                Self::ReadOutputFailed
-            }
+            CommandErrorReason::ReadOutputFailed { .. } => Self::ReadOutputFailed,
             CommandErrorReason::OpenInputFailed { .. } => Self::OpenInputFailed,
-            CommandErrorReason::NonRegularInputFile { .. } => {
-                Self::NonRegularInputFile
-            }
-            CommandErrorReason::OpenOutputFailed { .. } => {
-                Self::OpenOutputFailed
-            }
-            CommandErrorReason::NonRegularOutputFile { .. } => {
-                Self::NonRegularOutputFile
-            }
-            CommandErrorReason::InputOutputConflict { .. } => {
-                Self::InputOutputConflict
-            }
-            CommandErrorReason::OutputFilesConflict { .. } => {
-                Self::OutputFilesConflict
-            }
-            CommandErrorReason::InspectIoFileFailed { .. } => {
-                Self::InspectIoFileFailed
-            }
-            CommandErrorReason::StartInputThreadFailed { .. } => {
-                Self::StartInputThreadFailed
-            }
-            CommandErrorReason::StartOutputThreadFailed { .. } => {
-                Self::StartOutputThreadFailed
-            }
+            CommandErrorReason::NonRegularInputFile { .. } => Self::NonRegularInputFile,
+            CommandErrorReason::OpenOutputFailed { .. } => Self::OpenOutputFailed,
+            CommandErrorReason::NonRegularOutputFile { .. } => Self::NonRegularOutputFile,
+            CommandErrorReason::InputOutputConflict { .. } => Self::InputOutputConflict,
+            CommandErrorReason::OutputFilesConflict { .. } => Self::OutputFilesConflict,
+            CommandErrorReason::InspectIoFileFailed { .. } => Self::InspectIoFileFailed,
+            CommandErrorReason::StartInputThreadFailed { .. } => Self::StartInputThreadFailed,
+            CommandErrorReason::StartOutputThreadFailed { .. } => Self::StartOutputThreadFailed,
             CommandErrorReason::TimeFailed { .. } => Self::TimeFailed,
-            CommandErrorReason::WriteInputFailed { .. } => {
-                Self::WriteInputFailed
-            }
-            CommandErrorReason::WriteOutputFailed { .. } => {
-                Self::WriteOutputFailed
-            }
+            CommandErrorReason::WriteInputFailed { .. } => Self::WriteInputFailed,
+            CommandErrorReason::WriteOutputFailed { .. } => Self::WriteOutputFailed,
             CommandErrorReason::TimedOut { .. } => Self::TimedOut,
             CommandErrorReason::Cancelled => Self::Cancelled,
             CommandErrorReason::CancelFailed { .. } => Self::CancelFailed,
@@ -439,10 +341,7 @@ impl From<&CommandErrorReason> for CommandErrorKind {
 }
 
 /// Formats the observed termination detail for an unexpected command exit.
-fn unexpected_exit_detail(
-    exit_code: &Option<i32>,
-    output: Option<&CommandOutput>,
-) -> String {
+fn unexpected_exit_detail(exit_code: &Option<i32>, output: Option<&CommandOutput>) -> String {
     #[cfg(unix)]
     if let Some(signal) = output.and_then(CommandOutput::termination_signal) {
         return format!("signal {signal}");

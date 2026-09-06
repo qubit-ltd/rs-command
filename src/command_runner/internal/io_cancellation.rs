@@ -32,8 +32,7 @@ impl IoCancellation {
     ///
     /// A sender/token pair, or an I/O error when the Unix wakeup channel cannot
     /// be created or configured.
-    pub(in crate::command_runner) fn pair()
-    -> io::Result<(Self, IoCancellationToken)> {
+    pub(in crate::command_runner) fn pair() -> io::Result<(Self, IoCancellationToken)> {
         #[cfg(unix)]
         {
             use std::os::unix::net::UnixStream;

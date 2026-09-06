@@ -18,8 +18,8 @@ use crate::support::LocalTempDir;
 
 #[test]
 fn test_output_tee_streams_stderr_to_file() {
-    let temp_dir = LocalTempDir::with_prefix("qubit-command-output-tee-")
-        .expect("output tee temp directory should be created");
+    let temp_dir =
+        LocalTempDir::with_prefix("qubit-command-output-tee-").expect("output tee temp directory should be created");
     let path = temp_dir.path().join("stderr-tee.txt");
     let output = CommandRunner::new(Duration::from_secs(10))
         .max_stderr_bytes(5)

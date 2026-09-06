@@ -12,9 +12,7 @@ use std::process::ChildStderr;
 use std::process::ChildStdout;
 
 /// A child output pipe that can be switched to cancellation-aware reads.
-pub(in crate::command_runner) trait CancellableReader:
-    io::Read + Send + 'static
-{
+pub(in crate::command_runner) trait CancellableReader: io::Read + Send + 'static {
     /// Prepares the underlying pipe for cancellation polling.
     fn prepare_for_cancellation(&self) -> io::Result<()>;
     /// Returns the underlying Unix descriptor for event-driven reads.
@@ -57,12 +55,7 @@ fn prepare_pipe<T: std::os::fd::AsRawFd>(pipe: &T) -> io::Result<()> {
         if flags < 0 {
             return Err(io::Error::last_os_error());
         }
-        if libc::fcntl(
-            pipe.as_raw_fd(),
-            libc::F_SETFL,
-            flags | libc::O_NONBLOCK,
-        ) < 0
-        {
+        if libc::fcntl(pipe.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
             return Err(io::Error::last_os_error());
         }
     }

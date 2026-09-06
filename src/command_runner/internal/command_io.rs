@@ -67,10 +67,7 @@ impl CommandIo {
     pub(in crate::command_runner) fn is_finished(&self) -> bool {
         self.stdout_reader.is_finished()
             && self.stderr_reader.is_finished()
-            && self
-                .stdin_writer
-                .as_ref()
-                .is_none_or(|writer| writer.is_finished())
+            && self.stdin_writer.as_ref().is_none_or(|writer| writer.is_finished())
     }
 
     /// Collects output from all helper threads.
@@ -149,14 +146,7 @@ impl CommandIo {
         let stdout_result = join_output_reader(stdout_reader);
         let stderr_result = join_output_reader(stderr_reader);
         let stdin_result = join_stdin_writer(command, stdin_writer);
-        collect_output_results(
-            command,
-            status,
-            elapsed(),
-            stdout_result,
-            stderr_result,
-            stdin_result,
-        )
+        collect_output_results(command, status, elapsed(), stdout_result, stderr_result, stdin_result)
     }
 
     /// Cancels and joins every helper without process status.
@@ -169,10 +159,7 @@ impl CommandIo {
     ///
     /// All helper failures in stdout/stderr/stdin order after all joins
     /// complete.
-    pub(in crate::command_runner) fn cancel_and_join(
-        self,
-        command: &str,
-    ) -> Vec<CommandCleanupFailure> {
+    pub(in crate::command_runner) fn cancel_and_join(self, command: &str) -> Vec<CommandCleanupFailure> {
         let Self {
             stdout_reader,
             stderr_reader,
@@ -194,8 +181,7 @@ impl CommandIo {
                 failures.push(CommandCleanupFailure::StdoutRead { source });
             }
             Err(OutputCaptureError::Write { path, source, .. }) => {
-                failures
-                    .push(CommandCleanupFailure::StdoutWrite { path, source });
+                failures.push(CommandCleanupFailure::StdoutWrite { path, source });
             }
         }
         match stderr_result {
@@ -204,8 +190,7 @@ impl CommandIo {
                 failures.push(CommandCleanupFailure::StderrRead { source });
             }
             Err(OutputCaptureError::Write { path, source, .. }) => {
-                failures
-                    .push(CommandCleanupFailure::StderrWrite { path, source });
+                failures.push(CommandCleanupFailure::StderrWrite { path, source });
             }
         }
         if let Err(error) = stdin_result

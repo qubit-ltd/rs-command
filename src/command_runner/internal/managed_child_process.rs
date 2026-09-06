@@ -39,10 +39,7 @@ pub(in crate::command_runner) struct ManagedChildProcess {
 impl ManagedChildProcess {
     /// Creates a managed child process wrapper.
     #[inline]
-    pub(in crate::command_runner) fn new(
-        child: Box<dyn ChildWrapper>,
-        process_tree_managed: bool,
-    ) -> Self {
+    pub(in crate::command_runner) fn new(child: Box<dyn ChildWrapper>, process_tree_managed: bool) -> Self {
         Self {
             child,
             process_tree_managed,
@@ -58,9 +55,7 @@ impl ManagedChildProcess {
 
     /// Returns mutable access to the wrapped child handle.
     #[inline]
-    pub(in crate::command_runner) fn wrapper_mut(
-        &mut self,
-    ) -> &mut dyn ChildWrapper {
+    pub(in crate::command_runner) fn wrapper_mut(&mut self) -> &mut dyn ChildWrapper {
         self.child.as_mut()
     }
 
@@ -69,14 +64,10 @@ impl ManagedChildProcess {
     /// This preserves wrapper semantics for process-group and job-object based
     /// descendant cleanup.
     #[inline]
-    pub(in crate::command_runner) fn start_kill_tree(
-        &mut self,
-    ) -> io::Result<()> {
+    pub(in crate::command_runner) fn start_kill_tree(&mut self) -> io::Result<()> {
         #[cfg(coverage)]
         if FAIL_TREE_KILL.load(Ordering::Relaxed) {
-            return Err(io::Error::other(
-                "coverage-injected process-tree termination failure",
-            ));
+            return Err(io::Error::other("coverage-injected process-tree termination failure"));
         }
         self.child.start_kill()
     }
@@ -86,17 +77,13 @@ impl ManagedChildProcess {
     /// `inner_mut().start_kill()` intentionally targets the direct child
     /// process after a process-tree termination failure.
     #[inline]
-    pub(in crate::command_runner) fn start_kill_child(
-        &mut self,
-    ) -> io::Result<()> {
+    pub(in crate::command_runner) fn start_kill_child(&mut self) -> io::Result<()> {
         self.child.inner_mut().start_kill()
     }
 
     /// Checks non-blockingly whether the child has exited.
     #[inline]
-    pub(in crate::command_runner) fn try_wait(
-        &mut self,
-    ) -> io::Result<Option<ExitStatus>> {
+    pub(in crate::command_runner) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         self.child.try_wait()
     }
 

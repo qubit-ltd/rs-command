@@ -206,8 +206,7 @@ impl Command {
     /// The updated command.
     #[inline(always)]
     pub fn arg(mut self, arg: &str) -> Self {
-        self.args
-            .push(CommandArgument::visible(OsString::from(arg)));
+        self.args.push(CommandArgument::visible(OsString::from(arg)));
         self
     }
 
@@ -225,8 +224,7 @@ impl Command {
     where
         S: AsRef<OsStr>,
     {
-        self.args
-            .push(CommandArgument::visible(arg.as_ref().to_owned()));
+        self.args.push(CommandArgument::visible(arg.as_ref().to_owned()));
         self
     }
 
@@ -243,8 +241,7 @@ impl Command {
     /// The updated command.
     #[inline(always)]
     pub fn sensitive_arg(mut self, arg: &str) -> Self {
-        self.args
-            .push(CommandArgument::sensitive(OsString::from(arg)));
+        self.args.push(CommandArgument::sensitive(OsString::from(arg)));
         self
     }
 
@@ -264,8 +261,7 @@ impl Command {
     where
         S: AsRef<OsStr>,
     {
-        self.args
-            .push(CommandArgument::sensitive(arg.as_ref().to_owned()));
+        self.args.push(CommandArgument::sensitive(arg.as_ref().to_owned()));
         self
     }
 
@@ -280,10 +276,8 @@ impl Command {
     /// The updated command.
     #[inline]
     pub fn args(mut self, args: &[&str]) -> Self {
-        self.args.extend(
-            args.iter()
-                .map(|arg| CommandArgument::visible(OsString::from(arg))),
-        );
+        self.args
+            .extend(args.iter().map(|arg| CommandArgument::visible(OsString::from(arg))));
         self
     }
 
@@ -404,10 +398,8 @@ impl Command {
     {
         let key = key.as_ref().to_owned();
         let value = value.as_ref().to_owned();
-        self.removed_envs
-            .retain(|removed| !env_key_eq(removed, &key));
-        self.envs
-            .retain(|(existing_key, _)| !env_key_eq(existing_key, &key));
+        self.removed_envs.retain(|removed| !env_key_eq(removed, &key));
+        self.envs.retain(|(existing_key, _)| !env_key_eq(existing_key, &key));
         self.envs.push((key, value));
         self
     }
@@ -441,10 +433,8 @@ impl Command {
         S: AsRef<OsStr>,
     {
         let key = key.as_ref().to_owned();
-        self.envs
-            .retain(|(existing_key, _)| !env_key_eq(existing_key, &key));
-        self.removed_envs
-            .retain(|removed| !env_key_eq(removed, &key));
+        self.envs.retain(|(existing_key, _)| !env_key_eq(existing_key, &key));
+        self.removed_envs.retain(|removed| !env_key_eq(removed, &key));
         self.removed_envs.push(key);
         self
     }
@@ -565,9 +555,7 @@ impl Command {
         } else {
             let env_text = output.text(env);
             let unset_text = output.text(unset);
-            format!(
-                "Command {{ env: {env_text}, unset: {unset_text}, argv: {argv_text} }}"
-            )
+            format!("Command {{ env: {env_text}, unset: {unset_text}, argv: {argv_text} }}")
         }
     }
 
@@ -602,16 +590,13 @@ impl Command {
             return None;
         }
         let first_arg = self.args.first()?.value();
-        if self.program.as_os_str() == OsStr::new("sh")
-            && first_arg == OsStr::new("-c")
-        {
+        if self.program.as_os_str() == OsStr::new("sh") && first_arg == OsStr::new("-c") {
             return Some(1);
         }
 
         let program = self.program.to_string_lossy();
         let first_arg = first_arg.to_string_lossy();
-        if (program.eq_ignore_ascii_case("cmd")
-            || program.eq_ignore_ascii_case("cmd.exe"))
+        if (program.eq_ignore_ascii_case("cmd") || program.eq_ignore_ascii_case("cmd.exe"))
             && first_arg.eq_ignore_ascii_case("/C")
         {
             return Some(1);

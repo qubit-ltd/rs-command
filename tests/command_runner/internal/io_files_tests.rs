@@ -39,8 +39,7 @@ fn unspawnable_command() -> Command {
 ///
 /// An armed temporary-directory guard.
 fn temp_dir() -> LocalTempDir {
-    LocalTempDir::with_prefix("qubit-command-io-files-")
-        .expect("command I/O test temp directory should be created")
+    LocalTempDir::with_prefix("qubit-command-io-files-").expect("command I/O test temp directory should be created")
 }
 
 /// Creates a Unix FIFO at `path` for special-file rejection tests.
@@ -117,10 +116,8 @@ fn test_runner_rejects_symlinked_input_output_conflict() {
     let temp_dir = temp_dir();
     let input_path = temp_dir.path().join("symlink-conflict-input");
     let output_path = temp_dir.path().join("symlink-conflict-output");
-    fs::write(&input_path, b"preserve-me")
-        .expect("stdin fixture should be written");
-    std::os::unix::fs::symlink(&input_path, &output_path)
-        .expect("symlink fixture should be created");
+    fs::write(&input_path, b"preserve-me").expect("stdin fixture should be written");
+    std::os::unix::fs::symlink(&input_path, &output_path).expect("symlink fixture should be created");
 
     let error = CommandRunner::new(Duration::from_secs(10))
         .run_with(
@@ -141,10 +138,8 @@ fn test_runner_rejects_hard_linked_input_output_conflict() {
     let temp_dir = temp_dir();
     let input_path = temp_dir.path().join("hard-link-conflict-input");
     let output_path = temp_dir.path().join("hard-link-conflict-output");
-    fs::write(&input_path, b"preserve-me")
-        .expect("stdin fixture should be written");
-    fs::hard_link(&input_path, &output_path)
-        .expect("hard link fixture should be created");
+    fs::write(&input_path, b"preserve-me").expect("stdin fixture should be written");
+    fs::hard_link(&input_path, &output_path).expect("hard link fixture should be created");
 
     let error = CommandRunner::new(Duration::from_secs(10))
         .run_with(
@@ -165,10 +160,8 @@ fn test_runner_rejects_hard_linked_input_stderr_conflict() {
     let temp_dir = temp_dir();
     let input_path = temp_dir.path().join("hard-link-stderr-input");
     let output_path = temp_dir.path().join("hard-link-stderr-output");
-    fs::write(&input_path, b"preserve-me")
-        .expect("stdin fixture should be written");
-    fs::hard_link(&input_path, &output_path)
-        .expect("hard link fixture should be created");
+    fs::write(&input_path, b"preserve-me").expect("stdin fixture should be written");
+    fs::hard_link(&input_path, &output_path).expect("hard link fixture should be created");
 
     let error = CommandRunner::new(Duration::from_secs(10))
         .run_with(
@@ -189,10 +182,8 @@ fn test_runner_rejects_hard_linked_output_files() {
     let temp_dir = temp_dir();
     let stdout_path = temp_dir.path().join("hard-link-stdout");
     let stderr_path = temp_dir.path().join("hard-link-stderr");
-    fs::write(&stdout_path, b"preserve-me")
-        .expect("stdout fixture should be written");
-    fs::hard_link(&stdout_path, &stderr_path)
-        .expect("hard link fixture should be created");
+    fs::write(&stdout_path, b"preserve-me").expect("stdout fixture should be written");
+    fs::hard_link(&stdout_path, &stderr_path).expect("hard link fixture should be created");
 
     let error = CommandRunner::new(Duration::from_secs(10))
         .run_with(
@@ -213,9 +204,8 @@ fn test_runner_rejects_hard_linked_output_files() {
 #[cfg(not(windows))]
 #[test]
 fn test_runner_normalizes_relative_output_path_components() {
-    let temp_dir =
-        LocalTempDir::in_dir(".", Some("qubit-command-relative-output-"), 128)
-            .expect("relative output temp directory should be created");
+    let temp_dir = LocalTempDir::in_dir(".", Some("qubit-command-relative-output-"), 128)
+        .expect("relative output temp directory should be created");
     let dir_name = temp_dir
         .path()
         .file_name()
@@ -247,10 +237,8 @@ fn test_runner_reports_symlink_loop_during_path_inspection() {
     let temp_dir = temp_dir();
     let first = temp_dir.path().join("symlink-loop-first");
     let second = temp_dir.path().join("symlink-loop-second");
-    std::os::unix::fs::symlink(&second, &first)
-        .expect("first symlink should be created");
-    std::os::unix::fs::symlink(&first, &second)
-        .expect("second symlink should be created");
+    std::os::unix::fs::symlink(&second, &first).expect("first symlink should be created");
+    std::os::unix::fs::symlink(&first, &second).expect("second symlink should be created");
 
     let error = CommandRunner::new(Duration::from_secs(10))
         .run_with(
@@ -366,8 +354,7 @@ fn test_runner_accepts_regular_files_after_handle_validation() {
     let temp_dir = temp_dir();
     let input_path = temp_dir.path().join("regular-input");
     let output_path = temp_dir.path().join("regular-output");
-    fs::write(&input_path, b"regular-input")
-        .expect("regular stdin fixture should be written");
+    fs::write(&input_path, b"regular-input").expect("regular stdin fixture should be written");
 
     let output = CommandRunner::new(Duration::from_secs(10))
         .run_with(
