@@ -401,6 +401,7 @@ mod tests {
     use std::process::Stdio;
     use std::thread;
     use std::time::Duration;
+    use std::time::Instant;
 
     use process_wrap::std::ChildWrapper;
     use qubit_clock::ManualMonotonicClock;
@@ -519,12 +520,16 @@ mod tests {
         )
     }
 
-    fn failing_termination_child() -> ManagedChildProcess {
+    fn fallback_race_child(exit_status: ExitStatus) -> ManagedChildProcess {
         let direct = ScriptedChild::new(raw_child())
             .kill_error(io::Error::other("child termination failed"));
         let tree = ScriptedChild::new(Box::new(direct))
             .kill_error(io::Error::other("tree termination failed"))
-            .try_wait_results((0..9).map(|_| Ok(None)));
+            .try_wait_results(
+                (0..8)
+                    .map(|_| Ok(None))
+                    .chain(std::iter::once(Ok(Some(exit_status)))),
+            );
         ManagedChildProcess::new(Box::new(tree), true)
     }
 
@@ -601,6 +606,41 @@ mod tests {
         )
     }
 
+    fn completed_io_with_cancellation_failures() -> CommandIo {
+        let stdout = OutputReader::new(
+            thread::spawn(|| {
+                Err(OutputCaptureError::Read {
+                    source: io::Error::other("stdout read failed"),
+                    output: CapturedOutput::default(),
+                })
+            }),
+            IoCancellation::failing("stdout cancellation failed"),
+        );
+        let stderr = OutputReader::new(
+            thread::spawn(|| {
+                Err(OutputCaptureError::Write {
+                    path: PathBuf::from("stderr.log"),
+                    source: io::Error::other("stderr write failed"),
+                    output: CapturedOutput::default(),
+                })
+            }),
+            IoCancellation::failing("stderr cancellation failed"),
+        );
+        let stdin = StdinWriter::new(
+            thread::spawn(|| Err(io::Error::other("stdin write failed"))),
+            IoCancellation::failing("stdin cancellation failed"),
+        );
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !(stdout.is_finished() && stderr.is_finished() && stdin.is_finished()) {
+            assert!(
+                Instant::now() < deadline,
+                "failing helpers should finish before finalization"
+            );
+            thread::yield_now();
+        }
+        CommandIo::new(stdout, stderr, Some(stdin))
+    }
+
     fn running(child: ManagedChildProcess, io: CommandIo) -> RunningCommand {
         let clock = ManualMonotonicClock::new_shared();
         let started_at = clock.now();
@@ -610,6 +650,19 @@ mod tests {
             io,
             started_at,
             clock.new_timer(),
+            None,
+        )
+    }
+
+    fn running_with_elapsed_failure(child: ManagedChildProcess, io: CommandIo) -> RunningCommand {
+        let started_clock = ManualMonotonicClock::new_shared();
+        let timer_clock = ManualMonotonicClock::new_shared();
+        RunningCommand::new(
+            "test command".to_owned(),
+            child,
+            io,
+            started_clock.now(),
+            timer_clock.new_timer(),
             None,
         )
     }
@@ -638,11 +691,14 @@ mod tests {
         )
     }
 
-    fn cancellation_with_tree_kill_failure() -> CommandError {
+    fn cancellation_with_fallback_and_helper_failures() -> CommandError {
         expect_error(
-            running(failing_termination_child(), io_with_failures())
-                .resolve_event(RunEvent::Cancelled { status: None }, None),
-            "tree and child termination failures should be reported",
+            running_with_elapsed_failure(
+                fallback_race_child(status(0)),
+                completed_io_with_cancellation_failures(),
+            )
+            .resolve_event(RunEvent::Cancelled { status: None }, None),
+            "termination and helper cleanup failures should retain canonical order",
         )
     }
 
@@ -673,8 +729,13 @@ mod tests {
             .iter()
             .map(|failure| match failure {
                 CommandCleanupFailure::StdoutRead { .. } => "stdout-read",
+                CommandCleanupFailure::StdoutCancellation { .. } => "stdout-cancel",
                 CommandCleanupFailure::StderrWrite { .. } => "stderr-write",
+                CommandCleanupFailure::StderrCancellation { .. } => "stderr-cancel",
                 CommandCleanupFailure::Stdin { .. } => "stdin-write",
+                CommandCleanupFailure::StdinCancellation { .. } => "stdin-cancel",
+                CommandCleanupFailure::ProcessTreeTermination { .. } => "process-tree",
+                CommandCleanupFailure::ChildTermination { .. } => "direct-child",
                 other => panic!("unexpected cleanup failure: {other:?}"),
             })
             .collect()
@@ -683,7 +744,6 @@ mod tests {
     #[derive(Clone, Copy)]
     enum ExpectedReason {
         ReadOutput,
-        CancelFailed,
         TimeFailed,
         WaitFailed,
     }
@@ -700,12 +760,21 @@ mod tests {
                 &[][..],
             ),
             (
-                "cancellation plus tree kill failure",
-                cancellation_with_tree_kill_failure,
-                CommandErrorKind::CancelFailed,
-                ExpectedReason::CancelFailed,
+                "cancellation plus tree fallback and helper failures",
+                cancellation_with_fallback_and_helper_failures,
+                CommandErrorKind::TimeFailed,
+                ExpectedReason::TimeFailed,
                 false,
-                &["stdout-read", "stderr-write", "stdin-write"][..],
+                &[
+                    "process-tree",
+                    "direct-child",
+                    "stdout-read",
+                    "stdout-cancel",
+                    "stderr-write",
+                    "stderr-cancel",
+                    "stdin-write",
+                    "stdin-cancel",
+                ][..],
             ),
             (
                 "time failure plus helper failures",
@@ -737,9 +806,6 @@ mod tests {
                             ..
                         },
                         ExpectedReason::ReadOutput
-                    ) | (
-                        CommandErrorReason::CancelFailed { .. },
-                        ExpectedReason::CancelFailed
                     ) | (
                         CommandErrorReason::TimeFailed { .. },
                         ExpectedReason::TimeFailed
