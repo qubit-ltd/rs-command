@@ -924,13 +924,14 @@ mod unix {
                     .stdin_bytes(vec![b'x'; 4 * 1024 * 1024]),
             )
             .expect_err("escaped stdin descendant should make the command time out");
+        let elapsed = started.elapsed();
 
         escaped.wait_until_recorded(Duration::from_secs(1));
         escaped.terminate_and_wait();
 
         assert_eq!(error.kind(), CommandErrorKind::TimedOut);
         assert!(
-            started.elapsed() < Duration::from_secs(2),
+            elapsed < Duration::from_secs(2),
             "timeout must cancel a blocked stdin writer"
         );
     }
