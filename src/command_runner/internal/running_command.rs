@@ -5,10 +5,8 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::io;
 use std::process::ExitStatus;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use qubit_clock::BlockingSleeper;
@@ -17,24 +15,17 @@ use qubit_clock::TimeError;
 use qubit_clock::Timer;
 
 use super::command_io::CommandIo;
-use super::error_mapping::kill_failed;
-use super::error_mapping::wait_failed;
 use super::finished_command::FinishedCommand;
 use super::managed_child_process::ManagedChildProcess;
-use super::process_termination_error::ProcessTerminationError;
-use super::process_termination_error::ProcessTerminationOutcome;
+use super::process_terminator::ProcessTerminator;
+use super::run_event::RunEvent;
+use super::stop_reason::StopReason;
 use super::wait_policy::next_sleep;
 use crate::CommandCancellation;
-use crate::CommandCleanupFailure;
 use crate::CommandError;
-use crate::CommandErrorReason;
 
 /// Maximum delay before a cancellation-aware wait observes cancellation.
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
-/// Bounded confirmation window for a child racing process-tree termination.
-const KILL_FAILURE_EXIT_CHECK_ATTEMPTS: usize = 8;
-/// Delay between bounded exit checks after a failed process-tree kill.
-const KILL_FAILURE_EXIT_CHECK_DELAY: Duration = Duration::from_micros(50);
 
 /// Running command state that owns process and I/O helper lifetimes.
 #[must_use = "a running command must be waited on to collect its process and I/O"]
@@ -110,14 +101,11 @@ impl RunningCommand {
         timeout: Option<Duration>,
     ) -> Result<FinishedCommand, CommandError> {
         if timeout.is_none() && self.cancellation_token.is_none() {
-            let status = match self.child_process.wait() {
-                Ok(status) => status,
-                Err(source) => {
-                    let error = wait_failed(&self.command_text, source);
-                    return Err(self.collect_after_wait_error(error));
-                }
+            let event = match self.child_process.wait() {
+                Ok(status) => RunEvent::Exited(status),
+                Err(source) => RunEvent::WaitFailed(source),
             };
-            return self.complete_after_exit(status, None);
+            return self.finish_run_event(event, None);
         }
 
         let mut timeout_poll_count = 0;
@@ -125,30 +113,41 @@ impl RunningCommand {
             let maybe_status = match self.child_process.try_wait() {
                 Ok(status) => status,
                 Err(source) => {
-                    let error = wait_failed(&self.command_text, source);
-                    return Err(self.collect_after_wait_error(error));
+                    return self.finish_run_event(RunEvent::WaitFailed(source), timeout);
                 }
             };
             if let Some(status) = maybe_status {
-                return self.complete_after_exit(status, timeout);
+                return self.finish_run_event(RunEvent::Exited(status), timeout);
             }
             if self
                 .cancellation_token
                 .as_ref()
                 .is_some_and(CommandCancellation::is_cancelled)
             {
-                return self.handle_cancellation();
+                return self.finish_run_event(RunEvent::Cancelled { status: None }, timeout);
             }
             let sleep = match timeout {
                 Some(timeout) => {
                     let elapsed = match self.elapsed() {
                         Ok(elapsed) => elapsed,
                         Err(source) => {
-                            return Err(self.clean_up_after_time_error(source));
+                            return self.finish_run_event(
+                                RunEvent::TimeFailed {
+                                    source,
+                                    status: None,
+                                },
+                                timeout.into(),
+                            );
                         }
                     };
                     if elapsed >= timeout {
-                        return self.handle_timeout(timeout);
+                        return self.finish_run_event(
+                            RunEvent::TimedOut {
+                                timeout,
+                                status: None,
+                            },
+                            Some(timeout),
+                        );
                     }
                     let sleep = next_sleep(timeout, elapsed, timeout_poll_count);
                     timeout_poll_count = timeout_poll_count.saturating_add(1);
@@ -157,8 +156,26 @@ impl RunningCommand {
                 None => CANCELLATION_POLL_INTERVAL,
             };
             if let Err(source) = BlockingSleeper::new(Arc::clone(&self.timer)).sleep_for(sleep) {
-                return Err(self.clean_up_after_time_error(source));
+                return self.finish_run_event(
+                    RunEvent::TimeFailed {
+                        source,
+                        status: None,
+                    },
+                    timeout,
+                );
             }
+        }
+    }
+
+    /// Finalizes one terminal event from the process monitoring loop.
+    fn finish_run_event(
+        self,
+        event: RunEvent,
+        timeout: Option<Duration>,
+    ) -> Result<FinishedCommand, CommandError> {
+        match event.into_exit_status() {
+            Ok(status) => self.complete_after_exit(status, timeout),
+            Err(reason) => self.stop(reason),
         }
     }
 
@@ -192,18 +209,35 @@ impl RunningCommand {
                     .as_ref()
                     .is_some_and(CommandCancellation::is_cancelled)
                 {
-                    return self.handle_output_collection_cancellation();
+                    return self.finish_run_event(
+                        RunEvent::Cancelled {
+                            status: Some(status),
+                        },
+                        timeout,
+                    );
                 }
                 let sleep = match timeout {
                     Some(timeout) => {
                         let elapsed = match self.elapsed() {
                             Ok(elapsed) => elapsed,
                             Err(source) => {
-                                return self.handle_time_error_after_exit(source);
+                                return self.finish_run_event(
+                                    RunEvent::TimeFailed {
+                                        source,
+                                        status: Some(status),
+                                    },
+                                    Some(timeout),
+                                );
                             }
                         };
                         if elapsed >= timeout {
-                            return self.handle_output_collection_timeout(timeout);
+                            return self.finish_run_event(
+                                RunEvent::TimedOut {
+                                    timeout,
+                                    status: Some(status),
+                                },
+                                Some(timeout),
+                            );
                         }
                         let sleep = next_sleep(timeout, elapsed, timeout_poll_count);
                         timeout_poll_count = timeout_poll_count.saturating_add(1);
@@ -211,232 +245,57 @@ impl RunningCommand {
                     }
                     None => CANCELLATION_POLL_INTERVAL,
                 };
-                if let Err(source) = BlockingSleeper::new(Arc::clone(&self.timer)).sleep_for(sleep) {
-                    return self.handle_time_error_after_exit(source);
+                if let Err(source) = BlockingSleeper::new(Arc::clone(&self.timer)).sleep_for(sleep)
+                {
+                    return self.finish_run_event(
+                        RunEvent::TimeFailed {
+                            source,
+                            status: Some(status),
+                        },
+                        timeout,
+                    );
                 }
             }
         }
         self.complete(status)
     }
 
-    /// Handles timeout reached while collecting inherited output pipes.
+    /// Stops the managed process tree and finalizes all I/O helpers.
     ///
     /// # Parameters
     ///
-    /// * `timeout` - Timeout that has been exceeded.
+    /// * `reason` - Primary reason that monitoring stopped the command.
     ///
     /// # Returns
     ///
-    /// This method returns an error after timeout handling; its success type is
-    /// retained to compose with the surrounding state machine.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`CommandError`] with kind `TimedOut` after terminating the
-    /// command and collecting final output, or the process-control/output
-    /// error that prevented timeout output from being built.
-    fn handle_output_collection_timeout(mut self, timeout: Duration) -> Result<FinishedCommand, CommandError> {
-        let outcome = match self.terminate_child() {
-            Ok(outcome) => outcome,
-            Err(ProcessTerminationError::Wait(source)) => {
-                let error = wait_failed(&self.command_text, source);
-                return Err(self.finish_without_status(error));
-            }
-            Err(ProcessTerminationError::WaitAfterTreeTermination {
-                wait_source,
-                process_tree_source,
-            }) => {
-                let error = wait_failed(&self.command_text, wait_source).with_cleanup_failures([
-                    CommandCleanupFailure::ProcessTreeTermination {
-                        source: process_tree_source,
-                    },
-                ]);
-                return Err(self.finish_without_status(error));
-            }
-            Err(ProcessTerminationError::Kill(process_tree_source, child_source)) => {
-                let error = kill_failed(self.command_text.clone(), timeout, process_tree_source, child_source);
-                return Err(self.finish_without_status(error));
-            }
-        };
-        let ProcessTerminationOutcome {
-            status,
-            cleanup_failures,
-        } = outcome;
+    /// This method always returns an error after completing cleanup.
+    fn stop(mut self, reason: StopReason) -> Result<FinishedCommand, CommandError> {
+        let observed_status = reason.observed_status();
+        let retains_output = reason.retains_termination_output();
+        let outcome =
+            match ProcessTerminator::new(&mut self.child_process).terminate(observed_status) {
+                Ok(outcome) => outcome,
+                Err(failure) => {
+                    let error = failure.into_command_error(reason, &self.command_text);
+                    return Err(self.finish_without_status(error));
+                }
+            };
+        let status = observed_status.unwrap_or(outcome.status);
+        if !retains_output {
+            let error = reason
+                .into_primary_error(self.command_text.clone(), None)
+                .with_cleanup_failures(outcome.cleanup_failures);
+            return Err(self.finish_without_status(error));
+        }
         let finished = match self.complete_after_termination(status) {
             Ok(finished) => finished,
             Err(error) => {
-                return Err(error.with_cleanup_failures(cleanup_failures));
+                return Err(error.with_cleanup_failures(outcome.cleanup_failures));
             }
         };
-        Err(CommandError::from_reason(
-            finished.command_text,
-            CommandErrorReason::TimedOut { timeout },
-            Some(Box::new(finished.output)),
-        )
-        .with_cleanup_failures(cleanup_failures))
-    }
-
-    /// Cancels descendants that keep inherited output pipes open after the
-    /// direct child has exited.
-    ///
-    /// # Returns
-    ///
-    /// Always returns a cancellation or process-control error after cleanup.
-    fn handle_output_collection_cancellation(mut self) -> Result<FinishedCommand, CommandError> {
-        let outcome = match self.terminate_child() {
-            Ok(outcome) => outcome,
-            Err(ProcessTerminationError::Wait(source)) => {
-                let error = wait_failed(&self.command_text, source);
-                return Err(self.finish_without_status(error));
-            }
-            Err(ProcessTerminationError::WaitAfterTreeTermination {
-                wait_source,
-                process_tree_source,
-            }) => {
-                let error = wait_failed(&self.command_text, wait_source).with_cleanup_failures([
-                    CommandCleanupFailure::ProcessTreeTermination {
-                        source: process_tree_source,
-                    },
-                ]);
-                return Err(self.finish_without_status(error));
-            }
-            Err(ProcessTerminationError::Kill(process_tree_source, child_source)) => {
-                let error = CommandError::from_reason(
-                    self.command_text.clone(),
-                    CommandErrorReason::CancelFailed {
-                        process_tree_source,
-                        child_source,
-                    },
-                    None,
-                );
-                return Err(self.finish_without_status(error));
-            }
-        };
-        let ProcessTerminationOutcome {
-            status,
-            cleanup_failures,
-        } = outcome;
-        let finished = match self.complete_after_termination(status) {
-            Ok(finished) => finished,
-            Err(error) => {
-                return Err(error.with_cleanup_failures(cleanup_failures));
-            }
-        };
-        Err(CommandError::from_reason(
-            finished.command_text,
-            CommandErrorReason::Cancelled,
-            Some(Box::new(finished.output)),
-        )
-        .with_cleanup_failures(cleanup_failures))
-    }
-
-    /// Cancels a running process tree and collects its final output.
-    ///
-    /// # Returns
-    ///
-    /// Always returns a cancellation or process-control error after cleanup.
-    fn handle_cancellation(mut self) -> Result<FinishedCommand, CommandError> {
-        let outcome = match self.terminate_child() {
-            Ok(outcome) => outcome,
-            Err(ProcessTerminationError::Wait(source)) => {
-                let error = wait_failed(&self.command_text, source);
-                return Err(self.collect_after_wait_error(error));
-            }
-            Err(ProcessTerminationError::WaitAfterTreeTermination {
-                wait_source,
-                process_tree_source,
-            }) => {
-                let error = wait_failed(&self.command_text, wait_source).with_cleanup_failures([
-                    CommandCleanupFailure::ProcessTreeTermination {
-                        source: process_tree_source,
-                    },
-                ]);
-                return Err(self.finish_without_status(error));
-            }
-            Err(ProcessTerminationError::Kill(process_tree_source, child_source)) => {
-                let error = CommandError::from_reason(
-                    self.command_text.clone(),
-                    CommandErrorReason::CancelFailed {
-                        process_tree_source,
-                        child_source,
-                    },
-                    None,
-                );
-                return Err(self.finish_without_status(error));
-            }
-        };
-        let ProcessTerminationOutcome {
-            status,
-            cleanup_failures,
-        } = outcome;
-        let finished = match self.complete_after_termination(status) {
-            Ok(finished) => finished,
-            Err(error) => {
-                return Err(error.with_cleanup_failures(cleanup_failures));
-            }
-        };
-        Err(CommandError::from_reason(
-            finished.command_text,
-            CommandErrorReason::Cancelled,
-            Some(Box::new(finished.output)),
-        )
-        .with_cleanup_failures(cleanup_failures))
-    }
-
-    /// Handles timeout by killing the command and collecting final output.
-    ///
-    /// # Parameters
-    ///
-    /// * `timeout` - Timeout that has been exceeded.
-    ///
-    /// # Returns
-    ///
-    /// This method returns an error after timeout handling.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`CommandError`] with kind `TimedOut` after successful
-    /// termination and collection, or the process-control error from failed
-    /// cleanup.
-    fn handle_timeout(mut self, timeout: Duration) -> Result<FinishedCommand, CommandError> {
-        let outcome = match self.terminate_child() {
-            Ok(outcome) => outcome,
-            Err(ProcessTerminationError::Wait(source)) => {
-                let error = wait_failed(&self.command_text, source);
-                return Err(self.collect_after_wait_error(error));
-            }
-            Err(ProcessTerminationError::WaitAfterTreeTermination {
-                wait_source,
-                process_tree_source,
-            }) => {
-                let error = wait_failed(&self.command_text, wait_source).with_cleanup_failures([
-                    CommandCleanupFailure::ProcessTreeTermination {
-                        source: process_tree_source,
-                    },
-                ]);
-                return Err(self.finish_without_status(error));
-            }
-            Err(ProcessTerminationError::Kill(process_tree_source, child_source)) => {
-                let error = kill_failed(self.command_text.clone(), timeout, process_tree_source, child_source);
-                return Err(self.collect_after_status_lost(error));
-            }
-        };
-        let ProcessTerminationOutcome {
-            status,
-            cleanup_failures,
-        } = outcome;
-        let finished = match self.complete_after_termination(status) {
-            Ok(finished) => finished,
-            Err(error) => {
-                return Err(error.with_cleanup_failures(cleanup_failures));
-            }
-        };
-        Err(CommandError::from_reason(
-            finished.command_text,
-            CommandErrorReason::TimedOut { timeout },
-            Some(Box::new(finished.output)),
-        )
-        .with_cleanup_failures(cleanup_failures))
+        Err(reason
+            .into_primary_error(finished.command_text, Some(Box::new(finished.output)))
+            .with_cleanup_failures(outcome.cleanup_failures))
     }
 
     /// Completes a known-exited command by joining all I/O helpers.
@@ -463,7 +322,10 @@ impl RunningCommand {
         let output = io.collect(&command_text, status, move || {
             timer.clock().now().duration_since(started_at)
         })?;
-        Ok(FinishedCommand { command_text, output })
+        Ok(FinishedCommand {
+            command_text,
+            output,
+        })
     }
 
     /// Completes a terminated command after cancelling and joining I/O helpers.
@@ -481,7 +343,10 @@ impl RunningCommand {
     ///
     /// Returns [`CommandError`] if a completed helper or elapsed-time sampling
     /// fails.
-    fn complete_after_termination(self, status: ExitStatus) -> Result<FinishedCommand, CommandError> {
+    fn complete_after_termination(
+        self,
+        status: ExitStatus,
+    ) -> Result<FinishedCommand, CommandError> {
         let Self {
             command_text,
             io,
@@ -492,7 +357,10 @@ impl RunningCommand {
         let output = io.cancel_and_collect(&command_text, status, move || {
             timer.clock().now().duration_since(started_at)
         })?;
-        Ok(FinishedCommand { command_text, output })
+        Ok(FinishedCommand {
+            command_text,
+            output,
+        })
     }
 
     /// Returns elapsed time in the injected timer's clock domain.
@@ -507,249 +375,6 @@ impl RunningCommand {
     /// monotonic ordering.
     fn elapsed(&self) -> Result<Duration, TimeError> {
         self.timer.clock().now().duration_since(self.started_at)
-    }
-
-    /// Terminates the managed process tree and returns final child status.
-    ///
-    /// For process-tree managed children this method first tries wrapper tree
-    /// termination and falls back to direct-child kill through
-    /// `inner_mut().start_kill()` when needed.
-    fn terminate_child(&mut self) -> Result<ProcessTerminationOutcome, ProcessTerminationError> {
-        if !self.child_process.process_tree_managed() {
-            if let Err(child_source) = self.child_process.start_kill_child() {
-                let status = self.child_process.try_wait().map_err(ProcessTerminationError::Wait)?;
-                if let Some(status) = status {
-                    return Ok(ProcessTerminationOutcome {
-                        status,
-                        cleanup_failures: Vec::new(),
-                    });
-                }
-                return Err(ProcessTerminationError::Kill(
-                    io::Error::other("direct kill used without tree management"),
-                    child_source,
-                ));
-            }
-            return self
-                .child_process
-                .wait()
-                .map(|status| ProcessTerminationOutcome {
-                    status,
-                    cleanup_failures: Vec::new(),
-                })
-                .map_err(ProcessTerminationError::Wait);
-        }
-
-        match self.child_process.start_kill_tree() {
-            Ok(()) => self
-                .child_process
-                .wait()
-                .map(|status| ProcessTerminationOutcome {
-                    status,
-                    cleanup_failures: Vec::new(),
-                })
-                .map_err(ProcessTerminationError::Wait),
-            Err(process_tree_source) => match self.status_after_termination_failure(&process_tree_source) {
-                Ok(Some(status)) => Ok(ProcessTerminationOutcome {
-                    status,
-                    cleanup_failures: if Self::process_tree_already_exited(&process_tree_source) {
-                        Vec::new()
-                    } else {
-                        vec![CommandCleanupFailure::ProcessTreeTermination {
-                            source: process_tree_source,
-                        }]
-                    },
-                }),
-                Ok(None) => match self.child_process.start_kill_child() {
-                    Ok(()) => match self.child_process.wait() {
-                        Ok(status) => Ok(ProcessTerminationOutcome {
-                            status,
-                            cleanup_failures: vec![CommandCleanupFailure::ProcessTreeTermination {
-                                source: process_tree_source,
-                            }],
-                        }),
-                        Err(wait_source) => Err(ProcessTerminationError::WaitAfterTreeTermination {
-                            wait_source,
-                            process_tree_source,
-                        }),
-                    },
-                    Err(child_source) => {
-                        let status = self.child_process.try_wait().map_err(ProcessTerminationError::Wait)?;
-                        if let Some(status) = status {
-                            Ok(ProcessTerminationOutcome {
-                                status,
-                                cleanup_failures: vec![
-                                    CommandCleanupFailure::ProcessTreeTermination {
-                                        source: process_tree_source,
-                                    },
-                                    CommandCleanupFailure::ChildTermination { source: child_source },
-                                ],
-                            })
-                        } else {
-                            Err(ProcessTerminationError::Kill(process_tree_source, child_source))
-                        }
-                    }
-                },
-                Err(wait_source) => Err(ProcessTerminationError::WaitAfterTreeTermination {
-                    wait_source,
-                    process_tree_source,
-                }),
-            },
-        }
-    }
-
-    /// Resolves status after process-tree termination failure.
-    ///
-    /// # Parameters
-    ///
-    /// * `source` - Process-tree termination error.
-    ///
-    /// # Returns
-    ///
-    /// The completed direct-child status when it can be observed, or `None`
-    /// when the child remains running.
-    ///
-    /// # Errors
-    ///
-    /// Returns the operating-system wait error when the final child status
-    /// cannot be observed.
-    fn status_after_termination_failure(&mut self, source: &io::Error) -> io::Result<Option<ExitStatus>> {
-        if Self::process_tree_already_exited(source) {
-            return self.child_process.wait().map(Some);
-        }
-        for attempt in 0..KILL_FAILURE_EXIT_CHECK_ATTEMPTS {
-            if let Some(status) = self.child_process.try_wait()? {
-                return Ok(Some(status));
-            }
-            if attempt + 1 < KILL_FAILURE_EXIT_CHECK_ATTEMPTS {
-                thread::sleep(KILL_FAILURE_EXIT_CHECK_DELAY);
-            }
-        }
-        Ok(None)
-    }
-
-    /// Reports whether a process-tree termination error means the tree ended.
-    ///
-    /// # Parameters
-    ///
-    /// * `source` - Process-tree termination error.
-    ///
-    /// # Returns
-    ///
-    /// `true` when the platform reports that the managed process tree no
-    /// longer exists, otherwise `false`.
-    fn process_tree_already_exited(source: &io::Error) -> bool {
-        #[cfg(unix)]
-        {
-            source.raw_os_error() == Some(libc::ESRCH)
-        }
-        #[cfg(not(unix))]
-        {
-            source.kind() == io::ErrorKind::NotFound
-        }
-    }
-
-    /// Best-effort cleanup after timer failure with best-effort helper cleanup.
-    ///
-    /// # Parameters
-    ///
-    /// * `source` - Timer or monotonic-clock failure to preserve.
-    ///
-    /// # Returns
-    ///
-    /// The preserved time error after helper cleanup.
-    #[must_use]
-    fn clean_up_after_time_error(mut self, source: TimeError) -> CommandError {
-        let error = CommandError::from_reason(
-            self.command_text.clone(),
-            CommandErrorReason::TimeFailed { source },
-            None,
-        );
-        let error = match self.terminate_child() {
-            Ok(outcome) => error.with_cleanup_failures(outcome.cleanup_failures),
-            Err(ProcessTerminationError::Wait(source)) => {
-                error.with_cleanup_failures([CommandCleanupFailure::Wait { source }])
-            }
-            Err(ProcessTerminationError::WaitAfterTreeTermination {
-                wait_source,
-                process_tree_source,
-            }) => error.with_cleanup_failures([
-                CommandCleanupFailure::Wait { source: wait_source },
-                CommandCleanupFailure::ProcessTreeTermination {
-                    source: process_tree_source,
-                },
-            ]),
-            Err(ProcessTerminationError::Kill(process_tree_source, child_source)) => error.with_cleanup_failures([
-                CommandCleanupFailure::ProcessTreeTermination {
-                    source: process_tree_source,
-                },
-                CommandCleanupFailure::ChildTermination { source: child_source },
-            ]),
-        };
-        self.finish_without_status(error)
-    }
-
-    /// Cleans up inherited output pipes after timer failure after exit.
-    ///
-    /// # Parameters
-    ///
-    /// * `status` - Exit status already reported for the direct child.
-    /// * `source` - Timer or monotonic-clock failure to preserve.
-    ///
-    /// # Returns
-    ///
-    /// The preserved time error with helper cleanup guarantees.
-    fn handle_time_error_after_exit(self, source: TimeError) -> Result<FinishedCommand, CommandError> {
-        let error = CommandError::from_reason(
-            self.command_text.clone(),
-            CommandErrorReason::TimeFailed { source },
-            None,
-        );
-        let error = self.finish_without_status(error);
-        Err(error)
-    }
-
-    /// Best-effort helper cleanup after wait failures.
-    ///
-    /// # Parameters
-    ///
-    /// # Returns
-    ///
-    /// Preserved process-control error with complete I/O cleanup.
-    #[must_use]
-    fn collect_after_wait_error(mut self, error: CommandError) -> CommandError {
-        let error = match self.terminate_child() {
-            Ok(outcome) => error.with_cleanup_failures(outcome.cleanup_failures),
-            Err(ProcessTerminationError::Wait(source)) => {
-                error.with_cleanup_failures([CommandCleanupFailure::Wait { source }])
-            }
-            Err(ProcessTerminationError::WaitAfterTreeTermination {
-                wait_source,
-                process_tree_source,
-            }) => error.with_cleanup_failures([
-                CommandCleanupFailure::Wait { source: wait_source },
-                CommandCleanupFailure::ProcessTreeTermination {
-                    source: process_tree_source,
-                },
-            ]),
-            Err(ProcessTerminationError::Kill(process_tree_source, child_source)) => error.with_cleanup_failures([
-                CommandCleanupFailure::ProcessTreeTermination {
-                    source: process_tree_source,
-                },
-                CommandCleanupFailure::ChildTermination { source: child_source },
-            ]),
-        };
-        self.finish_without_status(error)
-    }
-
-    /// Best-effort helper cleanup when timeout/cancellation cleanup lost
-    /// status.
-    ///
-    /// # Returns
-    ///
-    /// Preserved error after all helper joins attempt.
-    #[must_use]
-    fn collect_after_status_lost(self, error: CommandError) -> CommandError {
-        self.finish_without_status(error)
     }
 
     /// Completes without process output and preserves the primary error.
