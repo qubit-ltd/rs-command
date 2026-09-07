@@ -101,54 +101,55 @@ impl RunningCommand {
         mut self,
         timeout: Option<Duration>,
     ) -> Result<FinishedCommand, CommandError> {
+        let event = self.wait_for_event(timeout);
+        self.resolve_event(event, timeout)
+    }
+
+    /// Waits until process monitoring produces one terminal event.
+    ///
+    /// This phase only observes the child, cancellation token, and timer. It
+    /// does not terminate the process, finalize helpers, or construct a
+    /// [`CommandError`].
+    fn wait_for_event(&mut self, timeout: Option<Duration>) -> RunEvent {
         if timeout.is_none() && self.cancellation_token.is_none() {
-            let event = match self.child_process.wait() {
+            return match self.child_process.wait() {
                 Ok(status) => RunEvent::Exited(status),
                 Err(source) => RunEvent::WaitFailed(source),
             };
-            return self.finish_run_event(event, None);
         }
 
         let mut timeout_poll_count = 0;
         loop {
             let maybe_status = match self.child_process.try_wait() {
                 Ok(status) => status,
-                Err(source) => {
-                    return self.finish_run_event(RunEvent::WaitFailed(source), timeout);
-                }
+                Err(source) => return RunEvent::WaitFailed(source),
             };
             if let Some(status) = maybe_status {
-                return self.finish_run_event(RunEvent::Exited(status), timeout);
+                return RunEvent::Exited(status);
             }
             if self
                 .cancellation_token
                 .as_ref()
                 .is_some_and(CommandCancellation::is_cancelled)
             {
-                return self.finish_run_event(RunEvent::Cancelled { status: None }, timeout);
+                return RunEvent::Cancelled { status: None };
             }
             let sleep = match timeout {
                 Some(timeout) => {
                     let elapsed = match self.elapsed() {
                         Ok(elapsed) => elapsed,
                         Err(source) => {
-                            return self.finish_run_event(
-                                RunEvent::TimeFailed {
-                                    source,
-                                    status: None,
-                                },
-                                timeout.into(),
-                            );
+                            return RunEvent::TimeFailed {
+                                source,
+                                status: None,
+                            };
                         }
                     };
                     if elapsed >= timeout {
-                        return self.finish_run_event(
-                            RunEvent::TimedOut {
-                                timeout,
-                                status: None,
-                            },
-                            Some(timeout),
-                        );
+                        return RunEvent::TimedOut {
+                            timeout,
+                            status: None,
+                        };
                     }
                     let sleep = next_sleep(timeout, elapsed, timeout_poll_count);
                     timeout_poll_count = timeout_poll_count.saturating_add(1);
@@ -157,51 +158,19 @@ impl RunningCommand {
                 None => CANCELLATION_POLL_INTERVAL,
             };
             if let Err(source) = BlockingSleeper::new(Arc::clone(&self.timer)).sleep_for(sleep) {
-                return self.finish_run_event(
-                    RunEvent::TimeFailed {
-                        source,
-                        status: None,
-                    },
-                    timeout,
-                );
+                return RunEvent::TimeFailed {
+                    source,
+                    status: None,
+                };
             }
         }
     }
 
-    /// Finalizes one terminal event from the process monitoring loop.
-    fn finish_run_event(
-        self,
-        event: RunEvent,
-        timeout: Option<Duration>,
-    ) -> Result<FinishedCommand, CommandError> {
-        match event.into_exit_status() {
-            Ok(status) => self.complete_after_exit(status, timeout),
-            Err(reason) => self.stop(reason),
-        }
-    }
-
-    /// Completes a command after the direct child exits.
+    /// Waits for I/O helpers after the direct child has exited.
     ///
-    /// # Parameters
-    ///
-    /// * `status` - Exit status reported by the direct child process.
-    /// * `timeout` - Optional command timeout that also bounds I/O collection.
-    ///
-    /// # Returns
-    ///
-    /// Finished command output when all I/O helpers finish before timeout or
-    /// cancellation.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`CommandError`] with kind `TimedOut` or `Cancelled` when
-    /// inherited I/O pipes keep helpers alive after the corresponding request,
-    /// or another [`CommandError`] if cleanup or output collection fails.
-    fn complete_after_exit(
-        self,
-        status: ExitStatus,
-        timeout: Option<Duration>,
-    ) -> Result<FinishedCommand, CommandError> {
+    /// The original timeout continues to be measured from `started_at`, so
+    /// inherited pipes cannot restart the command deadline after child exit.
+    fn wait_for_io_event(&mut self, status: ExitStatus, timeout: Option<Duration>) -> RunEvent {
         if timeout.is_some() || self.cancellation_token.is_some() {
             let mut timeout_poll_count = 0;
             while !self.io.is_finished() {
@@ -210,35 +179,26 @@ impl RunningCommand {
                     .as_ref()
                     .is_some_and(CommandCancellation::is_cancelled)
                 {
-                    return self.finish_run_event(
-                        RunEvent::Cancelled {
-                            status: Some(status),
-                        },
-                        timeout,
-                    );
+                    return RunEvent::Cancelled {
+                        status: Some(status),
+                    };
                 }
                 let sleep = match timeout {
                     Some(timeout) => {
                         let elapsed = match self.elapsed() {
                             Ok(elapsed) => elapsed,
                             Err(source) => {
-                                return self.finish_run_event(
-                                    RunEvent::TimeFailed {
-                                        source,
-                                        status: Some(status),
-                                    },
-                                    Some(timeout),
-                                );
+                                return RunEvent::TimeFailed {
+                                    source,
+                                    status: Some(status),
+                                };
                             }
                         };
                         if elapsed >= timeout {
-                            return self.finish_run_event(
-                                RunEvent::TimedOut {
-                                    timeout,
-                                    status: Some(status),
-                                },
-                                Some(timeout),
-                            );
+                            return RunEvent::TimedOut {
+                                timeout,
+                                status: Some(status),
+                            };
                         }
                         let sleep = next_sleep(timeout, elapsed, timeout_poll_count);
                         timeout_poll_count = timeout_poll_count.saturating_add(1);
@@ -248,17 +208,30 @@ impl RunningCommand {
                 };
                 if let Err(source) = BlockingSleeper::new(Arc::clone(&self.timer)).sleep_for(sleep)
                 {
-                    return self.finish_run_event(
-                        RunEvent::TimeFailed {
-                            source,
-                            status: Some(status),
-                        },
-                        timeout,
-                    );
+                    return RunEvent::TimeFailed {
+                        source,
+                        status: Some(status),
+                    };
                 }
             }
         }
-        self.complete(status)
+        RunEvent::Exited(status)
+    }
+
+    /// Resolves one monitoring event through the single finalization pipeline.
+    fn resolve_event(
+        mut self,
+        event: RunEvent,
+        timeout: Option<Duration>,
+    ) -> Result<FinishedCommand, CommandError> {
+        let event = match event.into_exit_status() {
+            Ok(status) => self.wait_for_io_event(status, timeout),
+            Err(reason) => return self.stop_and_finalize(reason),
+        };
+        match event.into_exit_status() {
+            Ok(status) => self.complete(status),
+            Err(reason) => self.stop_and_finalize(reason),
+        }
     }
 
     /// Stops the managed process tree and finalizes all I/O helpers.
@@ -270,7 +243,7 @@ impl RunningCommand {
     /// # Returns
     ///
     /// This method always returns an error after completing cleanup.
-    fn stop(mut self, reason: StopReason) -> Result<FinishedCommand, CommandError> {
+    fn stop_and_finalize(mut self, reason: StopReason) -> Result<FinishedCommand, CommandError> {
         let observed_status = reason.observed_status();
         let retains_output = reason.retains_termination_output();
         let outcome =
@@ -409,5 +382,376 @@ impl RunningCommand {
     fn finish_without_status(self, primary: CommandError) -> CommandError {
         let cleanup_failures = self.io.cancel_and_join(&self.command_text);
         primary.with_cleanup_failures(cleanup_failures)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::io;
+    #[cfg(unix)]
+    use std::io::Read;
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
+    use std::path::PathBuf;
+    use std::process::Command as ProcessCommand;
+    use std::process::ExitStatus;
+    use std::process::Stdio;
+    use std::thread;
+    use std::time::Duration;
+
+    use process_wrap::std::ChildWrapper;
+    use qubit_clock::ManualMonotonicClock;
+    use qubit_clock::MonotonicClock;
+    use qubit_clock::TimeError;
+
+    use super::super::captured_output::CapturedOutput;
+    use super::super::command_io::CommandIo;
+    use super::super::finished_command::FinishedCommand;
+    use super::super::io_cancellation::IoCancellation;
+    use super::super::io_cancellation_token::IoCancellationToken;
+    use super::super::managed_child_process::ManagedChildProcess;
+    use super::super::output_capture_error::OutputCaptureError;
+    use super::super::output_reader::OutputReader;
+    use super::super::run_event::RunEvent;
+    use super::super::stdin_writer::StdinWriter;
+    use super::RunningCommand;
+    use crate::CommandCleanupFailure;
+    use crate::CommandError;
+    use crate::CommandErrorKind;
+    use crate::CommandErrorReason;
+    use crate::OutputStream;
+
+    #[cfg(unix)]
+    fn status(code: i32) -> ExitStatus {
+        ExitStatus::from_raw(code << 8)
+    }
+
+    #[cfg(windows)]
+    fn status(code: i32) -> ExitStatus {
+        ExitStatus::from_raw(code as u32)
+    }
+
+    #[derive(Debug)]
+    struct ScriptedChild {
+        inner: Box<dyn ChildWrapper>,
+        kill_error: Option<io::Error>,
+        wait_result: Option<io::Result<ExitStatus>>,
+        try_wait_results: VecDeque<io::Result<Option<ExitStatus>>>,
+    }
+
+    impl ScriptedChild {
+        fn new(inner: Box<dyn ChildWrapper>) -> Self {
+            Self {
+                inner,
+                kill_error: None,
+                wait_result: None,
+                try_wait_results: VecDeque::new(),
+            }
+        }
+
+        fn kill_error(mut self, source: io::Error) -> Self {
+            self.kill_error = Some(source);
+            self
+        }
+
+        fn wait_status(mut self, exit_status: ExitStatus) -> Self {
+            self.wait_result = Some(Ok(exit_status));
+            self
+        }
+
+        fn try_wait_results(
+            mut self,
+            results: impl IntoIterator<Item = io::Result<Option<ExitStatus>>>,
+        ) -> Self {
+            self.try_wait_results.extend(results);
+            self
+        }
+    }
+
+    impl ChildWrapper for ScriptedChild {
+        fn inner(&self) -> &dyn ChildWrapper {
+            self.inner.as_ref()
+        }
+
+        fn inner_mut(&mut self) -> &mut dyn ChildWrapper {
+            self.inner.as_mut()
+        }
+
+        fn into_inner(self: Box<Self>) -> Box<dyn ChildWrapper> {
+            self.inner
+        }
+
+        fn start_kill(&mut self) -> io::Result<()> {
+            match self.kill_error.take() {
+                Some(source) => Err(source),
+                None => Ok(()),
+            }
+        }
+
+        fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+            self.try_wait_results
+                .pop_front()
+                .unwrap_or_else(|| self.inner.try_wait())
+        }
+
+        fn wait(&mut self) -> io::Result<ExitStatus> {
+            self.wait_result.take().unwrap_or_else(|| self.inner.wait())
+        }
+    }
+
+    fn raw_child() -> Box<dyn ChildWrapper> {
+        let mut child = ProcessCommand::new("rustc")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("test child should spawn");
+        child.wait().expect("test child should be reaped");
+        Box::new(child)
+    }
+
+    fn terminating_child(exit_status: ExitStatus) -> ManagedChildProcess {
+        ManagedChildProcess::new(
+            Box::new(ScriptedChild::new(raw_child()).wait_status(exit_status)),
+            true,
+        )
+    }
+
+    fn failing_termination_child() -> ManagedChildProcess {
+        let direct = ScriptedChild::new(raw_child())
+            .kill_error(io::Error::other("child termination failed"));
+        let tree = ScriptedChild::new(Box::new(direct))
+            .kill_error(io::Error::other("tree termination failed"))
+            .try_wait_results((0..9).map(|_| Ok(None)));
+        ManagedChildProcess::new(Box::new(tree), true)
+    }
+
+    fn completed_reader(result: Result<CapturedOutput, OutputCaptureError>) -> OutputReader {
+        let (cancellation, token) =
+            IoCancellation::pair().expect("reader cancellation should create");
+        OutputReader::new(
+            thread::spawn(move || {
+                wait_for_cancellation(&token);
+                result
+            }),
+            cancellation,
+        )
+    }
+
+    fn completed_writer(result: io::Result<()>) -> StdinWriter {
+        let (cancellation, token) =
+            IoCancellation::pair().expect("writer cancellation should create");
+        StdinWriter::new(
+            thread::spawn(move || {
+                wait_for_cancellation(&token);
+                result
+            }),
+            cancellation,
+        )
+    }
+
+    #[cfg(unix)]
+    fn wait_for_cancellation(token: &IoCancellationToken) {
+        let mut byte = [0_u8; 1];
+        loop {
+            match (&token.wakeup).read(&mut byte) {
+                Ok(0) => thread::yield_now(),
+                Ok(_) => return,
+                Err(source) if source.kind() == io::ErrorKind::WouldBlock => thread::yield_now(),
+                Err(source) => panic!("cancellation wakeup should be readable: {source}"),
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    fn wait_for_cancellation(token: &IoCancellationToken) {
+        while !token.is_cancelled() {
+            thread::yield_now();
+        }
+    }
+
+    fn successful_reader() -> OutputReader {
+        completed_reader(Ok(CapturedOutput::default()))
+    }
+
+    fn failing_stdout() -> OutputReader {
+        completed_reader(Err(OutputCaptureError::Read {
+            source: io::Error::other("stdout read failed"),
+            output: CapturedOutput::default(),
+        }))
+    }
+
+    fn failing_stderr() -> OutputReader {
+        completed_reader(Err(OutputCaptureError::Write {
+            path: PathBuf::from("stderr.log"),
+            source: io::Error::other("stderr write failed"),
+            output: CapturedOutput::default(),
+        }))
+    }
+
+    fn io_with_failures() -> CommandIo {
+        CommandIo::new(
+            failing_stdout(),
+            failing_stderr(),
+            Some(completed_writer(Err(io::Error::other(
+                "stdin write failed",
+            )))),
+        )
+    }
+
+    fn running(child: ManagedChildProcess, io: CommandIo) -> RunningCommand {
+        let clock = ManualMonotonicClock::new_shared();
+        let started_at = clock.now();
+        RunningCommand::new(
+            "test command".to_owned(),
+            child,
+            io,
+            started_at,
+            clock.new_timer(),
+            None,
+        )
+    }
+
+    fn expect_error(result: Result<FinishedCommand, CommandError>, message: &str) -> CommandError {
+        match result {
+            Ok(_) => panic!("{message}"),
+            Err(error) => error,
+        }
+    }
+
+    fn timeout_with_output_failure() -> CommandError {
+        expect_error(
+            running(
+                terminating_child(status(0)),
+                CommandIo::new(failing_stdout(), successful_reader(), None),
+            )
+            .resolve_event(
+                RunEvent::TimedOut {
+                    timeout: Duration::from_secs(2),
+                    status: Some(status(0)),
+                },
+                Some(Duration::from_secs(2)),
+            ),
+            "output failure should supersede timeout after termination",
+        )
+    }
+
+    fn cancellation_with_tree_kill_failure() -> CommandError {
+        expect_error(
+            running(failing_termination_child(), io_with_failures())
+                .resolve_event(RunEvent::Cancelled { status: None }, None),
+            "tree and child termination failures should be reported",
+        )
+    }
+
+    fn time_failure_with_helper_failures() -> CommandError {
+        expect_error(
+            running(terminating_child(status(0)), io_with_failures()).resolve_event(
+                RunEvent::TimeFailed {
+                    source: TimeError::InstantOverflow,
+                    status: Some(status(0)),
+                },
+                None,
+            ),
+            "time failure should remain primary",
+        )
+    }
+
+    fn wait_failure_with_helper_failures() -> CommandError {
+        expect_error(
+            running(terminating_child(status(0)), io_with_failures())
+                .resolve_event(RunEvent::WaitFailed(io::Error::other("wait failed")), None),
+            "wait failure should remain primary",
+        )
+    }
+
+    fn cleanup_order(error: &CommandError) -> Vec<&'static str> {
+        error
+            .cleanup_failures()
+            .iter()
+            .map(|failure| match failure {
+                CommandCleanupFailure::StdoutRead { .. } => "stdout-read",
+                CommandCleanupFailure::StderrWrite { .. } => "stderr-write",
+                CommandCleanupFailure::Stdin { .. } => "stdin-write",
+                other => panic!("unexpected cleanup failure: {other:?}"),
+            })
+            .collect()
+    }
+
+    #[derive(Clone, Copy)]
+    enum ExpectedReason {
+        ReadOutput,
+        CancelFailed,
+        TimeFailed,
+        WaitFailed,
+    }
+
+    #[test]
+    fn test_resolve_event_preserves_error_priority_and_cleanup_order() {
+        let cases = [
+            (
+                "timeout plus output read failure",
+                timeout_with_output_failure as fn() -> CommandError,
+                CommandErrorKind::ReadOutputFailed,
+                ExpectedReason::ReadOutput,
+                true,
+                &[][..],
+            ),
+            (
+                "cancellation plus tree kill failure",
+                cancellation_with_tree_kill_failure,
+                CommandErrorKind::CancelFailed,
+                ExpectedReason::CancelFailed,
+                false,
+                &["stdout-read", "stderr-write", "stdin-write"][..],
+            ),
+            (
+                "time failure plus helper failures",
+                time_failure_with_helper_failures,
+                CommandErrorKind::TimeFailed,
+                ExpectedReason::TimeFailed,
+                false,
+                &["stdout-read", "stderr-write", "stdin-write"][..],
+            ),
+            (
+                "wait failure plus helper failures",
+                wait_failure_with_helper_failures,
+                CommandErrorKind::WaitFailed,
+                ExpectedReason::WaitFailed,
+                false,
+                &["stdout-read", "stderr-write", "stdin-write"][..],
+            ),
+        ];
+
+        for (name, run, expected_kind, expected_reason, has_output, expected_cleanup) in cases {
+            let error = run();
+            assert_eq!(error.kind(), expected_kind, "{name}");
+            assert!(
+                matches!(
+                    (error.reason(), expected_reason),
+                    (
+                        CommandErrorReason::ReadOutputFailed {
+                            stream: OutputStream::Stdout,
+                            ..
+                        },
+                        ExpectedReason::ReadOutput
+                    ) | (
+                        CommandErrorReason::CancelFailed { .. },
+                        ExpectedReason::CancelFailed
+                    ) | (
+                        CommandErrorReason::TimeFailed { .. },
+                        ExpectedReason::TimeFailed
+                    ) | (
+                        CommandErrorReason::WaitFailed { .. },
+                        ExpectedReason::WaitFailed
+                    )
+                ),
+                "{name}"
+            );
+            assert_eq!(error.output().is_some(), has_output, "{name}");
+            assert_eq!(cleanup_order(&error), expected_cleanup, "{name}");
+        }
     }
 }
