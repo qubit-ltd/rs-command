@@ -96,7 +96,7 @@ impl IoCancellation {
             use std::io::Write;
 
             if let Err(error) = (&self.notifier).write_all(&[1])
-                && !(error.kind() == io::ErrorKind::BrokenPipe && join.is_finished())
+                && error.kind() != io::ErrorKind::BrokenPipe
             {
                 return Err(error);
             }
