@@ -56,33 +56,28 @@ impl ProcessTerminationError {
     /// Structured command error preserving primary-error precedence.
     pub(super) fn into_command_error(self, stop_reason: StopReason, command: &str) -> CommandError {
         match (stop_reason, self) {
-            (
-                StopReason::TimedOut { timeout, .. },
-                Self::Kill(process_tree_source, child_source),
-            ) => CommandError::from_reason(
-                command,
-                CommandErrorReason::KillFailed {
-                    timeout,
-                    process_tree_source,
-                    child_source,
-                },
-                None,
-            ),
-            (StopReason::Cancelled { .. }, Self::Kill(process_tree_source, child_source)) => {
+            (StopReason::TimedOut { timeout, .. }, Self::Kill(process_tree_source, child_source)) => {
                 CommandError::from_reason(
                     command,
-                    CommandErrorReason::CancelFailed {
+                    CommandErrorReason::KillFailed {
+                        timeout,
                         process_tree_source,
                         child_source,
                     },
                     None,
                 )
             }
-            (reason @ (StopReason::WaitFailed(_) | StopReason::TimeFailed { .. }), failure) => {
-                reason
-                    .into_primary_error(command, None)
-                    .with_cleanup_failures(failure.into_cleanup_failures())
-            }
+            (StopReason::Cancelled { .. }, Self::Kill(process_tree_source, child_source)) => CommandError::from_reason(
+                command,
+                CommandErrorReason::CancelFailed {
+                    process_tree_source,
+                    child_source,
+                },
+                None,
+            ),
+            (reason @ (StopReason::WaitFailed(_) | StopReason::TimeFailed { .. }), failure) => reason
+                .into_primary_error(command, None)
+                .with_cleanup_failures(failure.into_cleanup_failures()),
             (_, Self::Wait(source)) => {
                 CommandError::from_reason(command, CommandErrorReason::WaitFailed { source }, None)
             }
@@ -92,16 +87,10 @@ impl ProcessTerminationError {
                     wait_source,
                     process_tree_source,
                 },
-            ) => CommandError::from_reason(
-                command,
-                CommandErrorReason::WaitFailed {
-                    source: wait_source,
-                },
-                None,
-            )
-            .with_cleanup_failures([CommandCleanupFailure::ProcessTreeTermination {
-                source: process_tree_source,
-            }]),
+            ) => CommandError::from_reason(command, CommandErrorReason::WaitFailed { source: wait_source }, None)
+                .with_cleanup_failures([CommandCleanupFailure::ProcessTreeTermination {
+                    source: process_tree_source,
+                }]),
         }
     }
 
@@ -113,9 +102,7 @@ impl ProcessTerminationError {
                 wait_source,
                 process_tree_source,
             } => vec![
-                CommandCleanupFailure::Wait {
-                    source: wait_source,
-                },
+                CommandCleanupFailure::Wait { source: wait_source },
                 CommandCleanupFailure::ProcessTreeTermination {
                     source: process_tree_source,
                 },
@@ -124,9 +111,7 @@ impl ProcessTerminationError {
                 CommandCleanupFailure::ProcessTreeTermination {
                     source: process_tree_source,
                 },
-                CommandCleanupFailure::ChildTermination {
-                    source: child_source,
-                },
+                CommandCleanupFailure::ChildTermination { source: child_source },
             ],
         }
     }

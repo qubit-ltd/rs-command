@@ -50,31 +50,18 @@ fn write_stdin_bytes_with(
     command: &str,
     child: &mut dyn ChildWrapper,
     stdin_bytes: Option<Vec<u8>>,
-    spawn: impl FnOnce(
-        ChildStdin,
-        Vec<u8>,
-        IoCancellationToken,
-    ) -> io::Result<JoinHandle<io::Result<()>>>,
+    spawn: impl FnOnce(ChildStdin, Vec<u8>, IoCancellationToken) -> io::Result<JoinHandle<io::Result<()>>>,
 ) -> Result<OptionalStdinWriter, CommandError> {
     match stdin_bytes {
         Some(bytes) => match child.stdin().take() {
             Some(stdin) => {
                 prepare_stdin_pipe(&stdin).map_err(|source| {
-                    CommandError::from_reason(
-                        command,
-                        CommandErrorReason::WriteInputFailed { source },
-                        None,
-                    )
+                    CommandError::from_reason(command, CommandErrorReason::WriteInputFailed { source }, None)
                 })?;
                 let (cancellation, token) = IoCancellation::pair().map_err(|source| {
-                    CommandError::from_reason(
-                        command,
-                        CommandErrorReason::StartInputThreadFailed { source },
-                        None,
-                    )
+                    CommandError::from_reason(command, CommandErrorReason::StartInputThreadFailed { source }, None)
                 })?;
-                let writer = spawn(stdin, bytes, token)
-                    .map(|join| Some(StdinWriter::new(join, cancellation)));
+                let writer = spawn(stdin, bytes, token).map(|join| Some(StdinWriter::new(join, cancellation)));
                 map_stdin_thread_result(command, writer)
             }
             None => Err(CommandError::from_reason(
@@ -270,8 +257,7 @@ mod tests {
 
     #[test]
     fn test_join_stdin_writer_maps_write_failure() {
-        let (cancellation, token) =
-            IoCancellation::pair().expect("cancellation pair should be created");
+        let (cancellation, token) = IoCancellation::pair().expect("cancellation pair should be created");
         let writer = StdinWriter::new(
             thread::spawn(move || {
                 let _token = token;
@@ -280,16 +266,14 @@ mod tests {
             cancellation,
         );
 
-        let error = join_stdin_writer("command", Some(writer))
-            .expect_err("stdin write failure should be mapped");
+        let error = join_stdin_writer("command", Some(writer)).expect_err("stdin write failure should be mapped");
 
         assert_eq!(error.kind(), CommandErrorKind::WriteInputFailed);
     }
 
     #[test]
     fn test_join_stdin_writer_maps_worker_panic() {
-        let (cancellation, token) =
-            IoCancellation::pair().expect("cancellation pair should be created");
+        let (cancellation, token) = IoCancellation::pair().expect("cancellation pair should be created");
         let writer = StdinWriter::new(
             thread::spawn(move || -> io::Result<()> {
                 let _token = token;
@@ -298,8 +282,7 @@ mod tests {
             cancellation,
         );
 
-        let error = join_stdin_writer("command", Some(writer))
-            .expect_err("stdin worker panic should be mapped");
+        let error = join_stdin_writer("command", Some(writer)).expect_err("stdin worker panic should be mapped");
 
         assert_eq!(error.kind(), CommandErrorKind::WriteInputFailed);
     }

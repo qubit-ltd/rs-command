@@ -78,10 +78,7 @@ impl CommandIo {
     pub(in crate::command_runner) fn is_finished(&self) -> bool {
         self.stdout_reader.is_finished()
             && self.stderr_reader.is_finished()
-            && self
-                .stdin_writer
-                .as_ref()
-                .is_none_or(|writer| writer.is_finished())
+            && self.stdin_writer.as_ref().is_none_or(|writer| writer.is_finished())
     }
 
     /// Collects output from all helper threads.
@@ -146,10 +143,7 @@ impl CommandIo {
         command: &str,
         status: std::process::ExitStatus,
         elapsed: F,
-    ) -> (
-        Result<CommandOutput, CommandError>,
-        Vec<CommandCleanupFailure>,
-    )
+    ) -> (Result<CommandOutput, CommandError>, Vec<CommandCleanupFailure>)
     where
         F: FnOnce() -> Result<Duration, TimeError>,
     {
@@ -203,21 +197,13 @@ impl CommandIo {
     /// All helper failures in stdout/stderr/stdin order after all joins
     /// complete.
     #[must_use]
-    pub(in crate::command_runner) fn cancel_and_join(
-        self,
-        command: &str,
-    ) -> Vec<CommandCleanupFailure> {
+    pub(in crate::command_runner) fn cancel_and_join(self, command: &str) -> Vec<CommandCleanupFailure> {
         let Self {
             stdout_reader,
             stderr_reader,
             stdin_writer,
         } = self;
-        cancel_and_join_started_helpers(
-            command,
-            Some(stdout_reader),
-            Some(stderr_reader),
-            stdin_writer,
-        )
+        cancel_and_join_started_helpers(command, Some(stdout_reader), Some(stderr_reader), stdin_writer)
     }
 }
 
@@ -238,12 +224,7 @@ pub(super) fn cancel_and_join_started_helpers(
         stdout_reader,
         stderr_reader,
         stdin_writer,
-        |stdout_result,
-         stderr_result,
-         stdin_result,
-         stdout_cancellation,
-         stderr_cancellation,
-         stdin_cancellation| {
+        |stdout_result, stderr_result, stdin_result, stdout_cancellation, stderr_cancellation, stdin_cancellation| {
             let mut failures = Vec::new();
             push_stdout_failures(&mut failures, stdout_result, stdout_cancellation);
             push_stderr_failures(&mut failures, stderr_result, stderr_cancellation);
@@ -272,22 +253,14 @@ fn finish_helpers<R>(
     // Issue every request before waiting for any helper so one failure cannot
     // prevent the remaining helpers from being interrupted.
     let confirmation_deadline = Instant::now() + HELPER_CANCELLATION_CONFIRMATION_TIMEOUT;
-    let stdout_cancellation = stdout_reader
-        .as_ref()
-        .and_then(|reader| reader.cancel().err());
-    let stderr_cancellation = stderr_reader
-        .as_ref()
-        .and_then(|reader| reader.cancel().err());
-    let stdin_cancellation = stdin_writer
-        .as_ref()
-        .and_then(|writer| writer.cancel().err());
+    let stdout_cancellation = stdout_reader.as_ref().and_then(|reader| reader.cancel().err());
+    let stderr_cancellation = stderr_reader.as_ref().and_then(|reader| reader.cancel().err());
+    let stdin_cancellation = stdin_writer.as_ref().and_then(|writer| writer.cancel().err());
 
-    let stdout_result = stdout_reader.and_then(|reader| {
-        finish_output_reader(reader, stdout_cancellation.is_some(), confirmation_deadline)
-    });
-    let stderr_result = stderr_reader.and_then(|reader| {
-        finish_output_reader(reader, stderr_cancellation.is_some(), confirmation_deadline)
-    });
+    let stdout_result = stdout_reader
+        .and_then(|reader| finish_output_reader(reader, stdout_cancellation.is_some(), confirmation_deadline));
+    let stderr_result = stderr_reader
+        .and_then(|reader| finish_output_reader(reader, stderr_cancellation.is_some(), confirmation_deadline));
     let stdin_result = finish_optional_stdin_writer(
         command,
         stdin_writer,
@@ -295,12 +268,9 @@ fn finish_helpers<R>(
         confirmation_deadline,
     );
 
-    let stdout_cancellation =
-        retain_cancellation_failure(stdout_cancellation, stdout_result.is_some());
-    let stderr_cancellation =
-        retain_cancellation_failure(stderr_cancellation, stderr_result.is_some());
-    let stdin_cancellation =
-        retain_cancellation_failure(stdin_cancellation, stdin_result.is_some());
+    let stdout_cancellation = retain_cancellation_failure(stdout_cancellation, stdout_result.is_some());
+    let stderr_cancellation = retain_cancellation_failure(stderr_cancellation, stderr_result.is_some());
+    let stdin_cancellation = retain_cancellation_failure(stdin_cancellation, stdin_result.is_some());
 
     finish(
         stdout_result,
@@ -342,17 +312,12 @@ fn finish_optional_stdin_writer(
 
 /// Discards the Windows no-pending-operation race only after bounded
 /// confirmation observed helper completion.
-fn retain_cancellation_failure(
-    cancellation: Option<io::Error>,
-    completion_confirmed: bool,
-) -> Option<io::Error> {
-    cancellation.and_then(|error| {
-        if completion_confirmed && cancellation_found_no_pending_io(&error) {
-            None
-        } else {
-            Some(error)
-        }
-    })
+fn retain_cancellation_failure(cancellation: Option<io::Error>, completion_confirmed: bool) -> Option<io::Error> {
+    if completion_confirmed {
+        cancellation.and_then(|error| (!cancellation_found_no_pending_io(&error)).then_some(error))
+    } else {
+        cancellation
+    }
 }
 
 /// Identifies the Windows `ERROR_NOT_FOUND` cancellation race.
@@ -429,10 +394,7 @@ fn wait_until_finished(is_finished: impl Fn() -> bool, confirmation_deadline: In
         if now >= confirmation_deadline {
             return false;
         }
-        thread::sleep(
-            HELPER_CANCELLATION_POLL_INTERVAL
-                .min(confirmation_deadline.saturating_duration_since(now)),
-        );
+        thread::sleep(HELPER_CANCELLATION_POLL_INTERVAL.min(confirmation_deadline.saturating_duration_since(now)));
     }
     true
 }
@@ -466,10 +428,7 @@ mod tests {
     use crate::CommandCleanupFailure;
 
     fn completed_reader(cancellation: IoCancellation) -> OutputReader {
-        OutputReader::new(
-            thread::spawn(|| Ok(CapturedOutput::default())),
-            cancellation,
-        )
+        OutputReader::new(thread::spawn(|| Ok(CapturedOutput::default())), cancellation)
     }
 
     fn completed_writer(cancellation: IoCancellation) -> StdinWriter {
@@ -512,8 +471,7 @@ mod tests {
 
     #[test]
     fn test_finish_helpers_joins_when_all_cancellations_succeed() {
-        let (stdout_cancellation, stdout_token) =
-            IoCancellation::pair().expect("stdout cancellation should create");
+        let (stdout_cancellation, stdout_token) = IoCancellation::pair().expect("stdout cancellation should create");
         let stdout_reader = OutputReader::new(
             thread::spawn(move || {
                 while !stdout_token.is_cancelled() {
@@ -523,8 +481,7 @@ mod tests {
             }),
             stdout_cancellation,
         );
-        let (stderr_cancellation, stderr_token) =
-            IoCancellation::pair().expect("stderr cancellation should create");
+        let (stderr_cancellation, stderr_token) = IoCancellation::pair().expect("stderr cancellation should create");
         let stderr_reader = OutputReader::new(
             thread::spawn(move || {
                 while !stderr_token.is_cancelled() {
@@ -535,8 +492,7 @@ mod tests {
             stderr_cancellation,
         );
 
-        let failures =
-            CommandIo::new(stdout_reader, stderr_reader, None).cancel_and_join("test command");
+        let failures = CommandIo::new(stdout_reader, stderr_reader, None).cancel_and_join("test command");
 
         assert!(failures.is_empty());
     }
@@ -545,25 +501,20 @@ mod tests {
     fn test_finish_helpers_joins_completed_reader_after_cancellation_failure() {
         let reader = completed_reader(IoCancellation::failing("stdout cancellation failed"));
         wait_for_completion(|| reader.is_finished());
-        let (stderr_cancellation, _stderr_token) =
-            IoCancellation::pair().expect("stderr cancellation should create");
+        let (stderr_cancellation, _stderr_token) = IoCancellation::pair().expect("stderr cancellation should create");
         let stderr = completed_reader(stderr_cancellation);
 
         let failures = CommandIo::new(reader, stderr, None).cancel_and_join("test command");
 
         assert_eq!(failures.len(), 1);
-        assert!(matches!(
-            failures[0],
-            CommandCleanupFailure::StdoutCancellation { .. }
-        ));
+        assert!(matches!(failures[0], CommandCleanupFailure::StdoutCancellation { .. }));
     }
 
     #[test]
     fn test_finish_helpers_detaches_after_confirmation_timeout() {
         let release = Arc::new(AtomicBool::new(false));
         let blocked = blocked_reader(&release, "stdout cancellation failed");
-        let (stderr_cancellation, _stderr_token) =
-            IoCancellation::pair().expect("stderr cancellation should create");
+        let (stderr_cancellation, _stderr_token) = IoCancellation::pair().expect("stderr cancellation should create");
         let stderr = completed_reader(stderr_cancellation);
         let started = Instant::now();
 
@@ -573,10 +524,7 @@ mod tests {
         assert!(started.elapsed() >= HELPER_CANCELLATION_CONFIRMATION_TIMEOUT);
         assert!(started.elapsed() < Duration::from_secs(1));
         assert_eq!(failures.len(), 1);
-        assert!(matches!(
-            failures[0],
-            CommandCleanupFailure::StdoutCancellation { .. }
-        ));
+        assert!(matches!(failures[0], CommandCleanupFailure::StdoutCancellation { .. }));
     }
 
     #[test]
@@ -591,41 +539,28 @@ mod tests {
         let failures = CommandIo::new(stdout, stderr, Some(stdin)).cancel_and_join("test command");
 
         assert_eq!(failures.len(), 3);
-        assert!(matches!(
-            failures[0],
-            CommandCleanupFailure::StdoutCancellation { .. }
-        ));
-        assert!(matches!(
-            failures[1],
-            CommandCleanupFailure::StderrCancellation { .. }
-        ));
-        assert!(matches!(
-            failures[2],
-            CommandCleanupFailure::StdinCancellation { .. }
-        ));
+        assert!(matches!(failures[0], CommandCleanupFailure::StdoutCancellation { .. }));
+        assert!(matches!(failures[1], CommandCleanupFailure::StderrCancellation { .. }));
+        assert!(matches!(failures[2], CommandCleanupFailure::StdinCancellation { .. }));
     }
 
     #[test]
     fn test_finish_helpers_orders_io_before_cancellation_for_each_helper() {
         let stdout = OutputReader::new(
             thread::spawn(|| {
-                Err(
-                    super::super::output_capture_error::OutputCaptureError::Read {
-                        source: io::Error::other("stdout read failed"),
-                        output: CapturedOutput::default(),
-                    },
-                )
+                Err(super::super::output_capture_error::OutputCaptureError::Read {
+                    source: io::Error::other("stdout read failed"),
+                    output: CapturedOutput::default(),
+                })
             }),
             IoCancellation::failing("stdout cancellation failed"),
         );
         let stderr = OutputReader::new(
             thread::spawn(|| {
-                Err(
-                    super::super::output_capture_error::OutputCaptureError::Read {
-                        source: io::Error::other("stderr read failed"),
-                        output: CapturedOutput::default(),
-                    },
-                )
+                Err(super::super::output_capture_error::OutputCaptureError::Read {
+                    source: io::Error::other("stderr read failed"),
+                    output: CapturedOutput::default(),
+                })
             }),
             IoCancellation::failing("stderr cancellation failed"),
         );
@@ -640,27 +575,12 @@ mod tests {
         let failures = CommandIo::new(stdout, stderr, Some(stdin)).cancel_and_join("test command");
 
         assert_eq!(failures.len(), 6);
-        assert!(matches!(
-            failures[0],
-            CommandCleanupFailure::StdoutRead { .. }
-        ));
-        assert!(matches!(
-            failures[1],
-            CommandCleanupFailure::StdoutCancellation { .. }
-        ));
-        assert!(matches!(
-            failures[2],
-            CommandCleanupFailure::StderrRead { .. }
-        ));
-        assert!(matches!(
-            failures[3],
-            CommandCleanupFailure::StderrCancellation { .. }
-        ));
+        assert!(matches!(failures[0], CommandCleanupFailure::StdoutRead { .. }));
+        assert!(matches!(failures[1], CommandCleanupFailure::StdoutCancellation { .. }));
+        assert!(matches!(failures[2], CommandCleanupFailure::StderrRead { .. }));
+        assert!(matches!(failures[3], CommandCleanupFailure::StderrCancellation { .. }));
         assert!(matches!(failures[4], CommandCleanupFailure::Stdin { .. }));
-        assert!(matches!(
-            failures[5],
-            CommandCleanupFailure::StdinCancellation { .. }
-        ));
+        assert!(matches!(failures[5], CommandCleanupFailure::StdinCancellation { .. }));
     }
 
     #[test]
@@ -671,12 +591,7 @@ mod tests {
         let stdin = blocked_writer(&release, "stdin cancellation failed");
         let started = Instant::now();
 
-        let failures = cancel_and_join_started_helpers(
-            "test command",
-            Some(stdout),
-            Some(stderr),
-            Some(stdin),
-        );
+        let failures = cancel_and_join_started_helpers("test command", Some(stdout), Some(stderr), Some(stdin));
         let elapsed = started.elapsed();
         release.store(true, Ordering::Release);
 
@@ -728,18 +643,15 @@ mod tests {
     fn test_finish_helpers_keeps_output_error_primary_to_cancellation_failure() {
         let reader = OutputReader::new(
             thread::spawn(|| {
-                Err(
-                    super::super::output_capture_error::OutputCaptureError::Read {
-                        source: io::Error::other("stdout read failed"),
-                        output: CapturedOutput::default(),
-                    },
-                )
+                Err(super::super::output_capture_error::OutputCaptureError::Read {
+                    source: io::Error::other("stdout read failed"),
+                    output: CapturedOutput::default(),
+                })
             }),
             IoCancellation::failing("stdout cancellation failed"),
         );
         wait_for_completion(|| reader.is_finished());
-        let (stderr_cancellation, _stderr_token) =
-            IoCancellation::pair().expect("stderr cancellation should create");
+        let (stderr_cancellation, _stderr_token) = IoCancellation::pair().expect("stderr cancellation should create");
         let stderr = completed_reader(stderr_cancellation);
 
         let (output, failures) = CommandIo::new(reader, stderr, None).cancel_and_collect(
@@ -752,15 +664,10 @@ mod tests {
         );
 
         assert!(matches!(
-            output
-                .expect_err("reader failure should remain primary")
-                .reason(),
+            output.expect_err("reader failure should remain primary").reason(),
             crate::CommandErrorReason::ReadOutputFailed { .. }
         ));
         assert_eq!(failures.len(), 1);
-        assert!(matches!(
-            failures[0],
-            CommandCleanupFailure::StdoutCancellation { .. }
-        ));
+        assert!(matches!(failures[0], CommandCleanupFailure::StdoutCancellation { .. }));
     }
 }

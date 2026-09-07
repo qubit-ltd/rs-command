@@ -110,18 +110,12 @@ impl CommandError {
             ..
         } = self;
         let primary = match *reason {
-            CommandErrorReason::WriteInputFailed { source } => {
-                Some(CommandCleanupFailure::Stdin { source })
-            }
+            CommandErrorReason::WriteInputFailed { source } => Some(CommandCleanupFailure::Stdin { source }),
             CommandErrorReason::ReadOutputFailed { stream, source } => match stream {
                 OutputStream::Stdout => Some(CommandCleanupFailure::StdoutRead { source }),
                 OutputStream::Stderr => Some(CommandCleanupFailure::StderrRead { source }),
             },
-            CommandErrorReason::WriteOutputFailed {
-                stream,
-                path,
-                source,
-            } => match stream {
+            CommandErrorReason::WriteOutputFailed { stream, path, source } => match stream {
                 OutputStream::Stdout => Some(CommandCleanupFailure::StdoutWrite { path, source }),
                 OutputStream::Stderr => Some(CommandCleanupFailure::StderrWrite { path, source }),
             },
@@ -138,14 +132,12 @@ impl CommandError {
     }
 
     /// Returns the stable, data-free error category.
-    #[must_use]
     #[inline(always)]
     pub fn kind(&self) -> CommandErrorKind {
         self.reason.as_ref().into()
     }
 
     /// Returns the detailed primary failure reason.
-    #[must_use]
     #[inline(always)]
     pub fn reason(&self) -> &CommandErrorReason {
         self.reason.as_ref()
@@ -166,7 +158,6 @@ impl CommandError {
     }
 
     /// Returns every cleanup failure observed after the primary failure.
-    #[must_use]
     #[inline(always)]
     pub fn cleanup_failures(&self) -> &[CommandCleanupFailure] {
         &self.cleanup_failures

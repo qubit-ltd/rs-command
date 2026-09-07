@@ -238,11 +238,276 @@ fn read_capture_error(source: io::Error, bytes: Vec<u8>, truncated: bool) -> Out
 
 /// Reads one child output stream to completion for unit tests.
 #[cfg(test)]
-fn read_output(
-    reader: &mut dyn Read,
-    options: OutputCaptureOptions,
-) -> Result<CapturedOutput, OutputCaptureError> {
+fn read_output(reader: &mut dyn Read, options: OutputCaptureOptions) -> Result<CapturedOutput, OutputCaptureError> {
     read_output_inner(reader, options, None, None)
+}
+
+/// Collects reader-thread results into a command output value.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used in errors.
+/// * `status` - Child exit status.
+/// * `elapsed` - Callback that samples command duration after every helper has
+///   been joined.
+/// * `stdout_reader` - Helper draining stdout.
+/// * `stderr_reader` - Helper draining stderr.
+/// * `stdin_writer` - Optional helper writing stdin.
+///
+/// # Returns
+///
+/// Captured command output after every helper has been joined.
+///
+/// # Errors
+///
+/// Returns a time-handling failure after joining every helper, otherwise the
+/// first stdout, stderr, or stdin helper failure in that order.
+pub(in crate::command_runner) fn collect_output<F>(
+    command: &str,
+    status: ExitStatus,
+    elapsed: F,
+    stdout_reader: OutputReader,
+    stderr_reader: OutputReader,
+    stdin_writer: OptionalStdinWriter,
+) -> Result<CommandOutput, CommandError>
+where
+    F: FnOnce() -> Result<Duration, TimeError>,
+{
+    let stdout_result = join_output_reader(stdout_reader);
+    let stderr_result = join_output_reader(stderr_reader);
+    let stdin_result = join_stdin_writer(command, stdin_writer);
+    let elapsed_result = elapsed();
+
+    collect_output_results(
+        command,
+        status,
+        elapsed_result,
+        stdout_result,
+        stderr_result,
+        stdin_result,
+    )
+}
+
+/// Builds command output from completed helper results.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used in errors.
+/// * `status` - Child exit status.
+/// * `elapsed_result` - Sampled command duration.
+/// * `stdout_result` - Completed stdout helper result.
+/// * `stderr_result` - Completed stderr helper result.
+/// * `stdin_result` - Completed stdin helper result.
+///
+/// # Returns
+///
+/// Captured command output after mapping helper failures.
+///
+/// # Errors
+///
+/// Returns a time-handling failure, otherwise the first stdout, stderr, or
+/// stdin helper failure in that order.
+pub(in crate::command_runner) fn collect_output_results(
+    command: &str,
+    status: ExitStatus,
+    elapsed_result: Result<Duration, TimeError>,
+    stdout_result: Result<CapturedOutput, OutputCaptureError>,
+    stderr_result: Result<CapturedOutput, OutputCaptureError>,
+    stdin_result: Result<(), CommandError>,
+) -> Result<CommandOutput, CommandError> {
+    let (stdout, stdout_failure) = split_output_result(stdout_result);
+    let (stderr, stderr_failure) = split_output_result(stderr_result);
+
+    let stdin_error = stdin_result.err();
+    let elapsed = match elapsed_result {
+        Err(source) => {
+            let mut cleanup_failures = Vec::new();
+            if let Some(failure) = stdout_failure {
+                cleanup_failures.push(output_cleanup_failure(OutputStream::Stdout, failure));
+            }
+            if let Some(failure) = stderr_failure {
+                cleanup_failures.push(output_cleanup_failure(OutputStream::Stderr, failure));
+            }
+            if let Some(error) = stdin_error
+                && let Some(failure) = error.into_cleanup_failure()
+            {
+                cleanup_failures.push(failure);
+            }
+            return Err(
+                CommandError::from_reason(command, CommandErrorReason::TimeFailed { source }, None)
+                    .with_cleanup_failures(cleanup_failures),
+            );
+        }
+        Ok(elapsed) => elapsed,
+    };
+
+    if let Some(failure) = stdout_failure {
+        let mut cleanup_failures = Vec::new();
+        if let Some(failure) = stderr_failure {
+            cleanup_failures.push(output_cleanup_failure(OutputStream::Stderr, failure));
+        }
+        if let Some(error) = stdin_error
+            && let Some(failure) = error.into_cleanup_failure()
+        {
+            cleanup_failures.push(failure);
+        }
+        return Err(map_output_reader_error(
+            command,
+            status,
+            elapsed,
+            OutputStream::Stdout,
+            failure,
+            stdout,
+            Some(stderr),
+        )
+        .with_cleanup_failures(cleanup_failures));
+    }
+
+    if let Some(failure) = stderr_failure {
+        let mut cleanup_failures = Vec::new();
+        if let Some(error) = stdin_error
+            && let Some(failure) = error.into_cleanup_failure()
+        {
+            cleanup_failures.push(failure);
+        }
+        return Err(map_output_reader_error(
+            command,
+            status,
+            elapsed,
+            OutputStream::Stderr,
+            failure,
+            stderr,
+            Some(stdout),
+        )
+        .with_cleanup_failures(cleanup_failures));
+    }
+
+    let output = CommandOutput::new(
+        status,
+        (stdout.bytes, stdout.truncated, stdout.complete),
+        (stderr.bytes, stderr.truncated, stderr.complete),
+        elapsed,
+    );
+    match stdin_error {
+        None => Ok(output),
+        Some(error) if matches!(error.kind(), crate::CommandErrorKind::WriteInputFailed) => {
+            let command = error.command().to_owned();
+            let source = match error.reason() {
+                CommandErrorReason::WriteInputFailed { source } => io::Error::new(source.kind(), source.to_string()),
+                _ => io::Error::other("invalid stdin error category"),
+            };
+            Err(CommandError::from_reason(
+                command,
+                CommandErrorReason::WriteInputFailed { source },
+                Some(Box::new(output)),
+            ))
+        }
+        Some(error) => Err(error),
+    }
+}
+
+/// Separates retained bytes from an output-reader failure.
+fn split_output_result(
+    result: Result<CapturedOutput, OutputCaptureError>,
+) -> (CapturedOutput, Option<OutputCaptureFailure>) {
+    match result {
+        Ok(output) => (output, None),
+        Err(OutputCaptureError::Read { source, output }) => (output, Some(OutputCaptureFailure::Read { source })),
+        Err(OutputCaptureError::Write { path, source, output }) => {
+            (output, Some(OutputCaptureFailure::Write { path, source }))
+        }
+    }
+}
+
+/// Converts a reader failure into the public cleanup-failure category.
+fn output_cleanup_failure(stream: OutputStream, failure: OutputCaptureFailure) -> CommandCleanupFailure {
+    match (stream, failure) {
+        (OutputStream::Stdout, OutputCaptureFailure::Read { source }) => CommandCleanupFailure::StdoutRead { source },
+        (OutputStream::Stderr, OutputCaptureFailure::Read { source }) => CommandCleanupFailure::StderrRead { source },
+        (OutputStream::Stdout, OutputCaptureFailure::Write { path, source }) => {
+            CommandCleanupFailure::StdoutWrite { path, source }
+        }
+        (OutputStream::Stderr, OutputCaptureFailure::Write { path, source }) => {
+            CommandCleanupFailure::StderrWrite { path, source }
+        }
+    }
+}
+
+/// Maps a reader result while retaining output from a failed tee write.
+fn map_output_reader_error(
+    command: &str,
+    status: ExitStatus,
+    elapsed: Duration,
+    stream: OutputStream,
+    error: OutputCaptureFailure,
+    failed_output: CapturedOutput,
+    other_output: Option<CapturedOutput>,
+) -> CommandError {
+    match error {
+        OutputCaptureFailure::Read { source } => {
+            let (stdout, stderr) = match stream {
+                OutputStream::Stdout => (failed_output, other_output.unwrap_or_default()),
+                OutputStream::Stderr => (other_output.unwrap_or_default(), failed_output),
+            };
+            CommandError::from_reason(
+                command,
+                CommandErrorReason::ReadOutputFailed { stream, source },
+                Some(Box::new(CommandOutput::new(
+                    status,
+                    (stdout.bytes, stdout.truncated, stdout.complete),
+                    (stderr.bytes, stderr.truncated, stderr.complete),
+                    elapsed,
+                ))),
+            )
+        }
+        OutputCaptureFailure::Write { path, source } => {
+            let (stdout, stderr) = match stream {
+                OutputStream::Stdout => (failed_output, other_output.unwrap_or_default()),
+                OutputStream::Stderr => (other_output.unwrap_or_default(), failed_output),
+            };
+            CommandError::from_reason(
+                command,
+                CommandErrorReason::WriteOutputFailed { stream, path, source },
+                Some(Box::new(CommandOutput::new(
+                    status,
+                    (stdout.bytes, stdout.truncated, stdout.complete),
+                    (stderr.bytes, stderr.truncated, stderr.complete),
+                    elapsed,
+                ))),
+            )
+        }
+    }
+}
+
+/// Joins one output reader and maps failures to command errors.
+///
+/// # Parameters
+///
+/// * `reader` - Reader-thread join handle.
+///
+/// # Returns
+///
+/// Captured bytes and truncation state from the reader.
+///
+/// # Errors
+///
+/// Returns a [`CommandError`] with kind `ReadOutputFailed` for read failures or
+/// thread panics, and kind `WriteOutputFailed` for tee failures.
+pub(in crate::command_runner) fn join_output_reader(
+    reader: OutputReader,
+) -> Result<CapturedOutput, OutputCaptureError> {
+    match reader.join() {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Err(OutputCaptureError::Read {
+            source: io::Error::other("output reader thread panicked"),
+            output: CapturedOutput {
+                bytes: Vec::new(),
+                truncated: false,
+                complete: false,
+            },
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -402,8 +667,7 @@ mod tests {
 
     #[test]
     fn test_join_output_reader_maps_worker_panic() {
-        let (cancellation, token) =
-            IoCancellation::pair().expect("cancellation pair should be created");
+        let (cancellation, token) = IoCancellation::pair().expect("cancellation pair should be created");
         let reader = OutputReader::new(
             thread::spawn(move || -> Result<CapturedOutput, OutputCaptureError> {
                 let _token = token;
@@ -572,15 +836,9 @@ mod tests {
                 OutputStream::Stderr => (Ok(CapturedOutput::default()), Err(failure)),
             };
 
-            let error = collect_output_results(
-                "command",
-                status(0),
-                Ok(Duration::from_secs(1)),
-                stdout,
-                stderr,
-                Ok(()),
-            )
-            .expect_err("tee failure should be mapped");
+            let error =
+                collect_output_results("command", status(0), Ok(Duration::from_secs(1)), stdout, stderr, Ok(()))
+                    .expect_err("tee failure should be mapped");
 
             assert!(matches!(
                 error.reason(),
@@ -625,292 +883,5 @@ mod tests {
         assert_eq!(output.stdout(), b"stdout");
         assert_eq!(output.stderr(), b"stderr");
         assert!(output.stdout_truncated());
-    }
-}
-
-/// Collects reader-thread results into a command output value.
-///
-/// # Parameters
-///
-/// * `command` - Redacted command text used in errors.
-/// * `status` - Child exit status.
-/// * `elapsed` - Callback that samples command duration after every helper has
-///   been joined.
-/// * `stdout_reader` - Helper draining stdout.
-/// * `stderr_reader` - Helper draining stderr.
-/// * `stdin_writer` - Optional helper writing stdin.
-///
-/// # Returns
-///
-/// Captured command output after every helper has been joined.
-///
-/// # Errors
-///
-/// Returns a time-handling failure after joining every helper, otherwise the
-/// first stdout, stderr, or stdin helper failure in that order.
-pub(in crate::command_runner) fn collect_output<F>(
-    command: &str,
-    status: ExitStatus,
-    elapsed: F,
-    stdout_reader: OutputReader,
-    stderr_reader: OutputReader,
-    stdin_writer: OptionalStdinWriter,
-) -> Result<CommandOutput, CommandError>
-where
-    F: FnOnce() -> Result<Duration, TimeError>,
-{
-    let stdout_result = join_output_reader(stdout_reader);
-    let stderr_result = join_output_reader(stderr_reader);
-    let stdin_result = join_stdin_writer(command, stdin_writer);
-    let elapsed_result = elapsed();
-
-    collect_output_results(
-        command,
-        status,
-        elapsed_result,
-        stdout_result,
-        stderr_result,
-        stdin_result,
-    )
-}
-
-/// Builds command output from completed helper results.
-///
-/// # Parameters
-///
-/// * `command` - Redacted command text used in errors.
-/// * `status` - Child exit status.
-/// * `elapsed_result` - Sampled command duration.
-/// * `stdout_result` - Completed stdout helper result.
-/// * `stderr_result` - Completed stderr helper result.
-/// * `stdin_result` - Completed stdin helper result.
-///
-/// # Returns
-///
-/// Captured command output after mapping helper failures.
-///
-/// # Errors
-///
-/// Returns a time-handling failure, otherwise the first stdout, stderr, or
-/// stdin helper failure in that order.
-pub(in crate::command_runner) fn collect_output_results(
-    command: &str,
-    status: ExitStatus,
-    elapsed_result: Result<Duration, TimeError>,
-    stdout_result: Result<CapturedOutput, OutputCaptureError>,
-    stderr_result: Result<CapturedOutput, OutputCaptureError>,
-    stdin_result: Result<(), CommandError>,
-) -> Result<CommandOutput, CommandError> {
-    let (stdout, stdout_failure) = split_output_result(stdout_result);
-    let (stderr, stderr_failure) = split_output_result(stderr_result);
-
-    let stdin_error = stdin_result.err();
-    let elapsed = match elapsed_result {
-        Err(source) => {
-            let mut cleanup_failures = Vec::new();
-            if let Some(failure) = stdout_failure {
-                cleanup_failures.push(output_cleanup_failure(OutputStream::Stdout, failure));
-            }
-            if let Some(failure) = stderr_failure {
-                cleanup_failures.push(output_cleanup_failure(OutputStream::Stderr, failure));
-            }
-            if let Some(error) = stdin_error
-                && let Some(failure) = error.into_cleanup_failure()
-            {
-                cleanup_failures.push(failure);
-            }
-            return Err(CommandError::from_reason(
-                command,
-                CommandErrorReason::TimeFailed { source },
-                None,
-            )
-            .with_cleanup_failures(cleanup_failures));
-        }
-        Ok(elapsed) => elapsed,
-    };
-
-    if let Some(failure) = stdout_failure {
-        let mut cleanup_failures = Vec::new();
-        if let Some(failure) = stderr_failure {
-            cleanup_failures.push(output_cleanup_failure(OutputStream::Stderr, failure));
-        }
-        if let Some(error) = stdin_error
-            && let Some(failure) = error.into_cleanup_failure()
-        {
-            cleanup_failures.push(failure);
-        }
-        return Err(map_output_reader_error(
-            command,
-            status,
-            elapsed,
-            OutputStream::Stdout,
-            failure,
-            stdout,
-            Some(stderr),
-        )
-        .with_cleanup_failures(cleanup_failures));
-    }
-
-    if let Some(failure) = stderr_failure {
-        let mut cleanup_failures = Vec::new();
-        if let Some(error) = stdin_error
-            && let Some(failure) = error.into_cleanup_failure()
-        {
-            cleanup_failures.push(failure);
-        }
-        return Err(map_output_reader_error(
-            command,
-            status,
-            elapsed,
-            OutputStream::Stderr,
-            failure,
-            stderr,
-            Some(stdout),
-        )
-        .with_cleanup_failures(cleanup_failures));
-    }
-
-    let output = CommandOutput::new(
-        status,
-        (stdout.bytes, stdout.truncated, stdout.complete),
-        (stderr.bytes, stderr.truncated, stderr.complete),
-        elapsed,
-    );
-    match stdin_error {
-        None => Ok(output),
-        Some(error) if matches!(error.kind(), crate::CommandErrorKind::WriteInputFailed) => {
-            let command = error.command().to_owned();
-            let source = match error.reason() {
-                CommandErrorReason::WriteInputFailed { source } => {
-                    io::Error::new(source.kind(), source.to_string())
-                }
-                _ => io::Error::other("invalid stdin error category"),
-            };
-            Err(CommandError::from_reason(
-                command,
-                CommandErrorReason::WriteInputFailed { source },
-                Some(Box::new(output)),
-            ))
-        }
-        Some(error) => Err(error),
-    }
-}
-
-/// Separates retained bytes from an output-reader failure.
-fn split_output_result(
-    result: Result<CapturedOutput, OutputCaptureError>,
-) -> (CapturedOutput, Option<OutputCaptureFailure>) {
-    match result {
-        Ok(output) => (output, None),
-        Err(OutputCaptureError::Read { source, output }) => {
-            (output, Some(OutputCaptureFailure::Read { source }))
-        }
-        Err(OutputCaptureError::Write {
-            path,
-            source,
-            output,
-        }) => (output, Some(OutputCaptureFailure::Write { path, source })),
-    }
-}
-
-/// Converts a reader failure into the public cleanup-failure category.
-fn output_cleanup_failure(
-    stream: OutputStream,
-    failure: OutputCaptureFailure,
-) -> CommandCleanupFailure {
-    match (stream, failure) {
-        (OutputStream::Stdout, OutputCaptureFailure::Read { source }) => {
-            CommandCleanupFailure::StdoutRead { source }
-        }
-        (OutputStream::Stderr, OutputCaptureFailure::Read { source }) => {
-            CommandCleanupFailure::StderrRead { source }
-        }
-        (OutputStream::Stdout, OutputCaptureFailure::Write { path, source }) => {
-            CommandCleanupFailure::StdoutWrite { path, source }
-        }
-        (OutputStream::Stderr, OutputCaptureFailure::Write { path, source }) => {
-            CommandCleanupFailure::StderrWrite { path, source }
-        }
-    }
-}
-
-/// Maps a reader result while retaining output from a failed tee write.
-fn map_output_reader_error(
-    command: &str,
-    status: ExitStatus,
-    elapsed: Duration,
-    stream: OutputStream,
-    error: OutputCaptureFailure,
-    failed_output: CapturedOutput,
-    other_output: Option<CapturedOutput>,
-) -> CommandError {
-    match error {
-        OutputCaptureFailure::Read { source } => {
-            let (stdout, stderr) = match stream {
-                OutputStream::Stdout => (failed_output, other_output.unwrap_or_default()),
-                OutputStream::Stderr => (other_output.unwrap_or_default(), failed_output),
-            };
-            CommandError::from_reason(
-                command,
-                CommandErrorReason::ReadOutputFailed { stream, source },
-                Some(Box::new(CommandOutput::new(
-                    status,
-                    (stdout.bytes, stdout.truncated, stdout.complete),
-                    (stderr.bytes, stderr.truncated, stderr.complete),
-                    elapsed,
-                ))),
-            )
-        }
-        OutputCaptureFailure::Write { path, source } => {
-            let (stdout, stderr) = match stream {
-                OutputStream::Stdout => (failed_output, other_output.unwrap_or_default()),
-                OutputStream::Stderr => (other_output.unwrap_or_default(), failed_output),
-            };
-            CommandError::from_reason(
-                command,
-                CommandErrorReason::WriteOutputFailed {
-                    stream,
-                    path,
-                    source,
-                },
-                Some(Box::new(CommandOutput::new(
-                    status,
-                    (stdout.bytes, stdout.truncated, stdout.complete),
-                    (stderr.bytes, stderr.truncated, stderr.complete),
-                    elapsed,
-                ))),
-            )
-        }
-    }
-}
-
-/// Joins one output reader and maps failures to command errors.
-///
-/// # Parameters
-///
-/// * `reader` - Reader-thread join handle.
-///
-/// # Returns
-///
-/// Captured bytes and truncation state from the reader.
-///
-/// # Errors
-///
-/// Returns a [`CommandError`] with kind `ReadOutputFailed` for read failures or
-/// thread panics, and kind `WriteOutputFailed` for tee failures.
-pub(in crate::command_runner) fn join_output_reader(
-    reader: OutputReader,
-) -> Result<CapturedOutput, OutputCaptureError> {
-    match reader.join() {
-        Ok(Ok(output)) => Ok(output),
-        Ok(Err(error)) => Err(error),
-        Err(_) => Err(OutputCaptureError::Read {
-            source: io::Error::other("output reader thread panicked"),
-            output: CapturedOutput {
-                bytes: Vec::new(),
-                truncated: false,
-                complete: false,
-            },
-        }),
     }
 }

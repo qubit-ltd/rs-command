@@ -139,17 +139,11 @@ impl RunningCommand {
                     let elapsed = match self.elapsed() {
                         Ok(elapsed) => elapsed,
                         Err(source) => {
-                            return RunEvent::TimeFailed {
-                                source,
-                                status: None,
-                            };
+                            return RunEvent::TimeFailed { source, status: None };
                         }
                     };
                     if elapsed >= timeout {
-                        return RunEvent::TimedOut {
-                            timeout,
-                            status: None,
-                        };
+                        return RunEvent::TimedOut { timeout, status: None };
                     }
                     let sleep = next_sleep(timeout, elapsed, timeout_poll_count);
                     timeout_poll_count = timeout_poll_count.saturating_add(1);
@@ -158,10 +152,7 @@ impl RunningCommand {
                 None => CANCELLATION_POLL_INTERVAL,
             };
             if let Err(source) = BlockingSleeper::new(Arc::clone(&self.timer)).sleep_for(sleep) {
-                return RunEvent::TimeFailed {
-                    source,
-                    status: None,
-                };
+                return RunEvent::TimeFailed { source, status: None };
             }
         }
     }
@@ -179,9 +170,7 @@ impl RunningCommand {
                     .as_ref()
                     .is_some_and(CommandCancellation::is_cancelled)
                 {
-                    return RunEvent::Cancelled {
-                        status: Some(status),
-                    };
+                    return RunEvent::Cancelled { status: Some(status) };
                 }
                 let sleep = match timeout {
                     Some(timeout) => {
@@ -206,8 +195,7 @@ impl RunningCommand {
                     }
                     None => CANCELLATION_POLL_INTERVAL,
                 };
-                if let Err(source) = BlockingSleeper::new(Arc::clone(&self.timer)).sleep_for(sleep)
-                {
+                if let Err(source) = BlockingSleeper::new(Arc::clone(&self.timer)).sleep_for(sleep) {
                     return RunEvent::TimeFailed {
                         source,
                         status: Some(status),
@@ -219,11 +207,7 @@ impl RunningCommand {
     }
 
     /// Resolves one monitoring event through the single finalization pipeline.
-    fn resolve_event(
-        mut self,
-        event: RunEvent,
-        timeout: Option<Duration>,
-    ) -> Result<FinishedCommand, CommandError> {
+    fn resolve_event(mut self, event: RunEvent, timeout: Option<Duration>) -> Result<FinishedCommand, CommandError> {
         let event = match event.into_exit_status() {
             Ok(status) => self.wait_for_io_event(status, timeout),
             Err(reason) => return self.stop_and_finalize(reason),
@@ -246,14 +230,13 @@ impl RunningCommand {
     fn stop_and_finalize(mut self, reason: StopReason) -> Result<FinishedCommand, CommandError> {
         let observed_status = reason.observed_status();
         let retains_output = reason.retains_termination_output();
-        let outcome =
-            match ProcessTerminator::new(&mut self.child_process).terminate(observed_status) {
-                Ok(outcome) => outcome,
-                Err(failure) => {
-                    let error = failure.into_command_error(reason, &self.command_text);
-                    return Err(self.finish_without_status(error));
-                }
-            };
+        let outcome = match ProcessTerminator::new(&mut self.child_process).terminate(observed_status) {
+            Ok(outcome) => outcome,
+            Err(failure) => {
+                let error = failure.into_command_error(reason, &self.command_text);
+                return Err(self.finish_without_status(error));
+            }
+        };
         let status = observed_status.unwrap_or(outcome.status);
         if !retains_output {
             let error = reason
@@ -266,13 +249,7 @@ impl RunningCommand {
         let finished = match finished {
             Ok(finished) => finished,
             Err(error) => {
-                if matches!(
-                    reason,
-                    StopReason::TimeFailed {
-                        status: Some(_),
-                        ..
-                    }
-                ) {
+                if matches!(reason, StopReason::TimeFailed { status: Some(_), .. }) {
                     return Err(reason
                         .into_error_after_finalize(command_text, error)
                         .with_cleanup_failures(outcome.cleanup_failures)
@@ -313,10 +290,7 @@ impl RunningCommand {
         let output = io.collect(&command_text, status, move || {
             timer.clock().now().duration_since(started_at)
         })?;
-        Ok(FinishedCommand {
-            command_text,
-            output,
-        })
+        Ok(FinishedCommand { command_text, output })
     }
 
     /// Completes a terminated command after cancelling and joining I/O helpers.
@@ -337,10 +311,7 @@ impl RunningCommand {
     fn complete_after_termination(
         self,
         status: ExitStatus,
-    ) -> (
-        Result<FinishedCommand, CommandError>,
-        Vec<CommandCleanupFailure>,
-    ) {
+    ) -> (Result<FinishedCommand, CommandError>, Vec<CommandCleanupFailure>) {
         let Self {
             command_text,
             io,
@@ -352,10 +323,7 @@ impl RunningCommand {
             timer.clock().now().duration_since(started_at)
         });
         (
-            output.map(|output| FinishedCommand {
-                command_text,
-                output,
-            }),
+            output.map(|output| FinishedCommand { command_text, output }),
             cleanup_failures,
         )
     }
@@ -378,7 +346,6 @@ impl RunningCommand {
     ///
     /// This method always invokes helper cancellation and joining before
     /// returning `primary`, retaining every cleanup failure.
-    #[must_use]
     fn finish_without_status(self, primary: CommandError) -> CommandError {
         let cleanup_failures = self.io.cancel_and_join(&self.command_text);
         primary.with_cleanup_failures(cleanup_failures)
@@ -463,10 +430,7 @@ mod tests {
             self
         }
 
-        fn try_wait_results(
-            mut self,
-            results: impl IntoIterator<Item = io::Result<Option<ExitStatus>>>,
-        ) -> Self {
+        fn try_wait_results(mut self, results: impl IntoIterator<Item = io::Result<Option<ExitStatus>>>) -> Self {
             self.try_wait_results.extend(results);
             self
         }
@@ -514,28 +478,19 @@ mod tests {
     }
 
     fn terminating_child(exit_status: ExitStatus) -> ManagedChildProcess {
-        ManagedChildProcess::new(
-            Box::new(ScriptedChild::new(raw_child()).wait_status(exit_status)),
-            true,
-        )
+        ManagedChildProcess::new(Box::new(ScriptedChild::new(raw_child()).wait_status(exit_status)), true)
     }
 
     fn fallback_race_child(exit_status: ExitStatus) -> ManagedChildProcess {
-        let direct = ScriptedChild::new(raw_child())
-            .kill_error(io::Error::other("child termination failed"));
+        let direct = ScriptedChild::new(raw_child()).kill_error(io::Error::other("child termination failed"));
         let tree = ScriptedChild::new(Box::new(direct))
             .kill_error(io::Error::other("tree termination failed"))
-            .try_wait_results(
-                (0..8)
-                    .map(|_| Ok(None))
-                    .chain(std::iter::once(Ok(Some(exit_status)))),
-            );
+            .try_wait_results((0..8).map(|_| Ok(None)).chain(std::iter::once(Ok(Some(exit_status)))));
         ManagedChildProcess::new(Box::new(tree), true)
     }
 
     fn completed_reader(result: Result<CapturedOutput, OutputCaptureError>) -> OutputReader {
-        let (cancellation, token) =
-            IoCancellation::pair().expect("reader cancellation should create");
+        let (cancellation, token) = IoCancellation::pair().expect("reader cancellation should create");
         OutputReader::new(
             thread::spawn(move || {
                 wait_for_cancellation(&token);
@@ -546,8 +501,7 @@ mod tests {
     }
 
     fn completed_writer(result: io::Result<()>) -> StdinWriter {
-        let (cancellation, token) =
-            IoCancellation::pair().expect("writer cancellation should create");
+        let (cancellation, token) = IoCancellation::pair().expect("writer cancellation should create");
         StdinWriter::new(
             thread::spawn(move || {
                 wait_for_cancellation(&token);
@@ -600,9 +554,7 @@ mod tests {
         CommandIo::new(
             failing_stdout(),
             failing_stderr(),
-            Some(completed_writer(Err(io::Error::other(
-                "stdin write failed",
-            )))),
+            Some(completed_writer(Err(io::Error::other("stdin write failed")))),
         )
     }
 
@@ -806,13 +758,8 @@ mod tests {
                             ..
                         },
                         ExpectedReason::ReadOutput
-                    ) | (
-                        CommandErrorReason::TimeFailed { .. },
-                        ExpectedReason::TimeFailed
-                    ) | (
-                        CommandErrorReason::WaitFailed { .. },
-                        ExpectedReason::WaitFailed
-                    )
+                    ) | (CommandErrorReason::TimeFailed { .. }, ExpectedReason::TimeFailed)
+                        | (CommandErrorReason::WaitFailed { .. }, ExpectedReason::WaitFailed)
                 ),
                 "{name}"
             );

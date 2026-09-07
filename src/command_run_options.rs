@@ -67,7 +67,6 @@ impl CommandRunOptions {
     ///
     /// Clone this handle before passing it to multiple runs that should share a
     /// single cancellation request channel.
-    #[must_use]
     #[inline(always)]
     pub fn cancellation(mut self, cancellation: CommandCancellation) -> Self {
         self.cancellation = Some(cancellation);
@@ -80,7 +79,6 @@ impl CommandRunOptions {
     /// each run. The path is validated by the runner before spawning. Cloning
     /// these options clones the path; callers running concurrently must provide
     /// distinct paths when they need to retain both streams.
-    #[must_use]
     #[inline]
     pub fn tee_stdout_to_file<P>(mut self, path: P) -> Self
     where
@@ -96,7 +94,6 @@ impl CommandRunOptions {
     /// each run. The path is validated by the runner before spawning. Cloning
     /// these options clones the path; callers running concurrently must provide
     /// distinct paths when they need to retain both streams.
-    #[must_use]
     #[inline]
     pub fn tee_stderr_to_file<P>(mut self, path: P) -> Self
     where
