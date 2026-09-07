@@ -77,11 +77,11 @@ impl fmt::Debug for Command {
     /// Formatting result after rendering redacted command metadata.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let redactor = Redactor::application_default();
-        let mut batch = redactor.batch();
+        let mut batch = redactor.diagnostic_batch();
         let argv = batch.redact_heuristic_argv(self.redaction_argv_items());
         let env = batch.redact_env_pairs(self.environment_pairs());
         let unset = batch.redact_argv(self.removed_environment_items());
-        let output = batch.finish_for_diagnostics(TRUNCATED_REDACTION);
+        let output = batch.finish_with_marker(TRUNCATED_REDACTION);
         let argv_text = output.text(argv);
         let env_text = output.text(env);
         let unset_text = output.text(unset);
@@ -549,11 +549,11 @@ impl Command {
     #[must_use]
     pub(crate) fn display_command(&self, policy: &RedactionPolicy) -> String {
         let redactor = Redactor::new(policy.clone());
-        let mut batch = redactor.batch();
+        let mut batch = redactor.diagnostic_batch();
         let argv = batch.redact_heuristic_argv(self.redaction_argv_items());
         let env = batch.redact_env_pairs(self.environment_pairs());
         let unset = batch.redact_argv(self.removed_environment_items());
-        let output = batch.finish_for_diagnostics(TRUNCATED_REDACTION);
+        let output = batch.finish_with_marker(TRUNCATED_REDACTION);
         let argv_text = output.text(argv);
         if self.envs.is_empty() && self.removed_envs.is_empty() {
             argv_text.as_str().to_owned()

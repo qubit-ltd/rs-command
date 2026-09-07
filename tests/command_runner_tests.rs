@@ -274,10 +274,10 @@ mod unix {
         let missing_program = "x".repeat(46);
 
         let redactor = Redactor::new(policy.clone());
-        let mut batch = redactor.batch();
+        let mut batch = redactor.diagnostic_batch();
         let argv = batch.redact_heuristic_argv([ArgvItem::plain(OsStr::new(&missing_program))]);
         let env = batch.redact_env_pairs([(OsStr::new("MODE"), OsStr::new("debug"))]);
-        let output = batch.finish_for_diagnostics("<redaction incomplete>");
+        let output = batch.finish_with_marker("<redaction incomplete>");
         assert_ne!(output.text(argv).as_str(), "<redaction incomplete>");
         assert_ne!(output.text(env).as_str(), "<redaction incomplete>");
 
