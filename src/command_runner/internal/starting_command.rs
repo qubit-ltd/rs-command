@@ -44,7 +44,10 @@ impl<'a> StartingCommand<'a> {
     ///
     /// A guard that terminates the child unless initialization finishes.
     #[inline]
-    pub(in crate::command_runner) const fn new(command: &'a str, child_process: ManagedChildProcess) -> Self {
+    pub(in crate::command_runner) const fn new(
+        command: &'a str,
+        child_process: ManagedChildProcess,
+    ) -> Self {
         Self {
             command,
             child_process: Some(child_process),
@@ -137,15 +140,15 @@ impl<'a> StartingCommand<'a> {
     /// Cancels and joins all started I/O helpers.
     fn join_helpers(&mut self) {
         if let Some(reader) = self.stdout_reader.take() {
-            reader.cancel();
+            let _ = reader.cancel();
             let _ = reader.join();
         }
         if let Some(reader) = self.stderr_reader.take() {
-            reader.cancel();
+            let _ = reader.cancel();
             let _ = reader.join();
         }
         if let Some(writer) = self.stdin_writer.take() {
-            writer.cancel();
+            let _ = writer.cancel();
             let _ = writer.join();
         }
     }
