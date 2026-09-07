@@ -1,32 +1,58 @@
+// =============================================================================
+//    Copyright (c) 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0 (the "License");
+//    you may not use this file except in compliance with the License.
+//    You may obtain a copy of the License at
+//
+//        http://www.apache.org/licenses/LICENSE-2.0
+//
+//    Unless required by applicable law or agreed to in writing, software
+//    distributed under the License is distributed on an "AS IS" BASIS,
+//    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//    See the License for the specific language governing permissions and
+//    limitations under the License.
+// =============================================================================
+
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
+use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 
 pub(crate) struct EscapedProcessGuard {
     pid_path: PathBuf,
+    armed: bool,
 }
 
 impl EscapedProcessGuard {
     pub(crate) fn new(pid_path: PathBuf) -> Self {
-        Self { pid_path }
+        Self {
+            pid_path,
+            armed: true,
+        }
     }
 
     pub(crate) fn wait_until_recorded(&self, timeout: Duration) {
         let deadline = Instant::now() + timeout;
-        while !self.pid_path.exists() && Instant::now() < deadline {
+        while Instant::now() < deadline {
+            if let Ok(contents) = fs::read_to_string(&self.pid_path)
+                && contents.trim().parse::<u32>().is_ok_and(|pid| pid != 0)
+            {
+                return;
+            }
             thread::sleep(Duration::from_millis(10));
         }
-        assert!(
-            self.pid_path.exists(),
-            "escaped descendant must record its PID"
-        );
+        panic!("escaped descendant must record a non-zero PID");
     }
 
     pub(crate) fn terminate_and_wait(&mut self) {
         self.terminate_and_wait_inner()
             .expect("escaped descendant must be terminated");
+        self.armed = false;
     }
 
     fn terminate_and_wait_inner(&self) -> Result<(), String> {
@@ -66,6 +92,56 @@ impl EscapedProcessGuard {
 
 impl Drop for EscapedProcessGuard {
     fn drop(&mut self) {
-        let _ = self.terminate_and_wait_inner();
+        if self.armed {
+            let _ = self.terminate_and_wait_inner();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EscapedProcessGuard;
+    use std::fs;
+    use std::process::Command;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn terminate_disarms_guard_after_success() {
+        let pid_path = std::env::temp_dir().join(format!(
+            "qubit-escaped-process-guard-{}.pid",
+            std::process::id()
+        ));
+        let mut child = Command::new("sleep")
+            .arg("10")
+            .spawn()
+            .expect("sleep should start");
+        let child_pid = child.id();
+        fs::write(&pid_path, child_pid.to_string()).expect("PID file should be written");
+        let waiter = thread::spawn(move || child.wait().expect("sleep should be reaped"));
+
+        let mut guard = EscapedProcessGuard::new(pid_path.clone());
+        guard.terminate_and_wait();
+        assert!(!guard.armed, "successful cleanup must disarm the guard");
+        waiter.join().expect("sleep waiter should finish");
+        let _ = fs::remove_file(pid_path);
+    }
+
+    #[test]
+    fn wait_until_recorded_ignores_empty_pid_file() {
+        let pid_path = std::env::temp_dir().join(format!(
+            "qubit-escaped-process-guard-empty-{}.pid",
+            std::process::id()
+        ));
+        fs::write(&pid_path, "").expect("empty PID file should be written");
+        let path_for_writer = pid_path.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            fs::write(path_for_writer, "1234").expect("PID should be recorded");
+        });
+
+        let guard = EscapedProcessGuard::new(pid_path.clone());
+        guard.wait_until_recorded(Duration::from_secs(1));
+        let _ = fs::remove_file(pid_path);
     }
 }
