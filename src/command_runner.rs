@@ -151,7 +151,10 @@ impl fmt::Debug for CommandRunner {
             .field("success_exit_codes", &self.success_exit_codes)
             .field("disable_logging", &self.disable_logging)
             .field("fail_on_output_truncation", &self.fail_on_output_truncation)
-            .field("diagnostic_redaction_policy", &self.diagnostic_redaction_policy)
+            .field(
+                "diagnostic_redaction_policy",
+                &self.diagnostic_redaction_policy,
+            )
             .field("max_stdout_bytes", &self.max_stdout_bytes)
             .field("max_stderr_bytes", &self.max_stderr_bytes)
             .finish()
@@ -239,7 +242,11 @@ impl CommandRunner {
     /// cancellation handle has already been requested before command
     /// preparation, and maps all process, I/O, and timeout failures as
     /// described by [`CommandRunner::run`].
-    pub fn run_with(&self, command: Command, options: CommandRunOptions) -> Result<CommandOutput, CommandError> {
+    pub fn run_with(
+        &self,
+        command: Command,
+        options: CommandRunOptions,
+    ) -> Result<CommandOutput, CommandError> {
         let CommandRunOptionsParts {
             cancellation,
             stdout_file,
@@ -252,7 +259,10 @@ impl CommandRunner {
             stdout_file.as_deref(),
             stderr_file.as_deref(),
         )?;
-        if cancellation.as_ref().is_some_and(CommandCancellation::is_cancelled) {
+        if cancellation
+            .as_ref()
+            .is_some_and(CommandCancellation::is_cancelled)
+        {
             return Err(CommandError::from_reason(
                 prepared.command_text,
                 CommandErrorReason::CancelledBeforeStart,
@@ -282,7 +292,8 @@ impl CommandRunner {
         let mut starting_command = StartingCommand::new(&command_text, child_process);
         let started_at = self.timer.clock().now();
 
-        let stdin_writer = write_stdin_bytes(&command_text, starting_command.child_process(), stdin_bytes)?;
+        let stdin_writer =
+            write_stdin_bytes(&command_text, starting_command.child_process(), stdin_bytes)?;
         starting_command.set_stdin_writer(stdin_writer);
 
         let stdout = take_output_pipe(&command_text, OutputStream::Stdout, || {
@@ -296,7 +307,7 @@ impl CommandRunner {
                 stdout,
                 OutputCaptureOptions::new(
                     self.max_stdout_bytes,
-                    stdout_file.zip(stdout_file_path).map(|(file, path)| OutputTee::new(Box::new(file), path)),
+                    OutputTee::from_parts(stdout_file.map(|file| Box::new(file) as _), stdout_file_path),
                 ),
             )
         })?;
@@ -306,7 +317,7 @@ impl CommandRunner {
                 stderr,
                 OutputCaptureOptions::new(
                     self.max_stderr_bytes,
-                    stderr_file.zip(stderr_file_path).map(|(file, path)| OutputTee::new(Box::new(file), path)),
+                    OutputTee::from_parts(stderr_file.map(|file| Box::new(file) as _), stderr_file_path),
                 ),
             )
         })?;
@@ -329,13 +340,18 @@ impl CommandRunner {
             cancellation,
         )
         .wait_for_completion(self.timeout)?;
-        let FinishedCommand { command_text, output } = finished;
+        let FinishedCommand {
+            command_text,
+            output,
+        } = finished;
 
         if output
             .exit_code()
             .is_some_and(|exit_code| self.success_exit_codes.contains(&exit_code))
         {
-            if self.fail_on_output_truncation && (output.stdout_truncated() || output.stderr_truncated()) {
+            if self.fail_on_output_truncation
+                && (output.stdout_truncated() || output.stderr_truncated())
+            {
                 if !self.disable_logging {
                     log::debug!(
                         "Finished command `{}` with truncated output in {:?}.",
@@ -350,12 +366,20 @@ impl CommandRunner {
                 ));
             }
             if !self.disable_logging {
-                log::debug!("Finished command `{}` in {:?}.", command_text, output.elapsed());
+                log::debug!(
+                    "Finished command `{}` in {:?}.",
+                    command_text,
+                    output.elapsed()
+                );
             }
             Ok(output)
         } else {
             if !self.disable_logging {
-                log::debug!("Command `{}` exited with code {:?}.", command_text, output.exit_code());
+                log::debug!(
+                    "Command `{}` exited with code {:?}.",
+                    command_text,
+                    output.exit_code()
+                );
             }
             Err(CommandError::from_reason(
                 command_text,

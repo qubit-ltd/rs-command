@@ -5,14 +5,12 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-//! Failure details retained after separating partial output from a failed
-//! output reader.
+//! Failure details retained alongside partial output from a failed reader.
 
 use std::io;
 use std::path::PathBuf;
 
-/// Error details retained after separating partial output from a failed
-/// output reader.
+/// Output-reader failure details retained alongside partial output.
 pub(in crate::command_runner) enum OutputCaptureFailure {
     /// The child pipe could not be read.
     Read {
