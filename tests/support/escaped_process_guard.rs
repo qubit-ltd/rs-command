@@ -1,19 +1,9 @@
 // =============================================================================
-//    Copyright (c) 2026 Haixing Hu.
+//    Copyright (c) 2025 - 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
 //
-//    Licensed under the Apache License, Version 2.0 (the "License");
-//    you may not use this file except in compliance with the License.
-//    You may obtain a copy of the License at
-//
-//        http://www.apache.org/licenses/LICENSE-2.0
-//
-//    Unless required by applicable law or agreed to in writing, software
-//    distributed under the License is distributed on an "AS IS" BASIS,
-//    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//    See the License for the specific language governing permissions and
-//    limitations under the License.
+//    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 
 use std::fs;
@@ -21,7 +11,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 
 pub(crate) struct EscapedProcessGuard {
     pid_path: PathBuf,
@@ -100,11 +91,12 @@ impl Drop for EscapedProcessGuard {
 
 #[cfg(test)]
 mod tests {
-    use super::EscapedProcessGuard;
     use std::fs;
     use std::process::Command;
     use std::thread;
     use std::time::Duration;
+
+    use super::EscapedProcessGuard;
 
     #[test]
     fn terminate_disarms_guard_after_success() {
