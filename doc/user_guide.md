@@ -2,7 +2,7 @@
 
 [中文用户手册](user_guide.zh_CN.md) · [README](../README.md) · [API documentation](https://docs.rs/qubit-command)
 
-This guide describes `qubit-command` 0.6.0. It is for Rust applications that run external programs and need explicit policies for process lifetime, output size, cancellation, and diagnostics.
+This guide describes `qubit-command` 0.7.0. It is for Rust applications that run external programs and need explicit policies for process lifetime, output size, cancellation, and diagnostics.
 
 ## What This Crate Solves
 

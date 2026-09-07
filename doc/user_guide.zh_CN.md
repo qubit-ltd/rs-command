@@ -2,7 +2,7 @@
 
 [English user guide](user_guide.md) · [中文 README](../README.zh_CN.md) · [API 文档](https://docs.rs/qubit-command)
 
-本手册针对 `qubit-command` 0.6.0，面向需要从 Rust 应用运行外部程序，并明确处理进程生命周期、输出大小、取消和诊断边界的开发者。
+本手册针对 `qubit-command` 0.7.0，面向需要从 Rust 应用运行外部程序，并明确处理进程生命周期、输出大小、取消和诊断边界的开发者。
 
 ## 本 crate 解决什么问题
 
