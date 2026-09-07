@@ -52,9 +52,7 @@ impl StopReason {
     #[must_use]
     pub(super) const fn observed_status(&self) -> Option<ExitStatus> {
         match self {
-            Self::TimedOut { status, .. }
-            | Self::Cancelled { status }
-            | Self::TimeFailed { status, .. } => *status,
+            Self::TimedOut { status, .. } | Self::Cancelled { status } | Self::TimeFailed { status, .. } => *status,
             Self::WaitFailed(_) => None,
         }
     }

@@ -45,10 +45,7 @@ impl<'a> StartingCommand<'a> {
     ///
     /// A guard that terminates the child unless initialization finishes.
     #[inline]
-    pub(in crate::command_runner) const fn new(
-        command: &'a str,
-        child_process: ManagedChildProcess,
-    ) -> Self {
+    pub(in crate::command_runner) const fn new(command: &'a str, child_process: ManagedChildProcess) -> Self {
         Self {
             command,
             child_process: Some(child_process),

@@ -99,10 +99,7 @@ mod tests {
         let timeout = Duration::from_secs(3);
         let cases = [
             (
-                RunEvent::TimedOut {
-                    timeout,
-                    status: None,
-                },
+                RunEvent::TimedOut { timeout, status: None },
                 ExpectedStop::TimedOut,
                 None,
             ),
@@ -114,11 +111,7 @@ mod tests {
                 ExpectedStop::TimedOut,
                 Some(21),
             ),
-            (
-                RunEvent::Cancelled { status: None },
-                ExpectedStop::Cancelled,
-                None,
-            ),
+            (RunEvent::Cancelled { status: None }, ExpectedStop::Cancelled, None),
             (
                 RunEvent::Cancelled {
                     status: Some(status(22)),
@@ -153,10 +146,7 @@ mod tests {
             let reason = event
                 .into_exit_status()
                 .expect_err("non-exit event should map to a stop reason");
-            assert_eq!(
-                reason.observed_status().and_then(|status| status.code()),
-                expected_code
-            );
+            assert_eq!(reason.observed_status().and_then(|status| status.code()), expected_code);
             assert!(matches!(
                 (reason, expected),
                 (StopReason::TimedOut { .. }, ExpectedStop::TimedOut)
@@ -171,9 +161,7 @@ mod tests {
     fn test_run_event_keeps_normal_exit_separate_from_stop_reasons() {
         let event = RunEvent::Exited(status(7));
 
-        let exit_status = event
-            .into_exit_status()
-            .expect("normal exit should retain its status");
+        let exit_status = event.into_exit_status().expect("normal exit should retain its status");
 
         assert_eq!(exit_status.code(), Some(7));
     }
@@ -188,10 +176,7 @@ mod tests {
                 },
                 CommandErrorKind::TimedOut,
             ),
-            (
-                StopReason::Cancelled { status: None },
-                CommandErrorKind::Cancelled,
-            ),
+            (StopReason::Cancelled { status: None }, CommandErrorKind::Cancelled),
             (
                 StopReason::WaitFailed(io::Error::other("wait failed")),
                 CommandErrorKind::WaitFailed,

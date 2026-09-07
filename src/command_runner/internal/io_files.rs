@@ -673,42 +673,6 @@ fn truncate_output_with(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use std::fs::OpenOptions;
-    use std::io;
-
-    use super::truncate_output_with;
-    use crate::CommandErrorKind;
-    use crate::OutputStream;
-
-    #[test]
-    fn test_truncate_output_maps_injected_set_len_failure() {
-        let output = tempfile::NamedTempFile::new().expect("output fixture should be created");
-        std::fs::write(output.path(), b"preserve-on-failure")
-            .expect("output fixture should be populated");
-        let file = OpenOptions::new()
-            .write(true)
-            .open(output.path())
-            .expect("output fixture should be opened");
-
-        let error = truncate_output_with(
-            "command",
-            OutputStream::Stdout,
-            Some(output.path()),
-            Some(&file),
-            |_| Err(io::Error::other("injected truncate failure")),
-        )
-        .expect_err("injected truncation failure should be mapped");
-
-        assert_eq!(error.kind(), CommandErrorKind::OpenOutputFailed);
-        assert_eq!(
-            std::fs::read(output.path()).expect("output fixture should remain readable"),
-            b"preserve-on-failure",
-        );
-    }
-}
-
 /// Builds an input/output conflict error.
 ///
 /// # Parameters
@@ -721,7 +685,6 @@ mod tests {
 /// # Returns
 ///
 /// Structured conflict error retaining both configured paths.
-#[must_use]
 #[inline]
 fn input_output_conflict(
     command: &str,
@@ -751,7 +714,6 @@ fn input_output_conflict(
 /// # Returns
 ///
 /// Structured conflict error retaining both configured paths.
-#[must_use]
 #[inline]
 fn output_files_conflict(command: &str, stdout_path: &Path, stderr_path: &Path) -> CommandError {
     CommandError::from_reason(
@@ -775,7 +737,6 @@ fn output_files_conflict(command: &str, stdout_path: &Path, stderr_path: &Path) 
 /// # Returns
 ///
 /// Structured inspection error retaining the configured path.
-#[must_use]
 #[inline]
 fn inspect_error(command: &str, path: &Path, source: io::Error) -> CommandError {
     CommandError::from_reason(
@@ -834,4 +795,39 @@ fn non_regular_output_error(command: &str, stream: OutputStream, path: &Path) ->
         },
         None,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::OpenOptions;
+    use std::io;
+
+    use super::truncate_output_with;
+    use crate::CommandErrorKind;
+    use crate::OutputStream;
+
+    #[test]
+    fn test_truncate_output_maps_injected_set_len_failure() {
+        let output = tempfile::NamedTempFile::new().expect("output fixture should be created");
+        std::fs::write(output.path(), b"preserve-on-failure").expect("output fixture should be populated");
+        let file = OpenOptions::new()
+            .write(true)
+            .open(output.path())
+            .expect("output fixture should be opened");
+
+        let error = truncate_output_with(
+            "command",
+            OutputStream::Stdout,
+            Some(output.path()),
+            Some(&file),
+            |_| Err(io::Error::other("injected truncate failure")),
+        )
+        .expect_err("injected truncation failure should be mapped");
+
+        assert_eq!(error.kind(), CommandErrorKind::OpenOutputFailed);
+        assert_eq!(
+            std::fs::read(output.path()).expect("output fixture should remain readable"),
+            b"preserve-on-failure",
+        );
+    }
 }

@@ -21,7 +21,6 @@ use crate::OutputStream;
 /// # Returns
 ///
 /// Structured spawn failure retaining the command and source.
-#[must_use]
 #[inline]
 pub(in crate::command_runner) fn spawn_failed(command: &str, source: io::Error) -> CommandError {
     CommandError::from_reason(command, CommandErrorReason::SpawnFailed { source }, None)
@@ -37,12 +36,8 @@ pub(in crate::command_runner) fn spawn_failed(command: &str, source: io::Error) 
 /// # Returns
 ///
 /// Structured output-read failure describing the missing pipe.
-#[must_use]
 #[inline]
-pub(in crate::command_runner) fn output_pipe_error(
-    command: &str,
-    stream: OutputStream,
-) -> CommandError {
+pub(in crate::command_runner) fn output_pipe_error(command: &str, stream: OutputStream) -> CommandError {
     CommandError::from_reason(
         command,
         CommandErrorReason::ReadOutputFailed {

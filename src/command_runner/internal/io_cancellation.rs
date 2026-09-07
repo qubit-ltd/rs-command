@@ -95,7 +95,11 @@ impl IoCancellation {
         {
             use std::io::Write;
 
-            (&self.notifier).write_all(&[1])?;
+            if let Err(error) = (&self.notifier).write_all(&[1])
+                && !(error.kind() == io::ErrorKind::BrokenPipe && join.is_finished())
+            {
+                return Err(error);
+            }
             let _ = join;
             Ok(())
         }
@@ -108,8 +112,7 @@ impl IoCancellation {
     /// Creates cancellation state that reports a deterministic test failure.
     #[cfg(test)]
     pub(super) fn failing(message: &'static str) -> Self {
-        let (mut cancellation, _token) =
-            Self::pair().expect("test cancellation pair should be created");
+        let (mut cancellation, _token) = Self::pair().expect("test cancellation pair should be created");
         cancellation.test_failure = Some((io::ErrorKind::Other, message));
         cancellation
     }
@@ -117,8 +120,7 @@ impl IoCancellation {
     /// Creates cancellation state that reports one raw OS error.
     #[cfg(all(test, windows))]
     pub(super) fn failing_raw_os_error(raw_os_error: i32) -> Self {
-        let (mut cancellation, _token) =
-            Self::pair().expect("test cancellation pair should be created");
+        let (mut cancellation, _token) = Self::pair().expect("test cancellation pair should be created");
         cancellation.test_raw_os_error = Some(raw_os_error);
         cancellation
     }

@@ -701,12 +701,7 @@ mod tests {
                 case.label,
             );
             assert_eq!(error.source().is_some(), case.has_source, "{} source", case.label);
-            assert_eq!(
-                error.output().is_some(),
-                case.retains_output,
-                "{} output",
-                case.label,
-            );
+            assert_eq!(error.output().is_some(), case.retains_output, "{} output", case.label,);
             assert_eq!(error.exit_code(), case.expected_exit_code, "{} exit code", case.label);
             assert_eq!(
                 error.is_unexpected_exit(),
@@ -731,26 +726,25 @@ mod tests {
 
     #[test]
     fn test_command_error_formats_and_exposes_every_cleanup_variant() {
-        let error = CommandError::from_reason("command", CommandErrorReason::Cancelled, None)
-            .with_cleanup_failures([
-                CommandCleanupFailure::Wait { source: io_error() },
-                CommandCleanupFailure::ProcessTreeTermination { source: io_error() },
-                CommandCleanupFailure::ChildTermination { source: io_error() },
-                CommandCleanupFailure::Stdin { source: io_error() },
-                CommandCleanupFailure::StdinCancellation { source: io_error() },
-                CommandCleanupFailure::StdoutCancellation { source: io_error() },
-                CommandCleanupFailure::StderrCancellation { source: io_error() },
-                CommandCleanupFailure::StdoutRead { source: io_error() },
-                CommandCleanupFailure::StdoutWrite {
-                    path: "stdout".into(),
-                    source: io_error(),
-                },
-                CommandCleanupFailure::StderrRead { source: io_error() },
-                CommandCleanupFailure::StderrWrite {
-                    path: "stderr".into(),
-                    source: io_error(),
-                },
-            ]);
+        let error = CommandError::from_reason("command", CommandErrorReason::Cancelled, None).with_cleanup_failures([
+            CommandCleanupFailure::Wait { source: io_error() },
+            CommandCleanupFailure::ProcessTreeTermination { source: io_error() },
+            CommandCleanupFailure::ChildTermination { source: io_error() },
+            CommandCleanupFailure::Stdin { source: io_error() },
+            CommandCleanupFailure::StdinCancellation { source: io_error() },
+            CommandCleanupFailure::StdoutCancellation { source: io_error() },
+            CommandCleanupFailure::StderrCancellation { source: io_error() },
+            CommandCleanupFailure::StdoutRead { source: io_error() },
+            CommandCleanupFailure::StdoutWrite {
+                path: "stdout".into(),
+                source: io_error(),
+            },
+            CommandCleanupFailure::StderrRead { source: io_error() },
+            CommandCleanupFailure::StderrWrite {
+                path: "stderr".into(),
+                source: io_error(),
+            },
+        ]);
 
         assert_eq!(error.cleanup_failures().len(), 11);
         assert!(error.process_tree_source().is_some());

@@ -29,9 +29,7 @@ pub(super) fn cancellation_found_no_pending_io(error: &io::Error) -> bool {
 }
 
 /// Requests cancellation of one synchronous I/O operation on Windows.
-pub(in crate::command_runner) fn cancel_synchronous_io<T>(
-    handle: &JoinHandle<T>,
-) -> io::Result<()> {
+pub(in crate::command_runner) fn cancel_synchronous_io<T>(handle: &JoinHandle<T>) -> io::Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::io::AsRawHandle;
@@ -96,11 +94,7 @@ mod tests {
 
     #[test]
     fn test_cancellation_found_no_pending_io_matches_only_error_not_found() {
-        assert!(cancellation_found_no_pending_io(
-            &io::Error::from_raw_os_error(1168)
-        ));
-        assert!(!cancellation_found_no_pending_io(
-            &io::Error::from_raw_os_error(5)
-        ));
+        assert!(cancellation_found_no_pending_io(&io::Error::from_raw_os_error(1168)));
+        assert!(!cancellation_found_no_pending_io(&io::Error::from_raw_os_error(5)));
     }
 }

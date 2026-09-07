@@ -253,7 +253,6 @@ impl CommandOutput {
     /// Returns [`str::Utf8Error`] when retained stdout contains invalid UTF-8.
     /// A capture limit can retain only part of a multi-byte sequence, so this
     /// error does not necessarily mean the process emitted invalid UTF-8.
-    #[must_use]
     #[inline(always)]
     pub fn stdout_text(&self) -> Result<&str, str::Utf8Error> {
         str::from_utf8(&self.stdout)
@@ -270,7 +269,6 @@ impl CommandOutput {
     /// Returns [`str::Utf8Error`] when retained stderr contains invalid UTF-8.
     /// A capture limit can retain only part of a multi-byte sequence, so this
     /// error does not necessarily mean the process emitted invalid UTF-8.
-    #[must_use]
     #[inline(always)]
     pub fn stderr_text(&self) -> Result<&str, str::Utf8Error> {
         str::from_utf8(&self.stderr)

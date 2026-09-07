@@ -70,10 +70,7 @@ impl<'a> ProcessTerminator<'a> {
                 return Ok(Self::success(status));
             }
             if let Err(child_source) = self.child.start_kill_child() {
-                let status = self
-                    .child
-                    .try_wait()
-                    .map_err(ProcessTerminationError::Wait)?;
+                let status = self.child.try_wait().map_err(ProcessTerminationError::Wait)?;
                 if let Some(status) = status {
                     return Ok(Self::success(status));
                 }
@@ -108,24 +105,17 @@ impl<'a> ProcessTerminator<'a> {
                         Ok(()) => match self.child.wait() {
                             Ok(status) => Ok(ProcessTerminationOutcome {
                                 status,
-                                cleanup_failures: vec![
-                                    CommandCleanupFailure::ProcessTreeTermination {
-                                        source: process_tree_source,
-                                    },
-                                ],
+                                cleanup_failures: vec![CommandCleanupFailure::ProcessTreeTermination {
+                                    source: process_tree_source,
+                                }],
                             }),
-                            Err(wait_source) => {
-                                Err(ProcessTerminationError::WaitAfterTreeTermination {
-                                    wait_source,
-                                    process_tree_source,
-                                })
-                            }
+                            Err(wait_source) => Err(ProcessTerminationError::WaitAfterTreeTermination {
+                                wait_source,
+                                process_tree_source,
+                            }),
                         },
                         Err(child_source) => {
-                            let status = self
-                                .child
-                                .try_wait()
-                                .map_err(ProcessTerminationError::Wait)?;
+                            let status = self.child.try_wait().map_err(ProcessTerminationError::Wait)?;
                             if let Some(status) = status {
                                 Ok(ProcessTerminationOutcome {
                                     status,
@@ -133,16 +123,11 @@ impl<'a> ProcessTerminator<'a> {
                                         CommandCleanupFailure::ProcessTreeTermination {
                                             source: process_tree_source,
                                         },
-                                        CommandCleanupFailure::ChildTermination {
-                                            source: child_source,
-                                        },
+                                        CommandCleanupFailure::ChildTermination { source: child_source },
                                     ],
                                 })
                             } else {
-                                Err(ProcessTerminationError::Kill(
-                                    process_tree_source,
-                                    child_source,
-                                ))
+                                Err(ProcessTerminationError::Kill(process_tree_source, child_source))
                             }
                         }
                     },
@@ -164,10 +149,7 @@ impl<'a> ProcessTerminator<'a> {
     }
 
     /// Builds an outcome after a process-tree termination failure.
-    fn tree_failure_outcome(
-        status: ExitStatus,
-        process_tree_source: io::Error,
-    ) -> ProcessTerminationOutcome {
+    fn tree_failure_outcome(status: ExitStatus, process_tree_source: io::Error) -> ProcessTerminationOutcome {
         let cleanup_failures = if Self::process_tree_already_exited(&process_tree_source) {
             Vec::new()
         } else {
@@ -182,10 +164,7 @@ impl<'a> ProcessTerminator<'a> {
     }
 
     /// Resolves child status after process-tree termination failure.
-    fn status_after_termination_failure(
-        &mut self,
-        source: &io::Error,
-    ) -> io::Result<Option<ExitStatus>> {
+    fn status_after_termination_failure(&mut self, source: &io::Error) -> io::Result<Option<ExitStatus>> {
         if Self::process_tree_already_exited(source) {
             return self.child.wait().map(Some);
         }
@@ -267,11 +246,7 @@ mod tests {
     }
 
     impl ScriptedChild {
-        fn new(
-            name: &'static str,
-            inner: Box<dyn ChildWrapper>,
-            calls: Arc<Mutex<Vec<String>>>,
-        ) -> Self {
+        fn new(name: &'static str, inner: Box<dyn ChildWrapper>, calls: Arc<Mutex<Vec<String>>>) -> Self {
             Self {
                 name,
                 inner,
@@ -292,10 +267,7 @@ mod tests {
             self
         }
 
-        fn try_wait_results(
-            mut self,
-            results: impl IntoIterator<Item = io::Result<Option<ExitStatus>>>,
-        ) -> Self {
+        fn try_wait_results(mut self, results: impl IntoIterator<Item = io::Result<Option<ExitStatus>>>) -> Self {
             self.try_wait_results.extend(results);
             self
         }
@@ -446,10 +418,7 @@ mod tests {
                 },
                 CommandErrorKind::KillFailed,
             ),
-            (
-                StopReason::Cancelled { status: None },
-                CommandErrorKind::CancelFailed,
-            ),
+            (StopReason::Cancelled { status: None }, CommandErrorKind::CancelFailed),
         ];
 
         for (reason, expected_kind) in cases {
