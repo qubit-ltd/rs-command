@@ -30,8 +30,10 @@ use crate::CommandErrorReason;
 use crate::CommandOutput;
 use crate::OutputStream;
 
+/// Native descriptor used to poll a Unix output pipe.
 #[cfg(unix)]
 type OutputFd = std::os::fd::RawFd;
+/// Placeholder descriptor type because Windows uses cancellable handles.
 #[cfg(windows)]
 type OutputFd = ();
 

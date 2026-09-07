@@ -21,6 +21,7 @@ use crate::command_env::env_key_eq;
 use crate::command_stdin::CommandStdin;
 
 const REDACTED_PATH: &str = "<redacted path>";
+/// Marker used when a command path is redacted from diagnostics.
 const TRUNCATED_REDACTION: &str = "<truncated>";
 
 /// Structured description of an external command to run.
@@ -37,11 +38,13 @@ const TRUNCATED_REDACTION: &str = "<truncated>";
 ///
 /// # Examples
 ///
-/// ```compile_fail
-/// #![deny(unused_must_use)]
-/// use qubit_command::Command;
+/// ```
+/// use qubit_command::{Command, CommandRunner};
 ///
-/// Command::new("true");
+/// let output = CommandRunner::without_timeout()
+///     .run(Command::new("rustc").arg("--version"))
+///     .expect("rustc should run");
+/// assert!(!output.stdout().is_empty());
 /// ```
 #[derive(Clone, PartialEq, Eq)]
 #[must_use]
@@ -190,6 +193,7 @@ impl Command {
     /// # Returns
     ///
     /// Borrowed raw argument values in submission order.
+    #[must_use]
     #[inline(always)]
     pub fn arguments(&self) -> impl ExactSizeIterator<Item = &OsStr> {
         self.args.iter().map(CommandArgument::value)
@@ -308,6 +312,7 @@ impl Command {
     ///
     /// `Some(path)` when the command has a working directory override, or
     /// `None` when the runner default should be used.
+    #[must_use]
     #[inline(always)]
     pub fn working_directory_override(&self) -> Option<&Path> {
         self.working_directory.as_deref()

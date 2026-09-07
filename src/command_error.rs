@@ -19,6 +19,18 @@ use crate::OutputStream;
 
 /// Error returned while preparing, spawning, waiting for, or collecting a
 /// command.
+///
+/// # Examples
+///
+/// ```
+/// use qubit_command::{Command, CommandError, CommandRunner};
+///
+/// let error: CommandError = CommandRunner::without_timeout()
+///     .run(Command::new("__qubit_command_example_missing_executable__"))
+///     .expect_err("the example executable should not exist");
+/// assert!(error.output().is_none());
+/// ```
+#[must_use]
 pub struct CommandError {
     /// Human-readable, redacted command representation.
     command: String,

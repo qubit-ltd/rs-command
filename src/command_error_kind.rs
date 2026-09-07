@@ -8,8 +8,20 @@
 //! Stable categories for command execution failures.
 
 /// Stable, data-free category of a [`CommandError`](crate::CommandError).
+///
+/// # Examples
+///
+/// ```
+/// use qubit_command::{Command, CommandErrorKind, CommandRunner};
+///
+/// let error = CommandRunner::without_timeout()
+///     .run(Command::new("__qubit_command_example_missing_executable__"))
+///     .expect_err("the example executable should not exist");
+/// assert_eq!(error.kind(), CommandErrorKind::SpawnFailed);
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
+#[must_use]
 pub enum CommandErrorKind {
     /// The child process could not be spawned.
     SpawnFailed,

@@ -16,9 +16,15 @@ pub(crate) enum CommandStdin {
     /// Inherit stdin from the parent process.
     Inherit,
     /// Write these bytes to the child process stdin.
-    Bytes(Vec<u8>),
+    Bytes(
+        /// Bytes written to the child before stdin is closed.
+        Vec<u8>,
+    ),
     /// Read stdin bytes from this file.
-    File(PathBuf),
+    File(
+        /// Path to the regular file opened before spawning the child.
+        PathBuf,
+    ),
 }
 
 impl fmt::Debug for CommandStdin {
