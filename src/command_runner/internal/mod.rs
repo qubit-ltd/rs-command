@@ -21,6 +21,7 @@ pub(in crate::command_runner) mod managed_child_process;
 pub(in crate::command_runner) mod output_capture_error;
 pub(in crate::command_runner) mod output_capture_options;
 pub(in crate::command_runner) mod output_collector;
+pub(in crate::command_runner) mod output_capture_failure;
 pub(in crate::command_runner) mod output_reader;
 pub(in crate::command_runner) mod output_tee;
 pub(in crate::command_runner) mod pollable_stdin;

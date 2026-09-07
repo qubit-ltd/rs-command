@@ -15,3 +15,11 @@ pub(in crate::command_runner) struct OutputTee {
     /// Path used for diagnostics if writes fail.
     pub(in crate::command_runner) path: PathBuf,
 }
+
+impl OutputTee {
+    /// Creates a streaming destination with its diagnostic path.
+    #[inline]
+    pub(in crate::command_runner) fn new(writer: Box<dyn Write + Send>, path: PathBuf) -> Self {
+        Self { writer, path }
+    }
+}

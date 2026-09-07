@@ -5,9 +5,6 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::fs::File;
-use std::path::PathBuf;
-
 use super::output_tee::OutputTee;
 
 /// Output capture options moved into a reader thread.
@@ -24,8 +21,7 @@ impl OutputCaptureOptions {
     /// # Parameters
     ///
     /// * `max_bytes` - Optional in-memory retention limit.
-    /// * `file` - Optional file receiving all emitted bytes.
-    /// * `file_path` - File path used in write-failure diagnostics.
+    /// * `tee` - Optional writer receiving all emitted bytes.
     ///
     /// # Returns
     ///
@@ -33,13 +29,24 @@ impl OutputCaptureOptions {
     #[inline]
     pub(in crate::command_runner) fn new(
         max_bytes: Option<usize>,
-        file: Option<File>,
-        file_path: Option<PathBuf>,
+        tee: Option<OutputTee>,
     ) -> Self {
-        let tee = file.map(|file| OutputTee {
-            writer: Box::new(file),
-            path: file_path.unwrap_or_default(),
-        });
         Self { max_bytes, tee }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::OutputCaptureOptions;
+    use super::OutputTee;
+
+    #[test]
+    fn new_accepts_a_writer_and_diagnostic_path() {
+        let tee = OutputTee::new(Box::new(Vec::<u8>::new()), PathBuf::from("stdout.log"));
+        let options = OutputCaptureOptions::new(Some(4), Some(tee));
+        assert_eq!(options.max_bytes, Some(4));
+        assert!(options.tee.is_some());
     }
 }
