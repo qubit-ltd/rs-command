@@ -69,13 +69,17 @@ impl CommandError {
         }
     }
 
-    /// Adds all cleanup failures observed after the primary error.
+    /// Adds cleanup failures and restores canonical resource order.
+    ///
+    /// Failures are ordered by process tree, direct child, wait, stdout,
+    /// stderr, and stdin. Relative order remains stable within each resource.
     #[inline]
     pub(crate) fn with_cleanup_failures(
         mut self,
         cleanup_failures: impl IntoIterator<Item = CommandCleanupFailure>,
     ) -> Self {
         self.cleanup_failures.extend(cleanup_failures);
+        self.cleanup_failures.sort_by_key(cleanup_failure_rank);
         self
     }
 
@@ -216,6 +220,22 @@ impl CommandError {
             CommandCleanupFailure::ChildTermination { source } => Some(source),
             _ => None,
         })
+    }
+}
+
+/// Returns the canonical cleanup resource rank.
+const fn cleanup_failure_rank(failure: &CommandCleanupFailure) -> u8 {
+    match failure {
+        CommandCleanupFailure::ProcessTreeTermination { .. } => 0,
+        CommandCleanupFailure::ChildTermination { .. } => 1,
+        CommandCleanupFailure::Wait { .. } => 2,
+        CommandCleanupFailure::StdoutCancellation { .. }
+        | CommandCleanupFailure::StdoutRead { .. }
+        | CommandCleanupFailure::StdoutWrite { .. } => 3,
+        CommandCleanupFailure::StderrCancellation { .. }
+        | CommandCleanupFailure::StderrRead { .. }
+        | CommandCleanupFailure::StderrWrite { .. } => 4,
+        CommandCleanupFailure::Stdin { .. } | CommandCleanupFailure::StdinCancellation { .. } => 5,
     }
 }
 
