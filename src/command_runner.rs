@@ -46,6 +46,7 @@ use crate::CommandRunOptions;
 use crate::OutputStream;
 use crate::command_run_options_parts::CommandRunOptionsParts;
 
+/// Marker used when a configured working directory is redacted from diagnostics.
 const REDACTED_PATH: &str = "<redacted path>";
 
 /// Takes a prepared child output pipe and maps an absent pipe to a runner
@@ -99,12 +100,12 @@ pub const DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM: usize = 1024 * 1024;
 /// # Examples
 ///
 /// ```rust
-/// #![deny(unused_must_use)]
-/// use std::time::Duration;
-/// use qubit_command::CommandRunner;
+/// use qubit_command::{Command, CommandRunner};
 ///
-/// let runner = CommandRunner::new(Duration::from_secs(10));
-/// let _ = runner;
+/// let output = CommandRunner::without_timeout()
+///     .run(Command::new("rustc").arg("--version"))
+///     .expect("rustc should run");
+/// assert!(!output.stdout().is_empty());
 /// ```
 #[derive(Clone)]
 #[must_use]
@@ -199,6 +200,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// `Some(duration)` when timeout handling is enabled, otherwise `None`.
+    #[must_use]
     #[inline(always)]
     pub const fn configured_timeout(&self) -> Option<Duration> {
         self.timeout
@@ -219,6 +221,7 @@ impl CommandRunner {
     /// Returns [`CommandError`] when command preparation, spawning, waiting,
     /// output collection, timeout handling, cancellation, output truncation,
     /// or exit-status validation fails.
+    #[must_use]
     pub fn run(&self, command: Command) -> Result<CommandOutput, CommandError> {
         self.run_with(command, CommandRunOptions::new())
     }
@@ -236,12 +239,13 @@ impl CommandRunner {
     ///
     /// # Errors
     ///
-    /// Returns a [`CommandError`](crate::CommandError) with kind
+    /// Returns a [`CommandError`] with kind
     /// [`CommandErrorKind::CancelledBeforeStart`](crate::CommandErrorKind::CancelledBeforeStart)
     /// when a configured
     /// cancellation handle has already been requested before command
     /// preparation, and maps all process, I/O, and timeout failures as
     /// described by [`CommandRunner::run`].
+    #[must_use]
     pub fn run_with(
         &self,
         command: Command,
@@ -437,6 +441,7 @@ impl CommandRunner {
     ///
     /// `Some(path)` when a default working directory is configured, otherwise
     /// `None` to inherit the current process working directory.
+    #[must_use]
     #[inline(always)]
     pub fn configured_working_directory(&self) -> Option<&Path> {
         self.working_directory.as_deref()
@@ -571,6 +576,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The complete configured diagnostic redaction policy.
+    #[must_use]
     #[inline(always)]
     pub const fn configured_diagnostic_redaction_policy(&self) -> &RedactionPolicy {
         &self.diagnostic_redaction_policy
@@ -579,7 +585,7 @@ impl CommandRunner {
     /// Replaces the complete policy used for command diagnostics and logs.
     ///
     /// The policy affects runner lifecycle logs and
-    /// [`CommandError::command`]. Standalone [`Command`](crate::Command)
+    /// [`CommandError::command`]. Standalone [`Command`]
     /// [`Debug`](std::fmt::Debug) output uses the process-wide global redaction
     /// configuration because it has no runner context.
     ///
@@ -601,6 +607,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// `Some(max_bytes)` when stdout capture is limited, otherwise `None`.
+    #[must_use]
     #[inline(always)]
     pub const fn configured_max_stdout_bytes(&self) -> Option<usize> {
         self.max_stdout_bytes
@@ -630,6 +637,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// `Some(max_bytes)` when stderr capture is limited, otherwise `None`.
+    #[must_use]
     #[inline(always)]
     pub const fn configured_max_stderr_bytes(&self) -> Option<usize> {
         self.max_stderr_bytes

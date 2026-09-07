@@ -23,7 +23,20 @@ fn redacted_debug_text(value: &impl fmt::Debug) -> String {
 
 /// Failure observed while cleaning up after a command's primary result was
 /// already determined.
+///
+/// # Examples
+///
+/// ```
+/// use qubit_command::{Command, CommandCleanupFailure, CommandRunner};
+///
+/// let error = CommandRunner::without_timeout()
+///     .run(Command::new("__qubit_command_example_missing_executable__"))
+///     .expect_err("the example executable should not exist");
+/// let cleanup: &[CommandCleanupFailure] = error.cleanup_failures();
+/// assert!(cleanup.is_empty());
+/// ```
 #[non_exhaustive]
+#[must_use]
 pub enum CommandCleanupFailure {
     /// Waiting for the final child status failed.
     Wait {

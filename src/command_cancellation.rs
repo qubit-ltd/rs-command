@@ -21,6 +21,22 @@ use std::sync::atomic::Ordering;
 /// terminate its managed process tree and return an error with kind
 /// [`CommandErrorKind::Cancelled`](crate::CommandErrorKind::Cancelled). The
 /// handle is intentionally one-shot and cannot be reset.
+///
+/// # Examples
+///
+/// ```
+/// use qubit_command::{Command, CommandCancellation, CommandRunOptions, CommandRunner};
+///
+/// let cancellation = CommandCancellation::new();
+/// let output = CommandRunner::without_timeout()
+///     .run_with(
+///         Command::new("rustc").arg("--version"),
+///         CommandRunOptions::new().cancellation(cancellation.clone()),
+///     )
+///     .expect("rustc should run");
+/// assert!(!output.stdout().is_empty());
+/// assert!(!cancellation.is_cancelled());
+/// ```
 #[derive(Clone, Debug, Default)]
 #[must_use]
 pub struct CommandCancellation {

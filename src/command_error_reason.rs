@@ -15,6 +15,8 @@ use std::time::Duration;
 use qubit_clock::TimeError;
 use qubit_redact::Redactor;
 
+use crate::OutputStream;
+
 /// Redacts one debug-only value before it crosses the diagnostic boundary.
 fn redacted_debug_text(value: &impl fmt::Debug) -> String {
     Redactor::strict()
@@ -23,10 +25,20 @@ fn redacted_debug_text(value: &impl fmt::Debug) -> String {
         .into_string()
 }
 
-use crate::OutputStream;
-
 /// Detailed primary reason carried by [`crate::CommandError`].
+///
+/// # Examples
+///
+/// ```
+/// use qubit_command::{Command, CommandErrorReason, CommandRunner};
+///
+/// let error = CommandRunner::without_timeout()
+///     .run(Command::new("__qubit_command_example_missing_executable__"))
+///     .expect_err("the example executable should not exist");
+/// assert!(matches!(error.reason(), CommandErrorReason::SpawnFailed { .. }));
+/// ```
 #[non_exhaustive]
+#[must_use]
 pub enum CommandErrorReason {
     /// The process could not be spawned.
     SpawnFailed {
