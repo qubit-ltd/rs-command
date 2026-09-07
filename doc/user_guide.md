@@ -133,7 +133,7 @@ spawning time are outside that duration.
 
 ```rust
 use std::time::Duration;
-use qubit_command::{Command, CommandRunner, CommandRunOptions};
+use qubit_command::{Command, CommandRunner};
 
 let result = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::new("long-running-tool"));
@@ -168,7 +168,7 @@ let result = worker.join().expect("command worker should not panic");
 ```
 
 If cancellation is observed before the final startup check, the result is a
-    `CommandError` whose `kind()` is `CommandErrorKind::CancelledBeforeStart`; no tee file is created
+`CommandError` whose `kind()` is `CommandErrorKind::CancelledBeforeStart`; no tee file is created
 or truncated and no child is spawned. The final check is the startup
 linearization point. Cancellation observed after that point is an in-flight
 request: the managed process tree is terminated and `kind()` is `Cancelled`,
@@ -176,6 +176,13 @@ with retained output when available. The handle is one-shot; calling `cancel()`
 more than once has no additional effect.
 
 For timeout- or cancellation-aware waiting, the configured timer must continue progressing while `run()` blocks synchronously. A Tokio timer must not depend on a current-thread runtime driven only by that same blocked thread.
+
+On Windows, the normal helper-cancellation path uses `CancelSynchronousIo` and
+joins each helper after the cancellation request. If that system request fails,
+the runner waits at most 100 ms for the helper to confirm that it stopped. When
+the confirmation window expires, the returned error retains a cancellation
+cleanup failure so the result stays bounded; the affected helper may remain
+alive until its pipe closes.
 
 ## Bounded and Large Output
 
@@ -238,7 +245,6 @@ needed; do not match its storage layout. The important categories are:
 | Stream I/O | `ReadOutputFailed`, `WriteInputFailed`, `OpenOutputFailed`, `WriteOutputFailed` | Check the named stream, file access, and retained output attached to the error when present. |
 | Time | `TimeFailed` | Check that the timer and clock share a valid monotonic domain and can progress while the caller is blocked. |
 | Policy result | `UnexpectedExit`, `OutputTruncated`, `TimedOut`, `Cancelled`, `CancelledBeforeStart` | Inspect status, configured policy, retained output, and stream-completion flags. |
-```
 
 For a policy error with output:
 
@@ -313,4 +319,4 @@ Use `sensitive_arg` for caller-known secrets and review redaction allow rules ca
 - [中文 README](../README.zh_CN.md)
 - [中文用户手册](user_guide.zh_CN.md)
 - [API documentation](https://docs.rs/qubit-command)
-- [Command-runner I/O lifecycle design](command-runner-io-lifecycle-design.md)
+- [Command-runner I/O lifecycle design](design.md)

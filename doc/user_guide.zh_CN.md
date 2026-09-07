@@ -94,7 +94,7 @@ assert_eq!(output.stdout_text()?, "HELLO");
 `Command` 可以继承 stdin、使用空 stdin、提供字节或从文件读取；也可以继承环境、添加或覆盖变量、删除变量，或者先清空继承环境再应用显式值：
 
 ```rust
-use qubit_command::{Command, CommandRunOptions, CommandRunner};
+use qubit_command::{Command, CommandRunner};
 
 let output = CommandRunner::new(std::time::Duration::from_secs(10)).run(
     Command::new("cat")
@@ -173,6 +173,11 @@ runner 会终止受管进程树，`kind()` 为 `Cancelled`，并在可用时保�
 
 启用超时或取消的等待时，timer 必须能在 `run()` 同步阻塞调用方线程时继续推进。Tokio timer 不应依赖只能由同一阻塞线程驱动的 current-thread runtime。
 
+在 Windows 上，正常的 helper 取消路径会使用 `CancelSynchronousIo`，并在取消请求后
+join 每个 helper。如果系统取消请求失败，runner 最多等待 100 ms 来确认 helper 已经
+停止。确认窗口耗尽后，为保证返回有界，错误会保留 cancellation cleanup failure；受
+影响的 helper 可能一直存活到管道关闭。
+
 ## 有界输出与大输出
 
 默认每个流的上限是 `DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM`，当前为 1 MiB。成功命令的保留输出被截断时，除非关闭该策略，否则会返回 `CommandError`，其 `kind()` 为 `CommandErrorKind::OutputTruncated`。
@@ -180,7 +185,7 @@ runner 会终止受管进程树，`kind()` 为 `Cancelled`，并在可用时保�
 对于大量日志，保持内存有界，并把每个流 tee 到文件：
 
 ```rust
-use qubit_command::{Command, CommandRunner};
+use qubit_command::{Command, CommandRunOptions, CommandRunner};
 
 let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .max_output_bytes(64 * 1024)
@@ -306,4 +311,4 @@ match CommandRunner::new(std::time::Duration::from_secs(10)).run(Command::new("t
 - [English README](../README.md)
 - [English user guide](user_guide.md)
 - [API 文档](https://docs.rs/qubit-command)
-- [命令 runner 的 I/O 生命周期设计](command-runner-io-lifecycle-design.md)
+- [命令 runner 的 I/O 生命周期设计](design.md)

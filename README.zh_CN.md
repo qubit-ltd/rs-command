@@ -51,6 +51,7 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 - `CommandError` 区分准备、启动、等待、输出、超时、取消、截断和非预期退出错误。当进程状态和流状态可以可靠组装时，超时、取消、截断、非预期退出、tee 写入、输出读取以及最终 stdin 写入错误会保留 `CommandOutput`；准备、线程启动、时钟和进程控制错误可能不携带输出。
 - `CommandCancellation` 是供应用自己的关闭或终端信号策略使用的一次性句柄。本 crate 不安装信号处理器。
 - 启用超时或取消管理时，runner 会通过 Unix process group 或 Windows Job Object 尝试终止进程树。
+- Windows 正常路径会使用 `CancelSynchronousIo`，确认并 join 每个 I/O helper。如果系统取消请求本身失败且 100 ms 的确认窗口耗尽，为保证返回有界，结果会保留 cancellation cleanup failure；受影响的 helper 可能一直存活到管道关闭。
 - 默认每个输出流最多在内存中保留 1 MiB。通过 tee 文件可以保留完整流，同时让内存中的结果保持有界。
 - 命令诊断和生命周期日志会遮盖敏感参数、环境变量、shell 内容和路径。捕获到的进程输出与 tee 文件仍是原始输出，需要由调用方自行处理。
 
@@ -69,7 +70,7 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 - [English user guide](doc/user_guide.md)
 - [中文用户手册](doc/user_guide.zh_CN.md)
 - [docs.rs API 文档](https://docs.rs/qubit-command)
-- [命令 runner 的 I/O 生命周期设计](doc/command-runner-io-lifecycle-design.md)
+- [命令 runner 的 I/O 生命周期设计](doc/design.md)
 - [English README](README.md)
 
 ## 测试
