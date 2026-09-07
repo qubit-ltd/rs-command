@@ -29,8 +29,16 @@ pub(in crate::command_runner) mod prepared_command;
 pub(in crate::command_runner) mod process_launcher;
 pub(in crate::command_runner) mod process_setup;
 pub(in crate::command_runner) mod process_termination_error;
+pub(in crate::command_runner) mod process_termination_outcome;
+pub(in crate::command_runner) mod process_terminator;
+#[cfg(test)]
+mod process_terminator_tests;
+pub(in crate::command_runner) mod run_event;
+#[cfg(test)]
+mod run_event_tests;
 pub(in crate::command_runner) mod running_command;
 pub(in crate::command_runner) mod starting_command;
 pub(in crate::command_runner) mod stdin_pipe;
 pub(in crate::command_runner) mod stdin_writer;
+pub(in crate::command_runner) mod stop_reason;
 pub(in crate::command_runner) mod wait_policy;
