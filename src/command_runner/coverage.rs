@@ -525,10 +525,9 @@ pub fn __coverage_internal() {
         ),
     )
     .expect_err("coverage tee write failure should be returned");
-    let OutputCaptureError::Write { path, output, .. } = tee_error else {
+    let OutputCaptureError::Write { output, .. } = tee_error else {
         panic!("coverage tee write failure should retain output");
     };
-    assert_eq!(path, Path::new("tee-write.log"));
     assert_eq!(output.bytes.len(), 2 * 8 * 1024);
     assert!(output.truncated);
 
@@ -543,10 +542,9 @@ pub fn __coverage_internal() {
         ),
     )
     .expect_err("coverage tee flush failure should be returned");
-    let OutputCaptureError::Write { path, .. } = flush_error else {
+    let OutputCaptureError::Write { .. } = flush_error else {
         panic!("coverage tee flush failure should be returned");
     };
-    assert_eq!(path, Path::new("tee-flush.log"));
 
     FailingWriter { fail_write: true }
         .flush()

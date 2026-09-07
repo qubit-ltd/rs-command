@@ -307,7 +307,10 @@ impl CommandRunner {
                 stdout,
                 OutputCaptureOptions::new(
                     self.max_stdout_bytes,
-                    OutputTee::from_parts(stdout_file.map(|file| Box::new(file) as _), stdout_file_path),
+                    OutputTee::from_parts(
+                        stdout_file.map(|file| Box::new(file) as _),
+                        stdout_file_path,
+                    ),
                 ),
             )
         })?;
@@ -317,7 +320,10 @@ impl CommandRunner {
                 stderr,
                 OutputCaptureOptions::new(
                     self.max_stderr_bytes,
-                    OutputTee::from_parts(stderr_file.map(|file| Box::new(file) as _), stderr_file_path),
+                    OutputTee::from_parts(
+                        stderr_file.map(|file| Box::new(file) as _),
+                        stderr_file_path,
+                    ),
                 ),
             )
         })?;
