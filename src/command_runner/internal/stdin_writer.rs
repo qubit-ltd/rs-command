@@ -13,7 +13,9 @@ use super::io_cancellation::IoCancellation;
 /// Stdin writer thread and its cancellation state.
 #[derive(Debug)]
 pub(in crate::command_runner) struct StdinWriter {
+    /// Join handle for the worker that writes the configured stdin bytes.
     pub(in crate::command_runner) join: thread::JoinHandle<io::Result<()>>,
+    /// Cancellation state used to interrupt the worker during cleanup.
     pub(in crate::command_runner) cancellation: IoCancellation,
 }
 
@@ -42,8 +44,9 @@ impl StdinWriter {
     }
 
     /// Requests cancellation of the worker thread.
-    pub(in crate::command_runner) fn cancel(&self) {
-        self.cancellation.cancel(&self.join);
+    #[must_use]
+    pub(in crate::command_runner) fn cancel(&self) -> io::Result<()> {
+        self.cancellation.cancel(&self.join)
     }
 
     /// Joins the worker thread and returns its write result.
@@ -51,10 +54,14 @@ impl StdinWriter {
     /// # Returns
     ///
     /// The worker result or a panic payload from the worker thread.
+    #[must_use]
     pub(in crate::command_runner) fn join(self) -> thread::Result<io::Result<()>> {
         self.join.join()
     }
 }
 
 /// Optional stdin writer helper.
+///
+/// `None` means the command inherits or discards stdin without a writer
+/// thread; `Some` owns the worker that must be cancelled and joined.
 pub(in crate::command_runner) type OptionalStdinWriter = Option<StdinWriter>;
