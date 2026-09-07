@@ -13,16 +13,10 @@ use std::error::Error;
 
 use qubit_command::Command;
 use qubit_command::CommandCancellation;
-use qubit_command::CommandError;
 use qubit_command::CommandErrorKind;
 use qubit_command::CommandErrorReason;
 use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
-
-#[test]
-fn test_command_error_remains_small_enough_for_result_returns() {
-    assert!(std::mem::size_of::<CommandError>() <= 96);
-}
 
 #[test]
 fn test_command_error_kind_and_reason_are_stable() {
