@@ -27,10 +27,7 @@ impl OutputCaptureOptions {
     ///
     /// Capture options moved into the output reader thread.
     #[inline]
-    pub(in crate::command_runner) fn new(
-        max_bytes: Option<usize>,
-        tee: Option<OutputTee>,
-    ) -> Self {
+    pub(in crate::command_runner) fn new(max_bytes: Option<usize>, tee: Option<OutputTee>) -> Self {
         Self { max_bytes, tee }
     }
 }
@@ -43,7 +40,7 @@ mod tests {
     use super::OutputTee;
 
     #[test]
-    fn new_accepts_a_writer_and_diagnostic_path() {
+    fn test_output_capture_options_new_accepts_a_writer_and_diagnostic_path() {
         let tee = OutputTee::new(Box::new(Vec::<u8>::new()), PathBuf::from("stdout.log"));
         let options = OutputCaptureOptions::new(Some(4), Some(tee));
         assert_eq!(options.max_bytes, Some(4));
