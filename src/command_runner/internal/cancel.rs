@@ -17,11 +17,15 @@ const ERROR_NOT_FOUND: i32 = 1168;
 /// Converts a `CancelSynchronousIo` return value into an I/O result.
 #[cfg(windows)]
 fn cancel_result(result: i32, error: io::Error) -> io::Result<()> {
-    if result != 0 || error.raw_os_error() == Some(ERROR_NOT_FOUND) {
-        Ok(())
-    } else {
-        Err(error)
-    }
+    if result != 0 { Ok(()) } else { Err(error) }
+}
+
+/// Returns whether cancellation found no pending synchronous operation.
+///
+/// This result is only benign after the caller confirms that the helper has
+/// observed cancellation and stopped within the bounded confirmation window.
+pub(super) fn cancellation_found_no_pending_io(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(ERROR_NOT_FOUND)
 }
 
 /// Requests cancellation of one synchronous I/O operation on Windows.
@@ -56,6 +60,7 @@ mod tests {
 
     use super::cancel_result;
     use super::cancel_synchronous_io;
+    use super::cancellation_found_no_pending_io;
 
     #[test]
     fn test_cancel_synchronous_io_returns_io_result() {
@@ -70,10 +75,15 @@ mod tests {
     }
 
     #[test]
-    fn test_cancel_result_accepts_error_not_found() {
+    fn test_cancel_result_requires_confirmation_for_error_not_found() {
         let result = cancel_result(0, io::Error::from_raw_os_error(1168));
 
-        assert!(result.is_ok());
+        assert_eq!(
+            result
+                .expect_err("ERROR_NOT_FOUND must reach bounded confirmation")
+                .raw_os_error(),
+            Some(1168)
+        );
     }
 
     #[test]
@@ -82,5 +92,15 @@ mod tests {
             .expect_err("other cancellation errors should be preserved");
 
         assert_eq!(result.raw_os_error(), Some(5));
+    }
+
+    #[test]
+    fn test_cancellation_found_no_pending_io_matches_only_error_not_found() {
+        assert!(cancellation_found_no_pending_io(
+            &io::Error::from_raw_os_error(1168)
+        ));
+        assert!(!cancellation_found_no_pending_io(
+            &io::Error::from_raw_os_error(5)
+        ));
     }
 }

@@ -45,7 +45,7 @@ impl OutputReader {
     }
 
     /// Requests cancellation of the worker thread.
-    #[must_use]
+    #[must_use = "handle output-reader cancellation failures"]
     pub(in crate::command_runner) fn cancel(&self) -> std::io::Result<()> {
         self.cancellation.cancel(&self.join)
     }
@@ -55,7 +55,7 @@ impl OutputReader {
     /// # Returns
     ///
     /// The worker result or a panic payload from the worker thread.
-    #[must_use]
+    #[must_use = "handle both thread and output capture failures"]
     pub(in crate::command_runner) fn join(
         self,
     ) -> thread::Result<Result<CapturedOutput, OutputCaptureError>> {

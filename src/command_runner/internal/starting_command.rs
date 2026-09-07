@@ -10,6 +10,7 @@
 use process_wrap::std::ChildWrapper;
 
 use super::command_io::CommandIo;
+use super::command_io::cancel_and_join_started_helpers;
 use super::managed_child_process::ManagedChildProcess;
 use super::output_reader::OutputReader;
 use super::stdin_writer::OptionalStdinWriter;
@@ -139,17 +140,17 @@ impl<'a> StartingCommand<'a> {
 
     /// Cancels and joins all started I/O helpers.
     fn join_helpers(&mut self) {
-        if let Some(reader) = self.stdout_reader.take() {
-            let _ = reader.cancel();
-            let _ = reader.join();
-        }
-        if let Some(reader) = self.stderr_reader.take() {
-            let _ = reader.cancel();
-            let _ = reader.join();
-        }
-        if let Some(writer) = self.stdin_writer.take() {
-            let _ = writer.cancel();
-            let _ = writer.join();
+        let failures = cancel_and_join_started_helpers(
+            self.command,
+            self.stdout_reader.take(),
+            self.stderr_reader.take(),
+            self.stdin_writer.take(),
+        );
+        for failure in failures {
+            log::error!(
+                "Command '{}' helper failed during startup cleanup: {failure:?}",
+                self.command
+            );
         }
     }
 }

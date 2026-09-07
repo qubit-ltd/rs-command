@@ -44,7 +44,7 @@ impl StdinWriter {
     }
 
     /// Requests cancellation of the worker thread.
-    #[must_use]
+    #[must_use = "handle stdin-writer cancellation failures"]
     pub(in crate::command_runner) fn cancel(&self) -> io::Result<()> {
         self.cancellation.cancel(&self.join)
     }
@@ -54,7 +54,7 @@ impl StdinWriter {
     /// # Returns
     ///
     /// The worker result or a panic payload from the worker thread.
-    #[must_use]
+    #[must_use = "handle both thread and stdin write failures"]
     pub(in crate::command_runner) fn join(self) -> thread::Result<io::Result<()>> {
         self.join.join()
     }
