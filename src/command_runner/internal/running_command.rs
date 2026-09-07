@@ -22,6 +22,7 @@ use super::run_event::RunEvent;
 use super::stop_reason::StopReason;
 use super::wait_policy::next_sleep;
 use crate::CommandCancellation;
+use crate::CommandCleanupFailure;
 use crate::CommandError;
 
 /// Maximum delay before a cancellation-aware wait observes cancellation.
@@ -287,15 +288,32 @@ impl RunningCommand {
                 .with_cleanup_failures(outcome.cleanup_failures);
             return Err(self.finish_without_status(error));
         }
-        let finished = match self.complete_after_termination(status) {
+        let command_text = self.command_text.clone();
+        let (finished, io_cleanup_failures) = self.complete_after_termination(status);
+        let finished = match finished {
             Ok(finished) => finished,
             Err(error) => {
-                return Err(error.with_cleanup_failures(outcome.cleanup_failures));
+                if matches!(
+                    reason,
+                    StopReason::TimeFailed {
+                        status: Some(_),
+                        ..
+                    }
+                ) {
+                    return Err(reason
+                        .into_error_after_finalize(command_text, error)
+                        .with_cleanup_failures(outcome.cleanup_failures)
+                        .with_cleanup_failures(io_cleanup_failures));
+                }
+                return Err(error
+                    .with_cleanup_failures(outcome.cleanup_failures)
+                    .with_cleanup_failures(io_cleanup_failures));
             }
         };
         Err(reason
             .into_primary_error(finished.command_text, Some(Box::new(finished.output)))
-            .with_cleanup_failures(outcome.cleanup_failures))
+            .with_cleanup_failures(outcome.cleanup_failures)
+            .with_cleanup_failures(io_cleanup_failures))
     }
 
     /// Completes a known-exited command by joining all I/O helpers.
@@ -346,7 +364,10 @@ impl RunningCommand {
     fn complete_after_termination(
         self,
         status: ExitStatus,
-    ) -> Result<FinishedCommand, CommandError> {
+    ) -> (
+        Result<FinishedCommand, CommandError>,
+        Vec<CommandCleanupFailure>,
+    ) {
         let Self {
             command_text,
             io,
@@ -354,13 +375,16 @@ impl RunningCommand {
             timer,
             ..
         } = self;
-        let output = io.cancel_and_collect(&command_text, status, move || {
+        let (output, cleanup_failures) = io.cancel_and_collect(&command_text, status, move || {
             timer.clock().now().duration_since(started_at)
-        })?;
-        Ok(FinishedCommand {
-            command_text,
-            output,
-        })
+        });
+        (
+            output.map(|output| FinishedCommand {
+                command_text,
+                output,
+            }),
+            cleanup_failures,
+        )
     }
 
     /// Returns elapsed time in the injected timer's clock domain.

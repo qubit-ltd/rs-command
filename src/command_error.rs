@@ -83,6 +83,37 @@ impl CommandError {
         }
     }
 
+    /// Converts this error and its cleanup details into cleanup failures.
+    ///
+    /// The primary reason is included first when it represents an I/O helper
+    /// failure. Existing cleanup failures retain their original order.
+    pub(crate) fn into_cleanup_failures(self) -> Vec<CommandCleanupFailure> {
+        let Self {
+            reason,
+            cleanup_failures,
+            ..
+        } = self;
+        let primary = match *reason {
+            CommandErrorReason::WriteInputFailed { source } => {
+                Some(CommandCleanupFailure::Stdin { source })
+            }
+            CommandErrorReason::ReadOutputFailed { stream, source } => match stream {
+                OutputStream::Stdout => Some(CommandCleanupFailure::StdoutRead { source }),
+                OutputStream::Stderr => Some(CommandCleanupFailure::StderrRead { source }),
+            },
+            CommandErrorReason::WriteOutputFailed {
+                stream,
+                path,
+                source,
+            } => match stream {
+                OutputStream::Stdout => Some(CommandCleanupFailure::StdoutWrite { path, source }),
+                OutputStream::Stderr => Some(CommandCleanupFailure::StderrWrite { path, source }),
+            },
+            _ => None,
+        };
+        primary.into_iter().chain(cleanup_failures).collect()
+    }
+
     /// Returns the redacted command representation.
     #[must_use]
     #[inline(always)]
