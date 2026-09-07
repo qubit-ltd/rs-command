@@ -30,6 +30,8 @@ pub struct CommandError {
     cleanup_failures: Vec<CommandCleanupFailure>,
 }
 
+const _: () = assert!(std::mem::size_of::<CommandError>() <= 96);
+
 impl fmt::Debug for CommandError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
