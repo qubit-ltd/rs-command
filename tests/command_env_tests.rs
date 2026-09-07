@@ -30,11 +30,11 @@ fn test_command_env_readding_removed_key_clears_removal() {
 #[test]
 fn test_command_debug_stages_named_adapter_results() {
     let redactor = Redactor::new(RedactionPolicy::default());
-    let mut batch = redactor.batch();
+    let mut batch = redactor.diagnostic_batch();
     let argv = batch.redact_argv([ArgvItem::plain(OsStr::new("x"))]);
     let env = batch.redact_env_pairs(std::iter::empty());
     let unset = batch.redact_argv([ArgvItem::plain(OsStr::new("REMOVED"))]);
-    let output = batch.finish_for_diagnostics("<redaction incomplete>");
+    let output = batch.finish_with_marker("<redaction incomplete>");
     assert_ne!(output.text(argv).as_str(), "<redaction incomplete>");
     assert_ne!(output.text(env).as_str(), "<redaction incomplete>");
     assert_ne!(output.text(unset).as_str(), "<redaction incomplete>");
