@@ -1093,12 +1093,20 @@ mod unix {
             .expect_err("unexpected exit should be rejected");
 
         assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::UnexpectedExit {
+                exit_code: Some(7),
+                expected,
+            } if expected == &[0]
+        ));
         assert!(
             error
                 .output()
                 .expect("unexpected exit should expose output")
                 .stdout_truncated()
         );
+        assert!(error.cleanup_failures().is_empty());
     }
 
     #[test]
