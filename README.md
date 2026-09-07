@@ -15,7 +15,7 @@ The crate is published as `qubit-command` and requires Rust 1.94 or newer:
 
 ```toml
 [dependencies]
-qubit-command = "0.6"
+qubit-command = "0.7"
 ```
 
 ## Quick Start
@@ -51,6 +51,7 @@ The library is useful when the caller needs a repeatable policy around an extern
 - `CommandError` distinguishes preparation, spawn, wait, output, timeout, cancellation, truncation, and unexpected-exit failures. Timeout, cancellation, truncation, unexpected-exit, tee-write, output-read, and final stdin-write errors retain `CommandOutput` when the process status and stream state can be assembled; preparation, thread-start, clock, and process-control errors may not.
 - `CommandCancellation` is a one-shot handle for an application-owned shutdown or terminal-signal policy. The crate does not install signal handlers.
 - When timeout or cancellation management is enabled, the runner attempts to terminate the process tree using a Unix process group or a Windows Job Object.
+- On the normal Windows path, `CancelSynchronousIo` lets the runner confirm and join each I/O helper. If the system cancellation request itself fails and the 100 ms confirmation window expires, the bounded result retains a cancellation cleanup failure; the affected helper may remain alive until its pipe closes.
 - Each output stream is limited to 1 MiB in memory by default. Tee files can retain the complete stream while the in-memory result stays bounded.
 - Command diagnostics and lifecycle logs redact sensitive argument, environment, shell, and path values. Captured process output and tee files remain raw output and must be handled by the caller.
 
@@ -69,7 +70,7 @@ Important boundaries:
 - [English user guide](doc/user_guide.md)
 - [中文用户手册](doc/user_guide.zh_CN.md)
 - [API documentation on docs.rs](https://docs.rs/qubit-command)
-- [Command-runner I/O lifecycle design](doc/command-runner-io-lifecycle-design.md)
+- [Command-runner I/O lifecycle design](doc/design.md)
 - [中文 README](README.zh_CN.md)
 
 ## Testing

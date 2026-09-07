@@ -40,17 +40,13 @@ fn redacted_debug_text(value: &impl fmt::Debug) -> String {
 ///
 /// # Examples
 ///
-/// ```compile_fail
-/// #![deny(unused_must_use)]
+/// ```
 /// use qubit_command::{Command, CommandOutput, CommandRunner};
 ///
-/// fn run_command() -> CommandOutput {
-///     CommandRunner::new(std::time::Duration::from_secs(10))
-///         .run(Command::new("true"))
-///         .unwrap()
-/// }
-///
-/// run_command();
+/// let output: CommandOutput = CommandRunner::without_timeout()
+///     .run(Command::new("rustc").arg("--version"))
+///     .expect("rustc should run");
+/// assert!(!output.stdout().is_empty());
 /// ```
 #[derive(Clone, PartialEq, Eq)]
 #[must_use]
@@ -142,6 +138,7 @@ impl CommandOutput {
     /// `Some(code)` when the platform reports a numeric process exit code, or
     /// `None` when the process ended in a way that does not map to a numeric
     /// code.
+    #[must_use]
     #[inline(always)]
     pub fn exit_code(&self) -> Option<i32> {
         self.status.code()
@@ -165,6 +162,7 @@ impl CommandOutput {
     /// `Some(signal)` when the process was terminated by a signal, otherwise
     /// `None`.
     #[cfg(unix)]
+    #[must_use]
     #[inline(always)]
     pub fn termination_signal(&self) -> Option<i32> {
         self.status.signal()

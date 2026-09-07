@@ -19,16 +19,30 @@ use crate::OutputStream;
 
 /// Error returned while preparing, spawning, waiting for, or collecting a
 /// command.
+///
+/// # Examples
+///
+/// ```
+/// use qubit_command::{Command, CommandError, CommandRunner};
+///
+/// let error: CommandError = CommandRunner::without_timeout()
+///     .run(Command::new("__qubit_command_example_missing_executable__"))
+///     .expect_err("the example executable should not exist");
+/// assert!(error.output().is_none());
+/// ```
+#[must_use]
 pub struct CommandError {
     /// Human-readable, redacted command representation.
     command: String,
     /// Primary failure reason.
-    reason: CommandErrorReason,
+    reason: Box<CommandErrorReason>,
     /// Output retained before the primary failure, when available.
     output: Option<Box<CommandOutput>>,
     /// Failures observed while cleaning up after the primary failure.
     cleanup_failures: Vec<CommandCleanupFailure>,
 }
+
+const _: () = assert!(std::mem::size_of::<CommandError>() <= 96);
 
 impl fmt::Debug for CommandError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -49,25 +63,29 @@ impl CommandError {
     ) -> Self {
         Self {
             command: command.into(),
-            reason,
+            reason: Box::new(reason),
             output,
             cleanup_failures: Vec::new(),
         }
     }
 
-    /// Adds all cleanup failures observed after the primary error.
+    /// Adds cleanup failures and restores canonical resource order.
+    ///
+    /// Failures are ordered by process tree, direct child, wait, stdout,
+    /// stderr, and stdin. Relative order remains stable within each resource.
     #[inline]
     pub(crate) fn with_cleanup_failures(
         mut self,
         cleanup_failures: impl IntoIterator<Item = CommandCleanupFailure>,
     ) -> Self {
         self.cleanup_failures.extend(cleanup_failures);
+        self.cleanup_failures.sort_by_key(cleanup_failure_rank);
         self
     }
 
     /// Converts a helper error into its cleanup representation.
     pub(crate) fn into_cleanup_failure(self) -> Option<CommandCleanupFailure> {
-        match self.reason {
+        match *self.reason {
             CommandErrorReason::WriteInputFailed { source } => Some(CommandCleanupFailure::Stdin { source }),
             CommandErrorReason::ReadOutputFailed { stream, source } => match stream {
                 OutputStream::Stdout => Some(CommandCleanupFailure::StdoutRead { source }),
@@ -81,6 +99,31 @@ impl CommandError {
         }
     }
 
+    /// Converts this error and its cleanup details into cleanup failures.
+    ///
+    /// The primary reason is included first when it represents an I/O helper
+    /// failure. Existing cleanup failures retain their original order.
+    pub(crate) fn into_cleanup_failures(self) -> Vec<CommandCleanupFailure> {
+        let Self {
+            reason,
+            cleanup_failures,
+            ..
+        } = self;
+        let primary = match *reason {
+            CommandErrorReason::WriteInputFailed { source } => Some(CommandCleanupFailure::Stdin { source }),
+            CommandErrorReason::ReadOutputFailed { stream, source } => match stream {
+                OutputStream::Stdout => Some(CommandCleanupFailure::StdoutRead { source }),
+                OutputStream::Stderr => Some(CommandCleanupFailure::StderrRead { source }),
+            },
+            CommandErrorReason::WriteOutputFailed { stream, path, source } => match stream {
+                OutputStream::Stdout => Some(CommandCleanupFailure::StdoutWrite { path, source }),
+                OutputStream::Stderr => Some(CommandCleanupFailure::StderrWrite { path, source }),
+            },
+            _ => None,
+        };
+        primary.into_iter().chain(cleanup_failures).collect()
+    }
+
     /// Returns the redacted command representation.
     #[must_use]
     #[inline(always)]
@@ -89,17 +132,15 @@ impl CommandError {
     }
 
     /// Returns the stable, data-free error category.
-    #[must_use]
     #[inline(always)]
     pub fn kind(&self) -> CommandErrorKind {
-        (&self.reason).into()
+        self.reason.as_ref().into()
     }
 
     /// Returns the detailed primary failure reason.
-    #[must_use]
     #[inline(always)]
     pub fn reason(&self) -> &CommandErrorReason {
-        &self.reason
+        self.reason.as_ref()
     }
 
     /// Returns captured output retained by the primary failure.
@@ -117,7 +158,6 @@ impl CommandError {
     }
 
     /// Returns every cleanup failure observed after the primary failure.
-    #[must_use]
     #[inline(always)]
     pub fn cleanup_failures(&self) -> &[CommandCleanupFailure] {
         &self.cleanup_failures
@@ -127,7 +167,7 @@ impl CommandError {
     #[must_use]
     #[inline]
     pub fn exit_code(&self) -> Option<i32> {
-        match &self.reason {
+        match self.reason.as_ref() {
             CommandErrorReason::UnexpectedExit { exit_code, .. } => *exit_code,
             _ => self.output.as_deref().and_then(CommandOutput::exit_code),
         }
@@ -148,7 +188,7 @@ impl CommandError {
         }
         | CommandErrorReason::CancelFailed {
             process_tree_source, ..
-        } = &self.reason
+        } = self.reason.as_ref()
         {
             return Some(process_tree_source);
         }
@@ -163,7 +203,7 @@ impl CommandError {
     #[must_use]
     pub fn child_source(&self) -> Option<&io::Error> {
         if let CommandErrorReason::KillFailed { child_source, .. }
-        | CommandErrorReason::CancelFailed { child_source, .. } = &self.reason
+        | CommandErrorReason::CancelFailed { child_source, .. } = self.reason.as_ref()
         {
             return Some(child_source);
         }
@@ -174,10 +214,26 @@ impl CommandError {
     }
 }
 
+/// Returns the canonical cleanup resource rank.
+const fn cleanup_failure_rank(failure: &CommandCleanupFailure) -> u8 {
+    match failure {
+        CommandCleanupFailure::ProcessTreeTermination { .. } => 0,
+        CommandCleanupFailure::ChildTermination { .. } => 1,
+        CommandCleanupFailure::Wait { .. } => 2,
+        CommandCleanupFailure::StdoutCancellation { .. }
+        | CommandCleanupFailure::StdoutRead { .. }
+        | CommandCleanupFailure::StdoutWrite { .. } => 3,
+        CommandCleanupFailure::StderrCancellation { .. }
+        | CommandCleanupFailure::StderrRead { .. }
+        | CommandCleanupFailure::StderrWrite { .. } => 4,
+        CommandCleanupFailure::Stdin { .. } | CommandCleanupFailure::StdinCancellation { .. } => 5,
+    }
+}
+
 impl fmt::Display for CommandError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let command = &self.command;
-        match (&self.reason, self.output.as_deref()) {
+        match (self.reason.as_ref(), self.output.as_deref()) {
             (CommandErrorReason::SpawnFailed { source }, _) => {
                 write!(formatter, "failed to spawn command `{command}`: {source}")
             }
@@ -288,7 +344,7 @@ impl fmt::Display for CommandError {
 
 impl Error for CommandError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match &self.reason {
+        match self.reason.as_ref() {
             CommandErrorReason::SpawnFailed { source }
             | CommandErrorReason::WaitFailed { source }
             | CommandErrorReason::ReadOutputFailed { source, .. }
@@ -346,5 +402,7 @@ fn unexpected_exit_detail(exit_code: &Option<i32>, output: Option<&CommandOutput
     if let Some(signal) = output.and_then(CommandOutput::termination_signal) {
         return format!("signal {signal}");
     }
+    #[cfg(not(unix))]
+    let _ = output;
     format!("code {exit_code:?}")
 }

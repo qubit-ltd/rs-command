@@ -5,7 +5,6 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-// qubit-style: allow coverage-cfg
 use std::fmt;
 use std::io;
 use std::path::Path;
@@ -18,18 +17,14 @@ use qubit_clock::Timer;
 use qubit_redact::RedactionPolicy;
 use qubit_redact::Redactor;
 
-#[cfg(coverage)]
-mod coverage;
 mod internal;
-#[cfg(coverage)]
-#[doc(hidden)]
-pub use coverage::__coverage_internal;
 use internal::error_mapping::output_pipe_error;
 use internal::error_mapping::spawn_failed;
 use internal::finished_command::FinishedCommand;
 use internal::output_capture_options::OutputCaptureOptions;
 use internal::output_collector::read_output_stream;
 use internal::output_reader::OutputReader;
+use internal::output_tee::OutputTee;
 use internal::prepared_command::PreparedCommand;
 use internal::process_launcher::spawn_child;
 use internal::running_command::RunningCommand;
@@ -45,6 +40,8 @@ use crate::CommandRunOptions;
 use crate::OutputStream;
 use crate::command_run_options_parts::CommandRunOptionsParts;
 
+/// Marker used when a configured working directory is redacted from
+/// diagnostics.
 const REDACTED_PATH: &str = "<redacted path>";
 
 /// Takes a prepared child output pipe and maps an absent pipe to a runner
@@ -73,6 +70,53 @@ fn start_output_reader(
     })
 }
 
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::start_output_reader;
+    use super::take_output_pipe;
+    use crate::CommandErrorKind;
+    use crate::CommandErrorReason;
+    use crate::OutputStream;
+
+    #[test]
+    fn test_take_output_pipe_reports_each_missing_stream() {
+        for stream in [OutputStream::Stdout, OutputStream::Stderr] {
+            let error =
+                take_output_pipe::<u8>("command", stream, || None).expect_err("missing output pipe should be reported");
+
+            assert_eq!(error.kind(), CommandErrorKind::ReadOutputFailed);
+            assert!(matches!(
+                error.reason(),
+                CommandErrorReason::ReadOutputFailed {
+                    stream: actual,
+                    ..
+                } if *actual == stream
+            ));
+        }
+    }
+
+    #[test]
+    fn test_start_output_reader_maps_each_stream_spawn_failure() {
+        for stream in [OutputStream::Stdout, OutputStream::Stderr] {
+            let error = start_output_reader("command", stream, || {
+                Err(io::Error::other("injected output worker spawn failure"))
+            })
+            .expect_err("output worker spawn failure should be mapped");
+
+            assert_eq!(error.kind(), CommandErrorKind::StartOutputThreadFailed);
+            assert!(matches!(
+                error.reason(),
+                CommandErrorReason::StartOutputThreadFailed {
+                    stream: actual,
+                    ..
+                } if *actual == stream
+            ));
+        }
+    }
+}
+
 /// Default one-mebibyte in-memory capture limit applied to each output stream.
 ///
 /// Use [`CommandRunner::max_output_bytes`] to select a different per-stream
@@ -98,12 +142,12 @@ pub const DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM: usize = 1024 * 1024;
 /// # Examples
 ///
 /// ```rust
-/// #![deny(unused_must_use)]
-/// use std::time::Duration;
-/// use qubit_command::CommandRunner;
+/// use qubit_command::{Command, CommandRunner};
 ///
-/// let runner = CommandRunner::new(Duration::from_secs(10));
-/// let _ = runner;
+/// let output = CommandRunner::without_timeout()
+///     .run(Command::new("rustc").arg("--version"))
+///     .expect("rustc should run");
+/// assert!(!output.stdout().is_empty());
 /// ```
 #[derive(Clone)]
 #[must_use]
@@ -195,6 +239,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// `Some(duration)` when timeout handling is enabled, otherwise `None`.
+    #[must_use]
     #[inline(always)]
     pub const fn configured_timeout(&self) -> Option<Duration> {
         self.timeout
@@ -232,7 +277,7 @@ impl CommandRunner {
     ///
     /// # Errors
     ///
-    /// Returns a [`CommandError`](crate::CommandError) with kind
+    /// Returns a [`CommandError`] with kind
     /// [`CommandErrorKind::CancelledBeforeStart`](crate::CommandErrorKind::CancelledBeforeStart)
     /// when a configured
     /// cancellation handle has already been requested before command
@@ -293,14 +338,20 @@ impl CommandRunner {
         let stdout_reader = start_output_reader(&command_text, OutputStream::Stdout, || {
             read_output_stream(
                 stdout,
-                OutputCaptureOptions::new(self.max_stdout_bytes, stdout_file, stdout_file_path),
+                OutputCaptureOptions::new(
+                    self.max_stdout_bytes,
+                    OutputTee::from_parts(stdout_file.map(|file| Box::new(file) as _), stdout_file_path),
+                ),
             )
         })?;
         starting_command.set_stdout_reader(stdout_reader);
         let stderr_reader = start_output_reader(&command_text, OutputStream::Stderr, || {
             read_output_stream(
                 stderr,
-                OutputCaptureOptions::new(self.max_stderr_bytes, stderr_file, stderr_file_path),
+                OutputCaptureOptions::new(
+                    self.max_stderr_bytes,
+                    OutputTee::from_parts(stderr_file.map(|file| Box::new(file) as _), stderr_file_path),
+                ),
             )
         })?;
         starting_command.set_stderr_reader(stderr_reader);
@@ -400,6 +451,7 @@ impl CommandRunner {
     ///
     /// `Some(path)` when a default working directory is configured, otherwise
     /// `None` to inherit the current process working directory.
+    #[must_use]
     #[inline(always)]
     pub fn configured_working_directory(&self) -> Option<&Path> {
         self.working_directory.as_deref()
@@ -534,6 +586,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The complete configured diagnostic redaction policy.
+    #[must_use]
     #[inline(always)]
     pub const fn configured_diagnostic_redaction_policy(&self) -> &RedactionPolicy {
         &self.diagnostic_redaction_policy
@@ -542,7 +595,7 @@ impl CommandRunner {
     /// Replaces the complete policy used for command diagnostics and logs.
     ///
     /// The policy affects runner lifecycle logs and
-    /// [`CommandError::command`]. Standalone [`Command`](crate::Command)
+    /// [`CommandError::command`]. Standalone [`Command`]
     /// [`Debug`](std::fmt::Debug) output uses the process-wide global redaction
     /// configuration because it has no runner context.
     ///
@@ -564,6 +617,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// `Some(max_bytes)` when stdout capture is limited, otherwise `None`.
+    #[must_use]
     #[inline(always)]
     pub const fn configured_max_stdout_bytes(&self) -> Option<usize> {
         self.max_stdout_bytes
@@ -593,6 +647,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// `Some(max_bytes)` when stderr capture is limited, otherwise `None`.
+    #[must_use]
     #[inline(always)]
     pub const fn configured_max_stderr_bytes(&self) -> Option<usize> {
         self.max_stderr_bytes

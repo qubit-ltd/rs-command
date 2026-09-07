@@ -23,7 +23,20 @@ fn redacted_debug_text(value: &impl fmt::Debug) -> String {
 
 /// Failure observed while cleaning up after a command's primary result was
 /// already determined.
+///
+/// # Examples
+///
+/// ```
+/// use qubit_command::{Command, CommandCleanupFailure, CommandRunner};
+///
+/// let error = CommandRunner::without_timeout()
+///     .run(Command::new("__qubit_command_example_missing_executable__"))
+///     .expect_err("the example executable should not exist");
+/// let cleanup: &[CommandCleanupFailure] = error.cleanup_failures();
+/// assert!(cleanup.is_empty());
+/// ```
 #[non_exhaustive]
+#[must_use]
 pub enum CommandCleanupFailure {
     /// Waiting for the final child status failed.
     Wait {
@@ -43,6 +56,21 @@ pub enum CommandCleanupFailure {
     /// The stdin helper failed during cleanup.
     Stdin {
         /// Stdin helper cleanup error.
+        source: io::Error,
+    },
+    /// Cancelling the stdin helper failed during cleanup.
+    StdinCancellation {
+        /// Stdin helper cancellation error.
+        source: io::Error,
+    },
+    /// Cancelling the stdout reader failed during cleanup.
+    StdoutCancellation {
+        /// Stdout reader cancellation error.
+        source: io::Error,
+    },
+    /// Cancelling the stderr reader failed during cleanup.
+    StderrCancellation {
+        /// Stderr reader cancellation error.
         source: io::Error,
     },
     /// The stdout reader failed during cleanup.
@@ -84,6 +112,18 @@ impl fmt::Debug for CommandCleanupFailure {
                 .field("source", source)
                 .finish(),
             Self::Stdin { source } => formatter.debug_struct("Stdin").field("source", source).finish(),
+            Self::StdinCancellation { source } => formatter
+                .debug_struct("StdinCancellation")
+                .field("source", source)
+                .finish(),
+            Self::StdoutCancellation { source } => formatter
+                .debug_struct("StdoutCancellation")
+                .field("source", source)
+                .finish(),
+            Self::StderrCancellation { source } => formatter
+                .debug_struct("StderrCancellation")
+                .field("source", source)
+                .finish(),
             Self::StdoutRead { source } => formatter.debug_struct("StdoutRead").field("source", source).finish(),
             Self::StdoutWrite { path, source } => formatter
                 .debug_struct("StdoutWrite")
