@@ -14,7 +14,9 @@ use super::output_capture_error::OutputCaptureError;
 /// Output reader thread result type.
 #[derive(Debug)]
 pub(in crate::command_runner) struct OutputReader {
+    /// Join handle for the worker that drains one child output pipe.
     join: thread::JoinHandle<Result<CapturedOutput, OutputCaptureError>>,
+    /// Cancellation state used to interrupt the worker during cleanup.
     cancellation: IoCancellation,
 }
 
@@ -43,8 +45,9 @@ impl OutputReader {
     }
 
     /// Requests cancellation of the worker thread.
-    pub(in crate::command_runner) fn cancel(&self) {
-        self.cancellation.cancel(&self.join);
+    #[must_use = "handle output-reader cancellation failures"]
+    pub(in crate::command_runner) fn cancel(&self) -> std::io::Result<()> {
+        self.cancellation.cancel(&self.join)
     }
 
     /// Joins the worker thread and returns its capture result.
@@ -52,6 +55,7 @@ impl OutputReader {
     /// # Returns
     ///
     /// The worker result or a panic payload from the worker thread.
+    #[must_use = "handle both thread and output capture failures"]
     pub(in crate::command_runner) fn join(self) -> thread::Result<Result<CapturedOutput, OutputCaptureError>> {
         self.join.join()
     }

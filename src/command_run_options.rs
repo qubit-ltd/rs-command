@@ -17,6 +17,18 @@ use crate::command_run_options_parts::CommandRunOptionsParts;
 /// process-level defaults (timeout, logging, capture policy, etc.). This type
 /// carries run-level configuration that must not be shared across concurrent
 /// runs, such as cancellation and tee destinations.
+///
+/// # Examples
+///
+/// ```
+/// use qubit_command::{Command, CommandRunOptions, CommandRunner};
+///
+/// let options = CommandRunOptions::new();
+/// let output = CommandRunner::without_timeout()
+///     .run_with(Command::new("rustc").arg("--version"), options)
+///     .expect("rustc should run");
+/// assert!(!output.stdout().is_empty());
+/// ```
 #[derive(Clone, Default)]
 #[must_use]
 pub struct CommandRunOptions {
@@ -55,6 +67,7 @@ impl CommandRunOptions {
     ///
     /// Clone this handle before passing it to multiple runs that should share a
     /// single cancellation request channel.
+    #[inline(always)]
     pub fn cancellation(mut self, cancellation: CommandCancellation) -> Self {
         self.cancellation = Some(cancellation);
         self
@@ -91,19 +104,22 @@ impl CommandRunOptions {
     }
 
     /// Returns configured cancellation, if any.
-    #[inline]
+    #[must_use]
+    #[inline(always)]
     pub fn configured_cancellation(&self) -> Option<&CommandCancellation> {
         self.cancellation.as_ref()
     }
 
     /// Returns the configured stdout tee path, if any.
-    #[inline]
+    #[must_use]
+    #[inline(always)]
     pub fn configured_stdout_file(&self) -> Option<&Path> {
         self.stdout_file.as_deref()
     }
 
     /// Returns the configured stderr tee path, if any.
-    #[inline]
+    #[must_use]
+    #[inline(always)]
     pub fn configured_stderr_file(&self) -> Option<&Path> {
         self.stderr_file.as_deref()
     }

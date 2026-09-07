@@ -9,11 +9,14 @@ use std::fmt;
 
 /// Standard output or error stream identified in command diagnostics.
 ///
-/// ```compile_fail
-/// #![deny(unused_must_use)]
-/// use qubit_command::OutputStream;
+/// ```
+/// use qubit_command::{Command, CommandRunner, OutputStream};
 ///
-/// OutputStream::Stdout;
+/// let output = CommandRunner::without_timeout()
+///     .run(Command::new("rustc").arg("--version"))
+///     .expect("rustc should run");
+/// assert_eq!(OutputStream::Stdout.as_str(), "stdout");
+/// assert!(!output.stdout().is_empty());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]

@@ -7,10 +7,29 @@
 // =============================================================================
 //! Platform support for interrupting synchronous helper-thread I/O.
 
+use std::io;
 use std::thread::JoinHandle;
 
+/// Windows error returned when no synchronous I/O operation is pending.
+#[cfg(windows)]
+const ERROR_NOT_FOUND: i32 = 1168;
+
+/// Converts a `CancelSynchronousIo` return value into an I/O result.
+#[cfg(windows)]
+fn cancel_result(result: i32, error: io::Error) -> io::Result<()> {
+    if result != 0 { Ok(()) } else { Err(error) }
+}
+
+/// Returns whether cancellation found no pending synchronous operation.
+///
+/// This result is only benign after the caller confirms that the helper has
+/// observed cancellation and stopped within the bounded confirmation window.
+pub(super) fn cancellation_found_no_pending_io(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(ERROR_NOT_FOUND)
+}
+
 /// Requests cancellation of one synchronous I/O operation on Windows.
-pub(in crate::command_runner) fn cancel_synchronous_io<T>(handle: &JoinHandle<T>) {
+pub(in crate::command_runner) fn cancel_synchronous_io<T>(handle: &JoinHandle<T>) -> io::Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::io::AsRawHandle;
@@ -22,12 +41,60 @@ pub(in crate::command_runner) fn cancel_synchronous_io<T>(handle: &JoinHandle<T>
 
         // SAFETY: the handle belongs to this still-live helper thread. The
         // API only interrupts its current synchronous I/O call.
-        unsafe {
-            let _ = CancelSynchronousIo(handle.as_raw_handle().cast());
-        }
+        let result = unsafe { CancelSynchronousIo(handle.as_raw_handle().cast()) };
+        cancel_result(result, io::Error::last_os_error())
     }
     #[cfg(not(windows))]
     {
         let _ = handle;
+        Ok(())
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use std::io;
+    use std::thread::JoinHandle;
+
+    use super::cancel_result;
+    use super::cancel_synchronous_io;
+    use super::cancellation_found_no_pending_io;
+
+    #[test]
+    fn test_cancel_synchronous_io_returns_io_result() {
+        let _cancel: fn(&JoinHandle<()>) -> io::Result<()> = cancel_synchronous_io;
+    }
+
+    #[test]
+    fn test_cancel_result_accepts_nonzero_result() {
+        let result = cancel_result(1, io::Error::from_raw_os_error(5));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cancel_result_requires_confirmation_for_error_not_found() {
+        let result = cancel_result(0, io::Error::from_raw_os_error(1168));
+
+        assert_eq!(
+            result
+                .expect_err("ERROR_NOT_FOUND must reach bounded confirmation")
+                .raw_os_error(),
+            Some(1168)
+        );
+    }
+
+    #[test]
+    fn test_cancel_result_preserves_other_errors() {
+        let result = cancel_result(0, io::Error::from_raw_os_error(5))
+            .expect_err("other cancellation errors should be preserved");
+
+        assert_eq!(result.raw_os_error(), Some(5));
+    }
+
+    #[test]
+    fn test_cancellation_found_no_pending_io_matches_only_error_not_found() {
+        assert!(cancellation_found_no_pending_io(&io::Error::from_raw_os_error(1168)));
+        assert!(!cancellation_found_no_pending_io(&io::Error::from_raw_os_error(5)));
     }
 }

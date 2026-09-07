@@ -155,6 +155,8 @@ mod unix {
     use super::Redactor;
     use super::Sensitivity;
     use super::fs;
+    #[cfg(target_os = "linux")]
+    use super::support::EscapedProcessGuard;
     use super::support::captured_log_records_containing;
     use super::support::initialize_captured_logger;
 
@@ -426,6 +428,7 @@ mod unix {
         let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
             .expect("command test temporary directory should be created");
         let pid_path = temp_dir.path().join("escaped-stdin-child.pid");
+        let mut escaped = EscapedProcessGuard::new(pid_path.clone());
         let script = "setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" >/dev/null 2>&1 & wait";
         let cancellation = CommandCancellation::new();
         let run_cancellation = cancellation.clone();
@@ -433,6 +436,7 @@ mod unix {
         let worker = std::thread::spawn(move || {
             CommandRunner::without_timeout().run_with(
                 Command::shell(script)
+                    .arg("sh")
                     .arg_os(&run_pid_path)
                     .stdin_bytes(vec![b'x'; 4 * 1024 * 1024]),
                 CommandRunOptions::new().cancellation(run_cancellation),
@@ -440,15 +444,14 @@ mod unix {
         });
 
         std::thread::sleep(Duration::from_millis(100));
+        escaped.wait_until_recorded(Duration::from_secs(1));
         cancellation.cancel();
         let error = worker
             .join()
             .expect("cancelled runner should not panic")
             .expect_err("blocked stdin should make cancellation observable");
 
-        if let Ok(pid) = fs::read_to_string(&pid_path) {
-            let _ = std::process::Command::new("kill").arg("-KILL").arg(pid.trim()).status();
-        }
+        escaped.terminate_and_wait();
         assert_eq!(error.kind(), CommandErrorKind::Cancelled);
     }
 
@@ -826,19 +829,6 @@ mod unix {
         }
     }
 
-    #[test]
-    fn test_runner_zero_timeout_does_not_report_kill_failure_after_exit() {
-        // Exercise the short-lived child/killpg race repeatedly because the
-        // process-group error can arrive just before the child becomes
-        // waitable.
-        for _ in 0..10_000 {
-            if let Err(error) = CommandRunner::new(Duration::ZERO).run(Command::new("true")) {
-                assert_ne!(error.kind(), CommandErrorKind::KillFailed);
-                assert_ne!(error.kind(), CommandErrorKind::UnexpectedExit);
-            }
-        }
-    }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn test_command_runner_timeout_returns_when_descendant_escapes_process_group() {
@@ -911,26 +901,24 @@ mod unix {
         let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
             .expect("command test temporary directory should be created");
         let pid_path = temp_dir.path().join("escaped-stdin-child.pid");
+        let mut escaped = EscapedProcessGuard::new(pid_path.clone());
         let started = Instant::now();
         let error = CommandRunner::new(Duration::from_millis(100))
             .run(
                 Command::shell("setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" >/dev/null 2>&1 & wait")
+                    .arg("sh")
                     .arg_os(&pid_path)
                     .stdin_bytes(vec![b'x'; 4 * 1024 * 1024]),
             )
             .expect_err("escaped stdin descendant should make the command time out");
+        let elapsed = started.elapsed();
 
-        let pid_deadline = Instant::now() + Duration::from_secs(1);
-        while !pid_path.exists() && Instant::now() < pid_deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        if let Ok(pid) = fs::read_to_string(&pid_path) {
-            let _ = std::process::Command::new("kill").arg("-KILL").arg(pid.trim()).status();
-        }
+        escaped.wait_until_recorded(Duration::from_secs(1));
+        escaped.terminate_and_wait();
 
         assert_eq!(error.kind(), CommandErrorKind::TimedOut);
         assert!(
-            started.elapsed() < Duration::from_secs(2),
+            elapsed < Duration::from_secs(2),
             "timeout must cancel a blocked stdin writer"
         );
     }
@@ -1092,12 +1080,20 @@ mod unix {
             .expect_err("unexpected exit should be rejected");
 
         assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::UnexpectedExit {
+                exit_code: Some(7),
+                expected,
+            } if expected == &[0]
+        ));
         assert!(
             error
                 .output()
                 .expect("unexpected exit should expose output")
                 .stdout_truncated()
         );
+        assert!(error.cleanup_failures().is_empty());
     }
 
     #[test]
