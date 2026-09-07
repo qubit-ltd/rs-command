@@ -236,9 +236,9 @@ fn read_capture_error(source: io::Error, bytes: Vec<u8>, truncated: bool) -> Out
     }
 }
 
-/// Reads one child output stream to completion for tests and coverage hooks.
-#[allow(dead_code)]
-pub(in crate::command_runner) fn read_output(
+/// Reads one child output stream to completion for unit tests.
+#[cfg(test)]
+fn read_output(
     reader: &mut dyn Read,
     options: OutputCaptureOptions,
 ) -> Result<CapturedOutput, OutputCaptureError> {
@@ -249,13 +249,77 @@ pub(in crate::command_runner) fn read_output(
 mod tests {
     use std::io;
     use std::io::Cursor;
+    use std::io::Read;
     use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
     use std::path::Path;
+    use std::process::ExitStatus;
+    use std::thread;
+    use std::time::Duration;
 
+    use qubit_clock::TimeError;
+    use qubit_clock::TimerUnavailableError;
+
+    use super::super::captured_output::CapturedOutput;
+    use super::super::io_cancellation::IoCancellation;
     use super::super::output_capture_error::OutputCaptureError;
     use super::super::output_capture_options::OutputCaptureOptions;
+    use super::super::output_reader::OutputReader;
     use super::super::output_tee::OutputTee;
+    use super::collect_output_results;
+    use super::join_output_reader;
     use super::read_output;
+    use crate::CommandCleanupFailure;
+    use crate::CommandError;
+    use crate::CommandErrorKind;
+    use crate::CommandErrorReason;
+    use crate::OutputStream;
+
+    #[cfg(unix)]
+    fn status(code: i32) -> ExitStatus {
+        ExitStatus::from_raw(code << 8)
+    }
+
+    #[cfg(windows)]
+    fn status(code: i32) -> ExitStatus {
+        ExitStatus::from_raw(code as u32)
+    }
+
+    fn captured(bytes: &[u8], truncated: bool, complete: bool) -> CapturedOutput {
+        CapturedOutput {
+            bytes: bytes.to_vec(),
+            truncated,
+            complete,
+        }
+    }
+
+    fn stdin_failure() -> CommandError {
+        CommandError::from_reason(
+            "command",
+            CommandErrorReason::WriteInputFailed {
+                source: io::Error::other("injected stdin write failure"),
+            },
+            None,
+        )
+    }
+
+    struct FailingReader {
+        prefix: Cursor<Vec<u8>>,
+    }
+
+    impl Read for FailingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let read = self.prefix.read(buffer)?;
+            if read == 0 {
+                Err(io::Error::other("injected read failure"))
+            } else {
+                Ok(read)
+            }
+        }
+    }
 
     struct FailingWriter {
         fail_write: bool,
@@ -277,6 +341,23 @@ mod tests {
                 Err(io::Error::other("flush failure"))
             }
         }
+    }
+
+    #[test]
+    fn test_output_collector_read_failure_preserves_partial_output() {
+        let error = read_output(
+            &mut FailingReader {
+                prefix: Cursor::new(b"partial".to_vec()),
+            },
+            OutputCaptureOptions::new(None, None),
+        )
+        .expect_err("read failure should be returned");
+
+        let OutputCaptureError::Read { output, .. } = error else {
+            panic!("expected output read failure");
+        };
+        assert_eq!(output.bytes, b"partial");
+        assert!(!output.complete);
     }
 
     #[test]
@@ -317,6 +398,233 @@ mod tests {
             panic!("expected tee flush failure");
         };
         assert_eq!(path, Path::new("tee-flush.log"));
+    }
+
+    #[test]
+    fn test_join_output_reader_maps_worker_panic() {
+        let (cancellation, token) =
+            IoCancellation::pair().expect("cancellation pair should be created");
+        let reader = OutputReader::new(
+            thread::spawn(move || -> Result<CapturedOutput, OutputCaptureError> {
+                let _token = token;
+                panic!("injected output worker panic");
+            }),
+            cancellation,
+        );
+
+        let error = join_output_reader(reader).expect_err("output worker panic should be mapped");
+
+        let OutputCaptureError::Read { source, output } = error else {
+            panic!("expected output read failure");
+        };
+        assert_eq!(source.to_string(), "output reader thread panicked");
+        assert!(!output.complete);
+    }
+
+    #[test]
+    fn test_collect_output_prioritizes_elapsed_failure_and_retains_helpers() {
+        let elapsed_error = TimeError::TimerUnavailable {
+            source: TimerUnavailableError::BackendUnavailable {
+                backend: "test",
+                source: Box::new(io::Error::other("injected elapsed failure")),
+            },
+        };
+        let stdout_error = OutputCaptureError::Read {
+            source: io::Error::other("injected stdout read failure"),
+            output: CapturedOutput::default(),
+        };
+        let stderr_error = OutputCaptureError::Write {
+            path: "stderr.log".into(),
+            source: io::Error::other("injected stderr write failure"),
+            output: CapturedOutput::default(),
+        };
+        let stdin_error = CommandError::from_reason(
+            "command",
+            CommandErrorReason::WriteInputFailed {
+                source: io::Error::other("injected stdin write failure"),
+            },
+            None,
+        );
+
+        let error = collect_output_results(
+            "command",
+            status(0),
+            Err(elapsed_error),
+            Err(stdout_error),
+            Err(stderr_error),
+            Err(stdin_error),
+        )
+        .expect_err("elapsed failure should remain primary");
+
+        assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
+        assert!(matches!(
+            error.cleanup_failures(),
+            [
+                CommandCleanupFailure::StdoutRead { .. },
+                CommandCleanupFailure::StderrWrite { .. },
+                CommandCleanupFailure::Stdin { .. },
+            ]
+        ));
+        assert!(error.output().is_none());
+    }
+
+    #[test]
+    fn test_collect_output_maps_stdout_read_failure_with_partial_streams() {
+        let error = collect_output_results(
+            "command",
+            status(0),
+            Ok(Duration::from_secs(1)),
+            Err(OutputCaptureError::Read {
+                source: io::Error::other("injected stdout read failure"),
+                output: captured(b"partial-stdout", false, false),
+            }),
+            Ok(captured(b"complete-stderr", false, true)),
+            Ok(()),
+        )
+        .expect_err("stdout read failure should be mapped");
+
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::ReadOutputFailed {
+                stream: OutputStream::Stdout,
+                ..
+            }
+        ));
+        let output = error.output().expect("partial output should be retained");
+        assert_eq!(output.stdout(), b"partial-stdout");
+        assert_eq!(output.stderr(), b"complete-stderr");
+        assert!(!output.stdout_complete());
+        assert!(output.stderr_complete());
+    }
+
+    #[test]
+    fn test_collect_output_orders_combined_helper_failures() {
+        let error = collect_output_results(
+            "command",
+            status(0),
+            Ok(Duration::from_secs(1)),
+            Err(OutputCaptureError::Read {
+                source: io::Error::other("injected stdout read failure"),
+                output: CapturedOutput::default(),
+            }),
+            Err(OutputCaptureError::Write {
+                path: "stderr.log".into(),
+                source: io::Error::other("injected stderr tee failure"),
+                output: CapturedOutput::default(),
+            }),
+            Err(stdin_failure()),
+        )
+        .expect_err("stdout failure should remain primary");
+
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::ReadOutputFailed {
+                stream: OutputStream::Stdout,
+                ..
+            }
+        ));
+        assert!(matches!(
+            error.cleanup_failures(),
+            [
+                CommandCleanupFailure::StderrWrite { .. },
+                CommandCleanupFailure::Stdin { .. },
+            ]
+        ));
+    }
+
+    #[test]
+    fn test_collect_output_maps_stderr_read_failure() {
+        let error = collect_output_results(
+            "command",
+            status(0),
+            Ok(Duration::from_secs(1)),
+            Ok(captured(b"stdout", false, true)),
+            Err(OutputCaptureError::Read {
+                source: io::Error::other("injected stderr read failure"),
+                output: captured(b"partial-stderr", false, false),
+            }),
+            Ok(()),
+        )
+        .expect_err("stderr read failure should be mapped");
+
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::ReadOutputFailed {
+                stream: OutputStream::Stderr,
+                ..
+            }
+        ));
+        let output = error.output().expect("partial output should be retained");
+        assert_eq!(output.stdout(), b"stdout");
+        assert_eq!(output.stderr(), b"partial-stderr");
+    }
+
+    #[test]
+    fn test_collect_output_maps_each_tee_failure() {
+        for stream in [OutputStream::Stdout, OutputStream::Stderr] {
+            let failure = OutputCaptureError::Write {
+                path: format!("{stream}.log").into(),
+                source: io::Error::other("injected tee failure"),
+                output: captured(b"output", false, true),
+            };
+            let (stdout, stderr) = match stream {
+                OutputStream::Stdout => (Err(failure), Ok(CapturedOutput::default())),
+                OutputStream::Stderr => (Ok(CapturedOutput::default()), Err(failure)),
+            };
+
+            let error = collect_output_results(
+                "command",
+                status(0),
+                Ok(Duration::from_secs(1)),
+                stdout,
+                stderr,
+                Ok(()),
+            )
+            .expect_err("tee failure should be mapped");
+
+            assert!(matches!(
+                error.reason(),
+                CommandErrorReason::WriteOutputFailed {
+                    stream: actual,
+                    ..
+                } if *actual == stream
+            ));
+        }
+    }
+
+    #[test]
+    fn test_collect_output_preserves_completed_output_on_stdin_failure() {
+        let error = collect_output_results(
+            "command",
+            status(0),
+            Ok(Duration::from_secs(1)),
+            Ok(captured(b"stdout", false, true)),
+            Ok(captured(b"stderr", false, true)),
+            Err(stdin_failure()),
+        )
+        .expect_err("stdin failure should be mapped");
+
+        assert_eq!(error.kind(), CommandErrorKind::WriteInputFailed);
+        let output = error.output().expect("completed output should be retained");
+        assert_eq!(output.stdout(), b"stdout");
+        assert_eq!(output.stderr(), b"stderr");
+    }
+
+    #[test]
+    fn test_collect_output_builds_success_with_truncation() {
+        let output = collect_output_results(
+            "command",
+            status(0),
+            Ok(Duration::from_secs(1)),
+            Ok(captured(b"stdout", true, true)),
+            Ok(captured(b"stderr", false, true)),
+            Ok(()),
+        )
+        .expect("successful helper results should produce output");
+
+        assert_eq!(output.stdout(), b"stdout");
+        assert_eq!(output.stderr(), b"stderr");
+        assert!(output.stdout_truncated());
     }
 }
 

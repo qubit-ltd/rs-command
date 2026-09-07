@@ -5,7 +5,6 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-// qubit-style: allow coverage-cfg
 //! # Qubit Command
 //!
 //! Provides command-line process running utilities for Rust.
@@ -34,9 +33,6 @@ pub use command_error_kind::CommandErrorKind;
 pub use command_error_reason::CommandErrorReason;
 pub use command_output::CommandOutput;
 pub use command_run_options::CommandRunOptions;
-#[cfg(coverage)]
-#[doc(hidden)]
-pub use command_runner::__coverage_internal;
 pub use command_runner::CommandRunner;
 pub use command_runner::DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM;
 pub use output_stream::OutputStream;

@@ -25,9 +25,6 @@ include = [
     "/benches/**",
 ]
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
-
 [lib]
 name = "qubit_command"
 doctest = true

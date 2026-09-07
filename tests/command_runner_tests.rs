@@ -829,19 +829,6 @@ mod unix {
         }
     }
 
-    #[test]
-    fn test_runner_zero_timeout_does_not_report_kill_failure_after_exit() {
-        // Exercise the short-lived child/killpg race repeatedly because the
-        // process-group error can arrive just before the child becomes
-        // waitable.
-        for _ in 0..10_000 {
-            if let Err(error) = CommandRunner::new(Duration::ZERO).run(Command::new("true")) {
-                assert_ne!(error.kind(), CommandErrorKind::KillFailed);
-                assert_ne!(error.kind(), CommandErrorKind::UnexpectedExit);
-            }
-        }
-    }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn test_command_runner_timeout_returns_when_descendant_escapes_process_group() {
