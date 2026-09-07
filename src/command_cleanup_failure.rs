@@ -45,6 +45,21 @@ pub enum CommandCleanupFailure {
         /// Stdin helper cleanup error.
         source: io::Error,
     },
+    /// Cancelling the stdin helper failed during cleanup.
+    StdinCancellation {
+        /// Stdin helper cancellation error.
+        source: io::Error,
+    },
+    /// Cancelling the stdout reader failed during cleanup.
+    StdoutCancellation {
+        /// Stdout reader cancellation error.
+        source: io::Error,
+    },
+    /// Cancelling the stderr reader failed during cleanup.
+    StderrCancellation {
+        /// Stderr reader cancellation error.
+        source: io::Error,
+    },
     /// The stdout reader failed during cleanup.
     StdoutRead {
         /// Stdout reader cleanup error.
@@ -84,6 +99,18 @@ impl fmt::Debug for CommandCleanupFailure {
                 .field("source", source)
                 .finish(),
             Self::Stdin { source } => formatter.debug_struct("Stdin").field("source", source).finish(),
+            Self::StdinCancellation { source } => formatter
+                .debug_struct("StdinCancellation")
+                .field("source", source)
+                .finish(),
+            Self::StdoutCancellation { source } => formatter
+                .debug_struct("StdoutCancellation")
+                .field("source", source)
+                .finish(),
+            Self::StderrCancellation { source } => formatter
+                .debug_struct("StderrCancellation")
+                .field("source", source)
+                .finish(),
             Self::StdoutRead { source } => formatter.debug_struct("StdoutRead").field("source", source).finish(),
             Self::StdoutWrite { path, source } => formatter
                 .debug_struct("StdoutWrite")
