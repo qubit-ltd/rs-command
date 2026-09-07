@@ -5,13 +5,10 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-// qubit-style: allow coverage-cfg
 use std::io;
-#[cfg(coverage)]
-use std::sync::atomic::AtomicBool;
-#[cfg(coverage)]
-use std::sync::atomic::Ordering;
+use std::process::ChildStdin;
 use std::thread;
+use std::thread::JoinHandle;
 
 use process_wrap::std::ChildWrapper;
 
@@ -22,15 +19,6 @@ use super::stdin_writer::OptionalStdinWriter;
 use super::stdin_writer::StdinWriter;
 use crate::CommandError;
 use crate::CommandErrorReason;
-
-#[cfg(coverage)]
-static COVERAGE_FAIL_STDIN_THREAD: AtomicBool = AtomicBool::new(false);
-
-/// Enables or disables deterministic stdin-thread failure injection.
-#[cfg(coverage)]
-pub(in crate::command_runner) fn __coverage_fail_stdin_thread(enabled: bool) {
-    COVERAGE_FAIL_STDIN_THREAD.store(enabled, Ordering::Relaxed);
-}
 
 /// Starts a helper thread that writes configured stdin bytes.
 ///
@@ -54,28 +42,38 @@ pub(in crate::command_runner) fn write_stdin_bytes(
     child: &mut dyn ChildWrapper,
     stdin_bytes: Option<Vec<u8>>,
 ) -> Result<OptionalStdinWriter, CommandError> {
+    write_stdin_bytes_with(command, child, stdin_bytes, spawn_stdin_writer)
+}
+
+/// Starts a stdin helper with the supplied thread-spawn operation.
+fn write_stdin_bytes_with(
+    command: &str,
+    child: &mut dyn ChildWrapper,
+    stdin_bytes: Option<Vec<u8>>,
+    spawn: impl FnOnce(
+        ChildStdin,
+        Vec<u8>,
+        IoCancellationToken,
+    ) -> io::Result<JoinHandle<io::Result<()>>>,
+) -> Result<OptionalStdinWriter, CommandError> {
     match stdin_bytes {
         Some(bytes) => match child.stdin().take() {
-            Some(mut stdin) => {
-                #[cfg(coverage)]
-                if COVERAGE_FAIL_STDIN_THREAD.load(Ordering::Relaxed) {
-                    return Err(CommandError::from_reason(
-                        command,
-                        CommandErrorReason::StartInputThreadFailed {
-                            source: io::Error::other("coverage-injected stdin thread failure"),
-                        },
-                        None,
-                    ));
-                }
+            Some(stdin) => {
                 prepare_stdin_pipe(&stdin).map_err(|source| {
-                    CommandError::from_reason(command, CommandErrorReason::WriteInputFailed { source }, None)
+                    CommandError::from_reason(
+                        command,
+                        CommandErrorReason::WriteInputFailed { source },
+                        None,
+                    )
                 })?;
                 let (cancellation, token) = IoCancellation::pair().map_err(|source| {
-                    CommandError::from_reason(command, CommandErrorReason::StartInputThreadFailed { source }, None)
+                    CommandError::from_reason(
+                        command,
+                        CommandErrorReason::StartInputThreadFailed { source },
+                        None,
+                    )
                 })?;
-                let writer = thread::Builder::new()
-                    .name("qubit-command-stdin-writer".to_owned())
-                    .spawn(move || write_stdin_until_cancelled(&mut stdin, &bytes, token))
+                let writer = spawn(stdin, bytes, token)
                     .map(|join| Some(StdinWriter::new(join, cancellation)));
                 map_stdin_thread_result(command, writer)
             }
@@ -89,6 +87,17 @@ pub(in crate::command_runner) fn write_stdin_bytes(
         },
         None => Ok(None),
     }
+}
+
+/// Spawns the production stdin writer thread.
+fn spawn_stdin_writer(
+    mut stdin: ChildStdin,
+    bytes: Vec<u8>,
+    token: IoCancellationToken,
+) -> io::Result<JoinHandle<io::Result<()>>> {
+    thread::Builder::new()
+        .name("qubit-command-stdin-writer".to_owned())
+        .spawn(move || write_stdin_until_cancelled(&mut stdin, &bytes, token))
 }
 
 /// Maps stdin worker thread creation to a command error.
@@ -208,4 +217,90 @@ fn prepare_stdin_pipe<T: std::os::fd::AsRawFd>(pipe: &T) -> io::Result<()> {
 #[cfg(windows)]
 fn prepare_stdin_pipe<T>(_pipe: &T) -> io::Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::process::Command as ProcessCommand;
+    use std::process::Stdio;
+    use std::thread;
+
+    use super::super::io_cancellation::IoCancellation;
+    use super::super::stdin_writer::StdinWriter;
+    use super::join_stdin_writer;
+    use super::write_stdin_bytes;
+    use super::write_stdin_bytes_with;
+    use crate::CommandErrorKind;
+
+    #[test]
+    fn test_write_stdin_bytes_reports_missing_pipe() {
+        let mut child = ProcessCommand::new("rustc")
+            .arg("--version")
+            .stdin(Stdio::null())
+            .spawn()
+            .expect("test child should spawn");
+
+        let error = write_stdin_bytes("command", &mut child, Some(b"input".to_vec()))
+            .expect_err("missing stdin pipe should be reported");
+
+        assert_eq!(error.kind(), CommandErrorKind::WriteInputFailed);
+        child.wait().expect("test child should be waitable");
+    }
+
+    #[test]
+    fn test_write_stdin_bytes_maps_injected_spawn_failure() {
+        let mut child = ProcessCommand::new("rustc")
+            .arg("--version")
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("test child should spawn");
+
+        let error = write_stdin_bytes_with(
+            "command",
+            &mut child,
+            Some(b"input".to_vec()),
+            |_stdin, _bytes, _token| Err(io::Error::other("injected spawn failure")),
+        )
+        .expect_err("injected stdin worker failure should be mapped");
+
+        assert_eq!(error.kind(), CommandErrorKind::StartInputThreadFailed);
+        child.wait().expect("test child should be waitable");
+    }
+
+    #[test]
+    fn test_join_stdin_writer_maps_write_failure() {
+        let (cancellation, token) =
+            IoCancellation::pair().expect("cancellation pair should be created");
+        let writer = StdinWriter::new(
+            thread::spawn(move || {
+                let _token = token;
+                Err(io::Error::other("injected stdin write failure"))
+            }),
+            cancellation,
+        );
+
+        let error = join_stdin_writer("command", Some(writer))
+            .expect_err("stdin write failure should be mapped");
+
+        assert_eq!(error.kind(), CommandErrorKind::WriteInputFailed);
+    }
+
+    #[test]
+    fn test_join_stdin_writer_maps_worker_panic() {
+        let (cancellation, token) =
+            IoCancellation::pair().expect("cancellation pair should be created");
+        let writer = StdinWriter::new(
+            thread::spawn(move || -> io::Result<()> {
+                let _token = token;
+                panic!("injected stdin worker panic");
+            }),
+            cancellation,
+        );
+
+        let error = join_stdin_writer("command", Some(writer))
+            .expect_err("stdin worker panic should be mapped");
+
+        assert_eq!(error.kind(), CommandErrorKind::WriteInputFailed);
+    }
 }

@@ -5,7 +5,6 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-// qubit-style: allow coverage-cfg
 //! Prepares command I/O files without truncating conflicting paths.
 
 use std::fs;
@@ -21,10 +20,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 use std::process::Stdio;
-#[cfg(coverage)]
-use std::sync::atomic::AtomicBool;
-#[cfg(coverage)]
-use std::sync::atomic::Ordering;
 
 use same_file::Handle;
 
@@ -32,15 +27,6 @@ use crate::CommandError;
 use crate::CommandErrorReason;
 use crate::OutputStream;
 use crate::command_stdin::CommandStdin;
-
-#[cfg(coverage)]
-static COVERAGE_FAIL_TRUNCATE: AtomicBool = AtomicBool::new(false);
-
-/// Enables or disables deterministic truncation failure injection.
-#[cfg(coverage)]
-pub(in crate::command_runner) fn __coverage_fail_truncate(enabled: bool) {
-    COVERAGE_FAIL_TRUNCATE.store(enabled, Ordering::Relaxed);
-}
 
 /// Opened stdin path, file handle, and optional buffered input bytes.
 type PreparedInputParts = (Option<PathBuf>, Option<File>, Option<Vec<u8>>);
@@ -662,6 +648,17 @@ pub(in crate::command_runner) fn truncate_output(
     path: Option<&Path>,
     file: Option<&File>,
 ) -> Result<(), CommandError> {
+    truncate_output_with(command, stream, path, file, |file| file.set_len(0))
+}
+
+/// Truncates one validated regular output file with the supplied operation.
+fn truncate_output_with(
+    command: &str,
+    stream: OutputStream,
+    path: Option<&Path>,
+    file: Option<&File>,
+    truncate: impl FnOnce(&File) -> io::Result<()>,
+) -> Result<(), CommandError> {
     if let Some(file) = file {
         let path = path.expect("an open output file has an original path");
         let file_type = file
@@ -671,19 +668,45 @@ pub(in crate::command_runner) fn truncate_output(
         if !file_type.is_file() {
             return Err(non_regular_output_error(command, stream, path));
         }
-        #[cfg(coverage)]
-        if COVERAGE_FAIL_TRUNCATE.load(Ordering::Relaxed) {
-            return Err(open_output_error(
-                command,
-                stream,
-                path,
-                io::Error::other("coverage-injected output truncation failure"),
-            ));
-        }
-        file.set_len(0)
-            .map_err(|source| open_output_error(command, stream, path, source))?;
+        truncate(file).map_err(|source| open_output_error(command, stream, path, source))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::OpenOptions;
+    use std::io;
+
+    use super::truncate_output_with;
+    use crate::CommandErrorKind;
+    use crate::OutputStream;
+
+    #[test]
+    fn test_truncate_output_maps_injected_set_len_failure() {
+        let output = tempfile::NamedTempFile::new().expect("output fixture should be created");
+        std::fs::write(output.path(), b"preserve-on-failure")
+            .expect("output fixture should be populated");
+        let file = OpenOptions::new()
+            .write(true)
+            .open(output.path())
+            .expect("output fixture should be opened");
+
+        let error = truncate_output_with(
+            "command",
+            OutputStream::Stdout,
+            Some(output.path()),
+            Some(&file),
+            |_| Err(io::Error::other("injected truncate failure")),
+        )
+        .expect_err("injected truncation failure should be mapped");
+
+        assert_eq!(error.kind(), CommandErrorKind::OpenOutputFailed);
+        assert_eq!(
+            std::fs::read(output.path()).expect("output fixture should remain readable"),
+            b"preserve-on-failure",
+        );
+    }
 }
 
 /// Builds an input/output conflict error.

@@ -278,3 +278,150 @@ impl fmt::Debug for CommandErrorReason {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::io;
+    use std::time::Duration;
+
+    use qubit_clock::TimeError;
+    use qubit_clock::TimerUnavailableError;
+
+    use super::CommandErrorReason;
+    use crate::CommandCleanupFailure;
+    use crate::CommandError;
+    use crate::OutputStream;
+
+    fn io_error() -> io::Error {
+        io::Error::other("injected error source")
+    }
+
+    #[test]
+    fn test_command_error_formats_every_reason_variant() {
+        let reasons = vec![
+            CommandErrorReason::SpawnFailed { source: io_error() },
+            CommandErrorReason::WaitFailed { source: io_error() },
+            CommandErrorReason::CancelledBeforeStart,
+            CommandErrorReason::KillFailed {
+                timeout: Duration::from_secs(1),
+                process_tree_source: io_error(),
+                child_source: io_error(),
+            },
+            CommandErrorReason::ReadOutputFailed {
+                stream: OutputStream::Stdout,
+                source: io_error(),
+            },
+            CommandErrorReason::OpenInputFailed {
+                path: "input".into(),
+                source: io_error(),
+            },
+            CommandErrorReason::NonRegularInputFile {
+                path: "input".into(),
+            },
+            CommandErrorReason::OpenOutputFailed {
+                stream: OutputStream::Stdout,
+                path: "output".into(),
+                source: io_error(),
+            },
+            CommandErrorReason::NonRegularOutputFile {
+                stream: OutputStream::Stderr,
+                path: "output".into(),
+            },
+            CommandErrorReason::InputOutputConflict {
+                input_path: "input".into(),
+                output_stream: OutputStream::Stdout,
+                output_path: "output".into(),
+            },
+            CommandErrorReason::OutputFilesConflict {
+                stdout_path: "stdout".into(),
+                stderr_path: "stderr".into(),
+            },
+            CommandErrorReason::InspectIoFileFailed {
+                path: "output".into(),
+                source: io_error(),
+            },
+            CommandErrorReason::StartInputThreadFailed { source: io_error() },
+            CommandErrorReason::StartOutputThreadFailed {
+                stream: OutputStream::Stderr,
+                source: io_error(),
+            },
+            CommandErrorReason::TimeFailed {
+                source: TimeError::TimerUnavailable {
+                    source: TimerUnavailableError::BackendUnavailable {
+                        backend: "test",
+                        source: Box::new(io_error()),
+                    },
+                },
+            },
+            CommandErrorReason::WriteInputFailed { source: io_error() },
+            CommandErrorReason::WriteOutputFailed {
+                stream: OutputStream::Stdout,
+                path: "output".into(),
+                source: io_error(),
+            },
+            CommandErrorReason::TimedOut {
+                timeout: Duration::from_secs(1),
+            },
+            CommandErrorReason::Cancelled,
+            CommandErrorReason::CancelFailed {
+                process_tree_source: io_error(),
+                child_source: io_error(),
+            },
+            CommandErrorReason::OutputTruncated,
+            CommandErrorReason::UnexpectedExit {
+                exit_code: Some(9),
+                expected: vec![0],
+            },
+        ];
+
+        for reason in reasons {
+            let reason_debug = format!("{reason:?}");
+            let error = CommandError::from_reason("command", reason, None);
+            let display = error.to_string();
+            let debug = format!("{error:?}");
+
+            assert!(!reason_debug.is_empty());
+            assert!(display.contains("command"));
+            assert!(debug.contains(&display));
+            let _ = error.source();
+            let _ = error.kind();
+            let _ = error.reason();
+            let _ = error.output();
+            let _ = error.exit_code();
+            let _ = error.is_unexpected_exit();
+        }
+    }
+
+    #[test]
+    fn test_command_error_formats_and_exposes_every_cleanup_variant() {
+        let error = CommandError::from_reason("command", CommandErrorReason::Cancelled, None)
+            .with_cleanup_failures([
+                CommandCleanupFailure::Wait { source: io_error() },
+                CommandCleanupFailure::ProcessTreeTermination { source: io_error() },
+                CommandCleanupFailure::ChildTermination { source: io_error() },
+                CommandCleanupFailure::Stdin { source: io_error() },
+                CommandCleanupFailure::StdinCancellation { source: io_error() },
+                CommandCleanupFailure::StdoutCancellation { source: io_error() },
+                CommandCleanupFailure::StderrCancellation { source: io_error() },
+                CommandCleanupFailure::StdoutRead { source: io_error() },
+                CommandCleanupFailure::StdoutWrite {
+                    path: "stdout".into(),
+                    source: io_error(),
+                },
+                CommandCleanupFailure::StderrRead { source: io_error() },
+                CommandCleanupFailure::StderrWrite {
+                    path: "stderr".into(),
+                    source: io_error(),
+                },
+            ]);
+
+        assert_eq!(error.cleanup_failures().len(), 11);
+        assert!(error.process_tree_source().is_some());
+        assert!(error.child_source().is_some());
+        assert!(error.to_string().contains("11 cleanup failure(s)"));
+        for failure in error.cleanup_failures() {
+            assert!(!format!("{failure:?}").is_empty());
+        }
+    }
+}

@@ -5,7 +5,6 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-// qubit-style: allow coverage-cfg
 use std::fmt;
 use std::io;
 use std::path::Path;
@@ -18,12 +17,7 @@ use qubit_clock::Timer;
 use qubit_redact::RedactionPolicy;
 use qubit_redact::Redactor;
 
-#[cfg(coverage)]
-mod coverage;
 mod internal;
-#[cfg(coverage)]
-#[doc(hidden)]
-pub use coverage::__coverage_internal;
 use internal::error_mapping::output_pipe_error;
 use internal::error_mapping::spawn_failed;
 use internal::finished_command::FinishedCommand;
@@ -73,6 +67,53 @@ fn start_output_reader(
             None,
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::start_output_reader;
+    use super::take_output_pipe;
+    use crate::CommandErrorKind;
+    use crate::CommandErrorReason;
+    use crate::OutputStream;
+
+    #[test]
+    fn test_take_output_pipe_reports_each_missing_stream() {
+        for stream in [OutputStream::Stdout, OutputStream::Stderr] {
+            let error = take_output_pipe::<u8>("command", stream, || None)
+                .expect_err("missing output pipe should be reported");
+
+            assert_eq!(error.kind(), CommandErrorKind::ReadOutputFailed);
+            assert!(matches!(
+                error.reason(),
+                CommandErrorReason::ReadOutputFailed {
+                    stream: actual,
+                    ..
+                } if *actual == stream
+            ));
+        }
+    }
+
+    #[test]
+    fn test_start_output_reader_maps_each_stream_spawn_failure() {
+        for stream in [OutputStream::Stdout, OutputStream::Stderr] {
+            let error = start_output_reader("command", stream, || {
+                Err(io::Error::other("injected output worker spawn failure"))
+            })
+            .expect_err("output worker spawn failure should be mapped");
+
+            assert_eq!(error.kind(), CommandErrorKind::StartOutputThreadFailed);
+            assert!(matches!(
+                error.reason(),
+                CommandErrorReason::StartOutputThreadFailed {
+                    stream: actual,
+                    ..
+                } if *actual == stream
+            ));
+        }
+    }
 }
 
 /// Default one-mebibyte in-memory capture limit applied to each output stream.
