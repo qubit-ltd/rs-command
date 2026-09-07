@@ -49,4 +49,10 @@ mod tests {
     fn test_output_tee_rejects_unpaired_parts() {
         let _ = OutputTee::from_parts(None, Some(PathBuf::from("stdout.log")));
     }
+
+    #[test]
+    #[should_panic(expected = "output tee writer and diagnostic path must be configured together")]
+    fn test_output_tee_rejects_writer_without_path() {
+        let _ = OutputTee::from_parts(Some(Box::new(Vec::<u8>::new())), None);
+    }
 }

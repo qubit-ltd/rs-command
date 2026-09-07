@@ -243,6 +243,81 @@ pub(in crate::command_runner) fn read_output(
     read_output_inner(reader, options, None, None)
 }
 
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::io::Cursor;
+    use std::io::Write;
+    use std::path::Path;
+
+    use super::super::output_capture_error::OutputCaptureError;
+    use super::super::output_capture_options::OutputCaptureOptions;
+    use super::super::output_tee::OutputTee;
+    use super::read_output;
+
+    struct FailingWriter {
+        fail_write: bool,
+    }
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+            if self.fail_write {
+                Err(io::Error::other("write failure"))
+            } else {
+                Ok(0)
+            }
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if self.fail_write {
+                Ok(())
+            } else {
+                Err(io::Error::other("flush failure"))
+            }
+        }
+    }
+
+    #[test]
+    fn test_output_collector_write_failure_preserves_tee_path() {
+        let error = read_output(
+            &mut Cursor::new(b"output"),
+            OutputCaptureOptions::new(
+                None,
+                Some(OutputTee::new(
+                    Box::new(FailingWriter { fail_write: true }),
+                    "tee-write.log".into(),
+                )),
+            ),
+        )
+        .expect_err("write failure should be returned");
+
+        let OutputCaptureError::Write { path, .. } = error else {
+            panic!("expected tee write failure");
+        };
+        assert_eq!(path, Path::new("tee-write.log"));
+    }
+
+    #[test]
+    fn test_output_collector_flush_failure_preserves_tee_path() {
+        let error = read_output(
+            &mut Cursor::new(b"output"),
+            OutputCaptureOptions::new(
+                None,
+                Some(OutputTee::new(
+                    Box::new(FailingWriter { fail_write: false }),
+                    "tee-flush.log".into(),
+                )),
+            ),
+        )
+        .expect_err("flush failure should be returned");
+
+        let OutputCaptureError::Write { path, .. } = error else {
+            panic!("expected tee flush failure");
+        };
+        assert_eq!(path, Path::new("tee-flush.log"));
+    }
+}
+
 /// Collects reader-thread results into a command output value.
 ///
 /// # Parameters
