@@ -260,11 +260,11 @@ mod tests {
     }
 
     impl Write for FailingWriter {
-        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
             if self.fail_write {
                 Err(io::Error::other("write failure"))
             } else {
-                Ok(0)
+                Ok(buffer.len())
             }
         }
 
