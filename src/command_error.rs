@@ -23,7 +23,7 @@ pub struct CommandError {
     /// Human-readable, redacted command representation.
     command: String,
     /// Primary failure reason.
-    reason: CommandErrorReason,
+    reason: Box<CommandErrorReason>,
     /// Output retained before the primary failure, when available.
     output: Option<Box<CommandOutput>>,
     /// Failures observed while cleaning up after the primary failure.
@@ -49,7 +49,7 @@ impl CommandError {
     ) -> Self {
         Self {
             command: command.into(),
-            reason,
+            reason: Box::new(reason),
             output,
             cleanup_failures: Vec::new(),
         }
@@ -67,7 +67,7 @@ impl CommandError {
 
     /// Converts a helper error into its cleanup representation.
     pub(crate) fn into_cleanup_failure(self) -> Option<CommandCleanupFailure> {
-        match self.reason {
+        match *self.reason {
             CommandErrorReason::WriteInputFailed { source } => Some(CommandCleanupFailure::Stdin { source }),
             CommandErrorReason::ReadOutputFailed { stream, source } => match stream {
                 OutputStream::Stdout => Some(CommandCleanupFailure::StdoutRead { source }),
@@ -92,14 +92,14 @@ impl CommandError {
     #[must_use]
     #[inline(always)]
     pub fn kind(&self) -> CommandErrorKind {
-        (&self.reason).into()
+        self.reason.as_ref().into()
     }
 
     /// Returns the detailed primary failure reason.
     #[must_use]
     #[inline(always)]
     pub fn reason(&self) -> &CommandErrorReason {
-        &self.reason
+        self.reason.as_ref()
     }
 
     /// Returns captured output retained by the primary failure.
@@ -127,7 +127,7 @@ impl CommandError {
     #[must_use]
     #[inline]
     pub fn exit_code(&self) -> Option<i32> {
-        match &self.reason {
+        match self.reason.as_ref() {
             CommandErrorReason::UnexpectedExit { exit_code, .. } => *exit_code,
             _ => self.output.as_deref().and_then(CommandOutput::exit_code),
         }
@@ -148,7 +148,7 @@ impl CommandError {
         }
         | CommandErrorReason::CancelFailed {
             process_tree_source, ..
-        } = &self.reason
+        } = self.reason.as_ref()
         {
             return Some(process_tree_source);
         }
@@ -163,7 +163,7 @@ impl CommandError {
     #[must_use]
     pub fn child_source(&self) -> Option<&io::Error> {
         if let CommandErrorReason::KillFailed { child_source, .. }
-        | CommandErrorReason::CancelFailed { child_source, .. } = &self.reason
+        | CommandErrorReason::CancelFailed { child_source, .. } = self.reason.as_ref()
         {
             return Some(child_source);
         }
@@ -177,7 +177,7 @@ impl CommandError {
 impl fmt::Display for CommandError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let command = &self.command;
-        match (&self.reason, self.output.as_deref()) {
+        match (self.reason.as_ref(), self.output.as_deref()) {
             (CommandErrorReason::SpawnFailed { source }, _) => {
                 write!(formatter, "failed to spawn command `{command}`: {source}")
             }
@@ -288,7 +288,7 @@ impl fmt::Display for CommandError {
 
 impl Error for CommandError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match &self.reason {
+        match self.reason.as_ref() {
             CommandErrorReason::SpawnFailed { source }
             | CommandErrorReason::WaitFailed { source }
             | CommandErrorReason::ReadOutputFailed { source, .. }
@@ -346,5 +346,7 @@ fn unexpected_exit_detail(exit_code: &Option<i32>, output: Option<&CommandOutput
     if let Some(signal) = output.and_then(CommandOutput::termination_signal) {
         return format!("signal {signal}");
     }
+    #[cfg(not(unix))]
+    let _ = output;
     format!("code {exit_code:?}")
 }
