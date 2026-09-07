@@ -395,6 +395,48 @@ mod tests {
     }
 
     #[test]
+    fn test_process_terminator_waits_after_successful_tree_termination() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let tree = ScriptedChild::new("tree", raw_child(), Arc::clone(&calls));
+        let mut child = ManagedChildProcess::new(Box::new(tree), true);
+
+        let outcome = ProcessTerminator::new(&mut child)
+            .terminate(None)
+            .expect("successful tree termination should wait for final status");
+
+        assert!(outcome.status.success());
+        assert!(outcome.cleanup_failures.is_empty());
+        assert_eq!(
+            *calls.lock().expect("call log should not be poisoned"),
+            ["tree.kill", "tree.wait"]
+        );
+    }
+
+    #[test]
+    fn test_process_terminator_observes_completed_child_after_tree_failure() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut completed = ProcessCommand::new("rustc")
+            .arg("--version")
+            .spawn()
+            .expect("test child should spawn");
+        let expected_status = completed.wait().expect("test child should exit");
+        let tree = ScriptedChild::new("tree", Box::new(completed), Arc::clone(&calls))
+            .kill_error(io::Error::other("tree kill failed"));
+        let mut child = ManagedChildProcess::new(Box::new(tree), true);
+
+        let outcome = ProcessTerminator::new(&mut child)
+            .terminate(None)
+            .expect("completed child status should resolve tree-kill failure");
+
+        assert_eq!(outcome.status, expected_status);
+        assert_eq!(outcome.cleanup_failures.len(), 1);
+        assert_eq!(
+            *calls.lock().expect("call log should not be poisoned"),
+            ["tree.kill", "tree.try_wait"]
+        );
+    }
+
+    #[test]
     fn test_process_termination_maps_timeout_and_cancellation_kill_failures() {
         let cases = [
             (
