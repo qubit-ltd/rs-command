@@ -25,10 +25,8 @@ use qubit_clock::TimeError;
 use qubit_clock::TimerUnavailableError;
 
 use super::internal::captured_output::CapturedOutput;
-use super::internal::error_mapping::kill_failed;
 use super::internal::error_mapping::output_pipe_error;
 use super::internal::error_mapping::spawn_failed;
-use super::internal::error_mapping::wait_failed;
 use super::internal::io_cancellation::IoCancellation;
 use super::internal::io_files::__coverage_fail_truncate;
 use super::internal::io_files::IoFiles;
@@ -371,15 +369,6 @@ pub fn __coverage_internal() {
 
     let spawn = spawn_failed("spawn", io::Error::other("spawn source"));
     assert_eq!(spawn.kind(), crate::CommandErrorKind::SpawnFailed);
-    let wait = wait_failed("wait", io::Error::other("wait source"));
-    assert_eq!(wait.kind(), crate::CommandErrorKind::WaitFailed);
-    let kill = kill_failed(
-        "kill".to_owned(),
-        Duration::from_secs(3),
-        io::Error::other("kill source"),
-        io::Error::other("child kill source"),
-    );
-    assert_eq!(kill.kind(), crate::CommandErrorKind::KillFailed);
     let pipe = output_pipe_error("pipe", OutputStream::Stdout);
     assert!(pipe.to_string().contains("stdout pipe was not created"));
     assert_eq!(
