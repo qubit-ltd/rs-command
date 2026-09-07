@@ -470,13 +470,10 @@ pub fn __coverage_internal() {
     let tee_input = vec![b'o'; 3 * 8 * 1024];
     let tee_error = read_output(
         &mut Cursor::new(tee_input),
-        OutputCaptureOptions {
-            max_bytes: Some(2 * 8 * 1024),
-            tee: Some(OutputTee {
-                writer: Box::new(FailingWriter { fail_write: true }),
-                path: "tee-write.log".into(),
-            }),
-        },
+        OutputCaptureOptions::new(
+            Some(2 * 8 * 1024),
+            Some(OutputTee::new(Box::new(FailingWriter { fail_write: true }), "tee-write.log".into())),
+        ),
     )
     .expect_err("coverage tee write failure should be returned");
     let OutputCaptureError::Write { output, .. } = tee_error else {
@@ -487,13 +484,10 @@ pub fn __coverage_internal() {
 
     let flush_error = read_output(
         &mut Cursor::new(b"output".to_vec()),
-        OutputCaptureOptions {
-            max_bytes: None,
-            tee: Some(OutputTee {
-                writer: Box::new(FailingWriter { fail_write: false }),
-                path: "tee-flush.log".into(),
-            }),
-        },
+        OutputCaptureOptions::new(
+            None,
+            Some(OutputTee::new(Box::new(FailingWriter { fail_write: false }), "tee-flush.log".into())),
+        ),
     )
     .expect_err("coverage tee flush failure should be returned");
     assert!(matches!(flush_error, OutputCaptureError::Write { .. }));
@@ -545,7 +539,10 @@ pub fn __coverage_internal() {
         })),
     )
     .expect_err("coverage elapsed failure should retain helper failures");
-    assert_eq!(elapsed_with_helper_errors.kind(), crate::CommandErrorKind::TimeFailed);
+    assert_eq!(
+        elapsed_with_helper_errors.kind(),
+        crate::CommandErrorKind::TimeFailed
+    );
     assert_eq!(elapsed_with_helper_errors.cleanup_failures().len(), 3);
 
     let stdout_error = collect_output(

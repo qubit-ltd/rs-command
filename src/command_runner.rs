@@ -30,6 +30,7 @@ use internal::finished_command::FinishedCommand;
 use internal::output_capture_options::OutputCaptureOptions;
 use internal::output_collector::read_output_stream;
 use internal::output_reader::OutputReader;
+use internal::output_tee::OutputTee;
 use internal::prepared_command::PreparedCommand;
 use internal::process_launcher::spawn_child;
 use internal::running_command::RunningCommand;
@@ -293,14 +294,20 @@ impl CommandRunner {
         let stdout_reader = start_output_reader(&command_text, OutputStream::Stdout, || {
             read_output_stream(
                 stdout,
-                OutputCaptureOptions::new(self.max_stdout_bytes, stdout_file, stdout_file_path),
+                OutputCaptureOptions::new(
+                    self.max_stdout_bytes,
+                    stdout_file.zip(stdout_file_path).map(|(file, path)| OutputTee::new(Box::new(file), path)),
+                ),
             )
         })?;
         starting_command.set_stdout_reader(stdout_reader);
         let stderr_reader = start_output_reader(&command_text, OutputStream::Stderr, || {
             read_output_stream(
                 stderr,
-                OutputCaptureOptions::new(self.max_stderr_bytes, stderr_file, stderr_file_path),
+                OutputCaptureOptions::new(
+                    self.max_stderr_bytes,
+                    stderr_file.zip(stderr_file_path).map(|(file, path)| OutputTee::new(Box::new(file), path)),
+                ),
             )
         })?;
         starting_command.set_stderr_reader(stderr_reader);
