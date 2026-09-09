@@ -674,6 +674,7 @@ mod tests {
             .cleanup_failures()
             .iter()
             .map(|failure| match failure {
+                CommandCleanupFailure::Wait { .. } => "wait",
                 CommandCleanupFailure::Time { .. } => "time",
                 CommandCleanupFailure::StdoutRead { .. } => "stdout-read",
                 CommandCleanupFailure::StdoutCancellation { .. } => "stdout-cancel",
@@ -767,14 +768,18 @@ mod tests {
 
         use super::super::scripted_child::ScriptedChild as RecordingChild;
         for event_kind in 0..7 {
-            for termination_fails in [false, true] {
+            for termination_mode in 0..3 {
                 let calls = Arc::new(Mutex::new(Vec::new()));
-                let child = if termination_fails {
+                let child = if termination_mode == 1 {
                     let direct = RecordingChild::new("child", raw_child(), Arc::clone(&calls))
                         .kill_error(io::Error::other("child denied"));
                     let tree = RecordingChild::new("tree", Box::new(direct), calls)
                         .kill_error(io::Error::other("tree denied"))
                         .try_wait_results((0..9).map(|_| Ok(None)));
+                    ManagedChildProcess::new(Box::new(tree), true)
+                } else if termination_mode == 2 {
+                    let tree = RecordingChild::new("tree", raw_child(), calls)
+                        .wait_error(io::Error::other("final wait failed"));
                     ManagedChildProcess::new(Box::new(tree), true)
                 } else {
                     terminating_child(status(0))
@@ -827,15 +832,16 @@ mod tests {
                 assert_eq!(
                     error.kind(),
                     expected,
-                    "event {event_kind}, termination failure {termination_fails}"
+                    "event {event_kind}, termination mode {termination_mode}"
                 );
                 let cleanup = cleanup_order(&error);
                 assert!(cleanup.ends_with(&["stdout-read", "stderr-write", "stdin-write"]));
-                assert_eq!(error.process_tree_source().is_some(), termination_fails);
-                assert_eq!(error.child_source().is_some(), termination_fails && event_kind < 4);
+                assert_eq!(error.process_tree_source().is_some(), termination_mode == 1);
+                assert_eq!(error.child_source().is_some(), termination_mode == 1 && event_kind < 4);
+                assert_eq!(cleanup.contains(&"wait"), termination_mode == 2 && event_kind < 4);
                 assert_eq!(
                     error.output().is_some(),
-                    event_kind >= 4 || (!termination_fails && event_kind < 2)
+                    event_kind >= 4 || (termination_mode == 0 && event_kind < 2)
                 );
             }
         }
