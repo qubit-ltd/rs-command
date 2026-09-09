@@ -113,7 +113,7 @@ impl StopReason {
         finalize_error: CommandError,
     ) -> CommandError {
         self.into_primary_error(command, None)
-            .with_cleanup_failures(finalize_error.into_cleanup_failures())
+            .with_finalization_error(finalize_error)
     }
 }
 

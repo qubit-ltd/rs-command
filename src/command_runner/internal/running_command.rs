@@ -249,13 +249,8 @@ impl RunningCommand {
         let finished = match finished {
             Ok(finished) => finished,
             Err(error) => {
-                if matches!(reason, StopReason::TimeFailed { status: Some(_), .. }) {
-                    return Err(reason
-                        .into_error_after_finalize(command_text, error)
-                        .with_cleanup_failures(outcome.cleanup_failures)
-                        .with_cleanup_failures(io_cleanup_failures));
-                }
-                return Err(error
+                return Err(reason
+                    .into_error_after_finalize(command_text, error)
                     .with_cleanup_failures(outcome.cleanup_failures)
                     .with_cleanup_failures(io_cleanup_failures));
             }
@@ -390,7 +385,6 @@ mod tests {
     use crate::CommandError;
     use crate::CommandErrorKind;
     use crate::CommandErrorReason;
-    use crate::OutputStream;
 
     #[cfg(unix)]
     fn status(code: i32) -> ExitStatus {
@@ -639,7 +633,7 @@ mod tests {
                 },
                 Some(Duration::from_secs(2)),
             ),
-            "output failure should supersede timeout after termination",
+            "timeout should remain primary after output failure",
         )
     }
 
@@ -680,6 +674,7 @@ mod tests {
             .cleanup_failures()
             .iter()
             .map(|failure| match failure {
+                CommandCleanupFailure::Time { .. } => "time",
                 CommandCleanupFailure::StdoutRead { .. } => "stdout-read",
                 CommandCleanupFailure::StdoutCancellation { .. } => "stdout-cancel",
                 CommandCleanupFailure::StderrWrite { .. } => "stderr-write",
@@ -695,7 +690,8 @@ mod tests {
 
     #[derive(Clone, Copy)]
     enum ExpectedReason {
-        ReadOutput,
+        TimedOut,
+        Cancelled,
         TimeFailed,
         WaitFailed,
     }
@@ -706,20 +702,21 @@ mod tests {
             (
                 "timeout plus output read failure",
                 timeout_with_output_failure as fn() -> CommandError,
-                CommandErrorKind::ReadOutputFailed,
-                ExpectedReason::ReadOutput,
+                CommandErrorKind::TimedOut,
+                ExpectedReason::TimedOut,
                 true,
-                &[][..],
+                &["stdout-read"][..],
             ),
             (
                 "cancellation plus tree fallback and helper failures",
                 cancellation_with_fallback_and_helper_failures,
-                CommandErrorKind::TimeFailed,
-                ExpectedReason::TimeFailed,
+                CommandErrorKind::Cancelled,
+                ExpectedReason::Cancelled,
                 false,
                 &[
                     "process-tree",
                     "direct-child",
+                    "time",
                     "stdout-read",
                     "stdout-cancel",
                     "stderr-write",
@@ -733,7 +730,7 @@ mod tests {
                 time_failure_with_helper_failures,
                 CommandErrorKind::TimeFailed,
                 ExpectedReason::TimeFailed,
-                false,
+                true,
                 &["stdout-read", "stderr-write", "stdin-write"][..],
             ),
             (
@@ -752,19 +749,136 @@ mod tests {
             assert!(
                 matches!(
                     (error.reason(), expected_reason),
-                    (
-                        CommandErrorReason::ReadOutputFailed {
-                            stream: OutputStream::Stdout,
-                            ..
-                        },
-                        ExpectedReason::ReadOutput
-                    ) | (CommandErrorReason::TimeFailed { .. }, ExpectedReason::TimeFailed)
+                    (CommandErrorReason::TimedOut { .. }, ExpectedReason::TimedOut)
+                        | (CommandErrorReason::Cancelled, ExpectedReason::Cancelled)
+                        | (CommandErrorReason::TimeFailed { .. }, ExpectedReason::TimeFailed)
                         | (CommandErrorReason::WaitFailed { .. }, ExpectedReason::WaitFailed)
                 ),
                 "{name}"
             );
             assert_eq!(error.output().is_some(), has_output, "{name}");
             assert_eq!(cleanup_order(&error), expected_cleanup, "{name}");
+        }
+    }
+    #[test]
+    fn test_resolve_event_preserves_all_stop_reasons_across_cleanup_outcomes() {
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        use super::super::scripted_child::ScriptedChild as RecordingChild;
+        for event_kind in 0..7 {
+            for termination_fails in [false, true] {
+                let calls = Arc::new(Mutex::new(Vec::new()));
+                let child = if termination_fails {
+                    let direct = RecordingChild::new("child", raw_child(), Arc::clone(&calls))
+                        .kill_error(io::Error::other("child denied"));
+                    let tree = RecordingChild::new("tree", Box::new(direct), calls)
+                        .kill_error(io::Error::other("tree denied"))
+                        .try_wait_results((0..9).map(|_| Ok(None)));
+                    ManagedChildProcess::new(Box::new(tree), true)
+                } else {
+                    terminating_child(status(0))
+                };
+                let (event, expected) = match event_kind {
+                    0 => (
+                        RunEvent::TimedOut {
+                            timeout: Duration::from_secs(2),
+                            status: None,
+                        },
+                        CommandErrorKind::TimedOut,
+                    ),
+                    1 => (RunEvent::Cancelled { status: None }, CommandErrorKind::Cancelled),
+                    2 => (
+                        RunEvent::WaitFailed(io::Error::other("initial wait failed")),
+                        CommandErrorKind::WaitFailed,
+                    ),
+                    3 => (
+                        RunEvent::TimeFailed {
+                            source: TimeError::InstantOverflow,
+                            status: None,
+                        },
+                        CommandErrorKind::TimeFailed,
+                    ),
+                    4 => (
+                        RunEvent::TimedOut {
+                            timeout: Duration::from_secs(2),
+                            status: Some(status(0)),
+                        },
+                        CommandErrorKind::TimedOut,
+                    ),
+                    5 => (
+                        RunEvent::Cancelled {
+                            status: Some(status(0)),
+                        },
+                        CommandErrorKind::Cancelled,
+                    ),
+                    _ => (
+                        RunEvent::TimeFailed {
+                            source: TimeError::InstantOverflow,
+                            status: Some(status(0)),
+                        },
+                        CommandErrorKind::TimeFailed,
+                    ),
+                };
+                let error = expect_error(
+                    running(child, io_with_failures()).resolve_event(event, None),
+                    "a stopped command must remain an error",
+                );
+                assert_eq!(
+                    error.kind(),
+                    expected,
+                    "event {event_kind}, termination failure {termination_fails}"
+                );
+                let cleanup = cleanup_order(&error);
+                assert!(cleanup.ends_with(&["stdout-read", "stderr-write", "stdin-write"]));
+                assert_eq!(error.process_tree_source().is_some(), termination_fails);
+                assert_eq!(error.child_source().is_some(), termination_fails && event_kind < 4);
+                assert_eq!(
+                    error.output().is_some(),
+                    event_kind >= 4 || (!termination_fails && event_kind < 2)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_timeout_retains_each_individual_helper_failure() {
+        for failed_stream in 0..3 {
+            let stdout = if failed_stream == 0 {
+                failing_stdout()
+            } else {
+                successful_reader()
+            };
+            let stderr = if failed_stream == 1 {
+                failing_stderr()
+            } else {
+                successful_reader()
+            };
+            let stdin = if failed_stream == 2 {
+                Some(completed_writer(Err(io::Error::other("stdin failed"))))
+            } else {
+                None
+            };
+            let error = expect_error(
+                running(terminating_child(status(0)), CommandIo::new(stdout, stderr, stdin)).resolve_event(
+                    RunEvent::TimedOut {
+                        timeout: Duration::from_secs(2),
+                        status: None,
+                    },
+                    None,
+                ),
+                "timeout must remain primary",
+            );
+            assert_eq!(error.kind(), CommandErrorKind::TimedOut);
+            assert!(error.output().is_some());
+            assert_eq!(
+                cleanup_order(&error),
+                [match failed_stream {
+                    0 => "stdout-read",
+                    1 => "stderr-write",
+                    _ => "stdin-write",
+                }]
+            );
         }
     }
 }

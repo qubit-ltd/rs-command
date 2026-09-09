@@ -65,118 +65,95 @@ impl<'a> ProcessTerminator<'a> {
         mut self,
         observed_status: Option<ExitStatus>,
     ) -> Result<ProcessTerminationOutcome, ProcessTerminationError> {
-        if !self.child.process_tree_managed() {
-            if let Some(status) = observed_status {
-                return Ok(Self::success(status));
-            }
-            if let Err(child_source) = self.child.start_kill_child() {
-                let status = self.child.try_wait().map_err(ProcessTerminationError::Wait)?;
-                if let Some(status) = status {
-                    return Ok(Self::success(status));
-                }
-                return Err(ProcessTerminationError::Kill(
-                    io::Error::other("direct kill used without tree management"),
-                    child_source,
-                ));
-            }
-            return self
-                .child
-                .wait()
-                .map(Self::success)
-                .map_err(ProcessTerminationError::Wait);
-        }
-
-        match self.child.start_kill_tree() {
-            Ok(()) => match observed_status {
-                Some(status) => Ok(Self::success(status)),
-                None => self
-                    .child
-                    .wait()
-                    .map(Self::success)
-                    .map_err(ProcessTerminationError::Wait),
-            },
-            Err(process_tree_source) => {
-                if let Some(status) = observed_status {
-                    return Ok(Self::tree_failure_outcome(status, process_tree_source));
-                }
-                match self.status_after_termination_failure(&process_tree_source) {
-                    Ok(Some(status)) => Ok(Self::tree_failure_outcome(status, process_tree_source)),
-                    Ok(None) => match self.child.start_kill_child() {
-                        Ok(()) => match self.child.wait() {
-                            Ok(status) => Ok(ProcessTerminationOutcome {
-                                status,
-                                cleanup_failures: vec![CommandCleanupFailure::ProcessTreeTermination {
-                                    source: process_tree_source,
-                                }],
-                            }),
-                            Err(wait_source) => Err(ProcessTerminationError::WaitAfterTreeTermination {
-                                wait_source,
-                                process_tree_source,
-                            }),
-                        },
-                        Err(child_source) => {
-                            let status = self.child.try_wait().map_err(ProcessTerminationError::Wait)?;
-                            if let Some(status) = status {
-                                Ok(ProcessTerminationOutcome {
-                                    status,
-                                    cleanup_failures: vec![
-                                        CommandCleanupFailure::ProcessTreeTermination {
-                                            source: process_tree_source,
-                                        },
-                                        CommandCleanupFailure::ChildTermination { source: child_source },
-                                    ],
-                                })
-                            } else {
-                                Err(ProcessTerminationError::Kill(process_tree_source, child_source))
+        let mut failures = Vec::new();
+        if self.child.process_tree_managed() {
+            match self.child.start_kill_tree() {
+                Ok(()) => return self.finish_wait(observed_status, failures),
+                Err(source) => {
+                    let tree_gone = Self::process_tree_already_exited(&source);
+                    if let Some(status) = observed_status {
+                        if !tree_gone {
+                            failures.push(CommandCleanupFailure::ProcessTreeTermination { source });
+                        }
+                        return Ok(Self::success(status, failures));
+                    }
+                    failures.push(CommandCleanupFailure::ProcessTreeTermination { source });
+                    for attempt in 0..KILL_FAILURE_EXIT_CHECK_ATTEMPTS {
+                        match self.child.try_wait() {
+                            Ok(Some(status)) => {
+                                if tree_gone {
+                                    let _ = failures.remove(0);
+                                }
+                                return Ok(Self::success(status, failures));
+                            }
+                            Ok(None) => {}
+                            Err(source) => {
+                                failures.push(CommandCleanupFailure::Wait { source });
+                                break;
                             }
                         }
-                    },
-                    Err(wait_source) => Err(ProcessTerminationError::WaitAfterTreeTermination {
-                        wait_source,
-                        process_tree_source,
+                        if attempt + 1 < KILL_FAILURE_EXIT_CHECK_ATTEMPTS {
+                            thread::sleep(KILL_FAILURE_EXIT_CHECK_DELAY);
+                        }
+                    }
+                }
+            }
+        } else if let Some(status) = observed_status {
+            return Ok(Self::success(status, failures));
+        }
+
+        match self.child.start_kill_child() {
+            Ok(()) => self.finish_wait(None, failures),
+            Err(source) => {
+                failures.push(CommandCleanupFailure::ChildTermination { source });
+                match self.child.try_wait() {
+                    Ok(Some(status)) => Ok(Self::success(status, failures)),
+                    Ok(None) => Err(ProcessTerminationError {
+                        cleanup_failures: failures,
                     }),
+                    Err(source) => {
+                        failures.push(CommandCleanupFailure::Wait { source });
+                        Err(ProcessTerminationError {
+                            cleanup_failures: failures,
+                        })
+                    }
                 }
             }
         }
     }
 
-    /// Builds a successful outcome without cleanup failures.
-    fn success(status: ExitStatus) -> ProcessTerminationOutcome {
-        ProcessTerminationOutcome {
-            status,
-            cleanup_failures: Vec::new(),
+    /// Reaps only after a successful termination request, preserving prior
+    /// failures.
+    ///
+    /// An observed status avoids waiting again. OS wait errors retain all
+    /// earlier failures; successful termination requests do not imply a
+    /// hard deadline.
+    fn finish_wait(
+        &mut self,
+        status: Option<ExitStatus>,
+        mut failures: Vec<CommandCleanupFailure>,
+    ) -> Result<ProcessTerminationOutcome, ProcessTerminationError> {
+        let result = match status {
+            Some(status) => Ok(status),
+            None => self.child.wait(),
+        };
+        match result {
+            Ok(status) => Ok(Self::success(status, failures)),
+            Err(source) => {
+                failures.push(CommandCleanupFailure::Wait { source });
+                Err(ProcessTerminationError {
+                    cleanup_failures: failures,
+                })
+            }
         }
     }
 
-    /// Builds an outcome after a process-tree termination failure.
-    fn tree_failure_outcome(status: ExitStatus, process_tree_source: io::Error) -> ProcessTerminationOutcome {
-        let cleanup_failures = if Self::process_tree_already_exited(&process_tree_source) {
-            Vec::new()
-        } else {
-            vec![CommandCleanupFailure::ProcessTreeTermination {
-                source: process_tree_source,
-            }]
-        };
+    /// Builds an outcome retaining every preceding termination failure.
+    fn success(status: ExitStatus, cleanup_failures: Vec<CommandCleanupFailure>) -> ProcessTerminationOutcome {
         ProcessTerminationOutcome {
             status,
             cleanup_failures,
         }
-    }
-
-    /// Resolves child status after process-tree termination failure.
-    fn status_after_termination_failure(&mut self, source: &io::Error) -> io::Result<Option<ExitStatus>> {
-        if Self::process_tree_already_exited(source) {
-            return self.child.wait().map(Some);
-        }
-        for attempt in 0..KILL_FAILURE_EXIT_CHECK_ATTEMPTS {
-            if let Some(status) = self.child.try_wait()? {
-                return Ok(Some(status));
-            }
-            if attempt + 1 < KILL_FAILURE_EXIT_CHECK_ATTEMPTS {
-                thread::sleep(KILL_FAILURE_EXIT_CHECK_DELAY);
-            }
-        }
-        Ok(None)
     }
 
     /// Reports whether the platform says the managed tree no longer exists.
@@ -194,7 +171,6 @@ impl<'a> ProcessTerminator<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
     use std::io;
     #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt;
@@ -206,12 +182,13 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use process_wrap::std::ChildWrapper;
-
     use super::super::managed_child_process::ManagedChildProcess;
     use super::super::process_termination_error::ProcessTerminationError;
+    use super::super::scripted_child::ScriptedChild;
+    use super::super::scripted_child::raw_child;
     use super::super::stop_reason::StopReason;
     use super::ProcessTerminator;
+    use crate::CommandCleanupFailure;
     use crate::CommandErrorKind;
 
     #[cfg(unix)]
@@ -235,101 +212,13 @@ mod tests {
         }
     }
 
-    #[derive(Debug)]
-    struct ScriptedChild {
-        name: &'static str,
-        inner: Box<dyn ChildWrapper>,
-        calls: Arc<Mutex<Vec<String>>>,
-        kill_error: Option<io::Error>,
-        wait_result: Option<io::Result<ExitStatus>>,
-        try_wait_results: VecDeque<io::Result<Option<ExitStatus>>>,
-    }
-
-    impl ScriptedChild {
-        fn new(name: &'static str, inner: Box<dyn ChildWrapper>, calls: Arc<Mutex<Vec<String>>>) -> Self {
-            Self {
-                name,
-                inner,
-                calls,
-                kill_error: None,
-                wait_result: None,
-                try_wait_results: VecDeque::new(),
-            }
-        }
-
-        fn kill_error(mut self, source: io::Error) -> Self {
-            self.kill_error = Some(source);
-            self
-        }
-
-        fn wait_status(mut self, exit_status: ExitStatus) -> Self {
-            self.wait_result = Some(Ok(exit_status));
-            self
-        }
-
-        fn try_wait_results(mut self, results: impl IntoIterator<Item = io::Result<Option<ExitStatus>>>) -> Self {
-            self.try_wait_results.extend(results);
-            self
-        }
-
-        fn record(&self, operation: &str) {
-            self.calls
-                .lock()
-                .expect("call log should not be poisoned")
-                .push(format!("{}.{}", self.name, operation));
-        }
-    }
-
-    impl ChildWrapper for ScriptedChild {
-        fn inner(&self) -> &dyn ChildWrapper {
-            self.inner.as_ref()
-        }
-
-        fn inner_mut(&mut self) -> &mut dyn ChildWrapper {
-            self.inner.as_mut()
-        }
-
-        fn into_inner(self: Box<Self>) -> Box<dyn ChildWrapper> {
-            self.inner
-        }
-
-        fn start_kill(&mut self) -> io::Result<()> {
-            self.record("kill");
-            match self.kill_error.take() {
-                Some(source) => Err(source),
-                None => Ok(()),
-            }
-        }
-
-        fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-            self.record("try_wait");
-            self.try_wait_results
-                .pop_front()
-                .unwrap_or_else(|| self.inner.try_wait())
-        }
-
-        fn wait(&mut self) -> io::Result<ExitStatus> {
-            self.record("wait");
-            self.wait_result.take().unwrap_or_else(|| self.inner.wait())
-        }
-    }
-
-    fn raw_child() -> Box<dyn ChildWrapper> {
-        Box::new(
-            ProcessCommand::new("rustc")
-                .arg("--version")
-                .spawn()
-                .expect("test child should spawn"),
-        )
-    }
-
     #[test]
     fn test_process_terminator_treats_not_found_tree_as_exit_race() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let direct = ScriptedChild::new("child", raw_child(), Arc::clone(&calls));
         let tree = ScriptedChild::new("tree", Box::new(direct), Arc::clone(&calls))
             .kill_error(process_tree_not_found())
-            .wait_status(status(17));
+            .try_wait_results([Ok(Some(status(17)))]);
         let mut child = ManagedChildProcess::new(Box::new(tree), true);
 
         let outcome = ProcessTerminator::new(&mut child)
@@ -340,7 +229,7 @@ mod tests {
         assert!(outcome.cleanup_failures.is_empty());
         assert_eq!(
             *calls.lock().expect("call log should not be poisoned"),
-            ["tree.kill", "tree.wait"]
+            ["tree.kill", "tree.try_wait"]
         );
     }
 
@@ -416,18 +305,109 @@ mod tests {
                     timeout: Duration::from_secs(2),
                     status: None,
                 },
-                CommandErrorKind::KillFailed,
+                CommandErrorKind::TimedOut,
             ),
-            (StopReason::Cancelled { status: None }, CommandErrorKind::CancelFailed),
+            (StopReason::Cancelled { status: None }, CommandErrorKind::Cancelled),
         ];
 
         for (reason, expected_kind) in cases {
-            let error = ProcessTerminationError::Kill(
-                io::Error::other("tree kill failed"),
-                io::Error::other("child kill failed"),
-            )
+            let error = ProcessTerminationError {
+                cleanup_failures: vec![
+                    CommandCleanupFailure::ProcessTreeTermination {
+                        source: io::Error::other("tree kill failed"),
+                    },
+                    CommandCleanupFailure::ChildTermination {
+                        source: io::Error::other("child kill failed"),
+                    },
+                ],
+            }
             .into_command_error(reason, "command");
             assert_eq!(error.kind(), expected_kind);
+        }
+    }
+    #[test]
+    fn test_process_terminator_retains_every_failure_without_waiting_after_failed_kills() {
+        for wait_error in [false, true] {
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let direct = ScriptedChild::new("child", raw_child(), Arc::clone(&calls))
+                .kill_error(io::Error::other("child denied"));
+            let last = if wait_error {
+                Err(io::Error::other("status failed"))
+            } else {
+                Ok(None)
+            };
+            let tree = ScriptedChild::new("tree", Box::new(direct), Arc::clone(&calls))
+                .kill_error(io::Error::other("tree denied"))
+                .try_wait_results((0..8).map(|_| Ok(None)).chain(std::iter::once(last)));
+            let mut child = ManagedChildProcess::new(Box::new(tree), true);
+            let error = ProcessTerminator::new(&mut child)
+                .terminate(None)
+                .expect_err("both rejected kills must fail");
+            assert_eq!(error.cleanup_failures.len(), if wait_error { 3 } else { 2 });
+            assert!(matches!(
+                error.cleanup_failures[0],
+                CommandCleanupFailure::ProcessTreeTermination { .. }
+            ));
+            assert!(matches!(
+                error.cleanup_failures[1],
+                CommandCleanupFailure::ChildTermination { .. }
+            ));
+            if wait_error {
+                assert!(matches!(error.cleanup_failures[2], CommandCleanupFailure::Wait { .. }));
+            }
+            let calls = calls.lock().expect("calls should be readable");
+            assert!(!calls.iter().any(|call| call.ends_with(".wait")));
+            assert_eq!(calls.iter().filter(|call| call.as_str() == "child.kill").count(), 1);
+        }
+    }
+
+    #[test]
+    fn test_process_terminator_keeps_tree_failure_when_fallback_wait_fails() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let direct = ScriptedChild::new("child", raw_child(), Arc::clone(&calls));
+        let tree = ScriptedChild::new("tree", Box::new(direct), Arc::clone(&calls))
+            .kill_error(io::Error::other("tree denied"))
+            .try_wait_results([Err(io::Error::other("initial status failed"))])
+            .wait_error(io::Error::other("final status failed"));
+        let mut child = ManagedChildProcess::new(Box::new(tree), true);
+        let error = ProcessTerminator::new(&mut child)
+            .terminate(None)
+            .expect_err("wait failure must be retained");
+        assert!(matches!(
+            error.cleanup_failures.as_slice(),
+            [
+                CommandCleanupFailure::ProcessTreeTermination { .. },
+                CommandCleanupFailure::Wait { .. },
+                CommandCleanupFailure::Wait { .. }
+            ]
+        ));
+        assert!(
+            calls
+                .lock()
+                .expect("calls should be readable")
+                .contains(&"child.kill".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_process_terminator_does_not_wait_for_observed_status() {
+        for managed in [false, true] {
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let tree =
+                ScriptedChild::new("tree", raw_child(), Arc::clone(&calls)).kill_error(io::Error::other("tree denied"));
+            let mut child = ManagedChildProcess::new(Box::new(tree), managed);
+            let result = ProcessTerminator::new(&mut child)
+                .terminate(Some(status(9)))
+                .expect("observed status must survive");
+            assert_eq!(result.status.code(), Some(9));
+            assert_eq!(result.cleanup_failures.len(), usize::from(managed));
+            assert!(
+                !calls
+                    .lock()
+                    .expect("calls should be readable")
+                    .iter()
+                    .any(|call| call.ends_with("wait"))
+            );
         }
     }
 }

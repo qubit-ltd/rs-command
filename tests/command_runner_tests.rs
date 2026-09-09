@@ -359,6 +359,8 @@ mod unix {
         let temp_dir =
             LocalTempDir::with_prefix("qubit-command-test-").expect("command test temp directory should be created");
         let started_path = temp_dir.path().join("started");
+        let captured_path = temp_dir.path().join("captured");
+        let tee_path = captured_path.clone();
         let script = format!(
             "printf started; : > '{}'; while :; do sleep 1; done",
             started_path.display(),
@@ -370,16 +372,24 @@ mod unix {
         let worker = std::thread::spawn(move || {
             let result = runner.run_with(
                 Command::shell(&script),
-                CommandRunOptions::new().cancellation(run_cancellation),
+                CommandRunOptions::new()
+                    .cancellation(run_cancellation)
+                    .tee_stdout_to_file(tee_path),
             );
             sender.send(result).expect("test receiver should remain connected");
         });
 
         let deadline = Instant::now() + Duration::from_secs(1);
-        while !started_path.exists() && Instant::now() < deadline {
+        // A child-side marker does not prove the reader has captured stdout.
+        // The tee write precedes retaining the same chunk in the reader.
+        while fs::read(&captured_path).ok().as_deref() != Some(b"started".as_slice()) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(started_path.exists(), "command should start before cancellation");
+        assert_eq!(
+            fs::read(&captured_path).expect("reader should tee before cancellation"),
+            b"started"
+        );
 
         cancellation.cancel();
         let error = receiver

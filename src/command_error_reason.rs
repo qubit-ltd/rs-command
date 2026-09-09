@@ -52,15 +52,6 @@ pub enum CommandErrorReason {
     },
     /// Cancellation was requested before startup.
     CancelledBeforeStart,
-    /// Termination after a timeout failed.
-    KillFailed {
-        /// Timeout that was exceeded.
-        timeout: Duration,
-        /// Process-tree termination error.
-        process_tree_source: io::Error,
-        /// Direct-child termination error.
-        child_source: io::Error,
-    },
     /// Reading a captured stream failed.
     ReadOutputFailed {
         /// Output stream whose reader failed.
@@ -157,13 +148,6 @@ pub enum CommandErrorReason {
     },
     /// The command was cancelled after startup.
     Cancelled,
-    /// Process-tree cancellation failed.
-    CancelFailed {
-        /// Process-tree termination error.
-        process_tree_source: io::Error,
-        /// Direct-child termination error.
-        child_source: io::Error,
-    },
     /// Successful command output was truncated.
     OutputTruncated,
     /// The process exited with an unconfigured status.
@@ -181,16 +165,6 @@ impl fmt::Debug for CommandErrorReason {
             Self::SpawnFailed { source } => formatter.debug_struct("SpawnFailed").field("source", source).finish(),
             Self::WaitFailed { source } => formatter.debug_struct("WaitFailed").field("source", source).finish(),
             Self::CancelledBeforeStart => formatter.write_str("CancelledBeforeStart"),
-            Self::KillFailed {
-                timeout,
-                process_tree_source,
-                child_source,
-            } => formatter
-                .debug_struct("KillFailed")
-                .field("timeout", timeout)
-                .field("process_tree_source", process_tree_source)
-                .field("child_source", child_source)
-                .finish(),
             Self::ReadOutputFailed { stream, source } => formatter
                 .debug_struct("ReadOutputFailed")
                 .field("stream", stream)
@@ -261,14 +235,6 @@ impl fmt::Debug for CommandErrorReason {
                 .finish(),
             Self::TimedOut { timeout } => formatter.debug_struct("TimedOut").field("timeout", timeout).finish(),
             Self::Cancelled => formatter.write_str("Cancelled"),
-            Self::CancelFailed {
-                process_tree_source,
-                child_source,
-            } => formatter
-                .debug_struct("CancelFailed")
-                .field("process_tree_source", process_tree_source)
-                .field("child_source", child_source)
-                .finish(),
             Self::OutputTruncated => formatter.write_str("OutputTruncated"),
             Self::UnexpectedExit { exit_code, expected } => formatter
                 .debug_struct("UnexpectedExit")
@@ -387,23 +353,6 @@ mod tests {
                 has_child_source: false,
             },
             ErrorCase {
-                label: "KillFailed",
-                reason: CommandErrorReason::KillFailed {
-                    timeout: Duration::from_secs(1),
-                    process_tree_source: io_error(),
-                    child_source: io_error(),
-                },
-                reason_debug_key: "KillFailed",
-                expected_display: "failed to terminate timed-out command `command` after 1s; process-tree source: injected error source; child source: injected error source".into(),
-                expected_kind: CommandErrorKind::KillFailed,
-                has_source: true,
-                retains_output: false,
-                expected_exit_code: None,
-                is_unexpected_exit: false,
-                has_process_tree_source: true,
-                has_child_source: true,
-            },
-            ErrorCase {
                 label: "ReadOutputFailed",
                 reason: CommandErrorReason::ReadOutputFailed {
                     stream: OutputStream::Stdout,
@@ -426,7 +375,8 @@ mod tests {
                     source: io_error(),
                 },
                 reason_debug_key: "OpenInputFailed",
-                expected_display: "failed to open stdin file `<redacted path>` for command `command`: injected error source".into(),
+                expected_display:
+                    "failed to open stdin file `<redacted path>` for command `command`: injected error source".into(),
                 expected_kind: CommandErrorKind::OpenInputFailed,
                 has_source: true,
                 retains_output: false,
@@ -437,9 +387,7 @@ mod tests {
             },
             ErrorCase {
                 label: "NonRegularInputFile",
-                reason: CommandErrorReason::NonRegularInputFile {
-                    path: "input".into(),
-                },
+                reason: CommandErrorReason::NonRegularInputFile { path: "input".into() },
                 reason_debug_key: "NonRegularInputFile",
                 expected_display: "stdin path `<redacted path>` for command `command` is not an ordinary file".into(),
                 expected_kind: CommandErrorKind::NonRegularInputFile,
@@ -458,7 +406,8 @@ mod tests {
                     source: io_error(),
                 },
                 reason_debug_key: "OpenOutputFailed",
-                expected_display: "failed to open stdout file `<redacted path>` for command `command`: injected error source".into(),
+                expected_display:
+                    "failed to open stdout file `<redacted path>` for command `command`: injected error source".into(),
                 expected_kind: CommandErrorKind::OpenOutputFailed,
                 has_source: true,
                 retains_output: false,
@@ -491,7 +440,9 @@ mod tests {
                     output_path: "output".into(),
                 },
                 reason_debug_key: "InputOutputConflict",
-                expected_display: "stdin file '<redacted path>' conflicts with stdout file '<redacted path>' for command 'command'".into(),
+                expected_display:
+                    "stdin file '<redacted path>' conflicts with stdout file '<redacted path>' for command 'command'"
+                        .into(),
                 expected_kind: CommandErrorKind::InputOutputConflict,
                 has_source: false,
                 retains_output: false,
@@ -507,7 +458,9 @@ mod tests {
                     stderr_path: "stderr".into(),
                 },
                 reason_debug_key: "OutputFilesConflict",
-                expected_display: "stdout file '<redacted path>' conflicts with stderr file '<redacted path>' for command 'command'".into(),
+                expected_display:
+                    "stdout file '<redacted path>' conflicts with stderr file '<redacted path>' for command 'command'"
+                        .into(),
                 expected_kind: CommandErrorKind::OutputFilesConflict,
                 has_source: false,
                 retains_output: false,
@@ -523,7 +476,8 @@ mod tests {
                     source: io_error(),
                 },
                 reason_debug_key: "InspectIoFileFailed",
-                expected_display: "failed to inspect I/O file '<redacted path>' for command 'command': injected error source".into(),
+                expected_display:
+                    "failed to inspect I/O file '<redacted path>' for command 'command': injected error source".into(),
                 expected_kind: CommandErrorKind::InspectIoFileFailed,
                 has_source: true,
                 retains_output: false,
@@ -563,9 +517,7 @@ mod tests {
             },
             ErrorCase {
                 label: "TimeFailed",
-                reason: CommandErrorReason::TimeFailed {
-                    source: time_source,
-                },
+                reason: CommandErrorReason::TimeFailed { source: time_source },
                 reason_debug_key: "TimeFailed",
                 expected_display: time_display,
                 expected_kind: CommandErrorKind::TimeFailed,
@@ -597,7 +549,8 @@ mod tests {
                     source: io_error(),
                 },
                 reason_debug_key: "WriteOutputFailed",
-                expected_display: "failed to write stdout for command `command` to `<redacted path>`: injected error source".into(),
+                expected_display:
+                    "failed to write stdout for command `command` to `<redacted path>`: injected error source".into(),
                 expected_kind: CommandErrorKind::WriteOutputFailed,
                 has_source: true,
                 retains_output: true,
@@ -633,22 +586,6 @@ mod tests {
                 is_unexpected_exit: false,
                 has_process_tree_source: false,
                 has_child_source: false,
-            },
-            ErrorCase {
-                label: "CancelFailed",
-                reason: CommandErrorReason::CancelFailed {
-                    process_tree_source: io_error(),
-                    child_source: io_error(),
-                },
-                reason_debug_key: "CancelFailed",
-                expected_display: "failed to cancel command `command`; process-tree source: injected error source; child source: injected error source".into(),
-                expected_kind: CommandErrorKind::CancelFailed,
-                has_source: true,
-                retains_output: false,
-                expected_exit_code: None,
-                is_unexpected_exit: false,
-                has_process_tree_source: true,
-                has_child_source: true,
             },
             ErrorCase {
                 label: "OutputTruncated",
@@ -727,6 +664,9 @@ mod tests {
     #[test]
     fn test_command_error_formats_and_exposes_every_cleanup_variant() {
         let error = CommandError::from_reason("command", CommandErrorReason::Cancelled, None).with_cleanup_failures([
+            CommandCleanupFailure::Time {
+                source: TimeError::InstantOverflow,
+            },
             CommandCleanupFailure::Wait { source: io_error() },
             CommandCleanupFailure::ProcessTreeTermination { source: io_error() },
             CommandCleanupFailure::ChildTermination { source: io_error() },
@@ -746,10 +686,10 @@ mod tests {
             },
         ]);
 
-        assert_eq!(error.cleanup_failures().len(), 11);
+        assert_eq!(error.cleanup_failures().len(), 12);
         assert!(error.process_tree_source().is_some());
         assert!(error.child_source().is_some());
-        assert!(error.to_string().contains("11 cleanup failure(s)"));
+        assert!(error.to_string().contains("12 cleanup failure(s)"));
         for failure in error.cleanup_failures() {
             assert!(!format!("{failure:?}").is_empty());
         }
