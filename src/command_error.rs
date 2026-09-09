@@ -139,6 +139,11 @@ impl CommandError {
     }
 
     /// Returns the redacted command representation.
+    ///
+    /// # Returns
+    ///
+    /// The command text with sensitive arguments, environment values, and
+    /// paths removed or masked.
     #[must_use]
     #[inline(always)]
     pub fn command(&self) -> &str {
@@ -146,18 +151,31 @@ impl CommandError {
     }
 
     /// Returns the stable, data-free error category.
+    ///
+    /// # Returns
+    ///
+    /// The category corresponding to the primary failure reason.
     #[inline(always)]
     pub fn kind(&self) -> CommandErrorKind {
         self.reason.as_ref().into()
     }
 
     /// Returns the detailed primary failure reason.
+    ///
+    /// # Returns
+    ///
+    /// The structured reason selected for this error.
     #[inline(always)]
     pub fn reason(&self) -> &CommandErrorReason {
         self.reason.as_ref()
     }
 
     /// Returns captured output retained by the primary failure.
+    ///
+    /// # Returns
+    ///
+    /// `Some(output)` when the failure retained partial or complete output;
+    /// otherwise `None`.
     #[must_use]
     #[inline(always)]
     pub fn output(&self) -> Option<&CommandOutput> {
@@ -165,6 +183,10 @@ impl CommandError {
     }
 
     /// Consumes the error and returns captured output, when available.
+    ///
+    /// # Returns
+    ///
+    /// The retained output, or `None` when no output was available.
     #[must_use]
     #[inline(always)]
     pub fn into_output(self) -> Option<CommandOutput> {
@@ -172,12 +194,20 @@ impl CommandError {
     }
 
     /// Returns every cleanup failure observed after the primary failure.
+    ///
+    /// # Returns
+    ///
+    /// Cleanup failures in canonical resource order.
     #[inline(always)]
     pub fn cleanup_failures(&self) -> &[CommandCleanupFailure] {
         &self.cleanup_failures
     }
 
     /// Returns the process exit code when one was observed.
+    ///
+    /// # Returns
+    ///
+    /// `Some(code)` when a numeric exit code was observed, otherwise `None`.
     #[must_use]
     #[inline]
     pub fn exit_code(&self) -> Option<i32> {
@@ -188,6 +218,10 @@ impl CommandError {
     }
 
     /// Returns whether this is an unexpected process exit.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the primary reason is [`CommandErrorKind::UnexpectedExit`].
     #[must_use]
     #[inline(always)]
     pub fn is_unexpected_exit(&self) -> bool {
@@ -195,6 +229,11 @@ impl CommandError {
     }
 
     /// Returns the first process-tree termination source from cleanup failures.
+    ///
+    /// # Returns
+    ///
+    /// The first process-tree termination error, or `None` when cleanup did
+    /// not report one.
     #[must_use]
     pub fn process_tree_source(&self) -> Option<&io::Error> {
         self.cleanup_failures.iter().find_map(|failure| match failure {
@@ -205,6 +244,11 @@ impl CommandError {
 
     /// Returns the first direct-child termination source from cleanup
     /// failures.
+    ///
+    /// # Returns
+    ///
+    /// The first direct-child termination error, or `None` when cleanup did
+    /// not report one.
     #[must_use]
     pub fn child_source(&self) -> Option<&io::Error> {
         self.cleanup_failures.iter().find_map(|failure| match failure {
