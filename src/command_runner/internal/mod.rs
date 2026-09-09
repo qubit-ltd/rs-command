@@ -38,3 +38,6 @@ pub(in crate::command_runner) mod stdin_pipe;
 pub(in crate::command_runner) mod stdin_writer;
 pub(in crate::command_runner) mod stop_reason;
 pub(in crate::command_runner) mod wait_policy;
+
+#[cfg(test)]
+pub(super) mod scripted_child;

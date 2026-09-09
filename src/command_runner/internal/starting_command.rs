@@ -13,7 +13,10 @@ use super::command_io::CommandIo;
 use super::command_io::cancel_and_join_started_helpers;
 use super::managed_child_process::ManagedChildProcess;
 use super::output_reader::OutputReader;
+use super::process_terminator::ProcessTerminator;
 use super::stdin_writer::OptionalStdinWriter;
+use crate::CommandCleanupFailure;
+use crate::CommandError;
 
 /// Guards a spawned child until all runner-side I/O helpers are ready.
 ///
@@ -135,70 +138,166 @@ impl<'a> StartingCommand<'a> {
         )
     }
 
-    /// Cancels and joins all started I/O helpers.
-    fn join_helpers(&mut self) {
-        let failures = cancel_and_join_started_helpers(
+    /// Explicitly cleans up a failed initialization and preserves its primary
+    /// error.
+    ///
+    /// Cancels all started helpers even when process termination fails. Any
+    /// additional failure is attached to the returned error instead of logged.
+    pub(in crate::command_runner) fn abort(mut self, primary: CommandError) -> CommandError {
+        primary.with_cleanup_failures(self.cleanup())
+    }
+
+    /// Takes all resources, terminates the child and joins the started helpers.
+    ///
+    /// Returns every observed cleanup failure. Repeated calls are harmless;
+    /// failed kill requests with unknown status never enter a blocking wait.
+    fn cleanup(&mut self) -> Vec<CommandCleanupFailure> {
+        let mut failures = Vec::new();
+        if let Some(mut child) = self.child_process.take() {
+            match ProcessTerminator::new(&mut child).terminate(None) {
+                Ok(outcome) => failures.extend(outcome.cleanup_failures),
+                Err(error) => failures.extend(error.into_cleanup_failures()),
+            }
+        }
+        failures.extend(cancel_and_join_started_helpers(
             self.command,
             self.stdout_reader.take(),
             self.stderr_reader.take(),
             self.stdin_writer.take(),
-        );
-        for failure in failures {
-            log::error!(
-                "Command '{}' helper failed during startup cleanup: {failure:?}",
-                self.command
-            );
-        }
+        ));
+        failures
     }
 }
 
 impl Drop for StartingCommand<'_> {
-    /// Best-effort cleanup for initialization that returns early.
+    /// Reuses explicit cleanup as a fallback during unwinding.
     fn drop(&mut self) {
-        let Some(mut child_process) = self.child_process.take() else {
-            self.join_helpers();
-            return;
-        };
+        for failure in self.cleanup() {
+            log::error!("Command '{}' failed during startup cleanup: {failure:?}", self.command);
+        }
+    }
+}
 
-        let tree_managed = child_process.process_tree_managed();
-        if tree_managed {
-            if let Err(process_tree_source) = child_process.start_kill_tree() {
-                let child_result = if child_process.try_wait().ok().flatten().is_none() {
-                    child_process.start_kill_child()
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    use qubit_clock::TimeError;
+
+    use super::super::managed_child_process::ManagedChildProcess;
+    use super::super::scripted_child::ScriptedChild;
+    use super::super::scripted_child::raw_child;
+    use super::StartingCommand;
+    use crate::CommandCleanupFailure;
+    use crate::CommandError;
+    use crate::CommandErrorKind;
+    use crate::CommandErrorReason;
+    use crate::OutputStream;
+
+    #[test]
+    fn test_startup_abort_retains_primary_without_waiting_after_failed_kills() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let direct =
+            ScriptedChild::new("child", raw_child(), Arc::clone(&calls)).kill_error(io::Error::other("child denied"));
+        let tree = ScriptedChild::new("tree", Box::new(direct), Arc::clone(&calls))
+            .kill_error(io::Error::other("tree denied"))
+            .try_wait_results((0..9).map(|_| Ok(None)));
+        let guard = StartingCommand::new("redacted", ManagedChildProcess::new(Box::new(tree), true));
+        let primary = CommandError::from_reason(
+            "redacted",
+            CommandErrorReason::StartOutputThreadFailed {
+                stream: OutputStream::Stderr,
+                source: io::Error::other("thread unavailable"),
+            },
+            None,
+        );
+        let error = guard.abort(primary);
+        assert_eq!(error.kind(), CommandErrorKind::StartOutputThreadFailed);
+        assert!(matches!(
+            error.cleanup_failures(),
+            [
+                CommandCleanupFailure::ProcessTreeTermination { .. },
+                CommandCleanupFailure::ChildTermination { .. }
+            ]
+        ));
+        let calls = calls.lock().expect("calls should be readable");
+        assert!(!calls.iter().any(|call| call.ends_with(".wait")));
+        assert_eq!(calls.iter().filter(|call| call.as_str() == "child.kill").count(), 1);
+        assert_eq!(calls.iter().filter(|call| call.as_str() == "tree.kill").count(), 1);
+    }
+    #[test]
+    fn test_startup_abort_cancels_every_initialized_helper_once() {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::atomic::Ordering;
+        use std::thread;
+
+        use super::super::captured_output::CapturedOutput;
+        use super::super::io_cancellation::IoCancellation;
+        use super::super::output_capture_error::OutputCaptureError;
+        use super::super::output_reader::OutputReader;
+        use super::super::stdin_writer::StdinWriter;
+        for stage in 0_usize..=3 {
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let tree = ScriptedChild::new("tree", raw_child(), Arc::clone(&calls));
+            let mut guard = StartingCommand::new("redacted", ManagedChildProcess::new(Box::new(tree), true));
+            let finished = Arc::new(AtomicUsize::new(0));
+            if stage >= 1 {
+                let (cancel, token) = IoCancellation::pair().expect("stdin cancellation must initialize");
+                let finished = Arc::clone(&finished);
+                guard.set_stdin_writer(Some(StdinWriter::new(
+                    thread::spawn(move || {
+                        while !token.is_cancelled() {
+                            thread::yield_now();
+                        }
+                        finished.fetch_add(1, Ordering::SeqCst);
+                        Err(io::Error::other("stdin failed"))
+                    }),
+                    cancel,
+                )));
+            }
+            for stream in 0..stage.saturating_sub(1) {
+                let (cancel, token) = IoCancellation::pair().expect("output cancellation must initialize");
+                let finished = Arc::clone(&finished);
+                let reader = OutputReader::new(
+                    thread::spawn(move || {
+                        while !token.is_cancelled() {
+                            thread::yield_now();
+                        }
+                        finished.fetch_add(1, Ordering::SeqCst);
+                        Err(OutputCaptureError::Read {
+                            source: io::Error::other("reader failed"),
+                            output: CapturedOutput::default(),
+                        })
+                    }),
+                    cancel,
+                );
+                if stream == 0 {
+                    guard.set_stdout_reader(reader);
                 } else {
-                    Ok(())
-                };
-                match child_result {
-                    Ok(()) => {
-                        log::error!(
-                            "Failed to kill process tree for command '{}' during startup cleanup; direct-child fallback completed: {process_tree_source}",
-                            self.command
-                        );
-                    }
-                    Err(child_source) => {
-                        log::error!(
-                            "Failed to kill command '{}' during startup cleanup: process-tree: {process_tree_source}; child: {child_source}",
-                            self.command
-                        );
-                    }
+                    guard.set_stderr_reader(reader);
                 }
             }
-        } else {
-            if let Err(child_source) = child_process.start_kill_child() {
-                log::error!(
-                    "Failed to kill command '{}' during startup cleanup: {}",
-                    self.command,
-                    child_source,
-                );
-            }
-        }
-        if let Err(wait_source) = child_process.wait() {
-            log::error!(
-                "Failed to wait for command '{}' during startup cleanup: {wait_source}",
-                self.command
+            let error = guard.abort(CommandError::from_reason(
+                "redacted",
+                CommandErrorReason::TimeFailed {
+                    source: TimeError::InstantOverflow,
+                },
+                None,
+            ));
+            assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
+            assert_eq!(finished.load(Ordering::SeqCst), stage);
+            assert_eq!(error.cleanup_failures().len(), stage);
+            assert_eq!(
+                calls
+                    .lock()
+                    .expect("calls readable")
+                    .iter()
+                    .filter(|call| call.as_str() == "tree.kill")
+                    .count(),
+                1
             );
         }
-
-        self.join_helpers();
     }
 }

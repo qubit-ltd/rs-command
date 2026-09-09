@@ -326,16 +326,25 @@ impl CommandRunner {
         let mut starting_command = StartingCommand::new(&command_text, child_process);
         let started_at = self.timer.clock().now();
 
-        let stdin_writer = write_stdin_bytes(&command_text, starting_command.child_process(), stdin_bytes)?;
+        let stdin_writer = match write_stdin_bytes(&command_text, starting_command.child_process(), stdin_bytes) {
+            Ok(value) => value,
+            Err(error) => return Err(starting_command.abort(error)),
+        };
         starting_command.set_stdin_writer(stdin_writer);
 
-        let stdout = take_output_pipe(&command_text, OutputStream::Stdout, || {
+        let stdout = match take_output_pipe(&command_text, OutputStream::Stdout, || {
             starting_command.child_process().stdout().take()
-        })?;
-        let stderr = take_output_pipe(&command_text, OutputStream::Stderr, || {
+        }) {
+            Ok(value) => value,
+            Err(error) => return Err(starting_command.abort(error)),
+        };
+        let stderr = match take_output_pipe(&command_text, OutputStream::Stderr, || {
             starting_command.child_process().stderr().take()
-        })?;
-        let stdout_reader = start_output_reader(&command_text, OutputStream::Stdout, || {
+        }) {
+            Ok(value) => value,
+            Err(error) => return Err(starting_command.abort(error)),
+        };
+        let stdout_reader = match start_output_reader(&command_text, OutputStream::Stdout, || {
             read_output_stream(
                 stdout,
                 OutputCaptureOptions::new(
@@ -343,9 +352,12 @@ impl CommandRunner {
                     OutputTee::from_parts(stdout_file.map(|file| Box::new(file) as _), stdout_file_path),
                 ),
             )
-        })?;
+        }) {
+            Ok(value) => value,
+            Err(error) => return Err(starting_command.abort(error)),
+        };
         starting_command.set_stdout_reader(stdout_reader);
-        let stderr_reader = start_output_reader(&command_text, OutputStream::Stderr, || {
+        let stderr_reader = match start_output_reader(&command_text, OutputStream::Stderr, || {
             read_output_stream(
                 stderr,
                 OutputCaptureOptions::new(
@@ -353,14 +365,15 @@ impl CommandRunner {
                     OutputTee::from_parts(stderr_file.map(|file| Box::new(file) as _), stderr_file_path),
                 ),
             )
-        })?;
+        }) {
+            Ok(value) => value,
+            Err(error) => return Err(starting_command.abort(error)),
+        };
         starting_command.set_stderr_reader(stderr_reader);
         if let Err(source) = self.timer.clock().now().duration_since(started_at) {
-            return Err(CommandError::from_reason(
-                command_text.clone(),
-                CommandErrorReason::TimeFailed { source },
-                None,
-            ));
+            let error =
+                CommandError::from_reason(command_text.clone(), CommandErrorReason::TimeFailed { source }, None);
+            return Err(starting_command.abort(error));
         }
 
         let (child_process, command_io) = starting_command.finish();

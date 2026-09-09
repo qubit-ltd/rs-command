@@ -71,7 +71,7 @@ impl CommandError {
 
     /// Adds cleanup failures and restores canonical resource order.
     ///
-    /// Failures are ordered by process tree, direct child, wait, stdout,
+    /// Failures are ordered by process tree, direct child, wait, time, stdout,
     /// stderr, and stdin. Relative order remains stable within each resource.
     #[inline]
     pub(crate) fn with_cleanup_failures(
@@ -86,6 +86,7 @@ impl CommandError {
     /// Converts a helper error into its cleanup representation.
     pub(crate) fn into_cleanup_failure(self) -> Option<CommandCleanupFailure> {
         match *self.reason {
+            CommandErrorReason::TimeFailed { source } => Some(CommandCleanupFailure::Time { source }),
             CommandErrorReason::WriteInputFailed { source } => Some(CommandCleanupFailure::Stdin { source }),
             CommandErrorReason::ReadOutputFailed { stream, source } => match stream {
                 OutputStream::Stdout => Some(CommandCleanupFailure::StdoutRead { source }),
@@ -110,6 +111,7 @@ impl CommandError {
             ..
         } = self;
         let primary = match *reason {
+            CommandErrorReason::TimeFailed { source } => Some(CommandCleanupFailure::Time { source }),
             CommandErrorReason::WriteInputFailed { source } => Some(CommandCleanupFailure::Stdin { source }),
             CommandErrorReason::ReadOutputFailed { stream, source } => match stream {
                 OutputStream::Stdout => Some(CommandCleanupFailure::StdoutRead { source }),
@@ -122,6 +124,18 @@ impl CommandError {
             _ => None,
         };
         primary.into_iter().chain(cleanup_failures).collect()
+    }
+
+    /// Merges a finalization error without changing the selected primary
+    /// reason.
+    ///
+    /// Moves retained output when this error has none and records helper/time
+    /// failures as cleanup evidence. The input must be a finalization error.
+    pub(crate) fn with_finalization_error(mut self, mut error: CommandError) -> Self {
+        if self.output.is_none() {
+            self.output = error.output.take();
+        }
+        self.with_cleanup_failures(error.into_cleanup_failures())
     }
 
     /// Returns the redacted command representation.
@@ -180,33 +194,19 @@ impl CommandError {
         matches!(self.kind(), CommandErrorKind::UnexpectedExit)
     }
 
-    /// Returns the process-tree source from the primary or cleanup failures.
+    /// Returns the first process-tree termination source from cleanup failures.
     #[must_use]
     pub fn process_tree_source(&self) -> Option<&io::Error> {
-        if let CommandErrorReason::KillFailed {
-            process_tree_source, ..
-        }
-        | CommandErrorReason::CancelFailed {
-            process_tree_source, ..
-        } = self.reason.as_ref()
-        {
-            return Some(process_tree_source);
-        }
         self.cleanup_failures.iter().find_map(|failure| match failure {
             CommandCleanupFailure::ProcessTreeTermination { source } => Some(source),
             _ => None,
         })
     }
 
-    /// Returns the direct-child termination source from the primary or cleanup
+    /// Returns the first direct-child termination source from cleanup
     /// failures.
     #[must_use]
     pub fn child_source(&self) -> Option<&io::Error> {
-        if let CommandErrorReason::KillFailed { child_source, .. }
-        | CommandErrorReason::CancelFailed { child_source, .. } = self.reason.as_ref()
-        {
-            return Some(child_source);
-        }
         self.cleanup_failures.iter().find_map(|failure| match failure {
             CommandCleanupFailure::ChildTermination { source } => Some(source),
             _ => None,
@@ -220,13 +220,14 @@ const fn cleanup_failure_rank(failure: &CommandCleanupFailure) -> u8 {
         CommandCleanupFailure::ProcessTreeTermination { .. } => 0,
         CommandCleanupFailure::ChildTermination { .. } => 1,
         CommandCleanupFailure::Wait { .. } => 2,
+        CommandCleanupFailure::Time { .. } => 3,
         CommandCleanupFailure::StdoutCancellation { .. }
         | CommandCleanupFailure::StdoutRead { .. }
-        | CommandCleanupFailure::StdoutWrite { .. } => 3,
+        | CommandCleanupFailure::StdoutWrite { .. } => 4,
         CommandCleanupFailure::StderrCancellation { .. }
         | CommandCleanupFailure::StderrRead { .. }
-        | CommandCleanupFailure::StderrWrite { .. } => 4,
-        CommandCleanupFailure::Stdin { .. } | CommandCleanupFailure::StdinCancellation { .. } => 5,
+        | CommandCleanupFailure::StderrWrite { .. } => 5,
+        CommandCleanupFailure::Stdin { .. } | CommandCleanupFailure::StdinCancellation { .. } => 6,
     }
 }
 
@@ -243,17 +244,6 @@ impl fmt::Display for CommandError {
             (CommandErrorReason::CancelledBeforeStart, _) => {
                 write!(formatter, "command `{command}` was cancelled before it started")
             }
-            (
-                CommandErrorReason::KillFailed {
-                    timeout,
-                    process_tree_source,
-                    child_source,
-                },
-                _,
-            ) => write!(
-                formatter,
-                "failed to terminate timed-out command `{command}` after {timeout:?}; process-tree source: {process_tree_source}; child source: {child_source}"
-            ),
             (CommandErrorReason::ReadOutputFailed { stream, source }, _) => {
                 write!(formatter, "failed to read {stream} for command `{command}`: {source}")
             }
@@ -315,16 +305,6 @@ impl fmt::Display for CommandError {
             (CommandErrorReason::Cancelled, _) => {
                 write!(formatter, "command `{command}` was cancelled")
             }
-            (
-                CommandErrorReason::CancelFailed {
-                    process_tree_source,
-                    child_source,
-                },
-                _,
-            ) => write!(
-                formatter,
-                "failed to cancel command `{command}`; process-tree source: {process_tree_source}; child source: {child_source}"
-            ),
             (CommandErrorReason::OutputTruncated, _) => write!(
                 formatter,
                 "command `{command}` completed successfully, but captured output was truncated"
@@ -355,12 +335,6 @@ impl Error for CommandError {
             | CommandErrorReason::StartOutputThreadFailed { source, .. }
             | CommandErrorReason::WriteInputFailed { source }
             | CommandErrorReason::WriteOutputFailed { source, .. } => Some(source),
-            CommandErrorReason::KillFailed {
-                process_tree_source, ..
-            }
-            | CommandErrorReason::CancelFailed {
-                process_tree_source, ..
-            } => Some(process_tree_source),
             CommandErrorReason::TimeFailed { source } => Some(source),
             _ => None,
         }
@@ -373,7 +347,6 @@ impl From<&CommandErrorReason> for CommandErrorKind {
             CommandErrorReason::SpawnFailed { .. } => Self::SpawnFailed,
             CommandErrorReason::WaitFailed { .. } => Self::WaitFailed,
             CommandErrorReason::CancelledBeforeStart => Self::CancelledBeforeStart,
-            CommandErrorReason::KillFailed { .. } => Self::KillFailed,
             CommandErrorReason::ReadOutputFailed { .. } => Self::ReadOutputFailed,
             CommandErrorReason::OpenInputFailed { .. } => Self::OpenInputFailed,
             CommandErrorReason::NonRegularInputFile { .. } => Self::NonRegularInputFile,
@@ -389,7 +362,6 @@ impl From<&CommandErrorReason> for CommandErrorKind {
             CommandErrorReason::WriteOutputFailed { .. } => Self::WriteOutputFailed,
             CommandErrorReason::TimedOut { .. } => Self::TimedOut,
             CommandErrorReason::Cancelled => Self::Cancelled,
-            CommandErrorReason::CancelFailed { .. } => Self::CancelFailed,
             CommandErrorReason::OutputTruncated => Self::OutputTruncated,
             CommandErrorReason::UnexpectedExit { .. } => Self::UnexpectedExit,
         }
@@ -405,4 +377,128 @@ fn unexpected_exit_detail(exit_code: &Option<i32>, output: Option<&CommandOutput
     #[cfg(not(unix))]
     let _ = output;
     format!("code {exit_code:?}")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::process::ExitStatus;
+    use std::time::Duration;
+
+    use qubit_clock::TimeError;
+
+    use super::CommandError;
+    use crate::CommandCleanupFailure;
+    use crate::CommandErrorKind;
+    use crate::CommandErrorReason;
+    use crate::CommandOutput;
+    use crate::OutputStream;
+
+    /// Creates a portable successful exit status for error assembly tests.
+    fn status() -> ExitStatus {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            ExitStatus::from_raw(0)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::ExitStatusExt;
+            ExitStatus::from_raw(0)
+        }
+    }
+
+    #[test]
+    fn test_finalization_preserves_timeout_and_partial_output() {
+        let output = CommandOutput::new(
+            status(),
+            (b"prefix".to_vec(), false, false),
+            (Vec::new(), false, true),
+            Duration::from_secs(1),
+        );
+        let secondary = CommandError::from_reason(
+            "command",
+            CommandErrorReason::ReadOutputFailed {
+                stream: OutputStream::Stdout,
+                source: io::Error::other("read failed"),
+            },
+            Some(Box::new(output)),
+        );
+        let primary = CommandError::from_reason(
+            "command",
+            CommandErrorReason::TimedOut {
+                timeout: Duration::from_secs(1),
+            },
+            None,
+        );
+        let error = primary.with_finalization_error(secondary);
+        assert_eq!(error.kind(), CommandErrorKind::TimedOut);
+        let output = error
+            .output()
+            .expect("partial output must survive finalization failure");
+        assert_eq!(output.stdout(), b"prefix");
+        assert!(!output.stdout_complete());
+        assert!(matches!(
+            error.cleanup_failures(),
+            [CommandCleanupFailure::StdoutRead { .. }]
+        ));
+    }
+
+    #[test]
+    fn test_finalization_retains_time_failure_after_cancellation() {
+        let secondary = CommandError::from_reason(
+            "command",
+            CommandErrorReason::TimeFailed {
+                source: TimeError::InstantOverflow,
+            },
+            None,
+        )
+        .with_cleanup_failures([CommandCleanupFailure::Stdin {
+            source: io::Error::other("stdin failed"),
+        }]);
+        let primary = CommandError::from_reason("command", CommandErrorReason::Cancelled, None);
+        let error = primary.with_finalization_error(secondary);
+        assert_eq!(error.kind(), CommandErrorKind::Cancelled);
+        assert!(error.output().is_none());
+        assert!(matches!(
+            error.cleanup_failures(),
+            [CommandCleanupFailure::Time { .. }, CommandCleanupFailure::Stdin { .. }]
+        ));
+    }
+
+    #[test]
+    fn test_finalization_keeps_existing_primary_output() {
+        let primary_output = CommandOutput::new(
+            status(),
+            (b"primary".to_vec(), false, true),
+            (Vec::new(), false, true),
+            Duration::from_secs(2),
+        );
+        let secondary_output = CommandOutput::new(
+            status(),
+            (b"secondary".to_vec(), false, false),
+            (Vec::new(), false, true),
+            Duration::from_secs(3),
+        );
+        let primary =
+            CommandError::from_reason("command", CommandErrorReason::Cancelled, Some(Box::new(primary_output)));
+        let secondary = CommandError::from_reason(
+            "command",
+            CommandErrorReason::ReadOutputFailed {
+                stream: OutputStream::Stdout,
+                source: io::Error::other("read failed"),
+            },
+            Some(Box::new(secondary_output)),
+        );
+        let error = primary.with_finalization_error(secondary);
+        assert_eq!(error.kind(), CommandErrorKind::Cancelled);
+        let output = error.output().expect("primary output must be retained");
+        assert_eq!(output.stdout(), b"primary");
+        assert!(output.stdout_complete());
+        assert_eq!(output.elapsed(), Duration::from_secs(2));
+        assert!(matches!(
+            error.cleanup_failures(),
+            [CommandCleanupFailure::StdoutRead { .. }]
+        ));
+    }
 }

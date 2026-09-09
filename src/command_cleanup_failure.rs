@@ -11,6 +11,7 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
+use qubit_clock::TimeError;
 use qubit_redact::Redactor;
 
 /// Redacts one debug-only value before it crosses the diagnostic boundary.
@@ -38,6 +39,11 @@ fn redacted_debug_text(value: &impl fmt::Debug) -> String {
 #[non_exhaustive]
 #[must_use]
 pub enum CommandCleanupFailure {
+    /// Measuring elapsed time failed after a primary reason was selected.
+    Time {
+        /// Clock or timer error encountered during finalization.
+        source: TimeError,
+    },
     /// Waiting for the final child status failed.
     Wait {
         /// Operating-system wait error.
@@ -102,6 +108,7 @@ pub enum CommandCleanupFailure {
 impl fmt::Debug for CommandCleanupFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Time { source } => formatter.debug_struct("Time").field("source", source).finish(),
             Self::Wait { source } => formatter.debug_struct("Wait").field("source", source).finish(),
             Self::ProcessTreeTermination { source } => formatter
                 .debug_struct("ProcessTreeTermination")
