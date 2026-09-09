@@ -2,7 +2,7 @@
 
 [中文版](design.zh_CN.md) · [User Guide](user_guide.md) · [README](../README.md)
 
-This document records the `qubit-command` 0.6 command-runner contract. It is
+This document records the `qubit-command` 0.8 command-runner contract. It is
 for maintainers and callers that need to reason about process ownership, I/O
 helpers, termination, and the information preserved in failures. The user
 guide remains the entry point for runnable examples.
@@ -86,12 +86,16 @@ termination. If that request fails, it checks whether the child already exited,
 then tries direct-child termination. The original tree-termination source is
 retained as a cleanup failure when the child status can still be confirmed.
 Wait and kill errors are mapped without discarding earlier termination
-evidence. If the final child status cannot be confirmed, the process-control
-failure remains the primary error.
+evidence. If the final child status cannot be confirmed, the initiating stop reason
+remains primary and all process-control failures remain cleanup evidence.
 
 Termination is best effort with respect to descendants and external effects.
 The runner does not promise to undo work already performed by a child or by a
 descendant that escaped the managed process tree.
+
+Startup errors call the same termination policy explicitly before returning. Both
+failed kill requests with unknown status never lead to a blocking wait. OS wait
+after an accepted kill and ordinary-file I/O are not hard-deadline operations.
 
 ## I/O Finalization
 
@@ -121,8 +125,11 @@ retained bytes as a complete transcript.
 The primary error describes the first decisive failure in the operation's
 policy. Secondary failures observed while terminating the child or finalizing
 helpers are retained in `cleanup_failures()` in deterministic helper order.
-This preserves the reason the command failed without hiding useful cleanup
-evidence.
+The order is process tree, direct child, wait, clock, stdout, stderr, stdin.
+`Time` retains clock failures observed during finalization. Demoting a helper
+error also moves its retained output into the primary error. `KillFailed` and
+`CancelFailed` are removed; timeout and cancellation never change primary kind
+because cleanup failed.
 
 Preparation, thread-start, timer, and process-control failures may not carry a
 `CommandOutput`. Timeout, cancellation, truncation, unexpected exit, output

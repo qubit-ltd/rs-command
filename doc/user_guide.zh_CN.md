@@ -2,7 +2,7 @@
 
 [English user guide](user_guide.md) · [中文 README](../README.zh_CN.md) · [API 文档](https://docs.rs/qubit-command)
 
-本手册针对 `qubit-command` 0.7.0，面向需要从 Rust 应用运行外部程序，并明确处理进程生命周期、输出大小、取消和诊断边界的开发者。
+本手册针对 `qubit-command` 0.8.0，面向需要从 Rust 应用运行外部程序，并明确处理进程生命周期、输出大小、取消和诊断边界的开发者。
 
 ## 本 crate 解决什么问题
 
@@ -234,7 +234,7 @@ let command = Command::new("uploader")
 | 类别 | 示例 | 下一步诊断 |
 | --- | --- | --- |
 | 准备 | `OpenInputFailed`、`NonRegularInputFile`、`InputOutputConflict`、`OutputFilesConflict` | 检查路径、文件类型以及输入/输出路径是否不同。 |
-| 进程控制 | `SpawnFailed`、`WaitFailed`、`KillFailed`、`CancelFailed` | 检查可执行文件、权限、平台进程控制能力和源 I/O 错误。 |
+| 进程控制 | `SpawnFailed`、`WaitFailed` | 检查可执行文件、权限、平台进程控制能力和源 I/O 错误。 |
 | 流 I/O | `ReadOutputFailed`、`WriteInputFailed`、`OpenOutputFailed`、`WriteOutputFailed` | 检查对应流、文件访问权限以及错误附带的保留输出。 |
 | 时间 | `TimeFailed` | 检查 timer 与 clock 是否使用有效的单调时间域，并能在调用方阻塞时推进。 |
 | 策略结果 | `UnexpectedExit`、`OutputTruncated`、`TimedOut`、`Cancelled`、`CancelledBeforeStart` | 检查状态、配置策略、保留输出和流完整性标志。 |
@@ -312,3 +312,15 @@ match CommandRunner::new(std::time::Duration::from_secs(10)).run(Command::new("t
 - [English user guide](user_guide.md)
 - [API 文档](https://docs.rs/qubit-command)
 - [命令 runner 的 I/O 生命周期设计](design.md)
+
+## 0.8 的错误与清理策略
+
+一旦确认超时、取消、等待错误或时钟错误，`CommandError::kind()` 就保留该主原因。
+随后发生的进程终止和 I/O 清理失败由 `cleanup_failures()` 提供；收尾阶段的时钟错误
+使用 `CommandCleanupFailure::Time` 表达。能够可靠组装的部分输出会移入主错误，
+无法确认的退出状态或耗时不会用虚构值代替。
+
+启动失败也会显式清理已取得的资源。当两次终止请求均失败且无法确认子进程状态时，
+runner 会返回失败证据，不再进入无界等待。子进程此时可能仍在运行；这项约束不等于
+对任意操作系统或文件系统调用提供硬超时。旧错误变体的替代方式见
+[0.8 迁移说明](migration-0.8.md)。
