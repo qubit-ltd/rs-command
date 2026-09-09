@@ -131,6 +131,12 @@ error also moves its retained output into the primary error. `KillFailed` and
 `CancelFailed` are removed; timeout and cancellation never change primary kind
 because cleanup failed.
 
+A tee failure remains observable if draining later ends through cancellation
+or a pipe read failure. Within that stream the earlier tee failure precedes
+the later read failure; both survive demotion to cleanup details. Captured
+bytes are retained before tee writes. Stream completeness records pipe EOF,
+so a failed tee flush does not make an already drained stream incomplete.
+
 Preparation, thread-start, timer, and process-control failures may not carry a
 `CommandOutput`. Timeout, cancellation, truncation, unexpected exit, output
 read, tee-write, and final stdin-write failures carry output whenever status,
