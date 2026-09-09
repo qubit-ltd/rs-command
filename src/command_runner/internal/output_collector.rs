@@ -81,6 +81,11 @@ fn read_output_until_cancelled<R: CancellableReader>(
 /// Drains one output stream while retaining bounded bytes and teeing the full
 /// stream when configured.
 ///
+/// Every exit finalizes pending tee errors. A later pipe failure is retained
+/// alongside the earlier tee error; cancellation never erases either stored
+/// failure. Bytes are captured before tee I/O, and completeness records pipe
+/// EOF independently of tee write or flush success.
+///
 /// # Parameters
 ///
 /// * `reader` - Output stream reader.
@@ -94,7 +99,9 @@ fn read_output_until_cancelled<R: CancellableReader>(
 ///
 /// # Errors
 ///
-/// Returns an output read or tee write error.
+/// Returns an output read or tee write error, or both when draining a failed
+/// tee subsequently encounters a pipe error. All variants retain captured
+/// bytes and stream metadata.
 fn read_output_inner(
     reader: &mut dyn Read,
     mut options: OutputCaptureOptions,
@@ -110,25 +117,16 @@ fn read_output_inner(
     let mut truncated = false;
     let mut write_error = None;
     let mut buffer = [0_u8; 8 * 1024];
-    loop {
+    let read_result = loop {
         if cancellation.is_some_and(IoCancellationToken::is_cancelled) {
-            return Ok(CapturedOutput {
-                bytes,
-                truncated,
-                complete: false,
-            });
+            break Ok(false);
         }
         #[cfg(unix)]
         if let (Some(cancellation), Some(fd)) = (cancellation, fd) {
-            let ready = cancellation
-                .wait_for_fd(fd, libc::POLLIN)
-                .map_err(|source| read_capture_error(source, bytes.clone(), truncated))?;
-            if !ready {
-                return Ok(CapturedOutput {
-                    bytes,
-                    truncated,
-                    complete: false,
-                });
+            match cancellation.wait_for_fd(fd, libc::POLLIN) {
+                Ok(true) => {}
+                Ok(false) => break Ok(false),
+                Err(source) => break Err(source),
             }
         }
         let read = match reader.read(&mut buffer) {
@@ -138,11 +136,7 @@ fn read_output_inner(
             }
             Err(source) if source.kind() == io::ErrorKind::WouldBlock => {
                 if cancellation.is_some_and(IoCancellationToken::is_cancelled) {
-                    return Ok(CapturedOutput {
-                        bytes,
-                        truncated,
-                        complete: false,
-                    });
+                    break Ok(false);
                 }
                 if cancellation.is_none() {
                     thread::sleep(Duration::from_millis(1));
@@ -150,38 +144,18 @@ fn read_output_inner(
                 continue;
             }
             Err(_source) if cancellation.is_some_and(IoCancellationToken::is_cancelled) => {
-                return Ok(CapturedOutput {
-                    bytes,
-                    truncated,
-                    complete: false,
-                });
+                break Ok(false);
             }
             Err(source) => {
-                return Err(read_capture_error(source, bytes, truncated));
+                break Err(source);
             }
         };
         if read == 0 {
-            break;
+            break Ok(true);
         }
         let chunk = &buffer[..read];
-        if let Some(tee) = options.tee.as_mut()
-            && write_error.is_none()
-            && let Err(source) = tee.writer.write_all(chunk)
-        {
-            if cancellation.is_some_and(IoCancellationToken::is_cancelled) {
-                return Err(OutputCaptureError::Write {
-                    path: tee.path.clone(),
-                    source,
-                    output: CapturedOutput {
-                        bytes,
-                        truncated,
-                        complete: false,
-                    },
-                });
-            }
-            write_error = Some((tee.path.clone(), source));
-            options.tee = None;
-        }
+        // Capture bytes before tee I/O so an interrupted write cannot discard
+        // data that has already been consumed from the child pipe.
         match options.max_bytes {
             Some(max_bytes) => {
                 let remaining = max_bytes.saturating_sub(bytes.len());
@@ -195,52 +169,35 @@ fn read_output_inner(
             }
             None => bytes.extend_from_slice(chunk),
         }
-    }
-    if write_error.is_none()
+        if let Some(tee) = options.tee.as_mut()
+            && let Err(source) = tee.writer.write_all(chunk)
+        {
+            write_error = Some((tee.path.clone(), source));
+            options.tee = None;
+        }
+    };
+    let complete = matches!(read_result, Ok(true));
+    if complete
         && let Some(tee) = options.tee.as_mut()
         && let Err(source) = tee.writer.flush()
     {
-        if cancellation.is_some_and(IoCancellationToken::is_cancelled) {
-            return Err(OutputCaptureError::Write {
-                path: tee.path.clone(),
-                source,
-                output: CapturedOutput {
-                    bytes,
-                    truncated,
-                    complete: false,
-                },
-            });
-        }
         write_error = Some((tee.path.clone(), source));
     }
-    if let Some((path, source)) = write_error {
-        Err(OutputCaptureError::Write {
+    let output = CapturedOutput {
+        bytes,
+        truncated,
+        complete,
+    };
+    match (write_error, read_result) {
+        (Some((path, write_source)), Err(read_source)) => Err(OutputCaptureError::ReadAfterWrite {
             path,
-            source,
-            output: CapturedOutput {
-                bytes,
-                truncated,
-                complete: true,
-            },
-        })
-    } else {
-        Ok(CapturedOutput {
-            bytes,
-            truncated,
-            complete: true,
-        })
-    }
-}
-
-/// Builds a read error with the bytes retained before the failure.
-fn read_capture_error(source: io::Error, bytes: Vec<u8>, truncated: bool) -> OutputCaptureError {
-    OutputCaptureError::Read {
-        source,
-        output: CapturedOutput {
-            bytes,
-            truncated,
-            complete: false,
-        },
+            write_source,
+            read_source,
+            output,
+        }),
+        (Some((path, source)), Ok(_)) => Err(OutputCaptureError::Write { path, source, output }),
+        (None, Err(source)) => Err(OutputCaptureError::Read { source, output }),
+        (None, Ok(_)) => Ok(output),
     }
 }
 
@@ -323,19 +280,19 @@ pub(in crate::command_runner) fn collect_output_results(
     stderr_result: Result<CapturedOutput, OutputCaptureError>,
     stdin_result: Result<(), CommandError>,
 ) -> Result<CommandOutput, CommandError> {
-    let (stdout, stdout_failure) = split_output_result(stdout_result);
-    let (stderr, stderr_failure) = split_output_result(stderr_result);
+    let (stdout, stdout_failures) = split_output_result(stdout_result);
+    let (stderr, stderr_failures) = split_output_result(stderr_result);
+    let mut stdout_failures = stdout_failures.into_iter();
+    let mut stderr_failures = stderr_failures.into_iter();
 
     let stdin_error = stdin_result.err();
     let elapsed = match elapsed_result {
         Err(source) => {
             let mut cleanup_failures = Vec::new();
-            if let Some(failure) = stdout_failure {
-                cleanup_failures.push(output_cleanup_failure(OutputStream::Stdout, failure));
-            }
-            if let Some(failure) = stderr_failure {
-                cleanup_failures.push(output_cleanup_failure(OutputStream::Stderr, failure));
-            }
+            cleanup_failures
+                .extend(stdout_failures.map(|failure| output_cleanup_failure(OutputStream::Stdout, failure)));
+            cleanup_failures
+                .extend(stderr_failures.map(|failure| output_cleanup_failure(OutputStream::Stderr, failure)));
             if let Some(error) = stdin_error
                 && let Some(failure) = error.into_cleanup_failure()
             {
@@ -349,11 +306,10 @@ pub(in crate::command_runner) fn collect_output_results(
         Ok(elapsed) => elapsed,
     };
 
-    if let Some(failure) = stdout_failure {
+    if let Some(failure) = stdout_failures.next() {
         let mut cleanup_failures = Vec::new();
-        if let Some(failure) = stderr_failure {
-            cleanup_failures.push(output_cleanup_failure(OutputStream::Stderr, failure));
-        }
+        cleanup_failures.extend(stdout_failures.map(|failure| output_cleanup_failure(OutputStream::Stdout, failure)));
+        cleanup_failures.extend(stderr_failures.map(|failure| output_cleanup_failure(OutputStream::Stderr, failure)));
         if let Some(error) = stdin_error
             && let Some(failure) = error.into_cleanup_failure()
         {
@@ -371,8 +327,9 @@ pub(in crate::command_runner) fn collect_output_results(
         .with_cleanup_failures(cleanup_failures));
     }
 
-    if let Some(failure) = stderr_failure {
+    if let Some(failure) = stderr_failures.next() {
         let mut cleanup_failures = Vec::new();
+        cleanup_failures.extend(stderr_failures.map(|failure| output_cleanup_failure(OutputStream::Stderr, failure)));
         if let Some(error) = stdin_error
             && let Some(failure) = error.into_cleanup_failure()
         {
@@ -405,21 +362,54 @@ pub(in crate::command_runner) fn collect_output_results(
     }
 }
 
-/// Separates retained bytes from an output-reader failure.
-fn split_output_result(
+/// Separates retained bytes from all failures observed by one output reader.
+///
+/// # Parameters
+///
+/// * `result` - Completed reader result, including any prior tee failure.
+///
+/// # Returns
+///
+/// Retained output and failures in occurrence order; successful reads return
+/// an empty vector without allocating.
+pub(super) fn split_output_result(
     result: Result<CapturedOutput, OutputCaptureError>,
-) -> (CapturedOutput, Option<OutputCaptureFailure>) {
+) -> (CapturedOutput, Vec<OutputCaptureFailure>) {
     match result {
-        Ok(output) => (output, None),
-        Err(OutputCaptureError::Read { source, output }) => (output, Some(OutputCaptureFailure::Read { source })),
+        Ok(output) => (output, Vec::new()),
+        Err(OutputCaptureError::Read { source, output }) => (output, vec![OutputCaptureFailure::Read { source }]),
         Err(OutputCaptureError::Write { path, source, output }) => {
-            (output, Some(OutputCaptureFailure::Write { path, source }))
+            (output, vec![OutputCaptureFailure::Write { path, source }])
         }
+        Err(OutputCaptureError::ReadAfterWrite {
+            path,
+            write_source,
+            read_source,
+            output,
+        }) => (
+            output,
+            vec![
+                OutputCaptureFailure::Write {
+                    path,
+                    source: write_source,
+                },
+                OutputCaptureFailure::Read { source: read_source },
+            ],
+        ),
     }
 }
 
 /// Converts a reader failure into the public cleanup-failure category.
-fn output_cleanup_failure(stream: OutputStream, failure: OutputCaptureFailure) -> CommandCleanupFailure {
+///
+/// # Parameters
+///
+/// * `stream` - Stream that produced the failure.
+/// * `failure` - Owned failure whose original I/O source must be preserved.
+///
+/// # Returns
+///
+/// A stream-specific cleanup failure with its original path and source.
+pub(super) fn output_cleanup_failure(stream: OutputStream, failure: OutputCaptureFailure) -> CommandCleanupFailure {
     match (stream, failure) {
         (OutputStream::Stdout, OutputCaptureFailure::Read { source }) => CommandCleanupFailure::StdoutRead { source },
         (OutputStream::Stderr, OutputCaptureFailure::Read { source }) => CommandCleanupFailure::StderrRead { source },
@@ -516,11 +506,20 @@ mod tests {
     use std::io::Read;
     use std::io::Write;
     #[cfg(unix)]
+    use std::os::fd::AsRawFd;
+    #[cfg(unix)]
+    use std::os::unix::net::UnixStream;
+    #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt;
     #[cfg(windows)]
     use std::os::windows::process::ExitStatusExt;
     use std::path::Path;
     use std::process::ExitStatus;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    #[cfg(unix)]
+    use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
 
@@ -528,14 +527,17 @@ mod tests {
     use qubit_clock::TimerUnavailableError;
 
     use super::super::captured_output::CapturedOutput;
+    use super::super::command_io::CommandIo;
     use super::super::io_cancellation::IoCancellation;
     use super::super::output_capture_error::OutputCaptureError;
     use super::super::output_capture_options::OutputCaptureOptions;
     use super::super::output_reader::OutputReader;
     use super::super::output_tee::OutputTee;
+    use super::super::stop_reason::StopReason;
     use super::collect_output_results;
     use super::join_output_reader;
     use super::read_output;
+    use super::read_output_inner;
     use crate::CommandCleanupFailure;
     use crate::CommandError;
     use crate::CommandErrorKind;
@@ -587,6 +589,358 @@ mod tests {
 
     struct FailingWriter {
         fail_write: bool,
+    }
+
+    /// Chooses the observation immediately after the first tee write fails.
+    #[derive(Clone, Copy, Debug)]
+    enum AfterTeeFailure {
+        CancelWithBytes,
+        CancelInterrupted,
+        CancelWouldBlock,
+        CancelReadError,
+        ReadError,
+        Eof,
+    }
+
+    /// Produces a prefix, then cancels or fails without relying on scheduling.
+    struct ReaderAfterTeeFailure {
+        prefix_sent: bool,
+        cancelled: Arc<AtomicBool>,
+        outcome: AfterTeeFailure,
+    }
+
+    impl Read for ReaderAfterTeeFailure {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if !self.prefix_sent {
+                self.prefix_sent = true;
+                buffer[..6].copy_from_slice(b"prefix");
+                return Ok(6);
+            }
+            match self.outcome {
+                AfterTeeFailure::ReadError => return Err(io::Error::from_raw_os_error(9)),
+                AfterTeeFailure::Eof => return Ok(0),
+                _ => self.cancelled.store(true, Ordering::Release),
+            }
+            match self.outcome {
+                AfterTeeFailure::CancelWithBytes => {
+                    buffer[..6].copy_from_slice(b"suffix");
+                    Ok(6)
+                }
+                AfterTeeFailure::CancelInterrupted => Err(io::ErrorKind::Interrupted.into()),
+                AfterTeeFailure::CancelWouldBlock => Err(io::ErrorKind::WouldBlock.into()),
+                _ => Err(io::Error::from_raw_os_error(9)),
+            }
+        }
+    }
+
+    /// Captures a stream with a failed tee followed by one terminal event.
+    fn capture_after_tee_failure(outcome: AfterTeeFailure) -> Result<CapturedOutput, OutputCaptureError> {
+        let (_sender, token) = IoCancellation::pair().expect("cancellation pair must initialize");
+        let mut reader = ReaderAfterTeeFailure {
+            prefix_sent: false,
+            cancelled: Arc::clone(&token.cancelled),
+            outcome,
+        };
+        read_output_inner(
+            &mut reader,
+            OutputCaptureOptions::new(
+                Some(8),
+                Some(OutputTee::new(
+                    Box::new(FailingWriter { fail_write: true }),
+                    "failed-tee.log".into(),
+                )),
+            ),
+            Some(&token),
+            None,
+        )
+    }
+
+    #[test]
+    fn test_pending_tee_error_survives_every_read_cancellation() {
+        for outcome in [
+            AfterTeeFailure::CancelWithBytes,
+            AfterTeeFailure::CancelInterrupted,
+            AfterTeeFailure::CancelWouldBlock,
+            AfterTeeFailure::CancelReadError,
+        ] {
+            let error = capture_after_tee_failure(outcome).expect_err("pending tee error must survive cancellation");
+            let OutputCaptureError::Write { path, source, output } = error else {
+                panic!("expected retained tee error for {outcome:?}");
+            };
+            assert_eq!(path, Path::new("failed-tee.log"));
+            assert_eq!(source.to_string(), "write failure");
+            assert!(!output.complete, "cancelled stream must remain incomplete");
+            if matches!(outcome, AfterTeeFailure::CancelWithBytes) {
+                assert_eq!(output.bytes, b"prefixsu");
+                assert!(output.truncated);
+            } else {
+                assert_eq!(output.bytes, b"prefix");
+                assert!(!output.truncated);
+            }
+        }
+    }
+
+    #[test]
+    fn test_pending_tee_error_survives_later_read_failure() {
+        for stream in [OutputStream::Stdout, OutputStream::Stderr] {
+            let failed = capture_after_tee_failure(AfterTeeFailure::ReadError);
+            let (stdout, stderr) = match stream {
+                OutputStream::Stdout => (failed, Ok(CapturedOutput::default())),
+                OutputStream::Stderr => (Ok(CapturedOutput::default()), failed),
+            };
+            let error =
+                collect_output_results("command", status(0), Ok(Duration::from_secs(1)), stdout, stderr, Ok(()))
+                    .expect_err("both output failures must be reported");
+            assert!(matches!(
+                error.reason(),
+                CommandErrorReason::WriteOutputFailed { stream: actual, source, .. }
+                    if *actual == stream && source.to_string() == "write failure"
+            ));
+            assert!(matches!(
+                (stream, error.cleanup_failures()),
+                (OutputStream::Stdout, [CommandCleanupFailure::StdoutRead { source }])
+                | (OutputStream::Stderr, [CommandCleanupFailure::StderrRead { source }])
+                    if source.raw_os_error() == Some(9)
+            ));
+            let output = error.output().expect("partial output must be retained");
+            match stream {
+                OutputStream::Stdout => {
+                    assert_eq!(output.stdout(), b"prefix");
+                    assert!(!output.stdout_complete());
+                }
+                OutputStream::Stderr => {
+                    assert_eq!(output.stderr(), b"prefix");
+                    assert!(!output.stderr_complete());
+                }
+            }
+        }
+    }
+
+    /// Checks that demotion keeps all four stream errors in resource order.
+    fn assert_both_stream_failures(failures: &[CommandCleanupFailure]) {
+        assert!(matches!(
+            failures,
+            [
+                CommandCleanupFailure::StdoutWrite { path: stdout_path, source: stdout_write },
+                CommandCleanupFailure::StdoutRead { source: stdout_read },
+                CommandCleanupFailure::StderrWrite { path: stderr_path, source: stderr_write },
+                CommandCleanupFailure::StderrRead { source: stderr_read },
+            ] if stdout_path == Path::new("failed-tee.log")
+                && stderr_path == Path::new("failed-tee.log")
+                && stdout_write.to_string() == "write failure"
+                && stderr_write.to_string() == "write failure"
+                && stdout_read.raw_os_error() == Some(9)
+                && stderr_read.raw_os_error() == Some(9)
+        ));
+    }
+
+    #[test]
+    fn test_combined_stream_failures_survive_time_failure_and_stop_reason_demotion() {
+        let error = collect_output_results(
+            "command",
+            status(0),
+            Err(TimeError::InstantOverflow),
+            capture_after_tee_failure(AfterTeeFailure::ReadError),
+            capture_after_tee_failure(AfterTeeFailure::ReadError),
+            Ok(()),
+        )
+        .expect_err("clock error must retain both stream failures");
+        assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
+        assert!(error.output().is_none());
+        assert_both_stream_failures(error.cleanup_failures());
+
+        for reason in [
+            StopReason::TimedOut {
+                timeout: Duration::from_secs(1),
+                status: Some(status(0)),
+            },
+            StopReason::Cancelled {
+                status: Some(status(0)),
+            },
+        ] {
+            let error = collect_output_results(
+                "command",
+                status(0),
+                Ok(Duration::from_secs(1)),
+                capture_after_tee_failure(AfterTeeFailure::ReadError),
+                capture_after_tee_failure(AfterTeeFailure::ReadError),
+                Ok(()),
+            )
+            .expect_err("combined stream failures must be retained");
+            let expected_kind = if matches!(reason, StopReason::TimedOut { .. }) {
+                CommandErrorKind::TimedOut
+            } else {
+                CommandErrorKind::Cancelled
+            };
+            let error = reason.into_error_after_finalize("command", error);
+            assert_eq!(error.kind(), expected_kind);
+            assert_both_stream_failures(error.cleanup_failures());
+            let output = error.output().expect("demotion must preserve both partial streams");
+            assert_eq!(output.stdout(), b"prefix");
+            assert_eq!(output.stderr(), b"prefix");
+            assert!(!output.stdout_complete());
+            assert!(!output.stderr_complete());
+        }
+    }
+
+    /// Runs the real collector fault sequence inside an owned helper thread.
+    fn failed_output_reader() -> OutputReader {
+        let (sender, token) = IoCancellation::pair().expect("cancellation pair must initialize");
+        OutputReader::new(
+            thread::spawn(move || {
+                let _token = token;
+                capture_after_tee_failure(AfterTeeFailure::ReadError)
+            }),
+            sender,
+        )
+    }
+
+    #[test]
+    fn test_combined_stream_failures_survive_cleanup_without_process_status() {
+        let io = CommandIo::new(failed_output_reader(), failed_output_reader(), None);
+        let failures = io.cancel_and_join("command");
+        assert_both_stream_failures(&failures);
+    }
+
+    /// Signals only after the collector stores the failed tee and drops it.
+    #[cfg(unix)]
+    struct NotifyingFailedTee(mpsc::Sender<()>);
+
+    #[cfg(unix)]
+    impl Write for NotifyingFailedTee {
+        fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("pipe tee failure"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for NotifyingFailedTee {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_pending_tee_error_survives_pipe_wakeup_cancellation() {
+        let (mut input, mut peer) = UnixStream::pair().expect("test pipe must initialize");
+        input.set_nonblocking(true).expect("test pipe must be nonblocking");
+        peer.write_all(b"prefix").expect("test prefix must be written");
+        let (sender, token) = IoCancellation::pair().expect("cancellation pair must initialize");
+        let (failed, observed) = mpsc::channel();
+        let join = thread::spawn(move || {
+            let fd = input.as_raw_fd();
+            read_output_inner(
+                &mut input,
+                OutputCaptureOptions::new(
+                    Some(4),
+                    Some(OutputTee::new(
+                        Box::new(NotifyingFailedTee(failed)),
+                        "pipe-tee.log".into(),
+                    )),
+                ),
+                Some(&token),
+                Some(fd),
+            )
+        });
+        let failure_observed = observed.recv_timeout(Duration::from_secs(5));
+        let cancellation = sender.cancel(&join);
+        // Closing the peer also releases the helper if the OS rejects the
+        // cancellation request, so even a failed assertion cannot leak it.
+        if cancellation.is_err() || failure_observed.is_err() {
+            drop(peer);
+        }
+        let result = join.join().expect("output helper must not panic");
+        failure_observed.expect("tee failure must be stored before cancellation");
+        cancellation.expect("pipe reader must be cancellable");
+        let OutputCaptureError::Write { path, source, output } = result.expect_err("pending tee failure must survive")
+        else {
+            panic!("expected tee failure after pipe cancellation");
+        };
+        assert_eq!(path, Path::new("pipe-tee.log"));
+        assert_eq!(source.to_string(), "pipe tee failure");
+        assert_eq!(output.bytes, b"pref");
+        assert!(output.truncated);
+        assert!(!output.complete);
+    }
+
+    #[test]
+    fn test_pending_tee_error_keeps_eof_complete() {
+        let error = capture_after_tee_failure(AfterTeeFailure::Eof).expect_err("tee failure must survive EOF");
+        let OutputCaptureError::Write { output, .. } = error else {
+            panic!("expected tee failure at EOF");
+        };
+        assert_eq!(output.bytes, b"prefix");
+        assert!(output.complete, "tee failure does not undo observed pipe EOF");
+    }
+
+    /// Cancels exactly inside a failing write or flush operation.
+    struct CancellingWriter {
+        cancelled: Arc<AtomicBool>,
+        fail_on_flush: bool,
+    }
+
+    impl Write for CancellingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.fail_on_flush {
+                return Ok(bytes.len());
+            }
+            self.cancelled.store(true, Ordering::Release);
+            Err(io::Error::other("cancelled tee write"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.cancelled.store(true, Ordering::Release);
+            Err(io::Error::other("cancelled tee flush"))
+        }
+    }
+
+    #[test]
+    fn test_tee_cancellation_preserves_read_bytes_and_observed_eof() {
+        for fail_on_flush in [false, true] {
+            let (_sender, token) = IoCancellation::pair().expect("cancellation pair must initialize");
+            let error = read_output_inner(
+                &mut Cursor::new(b"output"),
+                OutputCaptureOptions::new(
+                    Some(4),
+                    Some(OutputTee::new(
+                        Box::new(CancellingWriter {
+                            cancelled: Arc::clone(&token.cancelled),
+                            fail_on_flush,
+                        }),
+                        "cancelled-tee.log".into(),
+                    )),
+                ),
+                Some(&token),
+                None,
+            )
+            .expect_err("tee failure must survive simultaneous cancellation");
+            let OutputCaptureError::Write { path, source, output } = error else {
+                panic!("expected tee write or flush failure");
+            };
+            assert_eq!(path, Path::new("cancelled-tee.log"));
+            assert_eq!(
+                source.to_string(),
+                if fail_on_flush {
+                    "cancelled tee flush"
+                } else {
+                    "cancelled tee write"
+                }
+            );
+            assert_eq!(
+                output.bytes, b"outp",
+                "bytes already read must survive tee cancellation"
+            );
+            assert!(output.truncated);
+            assert_eq!(
+                output.complete, fail_on_flush,
+                "completeness follows pipe EOF, not tee success"
+            );
+        }
     }
 
     impl Write for FailingWriter {
