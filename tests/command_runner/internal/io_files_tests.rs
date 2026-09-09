@@ -19,7 +19,7 @@ use qubit_command::CommandErrorKind;
 use qubit_command::CommandErrorReason;
 use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use qubit_command::OutputStream;
 
 use crate::support::LocalTempDir;

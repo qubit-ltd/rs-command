@@ -21,7 +21,6 @@ use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
 #[cfg(not(windows))]
 use qubit_command::DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM;
-#[cfg(not(windows))]
 use qubit_command::OutputStream;
 #[cfg(not(windows))]
 use qubit_redact::RedactionPolicy;
@@ -1422,6 +1421,8 @@ mod windows {
 
     use super::Command;
     use super::CommandCancellation;
+    use super::CommandErrorKind;
+    use super::CommandRunOptions;
     use super::CommandRunner;
     use super::Duration;
     use super::Instant;
