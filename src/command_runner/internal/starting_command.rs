@@ -238,12 +238,13 @@ mod tests {
         use super::super::output_capture_error::OutputCaptureError;
         use super::super::output_reader::OutputReader;
         use super::super::stdin_writer::StdinWriter;
-        for stage in 0_usize..=3 {
+        for (with_stdin, readers) in [(false, 0), (true, 0), (true, 1), (false, 2), (true, 2)] {
+            let stage = usize::from(with_stdin) + readers;
             let calls = Arc::new(Mutex::new(Vec::new()));
             let tree = ScriptedChild::new("tree", raw_child(), Arc::clone(&calls));
             let mut guard = StartingCommand::new("redacted", ManagedChildProcess::new(Box::new(tree), true));
             let finished = Arc::new(AtomicUsize::new(0));
-            if stage >= 1 {
+            if with_stdin {
                 let (cancel, token) = IoCancellation::pair().expect("stdin cancellation must initialize");
                 let finished = Arc::clone(&finished);
                 guard.set_stdin_writer(Some(StdinWriter::new(
@@ -257,7 +258,7 @@ mod tests {
                     cancel,
                 )));
             }
-            for stream in 0..stage.saturating_sub(1) {
+            for stream in 0..readers {
                 let (cancel, token) = IoCancellation::pair().expect("output cancellation must initialize");
                 let finished = Arc::clone(&finished);
                 let reader = OutputReader::new(
