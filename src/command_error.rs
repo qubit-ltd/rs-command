@@ -83,6 +83,13 @@ impl CommandError {
         self
     }
 
+    /// Attaches captured output without changing the primary reason or source.
+    #[inline]
+    pub(crate) fn with_output(mut self, output: CommandOutput) -> Self {
+        self.output = Some(Box::new(output));
+        self
+    }
+
     /// Converts a helper error into its cleanup representation.
     pub(crate) fn into_cleanup_failure(self) -> Option<CommandCleanupFailure> {
         match *self.reason {
