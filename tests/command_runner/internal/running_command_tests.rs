@@ -8,6 +8,7 @@
 //! Tests for running command behavior.
 
 use std::time::Duration;
+#[cfg(not(windows))]
 use std::time::Instant;
 
 #[cfg(not(windows))]
@@ -15,6 +16,7 @@ use qubit_clock::test_util::FaultInjectingTimer;
 #[cfg(not(windows))]
 use qubit_clock::test_util::TimerFailurePoint;
 use qubit_command::Command;
+#[cfg(not(windows))]
 use qubit_command::CommandErrorKind;
 use qubit_command::CommandRunner;
 

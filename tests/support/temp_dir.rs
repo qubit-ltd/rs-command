@@ -20,6 +20,7 @@ impl LocalTempDir {
     }
 
     /// Creates a temporary directory inside a selected parent.
+    #[cfg(not(windows))]
     pub(crate) fn in_dir(directory: impl AsRef<Path>, prefix: Option<&str>, _max_tries: usize) -> Result<Self> {
         let mut builder = tempfile::Builder::new();
         if let Some(prefix) = prefix {

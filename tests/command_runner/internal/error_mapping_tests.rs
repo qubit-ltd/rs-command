@@ -16,6 +16,7 @@ use std::time::Duration;
 use qubit_command::Command;
 #[cfg(not(windows))]
 use qubit_command::CommandErrorKind;
+#[cfg(not(windows))]
 use qubit_command::CommandErrorReason;
 #[cfg(not(windows))]
 use qubit_command::CommandRunner;
