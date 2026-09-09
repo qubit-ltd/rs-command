@@ -169,10 +169,14 @@ fn read_output_inner(
             && let Err(source) = tee.writer.write_all(chunk)
         {
             if cancellation.is_some_and(IoCancellationToken::is_cancelled) {
-                return Ok(CapturedOutput {
-                    bytes,
-                    truncated,
-                    complete: false,
+                return Err(OutputCaptureError::Write {
+                    path: tee.path.clone(),
+                    source,
+                    output: CapturedOutput {
+                        bytes,
+                        truncated,
+                        complete: false,
+                    },
                 });
             }
             write_error = Some((tee.path.clone(), source));
@@ -197,10 +201,14 @@ fn read_output_inner(
         && let Err(source) = tee.writer.flush()
     {
         if cancellation.is_some_and(IoCancellationToken::is_cancelled) {
-            return Ok(CapturedOutput {
-                bytes,
-                truncated,
-                complete: false,
+            return Err(OutputCaptureError::Write {
+                path: tee.path.clone(),
+                source,
+                output: CapturedOutput {
+                    bytes,
+                    truncated,
+                    complete: false,
+                },
             });
         }
         write_error = Some((tee.path.clone(), source));
@@ -391,16 +399,7 @@ pub(in crate::command_runner) fn collect_output_results(
     match stdin_error {
         None => Ok(output),
         Some(error) if matches!(error.kind(), crate::CommandErrorKind::WriteInputFailed) => {
-            let command = error.command().to_owned();
-            let source = match error.reason() {
-                CommandErrorReason::WriteInputFailed { source } => io::Error::new(source.kind(), source.to_string()),
-                _ => io::Error::other("invalid stdin error category"),
-            };
-            Err(CommandError::from_reason(
-                command,
-                CommandErrorReason::WriteInputFailed { source },
-                Some(Box::new(output)),
-            ))
+            Err(error.with_output(output))
         }
         Some(error) => Err(error),
     }
@@ -565,7 +564,7 @@ mod tests {
         CommandError::from_reason(
             "command",
             CommandErrorReason::WriteInputFailed {
-                source: io::Error::other("injected stdin write failure"),
+                source: io::Error::from_raw_os_error(7),
             },
             None,
         )
@@ -866,6 +865,24 @@ mod tests {
         let output = error.output().expect("completed output should be retained");
         assert_eq!(output.stdout(), b"stdout");
         assert_eq!(output.stderr(), b"stderr");
+    }
+
+    #[test]
+    fn test_collect_output_preserves_stdin_os_error_source() {
+        let error = collect_output_results(
+            "command",
+            status(0),
+            Ok(Duration::from_secs(1)),
+            Ok(CapturedOutput::default()),
+            Ok(CapturedOutput::default()),
+            Err(stdin_failure()),
+        )
+        .expect_err("stdin failure should be mapped");
+
+        let CommandErrorReason::WriteInputFailed { source } = error.reason() else {
+            panic!("expected stdin write failure");
+        };
+        assert_eq!(source.raw_os_error(), Some(7));
     }
 
     #[test]
