@@ -63,10 +63,26 @@ fn benchmark_short_lived_command_runner(criterion: &mut Criterion) {
 
     let mut group = criterion.benchmark_group("short_lived_command_runner");
     group.bench_function("default_timeout", |bencher| {
-        bencher.iter(|| black_box(default_timeout_runner.run(black_box(short_lived_command()))));
+        let mut failures = 0;
+        bencher.iter(|| {
+            black_box(
+                default_timeout_runner
+                    .run(black_box(short_lived_command()))
+                    .inspect_err(|_| failures += 1),
+            )
+        });
+        assert_eq!(failures, 0, "benchmark commands must succeed");
     });
     group.bench_function("without_timeout", |bencher| {
-        bencher.iter(|| black_box(without_timeout_runner.run(black_box(short_lived_command()))));
+        let mut failures = 0;
+        bencher.iter(|| {
+            black_box(
+                without_timeout_runner
+                    .run(black_box(short_lived_command()))
+                    .inspect_err(|_| failures += 1),
+            )
+        });
+        assert_eq!(failures, 0, "benchmark commands must succeed");
     });
     group.finish();
 }
@@ -77,7 +93,9 @@ fn benchmark_silent_command_runner(criterion: &mut Criterion) {
     verify_fixture(&runner);
     let mut group = criterion.benchmark_group("silent_command_runner");
     group.bench_function("default_timeout", |bencher| {
-        bencher.iter(|| black_box(runner.run(black_box(silent_command()))));
+        let mut failures = 0;
+        bencher.iter(|| black_box(runner.run(black_box(silent_command())).inspect_err(|_| failures += 1)));
+        assert_eq!(failures, 0, "benchmark commands must succeed");
     });
     group.finish();
 }
