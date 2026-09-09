@@ -73,18 +73,6 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 - [命令 runner 的 I/O 生命周期设计](doc/design.md)
 - [English README](README.md)
 
-## 0.8 的错误与清理策略
-
-一旦确认超时、取消、等待错误或时钟错误，`CommandError::kind()` 就保留该主原因。
-随后发生的进程终止和 I/O 清理失败由 `cleanup_failures()` 提供；收尾阶段的时钟错误
-使用 `CommandCleanupFailure::Time` 表达。能够可靠组装的部分输出会移入主错误，
-无法确认的退出状态或耗时不会用虚构值代替。
-
-启动失败也会显式清理已取得的资源。当两次终止请求均失败且无法确认子进程状态时，
-runner 会返回失败证据，不再进入无界等待。子进程此时可能仍在运行；这项约束不等于
-对任意操作系统或文件系统调用提供硬超时。旧错误变体的替代方式见
-[0.8 迁移说明](doc/migration-0.8.md)。
-
 ## 测试
 
 ```bash

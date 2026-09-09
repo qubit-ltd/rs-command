@@ -27,7 +27,7 @@ Add the crate to the application using Rust 1.94 or newer:
 
 ```toml
 [dependencies]
-qubit-command = "0.6"
+qubit-command = "0.8"
 ```
 
 ### Build and Run the Command
