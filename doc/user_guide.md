@@ -2,7 +2,7 @@
 
 [中文用户手册](user_guide.zh_CN.md) · [README](../README.md) · [API documentation](https://docs.rs/qubit-command)
 
-This guide describes `qubit-command` 0.7.0. It is for Rust applications that run external programs and need explicit policies for process lifetime, output size, cancellation, and diagnostics.
+This guide describes `qubit-command` 0.8.0. It is for Rust applications that run external programs and need explicit policies for process lifetime, output size, cancellation, and diagnostics.
 
 ## What This Crate Solves
 
@@ -241,7 +241,7 @@ needed; do not match its storage layout. The important categories are:
 | Category | Examples | Next diagnostic step |
 | --- | --- | --- |
 | Preparation | `OpenInputFailed`, `NonRegularInputFile`, `InputOutputConflict`, `OutputFilesConflict` | Verify paths, file kinds, and that input/output paths are distinct. |
-| Process control | `SpawnFailed`, `WaitFailed`, `KillFailed`, `CancelFailed` | Check the executable, permissions, platform process-control support, and the source I/O error. |
+| Process control | `SpawnFailed`, `WaitFailed` | Check the executable, permissions, platform process-control support, and the source I/O error. |
 | Stream I/O | `ReadOutputFailed`, `WriteInputFailed`, `OpenOutputFailed`, `WriteOutputFailed` | Check the named stream, file access, and retained output attached to the error when present. |
 | Time | `TimeFailed` | Check that the timer and clock share a valid monotonic domain and can progress while the caller is blocked. |
 | Policy result | `UnexpectedExit`, `OutputTruncated`, `TimedOut`, `Cancelled`, `CancelledBeforeStart` | Inspect status, configured policy, retained output, and stream-completion flags. |
@@ -268,6 +268,20 @@ match CommandRunner::new(std::time::Duration::from_secs(10)).run(Command::new("t
     }
 }
 ```
+
+## Failure and cleanup policy in 0.8
+
+Once a timeout, cancellation, wait error, or clock error is selected, it remains
+the primary `CommandError::kind()`. Later termination and I/O failures appear in
+`cleanup_failures()`, including `CommandCleanupFailure::Time` for a clock failure
+during finalization. Available partial output is moved into the primary error;
+status or elapsed time that cannot be established is never fabricated.
+
+Startup failures explicitly clean up all resources before returning. If both
+termination requests fail and the child status is unknown, the runner returns
+that evidence without entering an unbounded wait. The child may remain alive;
+this is not a hard deadline for arbitrary operating-system or filesystem calls.
+See the [0.8 migration guide](migration-0.8.md) for the removed error variants.
 
 ## Troubleshooting
 

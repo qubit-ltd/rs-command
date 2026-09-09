@@ -15,7 +15,7 @@ The crate is published as `qubit-command` and requires Rust 1.94 or newer:
 
 ```toml
 [dependencies]
-qubit-command = "0.7"
+qubit-command = "0.8"
 ```
 
 ## Quick Start
@@ -72,6 +72,20 @@ Important boundaries:
 - [API documentation on docs.rs](https://docs.rs/qubit-command)
 - [Command-runner I/O lifecycle design](doc/design.md)
 - [中文 README](README.zh_CN.md)
+
+## Failure and cleanup policy in 0.8
+
+Once a timeout, cancellation, wait error, or clock error is selected, it remains
+the primary `CommandError::kind()`. Later termination and I/O failures appear in
+`cleanup_failures()`, including `CommandCleanupFailure::Time` for a clock failure
+during finalization. Available partial output is moved into the primary error;
+status or elapsed time that cannot be established is never fabricated.
+
+Startup failures explicitly clean up all resources before returning. If both
+termination requests fail and the child status is unknown, the runner returns
+that evidence without entering an unbounded wait. The child may remain alive;
+this is not a hard deadline for arbitrary operating-system or filesystem calls.
+See the [0.8 migration guide](doc/migration-0.8.md) for the removed error variants.
 
 ## Testing
 
