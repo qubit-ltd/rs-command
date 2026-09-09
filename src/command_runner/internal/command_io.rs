@@ -17,12 +17,15 @@ use super::output_capture_error::OutputCaptureError;
 use super::output_collector::collect_output;
 use super::output_collector::collect_output_results;
 use super::output_collector::join_output_reader;
+use super::output_collector::output_cleanup_failure;
+use super::output_collector::split_output_result;
 use super::output_reader::OutputReader;
 use super::stdin_pipe::join_stdin_writer;
 use super::stdin_writer::OptionalStdinWriter;
 use crate::CommandCleanupFailure;
 use crate::CommandError;
 use crate::CommandOutput;
+use crate::OutputStream;
 
 /// Maximum time spent confirming that a helper stopped after cancellation
 /// itself failed.
@@ -339,14 +342,13 @@ fn push_stdout_failures(
     result: Option<Result<CapturedOutput, OutputCaptureError>>,
     cancellation: Option<io::Error>,
 ) {
-    match result {
-        None | Some(Ok(_)) => {}
-        Some(Err(OutputCaptureError::Read { source, .. })) => {
-            failures.push(CommandCleanupFailure::StdoutRead { source });
-        }
-        Some(Err(OutputCaptureError::Write { path, source, .. })) => {
-            failures.push(CommandCleanupFailure::StdoutWrite { path, source });
-        }
+    if let Some(result) = result {
+        let (_, output_failures) = split_output_result(result);
+        failures.extend(
+            output_failures
+                .into_iter()
+                .map(|failure| output_cleanup_failure(OutputStream::Stdout, failure)),
+        );
     }
     if let Some(source) = cancellation {
         failures.push(CommandCleanupFailure::StdoutCancellation { source });
@@ -359,14 +361,13 @@ fn push_stderr_failures(
     result: Option<Result<CapturedOutput, OutputCaptureError>>,
     cancellation: Option<io::Error>,
 ) {
-    match result {
-        None | Some(Ok(_)) => {}
-        Some(Err(OutputCaptureError::Read { source, .. })) => {
-            failures.push(CommandCleanupFailure::StderrRead { source });
-        }
-        Some(Err(OutputCaptureError::Write { path, source, .. })) => {
-            failures.push(CommandCleanupFailure::StderrWrite { path, source });
-        }
+    if let Some(result) = result {
+        let (_, output_failures) = split_output_result(result);
+        failures.extend(
+            output_failures
+                .into_iter()
+                .map(|failure| output_cleanup_failure(OutputStream::Stderr, failure)),
+        );
     }
     if let Some(source) = cancellation {
         failures.push(CommandCleanupFailure::StderrCancellation { source });

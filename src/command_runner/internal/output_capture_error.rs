@@ -30,4 +30,15 @@ pub(in crate::command_runner) enum OutputCaptureError {
         /// failed.
         output: CapturedOutput,
     },
+    /// Reading failed while draining a stream whose tee had already failed.
+    ReadAfterWrite {
+        /// Path of the failed tee file.
+        path: PathBuf,
+        /// Original tee error, which remains the primary stream failure.
+        write_source: io::Error,
+        /// Subsequent error from the child pipe.
+        read_source: io::Error,
+        /// Bytes retained before the pipe failed; the stream is incomplete.
+        output: CapturedOutput,
+    },
 }
