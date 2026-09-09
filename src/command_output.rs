@@ -213,6 +213,10 @@ impl CommandOutput {
     /// A `false` value means collection was cancelled, so the retained bytes
     /// may be only a prefix of the process output even when no capture limit
     /// was configured.
+    ///
+    /// # Returns
+    ///
+    /// `true` when stdout reached EOF before collection stopped.
     #[must_use]
     #[inline(always)]
     pub const fn stdout_complete(&self) -> bool {
@@ -224,6 +228,10 @@ impl CommandOutput {
     /// A `false` value means collection was cancelled, so the retained bytes
     /// may be only a prefix of the process output even when no capture limit
     /// was configured.
+    ///
+    /// # Returns
+    ///
+    /// `true` when stderr reached EOF before collection stopped.
     #[must_use]
     #[inline(always)]
     pub const fn stderr_complete(&self) -> bool {

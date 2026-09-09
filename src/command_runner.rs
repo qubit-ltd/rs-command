@@ -229,6 +229,11 @@ impl CommandRunner {
     }
 
     /// Creates a command runner with timeout handling disabled.
+    ///
+    /// # Returns
+    ///
+    /// A runner that performs no timeout checks and inherits default command
+    /// policies.
     #[inline(always)]
     pub fn without_timeout() -> Self {
         Self::with_optional_timeout(None)
