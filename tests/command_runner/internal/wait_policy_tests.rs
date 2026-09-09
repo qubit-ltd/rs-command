@@ -16,6 +16,7 @@ use std::time::Duration;
 use qubit_clock::ManualMonotonicClock;
 #[cfg(not(windows))]
 use qubit_clock::MonotonicClock;
+#[cfg(not(windows))]
 use qubit_command::Command;
 #[cfg(not(windows))]
 use qubit_command::CommandErrorKind;

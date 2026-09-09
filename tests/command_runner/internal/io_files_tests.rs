@@ -8,7 +8,9 @@
 //! Tests for conflict-safe command I/O file preparation.
 
 use std::fs;
+#[cfg(unix)]
 use std::path::Path;
+#[cfg(not(windows))]
 use std::path::PathBuf;
 #[cfg(unix)]
 use std::process::Command as ProcessCommand;
@@ -16,6 +18,7 @@ use std::time::Duration;
 
 use qubit_command::Command;
 use qubit_command::CommandErrorKind;
+#[cfg(unix)]
 use qubit_command::CommandErrorReason;
 use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
