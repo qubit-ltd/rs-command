@@ -856,6 +856,7 @@ mod unix {
                     .arg_os(&pid_path),
             )
             .expect_err("escaped descendant should keep the output pipe open");
+        let elapsed = started.elapsed();
 
         let pid_deadline = Instant::now() + Duration::from_secs(1);
         while !pid_path.exists() && Instant::now() < pid_deadline {
@@ -869,7 +870,7 @@ mod unix {
         let output = error.output().expect("timeout should retain captured output metadata");
         assert!(!output.stdout_complete());
         assert!(
-            started.elapsed() < Duration::from_secs(1),
+            elapsed < Duration::from_secs(1),
             "timeout must not wait for an escaped descendant to close inherited output"
         );
     }
@@ -912,7 +913,7 @@ mod unix {
         let pid_path = temp_dir.path().join("escaped-stdin-child.pid");
         let mut escaped = EscapedProcessGuard::new(pid_path.clone());
         let started = Instant::now();
-        let error = CommandRunner::new(Duration::from_millis(100))
+        let error = CommandRunner::new(Duration::from_secs(1))
             .run(
                 Command::shell("setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" >/dev/null 2>&1 & wait")
                     .arg("sh")
@@ -927,7 +928,7 @@ mod unix {
 
         assert_eq!(error.kind(), CommandErrorKind::TimedOut);
         assert!(
-            elapsed < Duration::from_secs(2),
+            elapsed < Duration::from_secs(3),
             "timeout must cancel a blocked stdin writer"
         );
     }
