@@ -15,7 +15,7 @@ crate 名称为 `qubit-command`，要求 Rust 1.94 或更高版本：
 
 ```toml
 [dependencies]
-qubit-command = "0.8"
+qubit-command = "0.9"
 ```
 
 ## 快速开始
