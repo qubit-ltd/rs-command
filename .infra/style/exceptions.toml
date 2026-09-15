@@ -1,0 +1,6 @@
+format = 1
+
+[[exceptions]]
+rule = "test-file-name"
+path = "tests/support/escaped_process_guard.rs"
+reason = "This existing test-support module defines EscapedProcessGuard and its unit tests, and is loaded through tests/support/mod.rs."
