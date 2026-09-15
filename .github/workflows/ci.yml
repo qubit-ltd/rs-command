@@ -116,6 +116,9 @@ jobs:
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --version 0.8.6 --locked
       - name: Collect and check coverage
+        env:
+          # Non-incremental builds misreport covered inline functions with this toolchain.
+          CARGO_INCREMENTAL: "1"
         run: ./coverage.sh
       - name: Build project (release)
         if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
