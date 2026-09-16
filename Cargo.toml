@@ -32,10 +32,10 @@ name = "command_runner"
 harness = false
 
 [dependencies]
-log = "0.4"
-process-wrap = { version = "10.0", default-features = false, features = ["std", "process-group", "job-object"] }
-same-file = "1.0"
-thiserror = "2.0"
+log = "^0.4"
+process-wrap = { version = "^10.0", default-features = false, features = ["std", "process-group", "job-object"] }
+same-file = "^1.0"
+thiserror = "^2.0"
 qubit-clock = { version = "0.13" }
 qubit-redact = { version = "0.9", default-features = false }
 
@@ -43,6 +43,6 @@ qubit-redact = { version = "0.9", default-features = false }
 libc = "0.2"
 
 [dev-dependencies]
-criterion = { version = "0.8", default-features = false }
-tempfile = "3.27"
+criterion = { version = "^0.8", default-features = false }
+tempfile = "^3.27"
 qubit-clock = { version = "0.13", features = ["test-util"] }
