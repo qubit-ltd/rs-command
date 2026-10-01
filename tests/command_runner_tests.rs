@@ -599,7 +599,7 @@ mod unix {
             sender.send(result).expect("test receiver should remain connected");
         });
 
-        let first_result = receiver.recv_timeout(Duration::from_millis(250));
+        let first_result = receiver.recv_timeout(Duration::from_secs(2));
         let completed_without_advance = first_result.is_ok();
         let result = match first_result {
             Ok(result) => result,
