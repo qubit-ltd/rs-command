@@ -989,8 +989,21 @@ mod unix {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
-        std::thread::sleep(Duration::from_millis(50));
-        clock.advance(timeout).expect("manual time should advance");
+        // The completion marker is written immediately before the shell exits,
+        // so keep advancing manual time in small steps until the runner has
+        // observed the exit. Advancing the full timeout here can race with the
+        // child process scheduler and turn a successful command into a timeout.
+        let observed_exit_before_deadline = Instant::now() + Duration::from_secs(2);
+        while !worker.is_finished() {
+            assert!(
+                Instant::now() < observed_exit_before_deadline,
+                "runner should observe the completed child before the manual deadline advances",
+            );
+            clock
+                .advance(Duration::from_millis(1))
+                .expect("manual time should advance");
+            std::thread::sleep(Duration::from_millis(1));
+        }
 
         let result = worker.join().expect("runner thread should not panic");
         let _ = result.expect("a child that exits before the deadline should complete normally");
