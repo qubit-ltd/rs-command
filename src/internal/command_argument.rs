@@ -21,7 +21,7 @@ pub(crate) struct CommandArgument {
 
 impl CommandArgument {
     /// Creates a visible argument.
-    #[inline(always)]
+    #[inline]
     pub(crate) const fn visible(value: OsString) -> Self {
         Self {
             value,
@@ -30,7 +30,7 @@ impl CommandArgument {
     }
 
     /// Creates a fully redacted argument.
-    #[inline(always)]
+    #[inline]
     pub(crate) const fn sensitive(value: OsString) -> Self {
         Self {
             value,
@@ -39,13 +39,13 @@ impl CommandArgument {
     }
 
     /// Returns the raw argument value.
-    #[inline(always)]
+    #[inline]
     pub(crate) fn value(&self) -> &OsStr {
         self.value.as_os_str()
     }
 
     /// Returns the configured diagnostic sensitivity.
-    #[inline(always)]
+    #[inline]
     pub(crate) const fn sensitivity(&self) -> Option<Sensitivity> {
         self.sensitivity
     }

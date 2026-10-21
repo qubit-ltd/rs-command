@@ -49,6 +49,7 @@ impl RunEvent {
     ///
     /// The exit status for [`Self::Exited`], or the corresponding stop reason
     /// for every event that requires cleanup.
+    #[inline]
     pub(super) fn into_exit_status(self) -> Result<ExitStatus, StopReason> {
         match self {
             Self::Exited(status) => Ok(status),

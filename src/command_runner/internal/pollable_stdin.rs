@@ -9,6 +9,11 @@
 
 use std::io;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+
+#[cfg(unix)]
+use libc::POLLOUT;
 
 use super::io_cancellation_token::IoCancellationToken;
 
@@ -19,16 +24,18 @@ pub(super) trait PollableStdin: Write {
 }
 
 #[cfg(unix)]
-impl<T: Write + std::os::fd::AsRawFd> PollableStdin for T {
+impl<T: Write + AsRawFd> PollableStdin for T {
     /// Waits for the Unix descriptor to become writable or cancellation.
+    #[inline]
     fn wait_writable(&self, cancellation: &IoCancellationToken) -> io::Result<bool> {
-        cancellation.wait_for_fd(std::os::fd::AsRawFd::as_raw_fd(self), libc::POLLOUT)
+        cancellation.wait_for_fd(self.as_raw_fd(), POLLOUT)
     }
 }
 
 #[cfg(windows)]
 impl<T: Write> PollableStdin for T {
     /// Checks cancellation before allowing the next write on Windows.
+    #[inline]
     fn wait_writable(&self, cancellation: &IoCancellationToken) -> io::Result<bool> {
         Ok(!cancellation.is_cancelled())
     }

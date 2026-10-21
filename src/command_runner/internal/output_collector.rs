@@ -423,6 +423,8 @@ pub(super) fn output_cleanup_failure(stream: OutputStream, failure: OutputCaptur
 }
 
 /// Maps a reader result while retaining output from a failed tee write.
+/// Converts one output-stream failure into a command error while preserving
+/// captured bytes from both the failed stream and its peer.
 fn map_output_reader_error(
     command: &str,
     status: ExitStatus,

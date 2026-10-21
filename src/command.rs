@@ -110,7 +110,7 @@ impl Command {
     /// # Returns
     ///
     /// A command with no arguments or per-command overrides.
-    #[inline(always)]
+    #[inline]
     pub fn new(program: &str) -> Self {
         Self::new_os(program)
     }
@@ -183,7 +183,7 @@ impl Command {
     ///
     /// Program executable name or path as an [`OsStr`].
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub fn program(&self) -> &OsStr {
         &self.program
     }
@@ -194,7 +194,7 @@ impl Command {
     ///
     /// Borrowed raw argument values in submission order.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub fn arguments(&self) -> impl ExactSizeIterator<Item = &OsStr> {
         self.args.iter().map(CommandArgument::value)
     }
@@ -208,7 +208,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline(always)]
+    #[inline]
     pub fn arg(mut self, arg: &str) -> Self {
         self.args.push(CommandArgument::visible(OsString::from(arg)));
         self
@@ -223,7 +223,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline(always)]
+    #[inline]
     pub fn arg_os<S>(mut self, arg: S) -> Self
     where
         S: AsRef<OsStr>,
@@ -243,7 +243,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline(always)]
+    #[inline]
     pub fn sensitive_arg(mut self, arg: &str) -> Self {
         self.args.push(CommandArgument::sensitive(OsString::from(arg)));
         self
@@ -260,7 +260,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline(always)]
+    #[inline]
     pub fn sensitive_arg_os<S>(mut self, arg: S) -> Self
     where
         S: AsRef<OsStr>,
@@ -313,7 +313,7 @@ impl Command {
     /// `Some(path)` when the command has a working directory override, or
     /// `None` when the runner default should be used.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub fn working_directory_override(&self) -> Option<&Path> {
         self.working_directory.as_deref()
     }
@@ -328,7 +328,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline(always)]
+    #[inline]
     pub fn working_directory<P>(mut self, working_directory: P) -> Self
     where
         P: Into<PathBuf>,
@@ -343,7 +343,7 @@ impl Command {
     ///
     /// Borrowed environment variable entries in insertion order.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub fn environment(&self) -> &[(OsString, OsString)] {
         &self.envs
     }
@@ -354,7 +354,7 @@ impl Command {
     ///
     /// Borrowed environment variable names removed before spawning the command.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub fn removed_environment(&self) -> &[OsString] {
         &self.removed_envs
     }
@@ -365,7 +365,7 @@ impl Command {
     ///
     /// `true` when the command should start from an empty environment.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub const fn clears_environment(&self) -> bool {
         self.clear_environment
     }
@@ -380,7 +380,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline(always)]
+    #[inline]
     pub fn env(mut self, key: &str, value: &str) -> Self {
         self = self.env_os(key, value);
         self
@@ -418,7 +418,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline(always)]
+    #[inline]
     pub fn env_remove(mut self, key: &str) -> Self {
         self = self.env_remove_os(key);
         self
@@ -452,7 +452,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline(always)]
+    #[inline]
     pub fn env_clear(mut self) -> Self {
         self.clear_environment = true;
         self.envs.clear();
@@ -465,7 +465,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline(always)]
+    #[inline]
     pub fn stdin_null(mut self) -> Self {
         self.stdin = CommandStdin::Null;
         self
@@ -476,7 +476,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline(always)]
+    #[inline]
     pub fn stdin_inherit(mut self) -> Self {
         self.stdin = CommandStdin::Inherit;
         self
@@ -494,7 +494,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline(always)]
+    #[inline]
     pub fn stdin_bytes<B>(mut self, bytes: B) -> Self
     where
         B: Into<Vec<u8>>,
@@ -522,7 +522,7 @@ impl Command {
     /// # Returns
     ///
     /// The updated command.
-    #[inline(always)]
+    #[inline]
     pub fn stdin_file<P>(mut self, path: P) -> Self
     where
         P: Into<PathBuf>,
@@ -536,7 +536,7 @@ impl Command {
     /// # Returns
     ///
     /// Owned stdin configuration used by the runner.
-    #[inline(always)]
+    #[inline]
     pub(crate) fn into_stdin_configuration(self) -> CommandStdin {
         self.stdin
     }

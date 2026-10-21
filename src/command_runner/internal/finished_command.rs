@@ -7,10 +7,13 @@
 // =============================================================================
 use crate::CommandOutput;
 
-/// Output of a command whose process and I/O helpers have completed.
+/// Retains a command's diagnostic text and collected output after its process
+/// and I/O helpers have finished.
 pub(in crate::command_runner) struct FinishedCommand {
-    /// Human-readable command text for diagnostics and logging.
+    /// Redacted command text used to identify the completed command in
+    /// diagnostics and logs.
     pub(in crate::command_runner) command_text: String,
-    /// Captured command output.
+    /// Captured status, output bytes, truncation and completion state, and
+    /// elapsed time; streams may be partial when collection was interrupted.
     pub(in crate::command_runner) output: CommandOutput,
 }

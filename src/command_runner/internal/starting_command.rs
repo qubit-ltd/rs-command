@@ -68,7 +68,7 @@ impl<'a> StartingCommand<'a> {
     ///
     /// Panics after ownership has transferred to a running command.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub(in crate::command_runner) fn child_process(&mut self) -> &mut dyn ChildWrapper {
         self.child_process
             .as_mut()
@@ -81,7 +81,7 @@ impl<'a> StartingCommand<'a> {
     /// # Parameters
     ///
     /// * `writer` - Optional stdin writer helper.
-    #[inline(always)]
+    #[inline]
     pub(in crate::command_runner) fn set_stdin_writer(&mut self, writer: OptionalStdinWriter) {
         self.stdin_writer = writer;
     }
@@ -91,7 +91,7 @@ impl<'a> StartingCommand<'a> {
     /// # Parameters
     ///
     /// * `reader` - Stdout reader helper.
-    #[inline(always)]
+    #[inline]
     pub(in crate::command_runner) fn set_stdout_reader(&mut self, reader: OutputReader) {
         self.stdout_reader = Some(reader);
     }
@@ -101,7 +101,7 @@ impl<'a> StartingCommand<'a> {
     /// # Parameters
     ///
     /// * `reader` - Stderr reader helper.
-    #[inline(always)]
+    #[inline]
     pub(in crate::command_runner) fn set_stderr_reader(&mut self, reader: OutputReader) {
         self.stderr_reader = Some(reader);
     }

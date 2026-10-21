@@ -26,6 +26,7 @@ pub(in crate::command_runner) struct IoCancellationToken {
 impl IoCancellationToken {
     /// Returns whether cancellation has been requested.
     #[must_use]
+    #[inline]
     pub(in crate::command_runner) fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
     }

@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use super::captured_output::CapturedOutput;
 
 /// Error reported by an output reader thread.
+#[must_use]
 #[derive(Debug)]
 pub(in crate::command_runner) enum OutputCaptureError {
     /// Reading from the child pipe failed after retaining partial output.

@@ -38,6 +38,7 @@ impl<'a> ProcessTerminator<'a> {
     /// # Returns
     ///
     /// A terminator borrowing the child for the cleanup operation.
+    #[must_use]
     pub(super) const fn new(child: &'a mut ManagedChildProcess) -> Self {
         Self { child }
     }

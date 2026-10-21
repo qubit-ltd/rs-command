@@ -56,10 +56,11 @@ unsafe extern "system" {
 ///
 /// # Returns
 ///
-/// `true` when the names are byte-for-byte equal.
+/// `true` when the names match according to the current platform's environment
+/// variable naming rules.
 #[cfg(not(windows))]
 #[must_use]
-#[inline(always)]
+#[inline]
 pub(crate) fn env_key_eq(left: &OsStr, right: &OsStr) -> bool {
     left == right
 }

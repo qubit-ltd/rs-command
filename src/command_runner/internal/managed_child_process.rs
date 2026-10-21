@@ -24,6 +24,16 @@ pub(in crate::command_runner) struct ManagedChildProcess {
 
 impl ManagedChildProcess {
     /// Creates a managed child process wrapper.
+    ///
+    /// # Parameters
+    ///
+    /// * `child` - Spawned child handle with its process wrapper configuration.
+    /// * `process_tree_managed` - Whether the wrapper can terminate the child
+    ///   process tree.
+    ///
+    /// # Returns
+    ///
+    /// A wrapper that records the child handle and its process-tree capability.
     #[inline]
     pub(in crate::command_runner) fn new(child: Box<dyn ChildWrapper>, process_tree_managed: bool) -> Self {
         Self {

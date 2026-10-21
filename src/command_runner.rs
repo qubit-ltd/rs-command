@@ -203,7 +203,7 @@ impl fmt::Debug for CommandRunner {
 
 impl CommandRunner {
     /// Creates a command runner with explicit timeout handling configuration.
-    #[inline(always)]
+    #[inline]
     fn with_optional_timeout(timeout: Option<Duration>) -> Self {
         Self {
             timeout,
@@ -223,7 +223,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// A runner that uses a timeout and inherits default command policies.
-    #[inline(always)]
+    #[inline]
     pub fn new(timeout: Duration) -> Self {
         Self::with_optional_timeout(Some(timeout))
     }
@@ -234,7 +234,7 @@ impl CommandRunner {
     ///
     /// A runner that performs no timeout checks and inherits default command
     /// policies.
-    #[inline(always)]
+    #[inline]
     pub fn without_timeout() -> Self {
         Self::with_optional_timeout(None)
     }
@@ -245,7 +245,7 @@ impl CommandRunner {
     ///
     /// `Some(duration)` when timeout handling is enabled, otherwise `None`.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub const fn configured_timeout(&self) -> Option<Duration> {
         self.timeout
     }
@@ -437,7 +437,7 @@ impl CommandRunner {
     /// Timer used for elapsed measurement and blocking sleeps during timeout or
     /// cancellation handling.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub fn configured_timer(&self) -> &dyn Timer {
         self.timer.as_ref()
     }
@@ -457,7 +457,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline(always)]
+    #[inline]
     pub fn timer(mut self, timer: Arc<dyn Timer>) -> Self {
         self.timer = timer;
         self
@@ -470,7 +470,7 @@ impl CommandRunner {
     /// `Some(path)` when a default working directory is configured, otherwise
     /// `None` to inherit the current process working directory.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub fn configured_working_directory(&self) -> Option<&Path> {
         self.working_directory.as_deref()
     }
@@ -485,7 +485,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline(always)]
+    #[inline]
     pub fn working_directory<P>(mut self, working_directory: P) -> Self
     where
         P: Into<PathBuf>,
@@ -500,7 +500,7 @@ impl CommandRunner {
     ///
     /// Borrowed list of exit codes treated as successful.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub fn configured_success_exit_codes(&self) -> &[i32] {
         &self.success_exit_codes
     }
@@ -541,7 +541,7 @@ impl CommandRunner {
     ///
     /// `true` when runner lifecycle logs are disabled.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub const fn is_logging_disabled(&self) -> bool {
         self.disable_logging
     }
@@ -559,7 +559,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline(always)]
+    #[inline]
     pub const fn disable_logging(mut self, disable_logging: bool) -> Self {
         self.disable_logging = disable_logging;
         self
@@ -573,7 +573,7 @@ impl CommandRunner {
     /// [`CommandErrorKind::OutputTruncated`](crate::CommandErrorKind::OutputTruncated) if either captured stream is
     /// truncated.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub const fn is_output_truncation_failure_enabled(&self) -> bool {
         self.fail_on_output_truncation
     }
@@ -593,7 +593,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline(always)]
+    #[inline]
     pub const fn fail_on_output_truncation(mut self, fail_on_output_truncation: bool) -> Self {
         self.fail_on_output_truncation = fail_on_output_truncation;
         self
@@ -605,7 +605,7 @@ impl CommandRunner {
     ///
     /// The complete configured diagnostic redaction policy.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub const fn configured_diagnostic_redaction_policy(&self) -> &RedactionPolicy {
         &self.diagnostic_redaction_policy
     }
@@ -624,7 +624,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline(always)]
+    #[inline]
     pub fn diagnostic_redaction_policy(mut self, policy: RedactionPolicy) -> Self {
         self.diagnostic_redaction_policy = policy;
         self
@@ -636,7 +636,7 @@ impl CommandRunner {
     ///
     /// `Some(max_bytes)` when stdout capture is limited, otherwise `None`.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub const fn configured_max_stdout_bytes(&self) -> Option<usize> {
         self.max_stdout_bytes
     }
@@ -654,7 +654,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline(always)]
+    #[inline]
     pub const fn max_stdout_bytes(mut self, max_bytes: usize) -> Self {
         self.max_stdout_bytes = Some(max_bytes);
         self
@@ -666,7 +666,7 @@ impl CommandRunner {
     ///
     /// `Some(max_bytes)` when stderr capture is limited, otherwise `None`.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub const fn configured_max_stderr_bytes(&self) -> Option<usize> {
         self.max_stderr_bytes
     }
@@ -684,7 +684,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline(always)]
+    #[inline]
     pub const fn max_stderr_bytes(mut self, max_bytes: usize) -> Self {
         self.max_stderr_bytes = Some(max_bytes);
         self
@@ -699,7 +699,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline(always)]
+    #[inline]
     pub const fn max_output_bytes(mut self, max_bytes: usize) -> Self {
         self.max_stdout_bytes = Some(max_bytes);
         self.max_stderr_bytes = Some(max_bytes);
@@ -715,7 +715,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline(always)]
+    #[inline]
     pub const fn bounded_output(mut self, max_bytes: usize) -> Self {
         self.max_stdout_bytes = Some(max_bytes);
         self.max_stderr_bytes = Some(max_bytes);
@@ -732,7 +732,7 @@ impl CommandRunner {
     /// # Returns
     ///
     /// The updated command runner.
-    #[inline(always)]
+    #[inline]
     pub const fn unbounded_output(mut self) -> Self {
         self.max_stdout_bytes = None;
         self.max_stderr_bytes = None;

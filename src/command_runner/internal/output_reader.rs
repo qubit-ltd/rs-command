@@ -31,6 +31,7 @@ impl OutputReader {
     /// # Returns
     ///
     /// An output reader owning the worker resources.
+    #[inline]
     pub(in crate::command_runner) fn new(
         join: thread::JoinHandle<Result<CapturedOutput, OutputCaptureError>>,
         cancellation: IoCancellation,
@@ -40,12 +41,19 @@ impl OutputReader {
 
     /// Returns whether the worker thread has stopped.
     #[must_use]
+    #[inline]
     pub(in crate::command_runner) fn is_finished(&self) -> bool {
         self.join.is_finished()
     }
 
     /// Requests cancellation of the worker thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if waking the worker fails, except when the wakeup
+    /// channel is already closed, or if interrupting the worker fails.
     #[must_use = "handle output-reader cancellation failures"]
+    #[inline]
     pub(in crate::command_runner) fn cancel(&self) -> std::io::Result<()> {
         self.cancellation.cancel(&self.join)
     }
@@ -54,8 +62,16 @@ impl OutputReader {
     ///
     /// # Returns
     ///
-    /// The worker result or a panic payload from the worker thread.
+    /// The inner result contains captured output or an output-capture error;
+    /// the outer result contains that worker result or the worker's panic
+    /// payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an outer error containing the panic payload if the worker
+    /// thread panicked.
     #[must_use = "handle both thread and output capture failures"]
+    #[inline]
     pub(in crate::command_runner) fn join(self) -> thread::Result<Result<CapturedOutput, OutputCaptureError>> {
         self.join.join()
     }

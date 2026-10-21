@@ -38,12 +38,21 @@ impl StdinWriter {
     }
 
     /// Returns whether the worker thread has stopped.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the worker has finished, or `false` while it is still running.
     #[must_use]
     pub(in crate::command_runner) fn is_finished(&self) -> bool {
         self.join.is_finished()
     }
 
     /// Requests cancellation of the worker thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error encountered while waking or interrupting the
+    /// worker. Cancellation is marked before the wakeup is attempted.
     #[must_use = "handle stdin-writer cancellation failures"]
     pub(in crate::command_runner) fn cancel(&self) -> io::Result<()> {
         self.cancellation.cancel(&self.join)
@@ -53,7 +62,8 @@ impl StdinWriter {
     ///
     /// # Returns
     ///
-    /// The worker result or a panic payload from the worker thread.
+    /// `Ok(Ok(()))` when the write completed, `Ok(Err(error))` when the write
+    /// failed, or `Err(panic)` when the worker panicked.
     #[must_use = "handle both thread and stdin write failures"]
     pub(in crate::command_runner) fn join(self) -> thread::Result<io::Result<()>> {
         self.join.join()

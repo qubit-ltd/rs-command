@@ -35,7 +35,7 @@ impl OutputStream {
     ///
     /// `"stdout"` for [`Self::Stdout`] and `"stderr"` for [`Self::Stderr`].
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Stdout => "stdout",

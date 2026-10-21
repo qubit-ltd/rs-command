@@ -24,6 +24,7 @@ fn cancel_result(result: i32, error: io::Error) -> io::Result<()> {
 ///
 /// This result is only benign after the caller confirms that the helper has
 /// observed cancellation and stopped within the bounded confirmation window.
+#[must_use]
 pub(super) fn cancellation_found_no_pending_io(error: &io::Error) -> bool {
     error.raw_os_error() == Some(ERROR_NOT_FOUND)
 }

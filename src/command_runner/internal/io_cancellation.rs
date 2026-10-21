@@ -81,6 +81,11 @@ impl IoCancellation {
     /// # Parameters
     ///
     /// * `join` - Helper thread whose blocking I/O may need interruption.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the Unix wakeup write fails for a reason other
+    /// than a broken pipe, or if interrupting the helper thread fails.
     pub(in crate::command_runner) fn cancel<T>(&self, join: &JoinHandle<T>) -> io::Result<()> {
         self.cancelled.store(true, Ordering::Release);
         #[cfg(test)]

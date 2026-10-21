@@ -45,7 +45,28 @@ pub(in crate::command_runner) fn write_stdin_bytes(
     write_stdin_bytes_with(command, child, stdin_bytes, spawn_stdin_writer)
 }
 
-/// Starts a stdin helper with the supplied thread-spawn operation.
+/// Takes the child stdin pipe and starts a writer through the supplied spawn
+/// operation.
+///
+/// The injected operation keeps thread creation failures deterministic to test
+/// while production callers use [`spawn_stdin_writer`].
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used in errors.
+/// * `child` - Spawned child whose stdin pipe may be taken.
+/// * `stdin_bytes` - Optional bytes to write; `None` leaves stdin untouched.
+/// * `spawn` - Operation that starts the writer thread.
+///
+/// # Returns
+///
+/// The optional writer that owns the worker thread and cancellation state.
+///
+/// # Errors
+///
+/// Returns `WriteInputFailed` when the child has no stdin pipe or configuring
+/// its pipe fails, and `StartInputThreadFailed` when cancellation setup or the
+/// supplied spawn operation fails.
 fn write_stdin_bytes_with(
     command: &str,
     child: &mut dyn ChildWrapper,

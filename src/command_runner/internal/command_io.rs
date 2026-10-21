@@ -101,7 +101,7 @@ impl CommandIo {
     ///
     /// Returns [`CommandError`] if stream collection or stdin writing fails.
     #[must_use = "handle command output collection failures"]
-    #[inline(always)]
+    #[inline]
     pub(in crate::command_runner) fn collect<F>(
         self,
         command: &str,

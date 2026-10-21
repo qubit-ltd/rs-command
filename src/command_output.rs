@@ -16,6 +16,14 @@ use std::time::Duration;
 use qubit_redact::Redactor;
 
 /// Redacts one debug-only value before it crosses the diagnostic boundary.
+///
+/// # Parameters
+///
+/// * `value` - Value whose debug representation may contain sensitive data.
+///
+/// # Returns
+///
+/// A redacted representation, or a marker when redaction cannot be completed.
 fn redacted_debug_text(value: &impl fmt::Debug) -> String {
     Redactor::strict()
         .redact_field("command_output", &format_args!("{value:?}"))
@@ -139,7 +147,7 @@ impl CommandOutput {
     /// `None` when the process ended in a way that does not map to a numeric
     /// code.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub fn exit_code(&self) -> Option<i32> {
         self.status.code()
     }
@@ -150,7 +158,7 @@ impl CommandOutput {
     ///
     /// Platform-specific process exit status reported by the operating system.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub const fn exit_status(&self) -> &ExitStatus {
         &self.status
     }
@@ -163,7 +171,7 @@ impl CommandOutput {
     /// `None`.
     #[cfg(unix)]
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub fn termination_signal(&self) -> Option<i32> {
         self.status.signal()
     }
@@ -177,7 +185,7 @@ impl CommandOutput {
     /// Check [`Self::stdout_truncated`] to determine whether retained bytes are
     /// only a prefix of the process output.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub fn stdout(&self) -> &[u8] {
         &self.stdout
     }
@@ -189,7 +197,7 @@ impl CommandOutput {
     /// Owned stdout bytes exactly as retained by the runner. This avoids a
     /// copy when the caller no longer needs the remaining output metadata.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub fn into_stdout(self) -> Vec<u8> {
         self.stdout
     }
@@ -203,7 +211,7 @@ impl CommandOutput {
     /// Check [`Self::stderr_truncated`] to determine whether retained bytes are
     /// only a prefix of the process output.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub fn stderr(&self) -> &[u8] {
         &self.stderr
     }
@@ -218,7 +226,7 @@ impl CommandOutput {
     ///
     /// `true` when stdout reached EOF before collection stopped.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub const fn stdout_complete(&self) -> bool {
         self.stdout_complete
     }
@@ -233,7 +241,7 @@ impl CommandOutput {
     ///
     /// `true` when stderr reached EOF before collection stopped.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub const fn stderr_complete(&self) -> bool {
         self.stderr_complete
     }
@@ -245,7 +253,7 @@ impl CommandOutput {
     /// Owned stderr bytes exactly as retained by the runner. This avoids a
     /// copy when the caller no longer needs the remaining output metadata.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub fn into_stderr(self) -> Vec<u8> {
         self.stderr
     }
@@ -261,7 +269,7 @@ impl CommandOutput {
     /// Returns [`str::Utf8Error`] when retained stdout contains invalid UTF-8.
     /// A capture limit can retain only part of a multi-byte sequence, so this
     /// error does not necessarily mean the process emitted invalid UTF-8.
-    #[inline(always)]
+    #[inline]
     pub fn stdout_text(&self) -> Result<&str, str::Utf8Error> {
         str::from_utf8(&self.stdout)
     }
@@ -277,7 +285,7 @@ impl CommandOutput {
     /// Returns [`str::Utf8Error`] when retained stderr contains invalid UTF-8.
     /// A capture limit can retain only part of a multi-byte sequence, so this
     /// error does not necessarily mean the process emitted invalid UTF-8.
-    #[inline(always)]
+    #[inline]
     pub fn stderr_text(&self) -> Result<&str, str::Utf8Error> {
         str::from_utf8(&self.stderr)
     }
@@ -289,7 +297,7 @@ impl CommandOutput {
     /// Borrowed UTF-8 text when stdout is valid UTF-8, or an owned string with
     /// invalid byte sequences replaced by the Unicode replacement character.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub fn stdout_lossy_text(&self) -> Cow<'_, str> {
         String::from_utf8_lossy(&self.stdout)
     }
@@ -301,7 +309,7 @@ impl CommandOutput {
     /// Borrowed UTF-8 text when stderr is valid UTF-8, or an owned string with
     /// invalid byte sequences replaced by the Unicode replacement character.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub fn stderr_lossy_text(&self) -> Cow<'_, str> {
         String::from_utf8_lossy(&self.stderr)
     }
@@ -314,7 +322,7 @@ impl CommandOutput {
     /// include time spent draining inherited output pipes after the direct
     /// child process exits.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub const fn elapsed(&self) -> Duration {
         self.elapsed
     }
@@ -325,7 +333,7 @@ impl CommandOutput {
     ///
     /// `true` when stdout emitted more bytes than the runner retained.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub const fn stdout_truncated(&self) -> bool {
         self.stdout_truncated
     }
@@ -336,7 +344,7 @@ impl CommandOutput {
     ///
     /// `true` when stderr emitted more bytes than the runner retained.
     #[must_use]
-    #[inline(always)]
+    #[inline]
     pub const fn stderr_truncated(&self) -> bool {
         self.stderr_truncated
     }

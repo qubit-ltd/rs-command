@@ -29,6 +29,8 @@ impl ProcessTerminationError {
 
     /// Moves all observed process-control failures into the caller's cleanup
     /// report.
+    #[must_use]
+    #[inline]
     pub(super) fn into_cleanup_failures(self) -> Vec<CommandCleanupFailure> {
         self.cleanup_failures
     }

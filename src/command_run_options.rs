@@ -63,6 +63,39 @@ impl CommandRunOptions {
         Self::default()
     }
 
+    /// Returns configured cancellation, if any.
+    ///
+    /// # Returns
+    ///
+    /// A borrowed cancellation handle when configured, otherwise `None`.
+    #[must_use]
+    #[inline]
+    pub fn configured_cancellation(&self) -> Option<&CommandCancellation> {
+        self.cancellation.as_ref()
+    }
+
+    /// Returns the configured stdout tee path, if any.
+    ///
+    /// # Returns
+    ///
+    /// The borrowed stdout tee path when configured, otherwise `None`.
+    #[must_use]
+    #[inline]
+    pub fn configured_stdout_file(&self) -> Option<&Path> {
+        self.stdout_file.as_deref()
+    }
+
+    /// Returns the configured stderr tee path, if any.
+    ///
+    /// # Returns
+    ///
+    /// The borrowed stderr tee path when configured, otherwise `None`.
+    #[must_use]
+    #[inline]
+    pub fn configured_stderr_file(&self) -> Option<&Path> {
+        self.stderr_file.as_deref()
+    }
+
     /// Configures a one-shot cancellation handle for this run.
     ///
     /// Clone this handle before passing it to multiple runs that should share a
@@ -71,7 +104,7 @@ impl CommandRunOptions {
     /// # Returns
     ///
     /// The updated options with this cancellation handle configured.
-    #[inline(always)]
+    #[inline]
     pub fn cancellation(mut self, cancellation: CommandCancellation) -> Self {
         self.cancellation = Some(cancellation);
         self
@@ -121,39 +154,6 @@ impl CommandRunOptions {
     {
         self.stderr_file = Some(path.into());
         self
-    }
-
-    /// Returns configured cancellation, if any.
-    ///
-    /// # Returns
-    ///
-    /// A borrowed cancellation handle when configured, otherwise `None`.
-    #[must_use]
-    #[inline(always)]
-    pub fn configured_cancellation(&self) -> Option<&CommandCancellation> {
-        self.cancellation.as_ref()
-    }
-
-    /// Returns the configured stdout tee path, if any.
-    ///
-    /// # Returns
-    ///
-    /// The borrowed stdout tee path when configured, otherwise `None`.
-    #[must_use]
-    #[inline(always)]
-    pub fn configured_stdout_file(&self) -> Option<&Path> {
-        self.stdout_file.as_deref()
-    }
-
-    /// Returns the configured stderr tee path, if any.
-    ///
-    /// # Returns
-    ///
-    /// The borrowed stderr tee path when configured, otherwise `None`.
-    #[must_use]
-    #[inline(always)]
-    pub fn configured_stderr_file(&self) -> Option<&Path> {
-        self.stderr_file.as_deref()
     }
 
     /// Splits options into the runner's internal per-run representation.
