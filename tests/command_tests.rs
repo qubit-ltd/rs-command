@@ -7,6 +7,7 @@
 // =============================================================================
 //! Tests for [`Command`](qubit_command::Command).
 
+use std::ffi::OsStr;
 #[cfg(unix)]
 use std::ffi::OsString;
 #[cfg(unix)]
@@ -35,9 +36,9 @@ fn test_command_args_appends_in_order() {
 
 #[test]
 fn test_command_os_args_appends_in_order() {
-    let command = Command::new_os(std::ffi::OsStr::new("git"))
-        .arg_os(std::ffi::OsStr::new("status"))
-        .args_os([std::ffi::OsStr::new("--short")]);
+    let command = Command::new_os(OsStr::new("git"))
+        .arg_os(OsStr::new("status"))
+        .args_os([OsStr::new("--short")]);
 
     let args = command
         .arguments()
@@ -70,10 +71,9 @@ fn test_command_env_replaces_existing_override() {
 
 #[test]
 fn test_command_env_os_removes_prior_removal() {
-    let command = Command::new("env").env_remove("QUBIT_COMMAND_TEST").env_os(
-        std::ffi::OsStr::new("QUBIT_COMMAND_TEST"),
-        std::ffi::OsStr::new("present"),
-    );
+    let command = Command::new("env")
+        .env_remove("QUBIT_COMMAND_TEST")
+        .env_os(OsStr::new("QUBIT_COMMAND_TEST"), OsStr::new("present"));
 
     assert!(command.removed_environment().is_empty());
     assert_eq!(command.environment().len(), 1);

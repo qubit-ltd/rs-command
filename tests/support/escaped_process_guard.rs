@@ -94,7 +94,7 @@ mod tests {
     use super::EscapedProcessGuard;
 
     #[test]
-    fn terminate_disarms_guard_after_success() {
+    fn test_terminate_disarms_guard_after_success() {
         let pid_path = std::env::temp_dir().join(format!("qubit-escaped-process-guard-{}.pid", std::process::id()));
         let mut child = Command::new("sleep").arg("10").spawn().expect("sleep should start");
         let child_pid = child.id();
@@ -109,7 +109,7 @@ mod tests {
     }
 
     #[test]
-    fn wait_until_recorded_ignores_empty_pid_file() {
+    fn test_wait_until_recorded_ignores_empty_pid_file() {
         let pid_path =
             std::env::temp_dir().join(format!("qubit-escaped-process-guard-empty-{}.pid", std::process::id()));
         fs::write(&pid_path, "").expect("empty PID file should be written");

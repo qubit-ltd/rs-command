@@ -31,6 +31,7 @@ impl SwitchingTimer {
         Self::after_observations(1)
     }
 
+    /// Keeps the first clock active for the given number of observations.
     pub(crate) fn after_observations(stable_observations: usize) -> Self {
         Self {
             first: ManualMonotonicClock::new(),

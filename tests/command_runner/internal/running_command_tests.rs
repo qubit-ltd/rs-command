@@ -7,6 +7,8 @@
 // =============================================================================
 //! Tests for running command behavior.
 
+#[cfg(not(windows))]
+use std::sync::Arc;
 use std::time::Duration;
 #[cfg(not(windows))]
 use std::time::Instant;
@@ -36,7 +38,7 @@ fn test_running_command_completes_before_timeout() {
 #[test]
 fn test_running_command_reports_injected_timer_completion_failure() {
     let error = CommandRunner::new(Duration::from_secs(30))
-        .timer(std::sync::Arc::new(FaultInjectingTimer::backend_unavailable(
+        .timer(Arc::new(FaultInjectingTimer::backend_unavailable(
             TimerFailurePoint::Completion,
             "test",
             "test timer completion failed",
@@ -51,7 +53,7 @@ fn test_running_command_reports_injected_timer_completion_failure() {
 #[test]
 fn test_running_command_reports_injected_timer_registration_failure() {
     let error = CommandRunner::new(Duration::from_secs(30))
-        .timer(std::sync::Arc::new(FaultInjectingTimer::backend_unavailable(
+        .timer(Arc::new(FaultInjectingTimer::backend_unavailable(
             TimerFailurePoint::Registration,
             "test",
             "test timer backend unavailable",
@@ -66,7 +68,7 @@ fn test_running_command_reports_injected_timer_registration_failure() {
 #[test]
 fn test_running_command_reports_clock_domain_change_after_exit() {
     let error = CommandRunner::without_timeout()
-        .timer(std::sync::Arc::new(SwitchingTimer::after_observations(2)))
+        .timer(Arc::new(SwitchingTimer::after_observations(2)))
         .run(Command::shell("printf done"))
         .expect_err("changing timer domains should reject elapsed time");
 
@@ -78,7 +80,7 @@ fn test_running_command_reports_clock_domain_change_after_exit() {
 fn test_running_command_rejects_inconsistent_timer_before_waiting() {
     let started = Instant::now();
     let error = CommandRunner::without_timeout()
-        .timer(std::sync::Arc::new(SwitchingTimer::new()))
+        .timer(Arc::new(SwitchingTimer::new()))
         .run(Command::new("sleep").arg("5").stdin_bytes(b"ignored".to_vec()))
         .expect_err("inconsistent timer should be rejected during startup");
 
@@ -90,7 +92,7 @@ fn test_running_command_rejects_inconsistent_timer_before_waiting() {
 #[test]
 fn test_running_command_cleans_up_inherited_output_after_time_failure() {
     let error = CommandRunner::new(Duration::from_secs(30))
-        .timer(std::sync::Arc::new(SwitchingTimer::after_observations(2)))
+        .timer(Arc::new(SwitchingTimer::after_observations(2)))
         .run(Command::shell("printf done; sleep 1 &"))
         .expect_err("changing timer domains should stop output collection");
 

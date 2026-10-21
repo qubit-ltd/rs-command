@@ -34,7 +34,7 @@ impl Log for CapturedLogger {
     /// # Returns
     ///
     /// Always `true` so tests can inspect every enabled level.
-    #[inline(always)]
+    #[inline]
     fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
         true
     }
@@ -56,7 +56,7 @@ impl Log for CapturedLogger {
     /// Flushes buffered records.
     ///
     /// Records are stored synchronously, so no flush work is required.
-    #[inline(always)]
+    #[inline]
     fn flush(&self) {}
 }
 

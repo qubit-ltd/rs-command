@@ -25,6 +25,9 @@ mod command_stdin;
 mod internal;
 mod output_stream;
 
+#[cfg(test)]
+mod tests;
+
 pub use command::Command;
 pub use command_cancellation::CommandCancellation;
 pub use command_cleanup_failure::CommandCleanupFailure;
