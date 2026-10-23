@@ -150,6 +150,7 @@ impl<'a> ProcessTerminator<'a> {
     }
 
     /// Builds an outcome retaining every preceding termination failure.
+    #[must_use]
     fn success(status: ExitStatus, cleanup_failures: Vec<CommandCleanupFailure>) -> ProcessTerminationOutcome {
         ProcessTerminationOutcome {
             status,
@@ -158,6 +159,7 @@ impl<'a> ProcessTerminator<'a> {
     }
 
     /// Reports whether the platform says the managed tree no longer exists.
+    #[must_use]
     fn process_tree_already_exited(source: &io::Error) -> bool {
         #[cfg(unix)]
         {
@@ -326,6 +328,7 @@ mod tests {
             assert_eq!(error.kind(), expected_kind);
         }
     }
+
     #[test]
     fn test_process_terminator_retains_every_failure_without_waiting_after_failed_kills() {
         for wait_error in [false, true] {

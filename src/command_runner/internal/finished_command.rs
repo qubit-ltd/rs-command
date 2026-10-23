@@ -5,6 +5,7 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+
 use crate::CommandOutput;
 
 /// Retains a command's diagnostic text and collected output after its process

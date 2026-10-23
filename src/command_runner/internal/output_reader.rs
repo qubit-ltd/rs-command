@@ -40,6 +40,10 @@ impl OutputReader {
     }
 
     /// Returns whether the worker thread has stopped.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the worker has stopped; otherwise, `false`.
     #[must_use]
     #[inline]
     pub(in crate::command_runner) fn is_finished(&self) -> bool {

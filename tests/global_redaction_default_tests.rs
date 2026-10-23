@@ -34,7 +34,11 @@ fn test_command_runner_default_uses_installed_global_policy() {
 
     let runner = CommandRunner::new(Duration::from_secs(10));
 
-    assert_eq!(runner.configured_diagnostic_redaction_policy(), &policy);
+    assert_eq!(
+        runner.configured_diagnostic_redaction_policy(),
+        &policy,
+        "the runner should snapshot the installed application policy"
+    );
     let _ = Redactor::replace_application_default(previous);
 }
 
@@ -62,6 +66,12 @@ fn test_command_debug_shares_one_redaction_budget() {
     );
     let _ = Redactor::replace_application_default(previous);
 
-    assert!(!debug.contains("LATE_ENV"));
-    assert!(!debug.contains("LATE_UNSET"));
+    assert!(
+        !debug.contains("LATE_ENV"),
+        "late environment values should be redacted after the shared budget is exhausted"
+    );
+    assert!(
+        !debug.contains("LATE_UNSET"),
+        "late removed-variable names should be redacted after the shared budget is exhausted"
+    );
 }

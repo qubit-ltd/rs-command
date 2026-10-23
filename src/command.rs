@@ -117,6 +117,11 @@ impl Command {
 
     /// Creates a command from a program name or path that may not be UTF-8.
     ///
+    /// # Type Parameters
+    ///
+    /// * `S` - A type that can provide the executable name or path as an
+    ///   operating-system string.
+    ///
     /// # Parameters
     ///
     /// * `program` - Executable name or path to run.
@@ -193,10 +198,53 @@ impl Command {
     /// # Returns
     ///
     /// Borrowed raw argument values in submission order.
-    #[must_use]
     #[inline]
     pub fn arguments(&self) -> impl ExactSizeIterator<Item = &OsStr> {
         self.args.iter().map(CommandArgument::value)
+    }
+
+    /// Returns the per-command working directory override.
+    ///
+    /// # Returns
+    ///
+    /// `Some(path)` when the command has a working directory override, or
+    /// `None` when the runner default should be used.
+    #[inline]
+    pub fn working_directory_override(&self) -> Option<&Path> {
+        self.working_directory.as_deref()
+    }
+
+    /// Returns environment variable overrides.
+    ///
+    /// # Returns
+    ///
+    /// Borrowed environment variable entries in insertion order.
+    #[must_use]
+    #[inline]
+    pub fn environment(&self) -> &[(OsString, OsString)] {
+        &self.envs
+    }
+
+    /// Returns environment variable removals.
+    ///
+    /// # Returns
+    ///
+    /// Borrowed environment variable names removed before spawning the command.
+    #[must_use]
+    #[inline]
+    pub fn removed_environment(&self) -> &[OsString] {
+        &self.removed_envs
+    }
+
+    /// Returns whether the inherited environment is cleared.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the command should start from an empty environment.
+    #[must_use]
+    #[inline]
+    pub const fn clears_environment(&self) -> bool {
+        self.clear_environment
     }
 
     /// Adds one positional argument.
@@ -215,6 +263,11 @@ impl Command {
     }
 
     /// Adds one positional argument that may not be UTF-8.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `S` - A type that can provide the argument as an operating-system
+    ///   string.
     ///
     /// # Parameters
     ///
@@ -253,6 +306,11 @@ impl Command {
     ///
     /// The original value is still passed unchanged to the child process.
     ///
+    /// # Type Parameters
+    ///
+    /// * `S` - A type that can provide the sensitive argument as an
+    ///   operating-system string.
+    ///
     /// # Parameters
     ///
     /// * `arg` - Sensitive argument to append.
@@ -287,6 +345,12 @@ impl Command {
 
     /// Adds multiple positional arguments that may not be UTF-8.
     ///
+    /// # Type Parameters
+    ///
+    /// * `I` - An iterator or collection that yields argument values.
+    /// * `S` - A yielded value type that can provide an argument as an
+    ///   operating-system string.
+    ///
     /// # Parameters
     ///
     /// * `args` - Arguments to append in order.
@@ -306,19 +370,11 @@ impl Command {
         self
     }
 
-    /// Returns the per-command working directory override.
-    ///
-    /// # Returns
-    ///
-    /// `Some(path)` when the command has a working directory override, or
-    /// `None` when the runner default should be used.
-    #[must_use]
-    #[inline]
-    pub fn working_directory_override(&self) -> Option<&Path> {
-        self.working_directory.as_deref()
-    }
-
     /// Sets a per-command working directory.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `P` - A path-like type that can be converted into an owned path.
     ///
     /// # Parameters
     ///
@@ -335,39 +391,6 @@ impl Command {
     {
         self.working_directory = Some(working_directory.into());
         self
-    }
-
-    /// Returns environment variable overrides.
-    ///
-    /// # Returns
-    ///
-    /// Borrowed environment variable entries in insertion order.
-    #[must_use]
-    #[inline]
-    pub fn environment(&self) -> &[(OsString, OsString)] {
-        &self.envs
-    }
-
-    /// Returns environment variable removals.
-    ///
-    /// # Returns
-    ///
-    /// Borrowed environment variable names removed before spawning the command.
-    #[must_use]
-    #[inline]
-    pub fn removed_environment(&self) -> &[OsString] {
-        &self.removed_envs
-    }
-
-    /// Returns whether the inherited environment is cleared.
-    ///
-    /// # Returns
-    ///
-    /// `true` when the command should start from an empty environment.
-    #[must_use]
-    #[inline]
-    pub const fn clears_environment(&self) -> bool {
-        self.clear_environment
     }
 
     /// Adds or overrides an environment variable for this command.
@@ -387,6 +410,13 @@ impl Command {
     }
 
     /// Adds or overrides an environment variable that may not be UTF-8.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `K` - A type that can provide the environment variable name as an
+    ///   operating-system string.
+    /// * `V` - A type that can provide the environment variable value as an
+    ///   operating-system string.
     ///
     /// # Parameters
     ///
@@ -425,6 +455,11 @@ impl Command {
     }
 
     /// Removes an environment variable whose name may not be UTF-8.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `S` - A type that can provide the environment variable name as an
+    ///   operating-system string.
     ///
     /// # Parameters
     ///
@@ -487,6 +522,11 @@ impl Command {
     /// The runner writes the bytes on a helper thread after spawning the child
     /// process, then closes stdin so the child can observe EOF.
     ///
+    /// # Type Parameters
+    ///
+    /// * `B` - A type that can be converted into the owned bytes sent to the
+    ///   child process.
+    ///
     /// # Parameters
     ///
     /// * `bytes` - Bytes to send to stdin.
@@ -509,6 +549,10 @@ impl Command {
     /// Directories, FIFOs, devices, sockets, and other special files are
     /// rejected before the child is spawned. The runner opens this path before
     /// spawning the child and before starting its timeout clock.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `P` - A path-like type that can be converted into an owned path.
     ///
     /// # Warning
     ///

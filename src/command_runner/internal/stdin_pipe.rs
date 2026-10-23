@@ -97,7 +97,22 @@ fn write_stdin_bytes_with(
     }
 }
 
-/// Spawns the production stdin writer thread.
+/// Spawns the production worker that writes bytes to the child's stdin pipe.
+///
+/// # Parameters
+///
+/// * `stdin` - Pipe owned by the worker for the duration of the write.
+/// * `bytes` - Input bytes written in order until completion or cancellation.
+/// * `token` - Cancellation state used to stop blocked or pending writes.
+///
+/// # Returns
+///
+/// A join handle that reports the worker's I/O result.
+///
+/// # Errors
+///
+/// Returns an I/O error if the operating system cannot create the worker
+/// thread.
 fn spawn_stdin_writer(
     mut stdin: ChildStdin,
     bytes: Vec<u8>,
@@ -176,6 +191,22 @@ pub(in crate::command_runner) fn join_stdin_writer(
 }
 
 /// Writes configured stdin bytes until completion or cancellation.
+///
+/// # Parameters
+///
+/// * `stdin` - Non-blocking pipe that accepts the bytes.
+/// * `bytes` - Input bytes written in order.
+/// * `cancellation` - Token checked before waiting and after interrupted
+///   writes.
+///
+/// # Returns
+///
+/// `Ok(())` when all bytes are written or cancellation stops the operation.
+///
+/// # Errors
+///
+/// Returns a pipe I/O error when waiting or writing fails for a reason other
+/// than an interrupted or temporarily unavailable operation.
 fn write_stdin_until_cancelled<W: PollableStdin>(
     stdin: &mut W,
     bytes: &[u8],
@@ -206,6 +237,19 @@ fn write_stdin_until_cancelled<W: PollableStdin>(
 }
 
 /// Configures one Unix stdin pipe for non-blocking writes.
+///
+/// # Parameters
+///
+/// * `pipe` - File descriptor whose flags are updated in place.
+///
+/// # Returns
+///
+/// `Ok(())` after non-blocking mode is enabled.
+///
+/// # Errors
+///
+/// Returns the operating-system error if reading or updating the descriptor
+/// flags fails.
 #[cfg(unix)]
 fn prepare_stdin_pipe<T: std::os::fd::AsRawFd>(pipe: &T) -> io::Result<()> {
     // SAFETY: fcntl operates on the valid descriptor owned by `pipe`.
@@ -221,7 +265,16 @@ fn prepare_stdin_pipe<T: std::os::fd::AsRawFd>(pipe: &T) -> io::Result<()> {
     Ok(())
 }
 
-/// Leaves Windows stdin handles unchanged.
+/// Leaves Windows stdin handles unchanged because their handles use blocking
+/// writes managed by the platform-specific cancellation path.
+///
+/// # Parameters
+///
+/// * `_pipe` - Child stdin handle, which is not modified on Windows.
+///
+/// # Returns
+///
+/// Always returns `Ok(())`.
 #[cfg(windows)]
 fn prepare_stdin_pipe<T>(_pipe: &T) -> io::Result<()> {
     Ok(())

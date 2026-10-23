@@ -19,6 +19,20 @@ pub(in crate::command_runner) struct OutputTee {
 impl OutputTee {
     /// Combines an optional writer and diagnostic path without silently
     /// dropping either half of a configured tee.
+    ///
+    /// # Parameters
+    ///
+    /// * `writer` - Optional destination for streamed output bytes.
+    /// * `path` - Optional path used to identify the destination in
+    ///   diagnostics.
+    ///
+    /// # Returns
+    ///
+    /// `Some` when both parts are present, or `None` when neither is present.
+    ///
+    /// # Panics
+    ///
+    /// Panics when exactly one of `writer` and `path` is present.
     #[inline]
     pub(in crate::command_runner) fn from_parts(
         writer: Option<Box<dyn Write + Send>>,
@@ -32,6 +46,16 @@ impl OutputTee {
     }
 
     /// Creates a streaming destination with its diagnostic path.
+    ///
+    /// # Parameters
+    ///
+    /// * `writer` - Destination receiving every emitted output byte.
+    /// * `path` - Path identifying the destination in write diagnostics.
+    ///
+    /// # Returns
+    ///
+    /// A destination that pairs the writer with its diagnostic path.
+    #[must_use]
     #[inline]
     pub(in crate::command_runner) fn new(writer: Box<dyn Write + Send>, path: PathBuf) -> Self {
         Self { writer, path }

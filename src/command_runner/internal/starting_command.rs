@@ -227,6 +227,7 @@ mod tests {
         assert_eq!(calls.iter().filter(|call| call.as_str() == "child.kill").count(), 1);
         assert_eq!(calls.iter().filter(|call| call.as_str() == "tree.kill").count(), 1);
     }
+
     #[test]
     fn test_startup_abort_cancels_every_initialized_helper_once() {
         use std::sync::atomic::AtomicUsize;

@@ -15,6 +15,7 @@ use qubit_clock::TimeError;
 use qubit_redact::Redactor;
 
 /// Redacts one debug-only value before it crosses the diagnostic boundary.
+#[must_use]
 fn redacted_debug_text(value: &impl fmt::Debug) -> String {
     Redactor::strict()
         .redact_field("command_path", &format_args!("{value:?}"))

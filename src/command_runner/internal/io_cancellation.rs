@@ -76,6 +76,22 @@ impl IoCancellation {
         }
     }
 
+    /// Creates cancellation state that reports a deterministic test failure.
+    #[cfg(test)]
+    pub(super) fn failing(message: &'static str) -> Self {
+        let (mut cancellation, _token) = Self::pair().expect("test cancellation pair should be created");
+        cancellation.test_failure = Some((io::ErrorKind::Other, message));
+        cancellation
+    }
+
+    /// Creates cancellation state that reports one raw OS error.
+    #[cfg(all(test, windows))]
+    pub(super) fn failing_raw_os_error(raw_os_error: i32) -> Self {
+        let (mut cancellation, _token) = Self::pair().expect("test cancellation pair should be created");
+        cancellation.test_raw_os_error = Some(raw_os_error);
+        cancellation
+    }
+
     /// Marks the operation cancelled and wakes the helper thread.
     ///
     /// # Parameters
@@ -112,21 +128,5 @@ impl IoCancellation {
         {
             super::cancel::cancel_synchronous_io(join)
         }
-    }
-
-    /// Creates cancellation state that reports a deterministic test failure.
-    #[cfg(test)]
-    pub(super) fn failing(message: &'static str) -> Self {
-        let (mut cancellation, _token) = Self::pair().expect("test cancellation pair should be created");
-        cancellation.test_failure = Some((io::ErrorKind::Other, message));
-        cancellation
-    }
-
-    /// Creates cancellation state that reports one raw OS error.
-    #[cfg(all(test, windows))]
-    pub(super) fn failing_raw_os_error(raw_os_error: i32) -> Self {
-        let (mut cancellation, _token) = Self::pair().expect("test cancellation pair should be created");
-        cancellation.test_raw_os_error = Some(raw_os_error);
-        cancellation
     }
 }

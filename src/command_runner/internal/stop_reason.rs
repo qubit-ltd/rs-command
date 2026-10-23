@@ -49,6 +49,7 @@ impl StopReason {
     /// # Returns
     ///
     /// The observed status for post-exit failures, otherwise `None`.
+    #[inline]
     pub(super) const fn observed_status(&self) -> Option<ExitStatus> {
         match self {
             Self::TimedOut { status, .. } | Self::Cancelled { status } | Self::TimeFailed { status, .. } => *status,
@@ -62,6 +63,7 @@ impl StopReason {
     /// Wait and time failures do so only when monitoring had already observed
     /// the direct child exit.
     #[must_use]
+    #[inline]
     pub(super) const fn retains_termination_output(&self) -> bool {
         match self {
             Self::TimedOut { .. } | Self::Cancelled { .. } => true,

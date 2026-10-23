@@ -26,6 +26,7 @@ impl OutputCaptureOptions {
     /// # Returns
     ///
     /// Capture options moved into the output reader thread.
+    #[must_use]
     #[inline]
     pub(in crate::command_runner) fn new(max_bytes: Option<usize>, tee: Option<OutputTee>) -> Self {
         Self { max_bytes, tee }

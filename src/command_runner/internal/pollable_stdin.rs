@@ -20,6 +20,20 @@ use super::io_cancellation_token::IoCancellationToken;
 /// Stdin writer abstraction that can wait for writable capacity.
 pub(super) trait PollableStdin: Write {
     /// Waits for the pipe to accept another write or observes cancellation.
+    ///
+    /// # Parameters
+    ///
+    /// * `cancellation` - Token used to stop waiting when the writer is
+    ///   cancelled.
+    ///
+    /// # Returns
+    ///
+    /// `true` when another write may be attempted; `false` when cancellation
+    /// was requested.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if waiting for the writer to become writable fails.
     fn wait_writable(&self, cancellation: &IoCancellationToken) -> io::Result<bool>;
 }
 

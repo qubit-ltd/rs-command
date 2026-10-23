@@ -8,8 +8,21 @@
 //! Child-pipe preparation for cancellation-aware output readers.
 
 use std::io;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::fd::RawFd;
 use std::process::ChildStderr;
 use std::process::ChildStdout;
+
+#[cfg(unix)]
+use libc::F_GETFL;
+#[cfg(unix)]
+use libc::F_SETFL;
+#[cfg(unix)]
+use libc::O_NONBLOCK;
+#[cfg(unix)]
+use libc::fcntl;
 
 /// A child output pipe that can be switched to cancellation-aware reads.
 pub(in crate::command_runner) trait CancellableReader: io::Read + Send + 'static {
@@ -17,7 +30,7 @@ pub(in crate::command_runner) trait CancellableReader: io::Read + Send + 'static
     fn prepare_for_cancellation(&self) -> io::Result<()>;
     /// Returns the underlying Unix descriptor for event-driven reads.
     #[cfg(unix)]
-    fn raw_fd(&self) -> std::os::fd::RawFd;
+    fn raw_fd(&self) -> RawFd;
 }
 
 impl CancellableReader for ChildStdout {
@@ -28,8 +41,8 @@ impl CancellableReader for ChildStdout {
 
     /// Returns stdout's underlying descriptor.
     #[cfg(unix)]
-    fn raw_fd(&self) -> std::os::fd::RawFd {
-        std::os::fd::AsRawFd::as_raw_fd(self)
+    fn raw_fd(&self) -> RawFd {
+        self.as_raw_fd()
     }
 }
 
@@ -41,21 +54,21 @@ impl CancellableReader for ChildStderr {
 
     /// Returns stderr's underlying descriptor.
     #[cfg(unix)]
-    fn raw_fd(&self) -> std::os::fd::RawFd {
-        std::os::fd::AsRawFd::as_raw_fd(self)
+    fn raw_fd(&self) -> RawFd {
+        self.as_raw_fd()
     }
 }
 
 /// Configures one Unix output pipe for non-blocking cancellation polling.
 #[cfg(unix)]
-fn prepare_pipe<T: std::os::fd::AsRawFd>(pipe: &T) -> io::Result<()> {
+fn prepare_pipe<T: AsRawFd>(pipe: &T) -> io::Result<()> {
     // SAFETY: fcntl operates on the valid descriptor owned by `pipe`.
     unsafe {
-        let flags = libc::fcntl(pipe.as_raw_fd(), libc::F_GETFL);
+        let flags = fcntl(pipe.as_raw_fd(), F_GETFL);
         if flags < 0 {
             return Err(io::Error::last_os_error());
         }
-        if libc::fcntl(pipe.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+        if fcntl(pipe.as_raw_fd(), F_SETFL, flags | O_NONBLOCK) < 0 {
             return Err(io::Error::last_os_error());
         }
     }

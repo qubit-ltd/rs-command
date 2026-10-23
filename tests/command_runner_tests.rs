@@ -13,6 +13,10 @@ use std::fs;
 use std::time::Duration;
 use std::time::Instant;
 
+#[cfg(not(windows))]
+use qubit_clock::ManualMonotonicClock;
+#[cfg(not(windows))]
+use qubit_clock::MonotonicClock;
 use qubit_command::Command;
 use qubit_command::CommandCancellation;
 use qubit_command::CommandErrorKind;
@@ -148,6 +152,8 @@ mod unix {
     use super::Duration;
     use super::Instant;
     use super::LocalTempDir;
+    use super::ManualMonotonicClock;
+    use super::MonotonicClock;
     use super::OsStr;
     use super::OutputStream;
     use super::RedactionPolicy;
@@ -588,9 +594,6 @@ mod unix {
 
     #[test]
     fn test_runner_without_timeout_does_not_wait_on_injected_timer() {
-        use qubit_clock::ManualMonotonicClock;
-        use qubit_clock::MonotonicClock;
-
         let clock = ManualMonotonicClock::new_shared();
         let runner = CommandRunner::without_timeout().timer(clock.new_timer());
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
@@ -935,9 +938,6 @@ mod unix {
 
     #[test]
     fn test_runner_timeout_uses_injected_manual_timer() {
-        use qubit_clock::ManualMonotonicClock;
-        use qubit_clock::MonotonicClock;
-
         let clock = ManualMonotonicClock::new_shared();
         let runner = CommandRunner::new(Duration::from_secs(30)).timer(clock.new_timer());
         let worker = std::thread::spawn(move || runner.run(Command::shell("sleep 60")));
@@ -955,9 +955,6 @@ mod unix {
 
     #[test]
     fn test_runner_timeout_accepts_child_that_exits_before_deadline() {
-        use qubit_clock::ManualMonotonicClock;
-        use qubit_clock::MonotonicClock;
-
         let temp_dir =
             LocalTempDir::with_prefix("qubit-command-test-").expect("command test temp directory should be created");
         let signal_path = temp_dir.path().join("deadline-signal");
@@ -1011,9 +1008,6 @@ mod unix {
 
     #[test]
     fn test_command_runner_timer_updates_configuration() {
-        use qubit_clock::ManualMonotonicClock;
-        use qubit_clock::MonotonicClock;
-
         let clock = ManualMonotonicClock::new_shared();
         let runner = CommandRunner::new(Duration::from_secs(10)).timer(clock.new_timer());
 

@@ -9,6 +9,7 @@ use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
+use std::process::Stdio;
 
 use qubit_redact::RedactionPolicy;
 
@@ -25,7 +26,8 @@ pub(in crate::command_runner) struct PreparedCommand {
     pub(in crate::command_runner) process_command: ProcessCommand,
     /// Bytes to write to stdin after spawning, if configured.
     pub(in crate::command_runner) stdin_bytes: Option<Vec<u8>>,
-    /// Open stdin file retained through the cancellation linearization point.
+    /// Configured stdin path retained through the cancellation linearization
+    /// point.
     pub(in crate::command_runner) stdin_path: Option<PathBuf>,
     /// Open stdin file retained through the cancellation linearization point.
     pub(in crate::command_runner) stdin_file: Option<File>,
@@ -70,8 +72,8 @@ impl PreparedCommand {
         let command_text = command.display_command(redaction_policy);
         let mut process_command = ProcessCommand::new(command.program());
         process_command.args(command.arguments());
-        process_command.stdout(std::process::Stdio::piped());
-        process_command.stderr(std::process::Stdio::piped());
+        process_command.stdout(Stdio::piped());
+        process_command.stderr(Stdio::piped());
 
         if let Some(working_directory) = command.working_directory_override().or(default_working_directory) {
             process_command.current_dir(working_directory);

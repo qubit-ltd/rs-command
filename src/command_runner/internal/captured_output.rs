@@ -18,6 +18,7 @@ pub(in crate::command_runner) struct CapturedOutput {
 
 impl Default for CapturedOutput {
     /// Creates empty, complete output metadata.
+    #[inline]
     fn default() -> Self {
         Self {
             bytes: Vec::new(),

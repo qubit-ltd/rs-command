@@ -68,7 +68,6 @@ impl CommandRunOptions {
     /// # Returns
     ///
     /// A borrowed cancellation handle when configured, otherwise `None`.
-    #[must_use]
     #[inline]
     pub fn configured_cancellation(&self) -> Option<&CommandCancellation> {
         self.cancellation.as_ref()
@@ -79,7 +78,6 @@ impl CommandRunOptions {
     /// # Returns
     ///
     /// The borrowed stdout tee path when configured, otherwise `None`.
-    #[must_use]
     #[inline]
     pub fn configured_stdout_file(&self) -> Option<&Path> {
         self.stdout_file.as_deref()
@@ -90,7 +88,6 @@ impl CommandRunOptions {
     /// # Returns
     ///
     /// The borrowed stderr tee path when configured, otherwise `None`.
-    #[must_use]
     #[inline]
     pub fn configured_stderr_file(&self) -> Option<&Path> {
         self.stderr_file.as_deref()

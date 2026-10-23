@@ -570,8 +570,8 @@ impl CommandRunner {
     /// # Returns
     ///
     /// `true` when a successful command returns
-    /// [`CommandErrorKind::OutputTruncated`](crate::CommandErrorKind::OutputTruncated) if either captured stream is
-    /// truncated.
+    /// [`CommandErrorKind::OutputTruncated`](crate::CommandErrorKind::OutputTruncated) if either
+    /// captured stream is truncated.
     #[must_use]
     #[inline]
     pub const fn is_output_truncation_failure_enabled(&self) -> bool {

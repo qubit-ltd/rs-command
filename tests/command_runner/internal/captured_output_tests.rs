@@ -20,8 +20,8 @@ fn test_captured_output_records_stdout_truncation() {
         .run(Command::new("rustc").arg("--version"))
         .expect("rustc version command should run successfully");
 
-    assert_eq!(output.stdout().len(), 5);
-    assert!(output.stdout_truncated());
+    assert_eq!(output.stdout().len(), 5, "stdout should be limited to five bytes");
+    assert!(output.stdout_truncated(), "stdout should report truncation");
 }
 
 #[test]
@@ -32,8 +32,11 @@ fn test_captured_output_can_keep_zero_stdout() {
         .run(Command::new("rustc").arg("--version"))
         .expect("rustc version command should run successfully");
 
-    assert!(output.stdout().is_empty());
-    assert!(output.stdout_truncated());
+    assert!(
+        output.stdout().is_empty(),
+        "stdout should be empty when its limit is zero"
+    );
+    assert!(output.stdout_truncated(), "stdout should report discarded output");
 }
 
 #[test]
@@ -43,6 +46,12 @@ fn test_captured_output_limit_without_truncation() {
         .run(Command::new("rustc").arg("--version"))
         .expect("rustc version command should run successfully");
 
-    assert!(output.stdout().starts_with(b"rustc "));
-    assert!(!output.stdout_truncated());
+    assert!(
+        output.stdout().starts_with(b"rustc "),
+        "stdout should contain the rustc version"
+    );
+    assert!(
+        !output.stdout_truncated(),
+        "stdout should not be truncated below its limit"
+    );
 }

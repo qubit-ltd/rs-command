@@ -54,6 +54,10 @@ impl fmt::Display for OutputStream {
     /// # Returns
     ///
     /// [`fmt::Result`] from writing the stream name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the formatter fails to write the stream name.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }

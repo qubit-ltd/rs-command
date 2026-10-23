@@ -21,6 +21,17 @@ pub(super) struct ProcessTerminationError {
 
 impl ProcessTerminationError {
     /// Attaches termination evidence without replacing the initiating reason.
+    ///
+    /// # Parameters
+    ///
+    /// * `reason` - The event that caused process termination.
+    /// * `command` - The redacted command description associated with the
+    ///   event.
+    ///
+    /// # Returns
+    ///
+    /// A command error containing the initiating reason and all cleanup
+    /// failures.
     pub(super) fn into_command_error(self, reason: StopReason, command: &str) -> CommandError {
         reason
             .into_primary_error(command, None)
@@ -29,6 +40,10 @@ impl ProcessTerminationError {
 
     /// Moves all observed process-control failures into the caller's cleanup
     /// report.
+    ///
+    /// # Returns
+    ///
+    /// Cleanup failures in the order in which they were observed.
     #[must_use]
     #[inline]
     pub(super) fn into_cleanup_failures(self) -> Vec<CommandCleanupFailure> {

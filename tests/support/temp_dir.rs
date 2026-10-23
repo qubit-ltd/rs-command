@@ -10,19 +10,21 @@
 use std::io::Result;
 use std::path::Path;
 
+use tempfile::Builder;
+
 /// Automatically removed temporary directory used by integration tests.
 pub(crate) struct LocalTempDir(tempfile::TempDir);
 
 impl LocalTempDir {
     /// Creates a temporary directory with a name prefix.
     pub(crate) fn with_prefix(prefix: &str) -> Result<Self> {
-        tempfile::Builder::new().prefix(prefix).tempdir().map(Self)
+        Builder::new().prefix(prefix).tempdir().map(Self)
     }
 
     /// Creates a temporary directory inside a selected parent.
     #[cfg(not(windows))]
     pub(crate) fn in_dir(directory: impl AsRef<Path>, prefix: Option<&str>, _max_tries: usize) -> Result<Self> {
-        let mut builder = tempfile::Builder::new();
+        let mut builder = Builder::new();
         if let Some(prefix) = prefix {
             builder.prefix(prefix);
         }
@@ -30,6 +32,8 @@ impl LocalTempDir {
     }
 
     /// Returns the temporary directory path.
+    #[must_use]
+    #[inline]
     pub(crate) fn path(&self) -> &Path {
         self.0.path()
     }

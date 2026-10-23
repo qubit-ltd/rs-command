@@ -15,17 +15,27 @@ use std::sync::Mutex;
 
 use process_wrap::std::ChildWrapper;
 
+/// Wraps a child process with scripted lifecycle results for fault-injection
+/// tests.
+#[must_use]
 #[derive(Debug)]
 pub(super) struct ScriptedChild {
+    /// Label included in each recorded lifecycle operation.
     name: &'static str,
+    /// Child wrapper that handles operations without an injected result.
     inner: Box<dyn ChildWrapper>,
+    /// Shared, ordered log of lifecycle operations observed by the test.
     calls: Arc<Mutex<Vec<String>>>,
+    /// Optional error returned by the next termination request.
     kill_error: Option<io::Error>,
+    /// Optional result returned by the next blocking wait.
     wait_result: Option<io::Result<ExitStatus>>,
+    /// Queued results returned by successive nonblocking waits.
     try_wait_results: VecDeque<io::Result<Option<ExitStatus>>>,
 }
 
 impl ScriptedChild {
+    /// Creates a wrapper that records operations and delegates unscripted work.
     pub(super) fn new(name: &'static str, inner: Box<dyn ChildWrapper>, calls: Arc<Mutex<Vec<String>>>) -> Self {
         Self {
             name,
@@ -37,16 +47,19 @@ impl ScriptedChild {
         }
     }
 
+    /// Scripts the next termination request to return an error.
     pub(super) fn kill_error(mut self, source: io::Error) -> Self {
         self.kill_error = Some(source);
         self
     }
 
+    /// Scripts the next blocking wait to return the supplied exit status.
     pub(super) fn wait_status(mut self, exit_status: ExitStatus) -> Self {
         self.wait_result = Some(Ok(exit_status));
         self
     }
 
+    /// Queues results for successive nonblocking wait calls.
     pub(super) fn try_wait_results(
         mut self,
         results: impl IntoIterator<Item = io::Result<Option<ExitStatus>>>,
@@ -61,6 +74,7 @@ impl ScriptedChild {
         self
     }
 
+    /// Records a lifecycle operation using this child's label.
     fn record(&self, operation: &str) {
         self.calls
             .lock()

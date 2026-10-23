@@ -100,7 +100,6 @@ impl CommandIo {
     /// # Errors
     ///
     /// Returns [`CommandError`] if stream collection or stdin writing fails.
-    #[must_use = "handle command output collection failures"]
     #[inline]
     pub(in crate::command_runner) fn collect<F>(
         self,
@@ -199,7 +198,7 @@ impl CommandIo {
     ///
     /// All helper failures in stdout/stderr/stdin order after all joins
     /// complete.
-    #[must_use]
+    #[must_use = "handle helper cleanup failures"]
     pub(in crate::command_runner) fn cancel_and_join(self, command: &str) -> Vec<CommandCleanupFailure> {
         let Self {
             stdout_reader,
@@ -216,6 +215,7 @@ impl CommandIo {
 /// Cancellation requests are issued as one batch. Failures are returned in
 /// stdout, stderr, stdin order, with a helper's read or write failure before
 /// its cancellation failure.
+#[must_use = "handle helper cleanup failures"]
 pub(super) fn cancel_and_join_started_helpers(
     command: &str,
     stdout_reader: Option<OutputReader>,

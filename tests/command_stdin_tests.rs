@@ -18,7 +18,10 @@ fn test_command_stdin_null_allows_command_without_input() {
         .run(Command::new("rustc").arg("--version").stdin_null())
         .expect("command with null stdin should run successfully");
 
-    assert!(output.stdout().starts_with(b"rustc "));
+    assert!(
+        output.stdout().starts_with(b"rustc "),
+        "rustc version output should start with its command name"
+    );
 }
 
 #[cfg(not(windows))]

@@ -24,13 +24,22 @@ fn test_command_cleanup_failure_debug_redacts_paths() {
     let secret_path = "/secret/output/diagnostic.log";
     let failure = CommandCleanupFailure::StdoutWrite {
         path: secret_path.into(),
-        source: std::io::Error::other("tee failed"),
+        source: io::Error::other("tee failed"),
     };
 
     let debug = format!("{failure:?}");
-    assert!(debug.contains("StdoutWrite"));
-    assert!(debug.contains("tee failed"));
-    assert!(!debug.contains(secret_path));
+    assert!(
+        debug.contains("StdoutWrite"),
+        "debug output should identify the failure variant"
+    );
+    assert!(
+        debug.contains("tee failed"),
+        "debug output should preserve the source error"
+    );
+    assert!(
+        !debug.contains(secret_path),
+        "debug output should redact the configured path"
+    );
 }
 
 #[test]
@@ -40,8 +49,14 @@ fn test_stdin_cancellation_cleanup_failure_debug_includes_variant_and_error() {
     };
 
     let debug = format!("{failure:?}");
-    assert!(debug.contains("StdinCancellation"));
-    assert!(debug.contains("cancel failed"));
+    assert!(
+        debug.contains("StdinCancellation"),
+        "debug output should identify the failure variant"
+    );
+    assert!(
+        debug.contains("cancel failed"),
+        "debug output should preserve the source error"
+    );
 }
 
 #[test]
@@ -51,8 +66,14 @@ fn test_stdout_cancellation_cleanup_failure_debug_includes_variant_and_error() {
     };
 
     let debug = format!("{failure:?}");
-    assert!(debug.contains("StdoutCancellation"));
-    assert!(debug.contains("cancel failed"));
+    assert!(
+        debug.contains("StdoutCancellation"),
+        "debug output should identify the failure variant"
+    );
+    assert!(
+        debug.contains("cancel failed"),
+        "debug output should preserve the source error"
+    );
 }
 
 #[test]
@@ -62,6 +83,12 @@ fn test_stderr_cancellation_cleanup_failure_debug_includes_variant_and_error() {
     };
 
     let debug = format!("{failure:?}");
-    assert!(debug.contains("StderrCancellation"));
-    assert!(debug.contains("cancel failed"));
+    assert!(
+        debug.contains("StderrCancellation"),
+        "debug output should identify the failure variant"
+    );
+    assert!(
+        debug.contains("cancel failed"),
+        "debug output should preserve the source error"
+    );
 }
