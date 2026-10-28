@@ -30,6 +30,7 @@ use internal::process_launcher::spawn_child;
 use internal::running_command::RunningCommand;
 use internal::starting_command::StartingCommand;
 use internal::stdin_pipe::write_stdin_bytes;
+use internal::total_output_budget::TotalOutputBudget;
 
 use crate::Command;
 use crate::CommandCancellation;
@@ -132,9 +133,9 @@ pub const DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM: usize = 1024 * 1024;
 /// [`DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM`] and successful commands with
 /// truncated output are rejected. Use
 /// [`CommandRunner::fail_on_output_truncation`] to accept truncated output or
-/// [`CommandRunner::unbounded_output`] to remove both limits explicitly. Use
-/// [`CommandOutput::stdout_text`] and [`CommandOutput::stderr_text`] for strict
-/// UTF-8 text, or [`CommandOutput::stdout_lossy_text`] and
+/// [`CommandRunner::unbounded_output`] to remove the per-stream memory limits.
+/// Use [`CommandOutput::stdout_text`] and [`CommandOutput::stderr_text`] for
+/// strict UTF-8 text, or [`CommandOutput::stdout_lossy_text`] and
 /// [`CommandOutput::stderr_lossy_text`] when invalid UTF-8 should be replaced.
 /// Timeout and cancellation handling use a blocking timer adapter, so the
 /// configured timer backend must keep progressing while this thread is parked.
@@ -170,6 +171,8 @@ pub struct CommandRunner {
     max_stdout_bytes: Option<usize>,
     /// Maximum stderr bytes retained in memory.
     max_stderr_bytes: Option<usize>,
+    /// Optional combined stdout/stderr hard budget.
+    max_total_output_bytes: Option<u64>,
 }
 
 impl fmt::Debug for CommandRunner {
@@ -197,6 +200,7 @@ impl fmt::Debug for CommandRunner {
             .field("diagnostic_redaction_policy", &self.diagnostic_redaction_policy)
             .field("max_stdout_bytes", &self.max_stdout_bytes)
             .field("max_stderr_bytes", &self.max_stderr_bytes)
+            .field("max_total_output_bytes", &self.max_total_output_bytes)
             .finish()
     }
 }
@@ -215,6 +219,7 @@ impl CommandRunner {
             diagnostic_redaction_policy: Redactor::application_default().policy().clone(),
             max_stdout_bytes: Some(DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM),
             max_stderr_bytes: Some(DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM),
+            max_total_output_bytes: None,
         }
     }
 
@@ -323,12 +328,17 @@ impl CommandRunner {
             log::debug!("Running command: {command_text}");
         }
 
-        let manage_process_tree = self.timeout.is_some() || cancellation.is_some();
+        let manage_process_tree =
+            self.timeout.is_some() || cancellation.is_some() || self.max_total_output_bytes.is_some();
         let child_process = match spawn_child(process_command, manage_process_tree) {
             Ok(child_process) => child_process,
             Err(source) => return Err(spawn_failed(&command_text, source)),
         };
         let mut starting_command = StartingCommand::new(&command_text, child_process);
+        let total_budget = self
+            .max_total_output_bytes
+            .map(|limit| TotalOutputBudget::new(limit, self.max_stdout_bytes, self.max_stderr_bytes))
+            .map(Arc::new);
         let started_at = self.timer.clock().now();
 
         let stdin_writer = match write_stdin_bytes(&command_text, starting_command.child_process(), stdin_bytes) {
@@ -350,26 +360,34 @@ impl CommandRunner {
             Err(error) => return Err(starting_command.abort(error)),
         };
         let stdout_reader = match start_output_reader(&command_text, OutputStream::Stdout, || {
-            read_output_stream(
-                stdout,
-                OutputCaptureOptions::new(
+            read_output_stream(stdout, {
+                let options = OutputCaptureOptions::new(
                     self.max_stdout_bytes,
                     OutputTee::from_parts(stdout_file.map(|file| Box::new(file) as _), stdout_file_path),
-                ),
-            )
+                );
+                if let Some(budget) = total_budget.as_ref() {
+                    options.with_total_budget(Arc::clone(budget), OutputStream::Stdout)
+                } else {
+                    options
+                }
+            })
         }) {
             Ok(value) => value,
             Err(error) => return Err(starting_command.abort(error)),
         };
         starting_command.set_stdout_reader(stdout_reader);
         let stderr_reader = match start_output_reader(&command_text, OutputStream::Stderr, || {
-            read_output_stream(
-                stderr,
-                OutputCaptureOptions::new(
+            read_output_stream(stderr, {
+                let options = OutputCaptureOptions::new(
                     self.max_stderr_bytes,
                     OutputTee::from_parts(stderr_file.map(|file| Box::new(file) as _), stderr_file_path),
-                ),
-            )
+                );
+                if let Some(budget) = total_budget.as_ref() {
+                    options.with_total_budget(Arc::clone(budget), OutputStream::Stderr)
+                } else {
+                    options
+                }
+            })
         }) {
             Ok(value) => value,
             Err(error) => return Err(starting_command.abort(error)),
@@ -389,6 +407,7 @@ impl CommandRunner {
             started_at,
             Arc::clone(&self.timer),
             cancellation,
+            total_budget,
         )
         .wait_for_completion(self.timeout)?;
         let FinishedCommand { command_text, output } = finished;
@@ -723,11 +742,11 @@ impl CommandRunner {
         self
     }
 
-    /// Removes both in-memory capture limits and accepts complete output.
+    /// Removes both per-stream in-memory capture limits and accepts complete
+    /// output.
     ///
-    /// This explicit opt-out may allow a child process to consume unbounded
-    /// memory through stdout or stderr. Prefer the default finite limits or
-    /// [`Self::bounded_output`] unless the command's output volume is trusted.
+    /// This does not remove a configured combined output budget. Without one,
+    /// the child can consume unbounded memory through stdout or stderr.
     ///
     /// # Returns
     ///
@@ -737,6 +756,32 @@ impl CommandRunner {
         self.max_stdout_bytes = None;
         self.max_stderr_bytes = None;
         self.fail_on_output_truncation = false;
+        self
+    }
+
+    /// Returns the configured combined stdout/stderr hard byte limit.
+    #[must_use]
+    #[inline]
+    pub const fn configured_max_total_output_bytes(&self) -> Option<u64> {
+        self.max_total_output_bytes
+    }
+
+    /// Sets a hard byte limit shared by stdout and stderr for each run.
+    ///
+    /// Bytes count even when they are not retained in memory or are sent to a
+    /// tee.
+    #[inline]
+    pub const fn max_total_output_bytes(mut self, limit: u64) -> Self {
+        self.max_total_output_bytes = Some(limit);
+        self
+    }
+
+    /// Removes the combined stdout/stderr hard byte limit. This is independent
+    /// of the in-memory capture limits controlled by
+    /// [`Self::unbounded_output`].
+    #[inline]
+    pub const fn without_total_output_limit(mut self) -> Self {
+        self.max_total_output_bytes = None;
         self
     }
 

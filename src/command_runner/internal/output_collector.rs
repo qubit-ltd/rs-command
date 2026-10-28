@@ -33,9 +33,9 @@ use crate::OutputStream;
 /// Native descriptor used to poll a Unix output pipe.
 #[cfg(unix)]
 type OutputFd = std::os::fd::RawFd;
-/// Placeholder descriptor type because Windows uses cancellable handles.
+/// Native handle used to inspect Windows pipe availability.
 #[cfg(windows)]
-type OutputFd = ();
+type OutputFd = std::os::windows::io::RawHandle;
 
 /// Starts a cancellation-aware helper thread for one output stream.
 ///
@@ -74,7 +74,7 @@ fn read_output_until_cancelled<R: CancellableReader>(
     #[cfg(unix)]
     let fd = Some(reader.raw_fd());
     #[cfg(windows)]
-    let fd = None;
+    let fd = Some(reader.raw_handle());
     read_output_inner(&mut reader, options, Some(&cancellation), fd)
 }
 
@@ -121,15 +121,43 @@ fn read_output_inner(
         if cancellation.is_some_and(IoCancellationToken::is_cancelled) {
             break Ok(false);
         }
-        #[cfg(unix)]
-        if let (Some(cancellation), Some(fd)) = (cancellation, fd) {
+        let mut ready_capacity = buffer.len();
+        if options.total_budget.is_none()
+            && let (Some(cancellation), Some(fd)) = (cancellation, fd)
+        {
+            #[cfg(unix)]
             match cancellation.wait_for_fd(fd, libc::POLLIN) {
                 Ok(true) => {}
                 Ok(false) => break Ok(false),
                 Err(source) => break Err(source),
             }
         }
-        let read = match reader.read(&mut buffer) {
+        if options.total_budget.is_some()
+            && let (Some(cancellation), Some(fd)) = (cancellation, fd)
+        {
+            match wait_output_readiness(fd, cancellation) {
+                Ok(super::pollable_output::OutputReadiness::Readable(available)) => ready_capacity = available,
+                #[cfg(windows)]
+                Ok(super::pollable_output::OutputReadiness::Eof) => {
+                    if let Some(budget) = options.total_budget.as_ref() {
+                        budget.mark_complete(options.total_budget_stream.expect("budget stream is configured"));
+                    }
+                    break Ok(true);
+                }
+                Ok(super::pollable_output::OutputReadiness::Cancelled) => break Ok(false),
+                Err(source) => break Err(source),
+            }
+        }
+        let read_result = match options.total_budget.as_ref() {
+            Some(budget) => budget.read_ready(
+                reader,
+                &mut buffer,
+                ready_capacity,
+                options.total_budget_stream.expect("budget stream is configured"),
+            ),
+            None => reader.read(&mut buffer),
+        };
+        let read = match read_result {
             Ok(read) => read,
             Err(source) if source.kind() == io::ErrorKind::Interrupted => {
                 continue;
@@ -151,29 +179,44 @@ fn read_output_inner(
             }
         };
         if read == 0 {
+            if options.total_budget.as_ref().is_some_and(|budget| budget.is_halted()) {
+                break Ok(false);
+            }
+            if let Some(budget) = options.total_budget.as_ref() {
+                budget.mark_complete(options.total_budget_stream.expect("budget stream is configured"));
+            }
             break Ok(true);
         }
         let chunk = &buffer[..read];
         // Capture bytes before tee I/O so an interrupted write cannot discard
         // data that has already been consumed from the child pipe.
-        match options.max_bytes {
-            Some(max_bytes) => {
-                let remaining = max_bytes.saturating_sub(bytes.len());
-                if remaining > 0 {
-                    let retained = remaining.min(chunk.len());
-                    bytes.extend_from_slice(&chunk[..retained]);
+        if options.total_budget.is_none() {
+            match options.max_bytes {
+                Some(max_bytes) => {
+                    let remaining = max_bytes.saturating_sub(bytes.len());
+                    if remaining > 0 {
+                        let retained = remaining.min(chunk.len());
+                        bytes.extend_from_slice(&chunk[..retained]);
+                    }
+                    if chunk.len() > remaining {
+                        truncated = true;
+                    }
                 }
-                if chunk.len() > remaining {
-                    truncated = true;
-                }
+                None => bytes.extend_from_slice(chunk),
             }
-            None => bytes.extend_from_slice(chunk),
         }
         if let Some(tee) = options.tee.as_mut()
             && let Err(source) = tee.writer.write_all(chunk)
         {
             write_error = Some((tee.path.clone(), source));
             options.tee = None;
+        }
+        if options
+            .total_budget
+            .as_ref()
+            .is_some_and(|budget| budget.exceeded().is_some())
+        {
+            break Ok(false);
         }
     };
     let complete = matches!(read_result, Ok(true));
@@ -183,10 +226,13 @@ fn read_output_inner(
     {
         write_error = Some((tee.path.clone(), source));
     }
-    let output = CapturedOutput {
-        bytes,
-        truncated,
-        complete,
+    let output = match (options.total_budget.as_ref(), options.total_budget_stream) {
+        (Some(budget), Some(stream)) => budget.captured_stream(stream),
+        _ => CapturedOutput {
+            bytes,
+            truncated,
+            complete,
+        },
     };
     match (write_error, read_result) {
         (Some((path, write_source)), Err(read_source)) => Err(OutputCaptureError::ReadAfterWrite {
@@ -198,6 +244,65 @@ fn read_output_inner(
         (Some((path, source)), Ok(_)) => Err(OutputCaptureError::Write { path, source, output }),
         (None, Err(source)) => Err(OutputCaptureError::Read { source, output }),
         (None, Ok(_)) => Ok(output),
+    }
+}
+
+#[cfg(unix)]
+fn wait_output_readiness(
+    fd: OutputFd,
+    cancellation: &IoCancellationToken,
+) -> io::Result<super::pollable_output::OutputReadiness> {
+    if cancellation.wait_for_fd(fd, libc::POLLIN)? {
+        Ok(super::pollable_output::OutputReadiness::Readable(8 * 1024))
+    } else {
+        Ok(super::pollable_output::OutputReadiness::Cancelled)
+    }
+}
+
+#[cfg(windows)]
+fn wait_output_readiness(
+    fd: OutputFd,
+    cancellation: &IoCancellationToken,
+) -> io::Result<super::pollable_output::OutputReadiness> {
+    use std::ffi::c_void;
+    use std::time::Duration;
+    unsafe extern "system" {
+        fn PeekNamedPipe(
+            handle: OutputFd,
+            buffer: *mut c_void,
+            size: u32,
+            read: *mut u32,
+            available: *mut u32,
+            left: *mut u32,
+        ) -> i32;
+    }
+    loop {
+        if cancellation.is_cancelled() {
+            return Ok(super::pollable_output::OutputReadiness::Cancelled);
+        }
+        let mut available = 0u32;
+        // SAFETY: the handle is owned by the output reader and outlives this wait.
+        let result = unsafe {
+            PeekNamedPipe(
+                fd,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                &mut available,
+                std::ptr::null_mut(),
+            )
+        };
+        if result == 0 {
+            let source = io::Error::last_os_error();
+            if source.kind() == io::ErrorKind::BrokenPipe {
+                return Ok(super::pollable_output::OutputReadiness::Eof);
+            }
+            return Err(source);
+        }
+        if available > 0 {
+            return Ok(super::pollable_output::OutputReadiness::Readable(available as usize));
+        }
+        std::thread::sleep(Duration::from_millis(1));
     }
 }
 

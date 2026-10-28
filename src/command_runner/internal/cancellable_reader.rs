@@ -12,6 +12,10 @@ use std::io;
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::fd::RawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
+#[cfg(windows)]
+use std::os::windows::io::RawHandle;
 use std::process::ChildStderr;
 use std::process::ChildStdout;
 
@@ -31,6 +35,9 @@ pub(in crate::command_runner) trait CancellableReader: io::Read + Send + 'static
     /// Returns the underlying Unix descriptor for event-driven reads.
     #[cfg(unix)]
     fn raw_fd(&self) -> RawFd;
+    /// Returns the underlying Windows handle for pipe readiness checks.
+    #[cfg(windows)]
+    fn raw_handle(&self) -> RawHandle;
 }
 
 impl CancellableReader for ChildStdout {
@@ -44,6 +51,10 @@ impl CancellableReader for ChildStdout {
     fn raw_fd(&self) -> RawFd {
         self.as_raw_fd()
     }
+    #[cfg(windows)]
+    fn raw_handle(&self) -> RawHandle {
+        self.as_raw_handle()
+    }
 }
 
 impl CancellableReader for ChildStderr {
@@ -56,6 +67,10 @@ impl CancellableReader for ChildStderr {
     #[cfg(unix)]
     fn raw_fd(&self) -> RawFd {
         self.as_raw_fd()
+    }
+    #[cfg(windows)]
+    fn raw_handle(&self) -> RawHandle {
+        self.as_raw_handle()
     }
 }
 

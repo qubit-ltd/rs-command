@@ -10,3 +10,4 @@
 
 mod command_error_reason_tests;
 mod command_error_tests;
+mod total_output_limit_tests;

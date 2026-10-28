@@ -31,6 +31,12 @@ pub(super) enum RunEvent {
         /// Direct-child status already observed while collecting output.
         status: Option<ExitStatus>,
     },
+    /// Combined stdout/stderr output exceeded its hard budget.
+    OutputLimitExceeded {
+        limit: u64,
+        observed: u128,
+        status: Option<ExitStatus>,
+    },
     /// Waiting for the direct child failed.
     WaitFailed(io::Error),
     /// Monotonic time handling failed.
@@ -55,6 +61,15 @@ impl RunEvent {
             Self::Exited(status) => Ok(status),
             Self::TimedOut { timeout, status } => Err(StopReason::TimedOut { timeout, status }),
             Self::Cancelled { status } => Err(StopReason::Cancelled { status }),
+            Self::OutputLimitExceeded {
+                limit,
+                observed,
+                status,
+            } => Err(StopReason::OutputLimitExceeded {
+                limit,
+                observed,
+                status,
+            }),
             Self::WaitFailed(source) => Err(StopReason::WaitFailed(source)),
             Self::TimeFailed { source, status } => Err(StopReason::TimeFailed { source, status }),
         }

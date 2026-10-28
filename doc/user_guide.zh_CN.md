@@ -203,7 +203,7 @@ if output.stdout_truncated() {
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-`bounded_output(max_bytes)` 同时修改两个流的上限，并保留默认的截断失败策略。`max_stdout_bytes` 和 `max_stderr_bytes` 可以分别配置两个流。`unbounded_output()` 会移除两个上限，只有在确认可信命令的输出有限时才应使用。
+`bounded_output(max_bytes)` 同时修改两个流的内存保留上限，并保留默认的截断失败策略。`max_stdout_bytes` 和 `max_stderr_bytes` 可以分别配置两个流。这些上限只控制保留在内存中的字节，不会阻止命令继续输出。使用 `max_total_output_bytes(limit)` 可选地设置 stdout 与 stderr 共享的硬上限。超过上限会终止受管进程树，并返回 `CommandErrorKind::OutputLimitExceeded`；通过 `CommandErrorReason::OutputLimitExceeded { limit, observed }` 可读取上限及包含哨兵字节的实际观察量。部分捕获字节可通过 `CommandError::captured_output()` 读取；由于不会伪造自然进程状态，`CommandError::output()` 保持为 `None`。`without_total_output_limit()` 会移除硬上限。`unbounded_output()` 只移除内存保留限制，不会解除已配置的总输出预算。
 
 超时、取消、非预期退出和输出截断错误都可能通过 `CommandError::output()` 暴露 `CommandOutput`，也可以通过 `CommandError::into_output()` 将其取出。对于超时和取消，请先检查 `stdout_complete()` 与 `stderr_complete()`，再判断保留字节是否代表完整流。
 

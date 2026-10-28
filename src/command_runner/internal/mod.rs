@@ -24,6 +24,7 @@ pub(in crate::command_runner) mod output_capture_options;
 pub(in crate::command_runner) mod output_collector;
 pub(in crate::command_runner) mod output_reader;
 pub(in crate::command_runner) mod output_tee;
+pub(in crate::command_runner) mod pollable_output;
 pub(in crate::command_runner) mod pollable_stdin;
 pub(in crate::command_runner) mod prepared_command;
 pub(in crate::command_runner) mod process_launcher;
@@ -37,6 +38,7 @@ pub(in crate::command_runner) mod starting_command;
 pub(in crate::command_runner) mod stdin_pipe;
 pub(in crate::command_runner) mod stdin_writer;
 pub(in crate::command_runner) mod stop_reason;
+pub(in crate::command_runner) mod total_output_budget;
 pub(in crate::command_runner) mod wait_policy;
 
 #[cfg(test)]

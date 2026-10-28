@@ -15,6 +15,8 @@ use std::time::Duration;
 
 use qubit_redact::Redactor;
 
+use crate::CommandCapturedOutput;
+
 /// Redacts one debug-only value before it crosses the diagnostic boundary.
 ///
 /// # Parameters
@@ -62,17 +64,7 @@ pub struct CommandOutput {
     /// Exit status reported by the process.
     status: ExitStatus,
     /// Captured standard output bytes.
-    stdout: Vec<u8>,
-    /// Captured standard error bytes.
-    stderr: Vec<u8>,
-    /// Whether stdout was truncated by the configured capture limit.
-    stdout_truncated: bool,
-    /// Whether stderr was truncated by the configured capture limit.
-    stderr_truncated: bool,
-    /// Whether stdout reached EOF before collection was cancelled.
-    stdout_complete: bool,
-    /// Whether stderr reached EOF before collection was cancelled.
-    stderr_complete: bool,
+    captured: CommandCapturedOutput,
     /// Duration from process spawn until output collection completes.
     elapsed: Duration,
 }
@@ -91,14 +83,9 @@ impl fmt::Debug for CommandOutput {
         formatter
             .debug_struct("CommandOutput")
             .field("status", &self.status)
-            .field("stdout", &redacted_debug_text(&self.stdout))
-            .field("stdout_len", &self.stdout.len())
-            .field("stdout_truncated", &self.stdout_truncated)
-            .field("stdout_complete", &self.stdout_complete)
-            .field("stderr", &redacted_debug_text(&self.stderr))
-            .field("stderr_len", &self.stderr.len())
-            .field("stderr_truncated", &self.stderr_truncated)
-            .field("stderr_complete", &self.stderr_complete)
+            .field("stdout", &redacted_debug_text(&self.captured.stdout))
+            .field("stderr", &redacted_debug_text(&self.captured.stderr))
+            .field("captured", &self.captured)
             .field("elapsed", &self.elapsed)
             .finish()
     }
@@ -125,16 +112,9 @@ impl CommandOutput {
         stderr: (Vec<u8>, bool, bool),
         elapsed: Duration,
     ) -> Self {
-        let (stdout, stdout_truncated, stdout_complete) = stdout;
-        let (stderr, stderr_truncated, stderr_complete) = stderr;
         Self {
             status,
-            stdout,
-            stderr,
-            stdout_truncated,
-            stderr_truncated,
-            stdout_complete,
-            stderr_complete,
+            captured: CommandCapturedOutput::new(stdout, stderr),
             elapsed,
         }
     }
@@ -187,7 +167,7 @@ impl CommandOutput {
     #[must_use]
     #[inline]
     pub fn stdout(&self) -> &[u8] {
-        &self.stdout
+        self.captured.stdout()
     }
 
     /// Consumes this output and returns captured standard output bytes.
@@ -199,7 +179,7 @@ impl CommandOutput {
     #[must_use]
     #[inline]
     pub fn into_stdout(self) -> Vec<u8> {
-        self.stdout
+        self.captured.stdout
     }
 
     /// Returns captured standard error bytes.
@@ -213,7 +193,7 @@ impl CommandOutput {
     #[must_use]
     #[inline]
     pub fn stderr(&self) -> &[u8] {
-        &self.stderr
+        self.captured.stderr()
     }
 
     /// Returns whether stdout was drained through EOF.
@@ -228,7 +208,7 @@ impl CommandOutput {
     #[must_use]
     #[inline]
     pub const fn stdout_complete(&self) -> bool {
-        self.stdout_complete
+        self.captured.stdout_complete()
     }
 
     /// Returns whether stderr was drained through EOF.
@@ -243,7 +223,7 @@ impl CommandOutput {
     #[must_use]
     #[inline]
     pub const fn stderr_complete(&self) -> bool {
-        self.stderr_complete
+        self.captured.stderr_complete()
     }
 
     /// Consumes this output and returns captured standard error bytes.
@@ -255,7 +235,7 @@ impl CommandOutput {
     #[must_use]
     #[inline]
     pub fn into_stderr(self) -> Vec<u8> {
-        self.stderr
+        self.captured.stderr
     }
 
     /// Returns captured standard output as strict UTF-8 text.
@@ -271,7 +251,7 @@ impl CommandOutput {
     /// error does not necessarily mean the process emitted invalid UTF-8.
     #[inline]
     pub fn stdout_text(&self) -> Result<&str, str::Utf8Error> {
-        str::from_utf8(&self.stdout)
+        str::from_utf8(self.captured.stdout())
     }
 
     /// Returns captured standard error as strict UTF-8 text.
@@ -287,7 +267,7 @@ impl CommandOutput {
     /// error does not necessarily mean the process emitted invalid UTF-8.
     #[inline]
     pub fn stderr_text(&self) -> Result<&str, str::Utf8Error> {
-        str::from_utf8(&self.stderr)
+        str::from_utf8(self.captured.stderr())
     }
 
     /// Returns captured standard output as UTF-8 text, replacing invalid bytes.
@@ -299,7 +279,7 @@ impl CommandOutput {
     #[must_use]
     #[inline]
     pub fn stdout_lossy_text(&self) -> Cow<'_, str> {
-        String::from_utf8_lossy(&self.stdout)
+        String::from_utf8_lossy(self.captured.stdout())
     }
 
     /// Returns captured standard error as UTF-8 text, replacing invalid bytes.
@@ -311,7 +291,7 @@ impl CommandOutput {
     #[must_use]
     #[inline]
     pub fn stderr_lossy_text(&self) -> Cow<'_, str> {
-        String::from_utf8_lossy(&self.stderr)
+        String::from_utf8_lossy(self.captured.stderr())
     }
 
     /// Returns the observed command duration.
@@ -335,7 +315,7 @@ impl CommandOutput {
     #[must_use]
     #[inline]
     pub const fn stdout_truncated(&self) -> bool {
-        self.stdout_truncated
+        self.captured.stdout_truncated()
     }
 
     /// Returns whether captured stderr was truncated by a configured limit.
@@ -346,6 +326,13 @@ impl CommandOutput {
     #[must_use]
     #[inline]
     pub const fn stderr_truncated(&self) -> bool {
-        self.stderr_truncated
+        self.captured.stderr_truncated()
+    }
+
+    /// Returns captured stdout and stderr bytes with truncation and completion
+    /// metadata.
+    #[inline]
+    pub const fn captured_output(&self) -> &CommandCapturedOutput {
+        &self.captured
     }
 }

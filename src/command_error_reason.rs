@@ -151,6 +151,13 @@ pub enum CommandErrorReason {
     Cancelled,
     /// Successful command output was truncated.
     OutputTruncated,
+    /// Combined stdout and stderr exceeded the configured hard limit.
+    OutputLimitExceeded {
+        /// Configured combined output limit.
+        limit: u64,
+        /// Bytes observed, including the sentinel byte.
+        observed: u128,
+    },
     /// The process exited with an unconfigured status.
     UnexpectedExit {
         /// Exit code reported by the process, when available.
@@ -237,6 +244,11 @@ impl fmt::Debug for CommandErrorReason {
             Self::TimedOut { timeout } => formatter.debug_struct("TimedOut").field("timeout", timeout).finish(),
             Self::Cancelled => formatter.write_str("Cancelled"),
             Self::OutputTruncated => formatter.write_str("OutputTruncated"),
+            Self::OutputLimitExceeded { limit, observed } => formatter
+                .debug_struct("OutputLimitExceeded")
+                .field("limit", limit)
+                .field("observed", observed)
+                .finish(),
             Self::UnexpectedExit { exit_code, expected } => formatter
                 .debug_struct("UnexpectedExit")
                 .field("exit_code", exit_code)

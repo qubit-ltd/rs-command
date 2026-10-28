@@ -5,7 +5,11 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+use std::sync::Arc;
+
 use super::output_tee::OutputTee;
+use super::total_output_budget::TotalOutputBudget;
+use crate::OutputStream;
 
 /// Output capture options moved into a reader thread.
 pub(in crate::command_runner) struct OutputCaptureOptions {
@@ -13,6 +17,10 @@ pub(in crate::command_runner) struct OutputCaptureOptions {
     pub(in crate::command_runner) max_bytes: Option<usize>,
     /// Optional writer receiving a streaming copy.
     pub(in crate::command_runner) tee: Option<OutputTee>,
+    /// Optional shared stdout/stderr byte budget.
+    pub(in crate::command_runner) total_budget: Option<Arc<TotalOutputBudget>>,
+    /// Output stream charged to the aggregate budget.
+    pub(in crate::command_runner) total_budget_stream: Option<OutputStream>,
 }
 
 impl OutputCaptureOptions {
@@ -29,7 +37,22 @@ impl OutputCaptureOptions {
     #[must_use]
     #[inline]
     pub(in crate::command_runner) fn new(max_bytes: Option<usize>, tee: Option<OutputTee>) -> Self {
-        Self { max_bytes, tee }
+        Self {
+            max_bytes,
+            tee,
+            total_budget: None,
+            total_budget_stream: None,
+        }
+    }
+
+    pub(in crate::command_runner) fn with_total_budget(
+        mut self,
+        budget: Arc<TotalOutputBudget>,
+        stream: OutputStream,
+    ) -> Self {
+        self.total_budget = Some(budget);
+        self.total_budget_stream = Some(stream);
+        self
     }
 }
 

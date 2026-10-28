@@ -209,7 +209,7 @@ if output.stdout_truncated() {
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-`bounded_output(max_bytes)` changes both stream limits while retaining the default failure policy. `max_stdout_bytes` and `max_stderr_bytes` configure streams independently. `unbounded_output()` removes both limits and should only be used for trusted commands whose output is known to be finite.
+`bounded_output(max_bytes)` changes both per-stream memory limits while retaining the default failure policy. `max_stdout_bytes` and `max_stderr_bytes` configure streams independently. These limits control retained memory; they do not stop a command from emitting more bytes. Set `max_total_output_bytes(limit)` to impose an opt-in hard limit shared by stdout and stderr. Exceeding it terminates the managed process tree and returns `CommandErrorKind::OutputLimitExceeded`; inspect `CommandErrorReason::OutputLimitExceeded { limit, observed }` for the configured limit and observed sentinel byte. The partial bytes are available through `CommandError::captured_output()`, while `CommandError::output()` remains `None` because no natural process status is fabricated. `without_total_output_limit()` removes the hard limit. `unbounded_output()` removes only the memory retention limits and does not remove a configured total budget.
 
 Timeout, cancellation, unexpected exit, and output-truncation errors can expose a `CommandOutput` through `CommandError::output()` or move it with `CommandError::into_output()`. For timeout and cancellation, inspect `stdout_complete()` and `stderr_complete()` before treating retained bytes as complete streams.
 

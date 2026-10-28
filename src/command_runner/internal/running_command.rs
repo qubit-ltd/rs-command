@@ -20,6 +20,7 @@ use super::managed_child_process::ManagedChildProcess;
 use super::process_terminator::ProcessTerminator;
 use super::run_event::RunEvent;
 use super::stop_reason::StopReason;
+use super::total_output_budget::TotalOutputBudget;
 use super::wait_policy::next_sleep;
 use crate::CommandCancellation;
 use crate::CommandCleanupFailure;
@@ -43,6 +44,7 @@ pub(in crate::command_runner) struct RunningCommand {
     timer: Arc<dyn Timer>,
     /// Optional shared cancellation handle.
     cancellation_token: Option<CommandCancellation>,
+    total_budget: Option<Arc<TotalOutputBudget>>,
 }
 
 impl RunningCommand {
@@ -68,6 +70,7 @@ impl RunningCommand {
         started_at: MonotonicInstant,
         timer: Arc<dyn Timer>,
         cancellation_token: Option<CommandCancellation>,
+        total_budget: Option<Arc<TotalOutputBudget>>,
     ) -> Self {
         Self {
             command_text,
@@ -76,6 +79,7 @@ impl RunningCommand {
             started_at,
             timer,
             cancellation_token,
+            total_budget,
         }
     }
 
@@ -111,7 +115,7 @@ impl RunningCommand {
     /// does not terminate the process, finalize helpers, or construct a
     /// [`CommandError`].
     fn wait_for_event(&mut self, timeout: Option<Duration>) -> RunEvent {
-        if timeout.is_none() && self.cancellation_token.is_none() {
+        if timeout.is_none() && self.cancellation_token.is_none() && self.total_budget.is_none() {
             return match self.child_process.wait() {
                 Ok(status) => RunEvent::Exited(status),
                 Err(source) => RunEvent::WaitFailed(source),
@@ -120,6 +124,14 @@ impl RunningCommand {
 
         let mut timeout_poll_count = 0;
         loop {
+            if let Some((limit, observed)) = self.total_budget.as_ref().and_then(|budget| budget.exceeded()) {
+                let status = self.child_process.try_wait().ok().flatten();
+                return RunEvent::OutputLimitExceeded {
+                    limit,
+                    observed,
+                    status,
+                };
+            }
             let maybe_status = match self.child_process.try_wait() {
                 Ok(status) => status,
                 Err(source) => return RunEvent::WaitFailed(source),
@@ -162,9 +174,16 @@ impl RunningCommand {
     /// The original timeout continues to be measured from `started_at`, so
     /// inherited pipes cannot restart the command deadline after child exit.
     fn wait_for_io_event(&mut self, status: ExitStatus, timeout: Option<Duration>) -> RunEvent {
-        if timeout.is_some() || self.cancellation_token.is_some() {
+        if timeout.is_some() || self.cancellation_token.is_some() || self.total_budget.is_some() {
             let mut timeout_poll_count = 0;
             while !self.io.is_finished() {
+                if let Some((limit, observed)) = self.total_budget.as_ref().and_then(|budget| budget.exceeded()) {
+                    return RunEvent::OutputLimitExceeded {
+                        limit,
+                        observed,
+                        status: Some(status),
+                    };
+                }
                 if self
                     .cancellation_token
                     .as_ref()
@@ -203,6 +222,13 @@ impl RunningCommand {
                 }
             }
         }
+        if let Some((limit, observed)) = self.total_budget.as_ref().and_then(|budget| budget.exceeded()) {
+            return RunEvent::OutputLimitExceeded {
+                limit,
+                observed,
+                status: Some(status),
+            };
+        }
         RunEvent::Exited(status)
     }
 
@@ -230,10 +256,20 @@ impl RunningCommand {
     fn stop_and_finalize(mut self, reason: StopReason) -> Result<FinishedCommand, CommandError> {
         let observed_status = reason.observed_status();
         let retains_output = reason.retains_termination_output();
+        let output_limit = match &reason {
+            StopReason::OutputLimitExceeded { limit, observed, .. } => Some((*limit, *observed)),
+            _ => None,
+        };
+        let total_budget = self.total_budget.clone();
         let outcome = match ProcessTerminator::new(&mut self.child_process).terminate(observed_status) {
             Ok(outcome) => outcome,
             Err(failure) => {
-                let error = failure.into_command_error(reason, &self.command_text);
+                let mut error = failure.into_command_error(reason, &self.command_text);
+                if output_limit.is_some()
+                    && let Some(budget) = total_budget.as_ref()
+                {
+                    error = error.with_captured_output(budget.captured_output());
+                }
                 return Err(self.finish_without_status(error));
             }
         };
@@ -249,12 +285,44 @@ impl RunningCommand {
         let finished = match finished {
             Ok(finished) => finished,
             Err(error) => {
+                if let StopReason::OutputLimitExceeded { limit, observed, .. } = reason {
+                    let captured = total_budget
+                        .as_ref()
+                        .map(|budget| budget.captured_output())
+                        .or_else(|| error.captured_output().cloned());
+                    let mut primary = CommandError::from_reason(
+                        command_text,
+                        crate::CommandErrorReason::OutputLimitExceeded { limit, observed },
+                        None,
+                    );
+                    if let Some(captured) = captured {
+                        primary = primary.with_captured_output(captured);
+                    }
+                    return Err(primary
+                        .with_cleanup_failures(outcome.cleanup_failures)
+                        .with_cleanup_failures(io_cleanup_failures)
+                        .with_cleanup_failures(error.into_cleanup_failures()));
+                }
                 return Err(reason
                     .into_error_after_finalize(command_text, error)
                     .with_cleanup_failures(outcome.cleanup_failures)
                     .with_cleanup_failures(io_cleanup_failures));
             }
         };
+        if let StopReason::OutputLimitExceeded { limit, observed, .. } = reason {
+            let captured = total_budget
+                .as_ref()
+                .map(|budget| budget.captured_output())
+                .unwrap_or_else(|| finished.output.captured_output().clone());
+            return Err(CommandError::from_reason(
+                finished.command_text,
+                crate::CommandErrorReason::OutputLimitExceeded { limit, observed },
+                None,
+            )
+            .with_captured_output(captured)
+            .with_cleanup_failures(outcome.cleanup_failures)
+            .with_cleanup_failures(io_cleanup_failures));
+        }
         Err(reason
             .into_primary_error(finished.command_text, Some(Box::new(finished.output)))
             .with_cleanup_failures(outcome.cleanup_failures)
@@ -351,6 +419,7 @@ impl RunningCommand {
 mod tests {
     use std::collections::VecDeque;
     use std::io;
+    use std::io::Cursor;
     #[cfg(unix)]
     use std::io::Read;
     #[cfg(unix)]
@@ -361,6 +430,7 @@ mod tests {
     use std::process::Command as ProcessCommand;
     use std::process::ExitStatus;
     use std::process::Stdio;
+    use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
     use std::time::Instant;
@@ -380,6 +450,7 @@ mod tests {
     use super::super::output_reader::OutputReader;
     use super::super::run_event::RunEvent;
     use super::super::stdin_writer::StdinWriter;
+    use super::super::total_output_budget::TotalOutputBudget;
     use super::RunningCommand;
     use crate::CommandCleanupFailure;
     use crate::CommandError;
@@ -597,7 +668,51 @@ mod tests {
             started_at,
             clock.new_timer(),
             None,
+            None,
         )
+    }
+
+    fn running_with_budget(
+        child: ManagedChildProcess,
+        io: CommandIo,
+        budget: Arc<TotalOutputBudget>,
+    ) -> RunningCommand {
+        let clock = ManualMonotonicClock::new_shared();
+        let started_at = clock.now();
+        RunningCommand::new(
+            "test command".to_owned(),
+            child,
+            io,
+            started_at,
+            clock.new_timer(),
+            None,
+            Some(budget),
+        )
+    }
+
+    fn exceeded_total_budget() -> Arc<TotalOutputBudget> {
+        let budget = Arc::new(TotalOutputBudget::new(1, Some(2), Some(2)));
+        let mut reader = Cursor::new(b"ab");
+        let mut buffer = [0_u8; 8];
+        let ready_capacity = buffer.len();
+        assert_eq!(
+            budget
+                .read_ready(&mut reader, &mut buffer, ready_capacity, crate::OutputStream::Stdout)
+                .expect("scripted ready bytes should be read"),
+            2,
+        );
+        assert_eq!(budget.exceeded(), Some((1, 2)));
+        budget
+    }
+
+    fn termination_failure_child() -> ManagedChildProcess {
+        let direct = ScriptedChild::new(raw_child())
+            .kill_error(io::Error::other("child termination failed"))
+            .try_wait_results((0..9).map(|_| Ok(None)));
+        let tree = ScriptedChild::new(Box::new(direct))
+            .kill_error(io::Error::other("tree termination failed"))
+            .try_wait_results((0..8).map(|_| Ok(None)));
+        ManagedChildProcess::new(Box::new(tree), true)
     }
 
     fn running_with_elapsed_failure(child: ManagedChildProcess, io: CommandIo) -> RunningCommand {
@@ -609,6 +724,7 @@ mod tests {
             io,
             started_clock.now(),
             timer_clock.new_timer(),
+            None,
             None,
         )
     }
@@ -687,6 +803,78 @@ mod tests {
                 other => panic!("unexpected cleanup failure: {other:?}"),
             })
             .collect()
+    }
+
+    #[test]
+    fn test_total_output_limit_remains_primary_when_helpers_fail_during_cleanup() {
+        let error = expect_error(
+            running_with_budget(
+                terminating_child(status(0)),
+                io_with_failures(),
+                exceeded_total_budget(),
+            )
+            .resolve_event(
+                RunEvent::OutputLimitExceeded {
+                    limit: 1,
+                    observed: 2,
+                    status: None,
+                },
+                None,
+            ),
+            "output budget violation must remain primary after helper cleanup failures",
+        );
+
+        assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::OutputLimitExceeded { limit: 1, observed: 2 }
+        ));
+        assert!(
+            error.output().is_none(),
+            "a budget error must not fabricate an ExitStatus"
+        );
+        let captured = error
+            .captured_output()
+            .expect("the consumed prefix must remain available");
+        assert_eq!(captured.stdout(), b"ab");
+        assert!(!captured.stdout_complete());
+        assert_eq!(cleanup_order(&error), ["stdout-read", "stderr-write", "stdin-write"]);
+    }
+
+    #[test]
+    fn test_total_output_limit_remains_primary_when_tree_termination_fails() {
+        let error = expect_error(
+            running_with_budget(termination_failure_child(), io_with_failures(), exceeded_total_budget())
+                .resolve_event(
+                    RunEvent::OutputLimitExceeded {
+                        limit: 1,
+                        observed: 2,
+                        status: None,
+                    },
+                    None,
+                ),
+            "output budget violation must survive process termination failure",
+        );
+
+        assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::OutputLimitExceeded { limit: 1, observed: 2 }
+        ));
+        let captured = error
+            .captured_output()
+            .expect("the captured prefix must survive failed termination");
+        assert_eq!(captured.stdout(), b"ab");
+        assert_eq!(
+            cleanup_order(&error),
+            [
+                "process-tree",
+                "direct-child",
+                "stdout-read",
+                "stderr-write",
+                "stdin-write"
+            ]
+        );
     }
 
     #[derive(Clone, Copy)]

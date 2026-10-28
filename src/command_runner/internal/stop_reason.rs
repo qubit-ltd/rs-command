@@ -32,6 +32,12 @@ pub(super) enum StopReason {
         /// Direct-child status already observed while collecting output.
         status: Option<ExitStatus>,
     },
+    /// Combined stdout/stderr output exceeded its hard budget.
+    OutputLimitExceeded {
+        limit: u64,
+        observed: u128,
+        status: Option<ExitStatus>,
+    },
     /// Waiting for the direct child failed.
     WaitFailed(io::Error),
     /// Monotonic time handling failed.
@@ -52,7 +58,10 @@ impl StopReason {
     #[inline]
     pub(super) const fn observed_status(&self) -> Option<ExitStatus> {
         match self {
-            Self::TimedOut { status, .. } | Self::Cancelled { status } | Self::TimeFailed { status, .. } => *status,
+            Self::TimedOut { status, .. }
+            | Self::Cancelled { status }
+            | Self::OutputLimitExceeded { status, .. }
+            | Self::TimeFailed { status, .. } => *status,
             Self::WaitFailed(_) => None,
         }
     }
@@ -66,7 +75,7 @@ impl StopReason {
     #[inline]
     pub(super) const fn retains_termination_output(&self) -> bool {
         match self {
-            Self::TimedOut { .. } | Self::Cancelled { .. } => true,
+            Self::TimedOut { .. } | Self::Cancelled { .. } | Self::OutputLimitExceeded { .. } => true,
             Self::WaitFailed(_) => false,
             Self::TimeFailed { status, .. } => status.is_some(),
         }
@@ -90,6 +99,9 @@ impl StopReason {
         let reason = match self {
             Self::TimedOut { timeout, .. } => CommandErrorReason::TimedOut { timeout },
             Self::Cancelled { .. } => CommandErrorReason::Cancelled,
+            Self::OutputLimitExceeded { limit, observed, .. } => {
+                CommandErrorReason::OutputLimitExceeded { limit, observed }
+            }
             Self::WaitFailed(source) => CommandErrorReason::WaitFailed { source },
             Self::TimeFailed { source, .. } => CommandErrorReason::TimeFailed { source },
         };

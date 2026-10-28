@@ -61,6 +61,8 @@ pub enum CommandErrorKind {
     Cancelled,
     /// Successful command output was truncated.
     OutputTruncated,
+    /// The command exceeded its combined stdout/stderr output budget.
+    OutputLimitExceeded,
     /// The process exited with an unconfigured status.
     UnexpectedExit,
 }

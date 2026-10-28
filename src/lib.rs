@@ -12,6 +12,7 @@
 mod command;
 mod command_argument;
 mod command_cancellation;
+mod command_captured_output;
 mod command_cleanup_failure;
 mod command_env;
 mod command_error;
@@ -30,6 +31,7 @@ mod tests;
 
 pub use command::Command;
 pub use command_cancellation::CommandCancellation;
+pub use command_captured_output::CommandCapturedOutput;
 pub use command_cleanup_failure::CommandCleanupFailure;
 pub use command_error::CommandError;
 pub use command_error_kind::CommandErrorKind;

@@ -11,6 +11,7 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 
+use crate::CommandCapturedOutput;
 use crate::CommandCleanupFailure;
 use crate::CommandErrorKind;
 use crate::CommandErrorReason;
@@ -38,6 +39,8 @@ pub struct CommandError {
     reason: Box<CommandErrorReason>,
     /// Output retained before the primary failure, when available.
     output: Option<Box<CommandOutput>>,
+    /// Captured bytes when no real process status is available.
+    captured_output: Option<Box<CommandCapturedOutput>>,
     /// Failures observed while cleaning up after the primary failure.
     cleanup_failures: Vec<CommandCleanupFailure>,
 }
@@ -65,6 +68,7 @@ impl CommandError {
             command: command.into(),
             reason: Box::new(reason),
             output,
+            captured_output: None,
             cleanup_failures: Vec::new(),
         }
     }
@@ -187,6 +191,22 @@ impl CommandError {
     #[inline(always)]
     pub fn output(&self) -> Option<&CommandOutput> {
         self.output.as_deref()
+    }
+
+    /// Returns captured bytes, including partial output when no real process
+    /// status exists.
+    #[must_use]
+    #[inline(always)]
+    pub fn captured_output(&self) -> Option<&CommandCapturedOutput> {
+        self.output
+            .as_deref()
+            .map(CommandOutput::captured_output)
+            .or(self.captured_output.as_deref())
+    }
+
+    pub(crate) fn with_captured_output(mut self, output: CommandCapturedOutput) -> Self {
+        self.captured_output = Some(Box::new(output));
+        self
     }
 
     /// Consumes the error and returns captured output, when available.
@@ -360,6 +380,10 @@ impl fmt::Display for CommandError {
                 formatter,
                 "command `{command}` completed successfully, but captured output was truncated"
             ),
+            (CommandErrorReason::OutputLimitExceeded { limit, observed }, _) => write!(
+                formatter,
+                "command `{command}` exceeded its combined output limit of {limit} bytes (observed {observed})"
+            ),
             (CommandErrorReason::UnexpectedExit { exit_code, expected }, output) => write!(
                 formatter,
                 "command `{command}` exited with {}; expected one of {expected:?}",
@@ -414,6 +438,7 @@ impl From<&CommandErrorReason> for CommandErrorKind {
             CommandErrorReason::TimedOut { .. } => Self::TimedOut,
             CommandErrorReason::Cancelled => Self::Cancelled,
             CommandErrorReason::OutputTruncated => Self::OutputTruncated,
+            CommandErrorReason::OutputLimitExceeded { .. } => Self::OutputLimitExceeded,
             CommandErrorReason::UnexpectedExit { .. } => Self::UnexpectedExit,
         }
     }
