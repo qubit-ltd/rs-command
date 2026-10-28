@@ -205,6 +205,17 @@ fn test_command_shell_payload_and_explicit_sensitive_argument_never_leak() {
     assert!(!explicit.contains("raw-arg-secret"));
 }
 
+#[test]
+fn test_command_debug_marks_truncated_output() {
+    let payload = "x".repeat(20_000);
+    let command = Command::new("tool").arg(&payload);
+
+    let debug = format!("{command:?}");
+
+    assert!(debug.contains("<truncated>"));
+    assert!(!debug.contains(&payload));
+}
+
 #[cfg(unix)]
 #[test]
 fn test_command_debug_fails_closed_for_non_utf8_argument_and_environment() {
