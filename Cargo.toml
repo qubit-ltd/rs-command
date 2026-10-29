@@ -1,6 +1,6 @@
 [package]
 name = "qubit-command"
-version = "0.11.0"
+version = "0.11.1"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Haixing Hu <starfish.hu@gmail.com>"]
@@ -36,8 +36,8 @@ log = "^0.4"
 process-wrap = { version = "^10.0", default-features = false, features = ["std", "process-group", "job-object"] }
 same-file = "^1.0"
 thiserror = "^2.0"
-qubit-clock = { version = "0.13" }
-qubit-redact = { version = "0.10", default-features = false }
+qubit-clock = "^0.13"
+qubit-redact = { path = "../rs-redact", version = "0.10", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -45,4 +45,4 @@ libc = "0.2"
 [dev-dependencies]
 criterion = { version = "^0.8", default-features = false }
 tempfile = "^3.27"
-qubit-clock = { version = "0.13", features = ["test-util"] }
+qubit-clock = { version = "^0.13", features = ["test-util"] }
