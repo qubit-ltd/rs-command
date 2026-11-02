@@ -78,7 +78,10 @@ fn test_total_output_exact_combined_limit_succeeds() {
         }
         #[cfg(windows)]
         {
-            command("<nul set /p =1234 & <nul set /p =abcd 1>&2")
+            Command::new("powershell")
+                .arg("-NoProfile")
+                .arg("-Command")
+                .arg("[Console]::OpenStandardOutput().Write([byte[]](49,50,51,52),0,4); [Console]::OpenStandardError().Write([byte[]](97,98,99,100),0,4)")
         }
     };
     let output = CommandRunner::without_timeout()
