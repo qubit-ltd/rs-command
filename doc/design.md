@@ -2,7 +2,7 @@
 
 [中文版](design.zh_CN.md) · [User Guide](user_guide.md) · [README](../README.md)
 
-This document records the `qubit-command` 0.8 command-runner contract. It is
+This document records the current `qubit-command` command-runner contract. It is
 for maintainers and callers that need to reason about process ownership, I/O
 helpers, termination, and the information preserved in failures. The user
 guide remains the entry point for runnable examples.
@@ -36,6 +36,24 @@ The default captures at most 1 MiB per output stream and treats exit code zero
 as success. `stdin_file` and tee paths must identify ordinary files. A tee is
 replaced at the beginning of a run, not appended. Callers that use
 `unbounded_output()` accept unbounded in-memory process data themselves.
+
+`max_total_output_bytes(limit)` optionally sets a hard budget shared by stdout
+and stderr. It also enables process-tree management when no timeout or
+cancellation policy is configured. The reader observes at most `limit + 1`
+bytes in total; the extra byte is a sentinel proving that the budget was
+exceeded. Per-stream retention limits can still discard bytes before they are
+retained, but those bytes count toward the shared budget and are still sent to
+the configured tee. The sentinel is included in the observed count when
+available.
+
+An exceeded budget returns `OutputLimitExceeded` without inventing a natural
+process exit status. Its partial bytes are available from
+`CommandError::captured_output()`, while `CommandError::output()` is `None`.
+For other errors, `output()` is present only when finalization assembled a
+`CommandOutput`; `captured_output()` can still expose partial data when no
+natural status, elapsed time, or complete helper result could be assembled.
+The captured accessors expose raw process bytes, so callers remain responsible
+for handling sensitive output.
 
 ## Ownership States
 
@@ -142,6 +160,16 @@ Preparation, thread-start, timer, and process-control failures may not carry a
 read, tee-write, and final stdin-write failures carry output whenever status,
 elapsed time, and stream state can be assembled. A cleanup failure does not
 make partial output complete and does not imply that a descendant was stopped.
+
+While monitoring a live child, an observed total-budget overrun is checked
+before child status, cancellation, or timeout; otherwise the child status is
+checked before cancellation and timeout. After child exit, the I/O-finalization
+loop checks budget overrun, cancellation, then timeout. A normal join returns
+the reader's output as the authority for that stream. A budget snapshot is
+used only for streams whose helper result could not be joined; this preserves
+partial output without discarding completed reader results. The checked
+precedence and output cases are covered by `total_output_limit_tests`,
+`running_command_tests`, and `output_collector_tests`.
 
 ## Platform Semantics
 

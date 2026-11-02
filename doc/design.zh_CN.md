@@ -2,7 +2,7 @@
 
 [English](design.md) · [用户指南](user_guide.zh_CN.md) · [中文 README](../README.zh_CN.md)
 
-本文记录 `qubit-command` 0.8 的 command runner 契约，面向需要理解进程所有权、I/O
+本文记录当前 `qubit-command` 的 command runner 契约，面向需要理解进程所有权、I/O
 helper、终止流程以及错误保留信息的维护者和调用方。可运行示例仍以用户指南为入口。
 
 ## 目的
@@ -26,6 +26,17 @@ helper、终止流程以及错误保留信息的维护者和调用方。可运�
 默认每个流最多捕获 1 MiB，退出码 0 表示成功。`stdin_file` 和 tee 路径必须指向普通
 文件；每次运行开始时 tee 会被替换而不是追加。调用 `unbounded_output()` 就意味着调用方
 自行接受无界的进程内存输出。
+
+`max_total_output_bytes(limit)` 可选设置 stdout 与 stderr 共享的硬预算。即使没有配置超时或
+取消策略，它也会启用进程树管理。reader 总共最多观察 `limit + 1` 个字节；额外的一个字节
+作为哨兵证明预算已超限。每流保留上限仍可使部分字节不进入内存，但这些字节仍计入共享预算，
+也仍会写入已配置的 tee。若观察到哨兵，它会计入实际观察量。
+
+预算超限返回 `OutputLimitExceeded`，不会伪造自然进程退出状态。部分字节可从
+`CommandError::captured_output()` 读取，此时 `CommandError::output()` 为 `None`。其他错误只有在
+收尾成功组装 `CommandOutput` 时才会有 `output()`；若无法组装自然状态、耗时或完整 helper
+结果，`captured_output()` 仍可能提供部分数据。捕获访问器暴露原始进程字节，调用方需自行
+负责敏感输出的处理。
 
 ## 所有权状态
 
@@ -102,6 +113,12 @@ tee 失败后，即使继续排空输出时发生取消或管道读取失败，�
 准备、线程启动、timer 和进程控制错误可能不携带 `CommandOutput`。超时、取消、截断、
 非预期退出、输出读取、tee 写入和最终 stdin 写入错误，在能够组装进程状态、耗时和流状态
 时会携带输出。清理失败不会使部分输出变完整，也不表示所有后代都已停止。
+
+监控仍存活的子进程时，检测到总预算超限会先于子进程状态、取消和超时检查；否则先检查子进程
+状态，再检查取消与超时。子进程退出后的 I/O 收尾循环依次检查预算超限、取消、超时。reader
+正常 join 后，其结果是该流的权威数据源；只有 helper 结果无法 join 时才使用预算快照，因此
+既能保留部分输出，也不会丢弃已完成 reader 的结果。`total_output_limit_tests`、
+`running_command_tests` 和 `output_collector_tests` 覆盖这些优先级及输出情况。
 
 ## 平台语义
 
