@@ -2,6 +2,8 @@
 //    Copyright (c) 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 use std::sync::Mutex;
 
@@ -9,7 +11,15 @@ use super::captured_output::CapturedOutput;
 use crate::CommandCapturedOutput;
 use crate::OutputStream;
 
-/// Per-run aggregate stdout/stderr hard limit.
+/// Per-run aggregate stdout/stderr hard limit and bounded failure snapshot.
+///
+/// The `limit + 1` sentinel byte is charged to the stream that observes it so
+/// the runner can distinguish an exact-limit EOF from exceeded output. Each
+/// stream retains only its configured prefix, while `complete` is set only
+/// after that stream reaches EOF. Snapshots clone retained data because a
+/// reader may still be running when cancellation or process termination fails;
+/// callers that have successfully joined a reader should use its returned
+/// output as the authoritative stream result.
 #[derive(Debug)]
 pub(in crate::command_runner) struct TotalOutputBudget {
     limit: u64,
@@ -29,6 +39,8 @@ struct State {
     stderr_truncated: bool,
     stdout_complete: bool,
     stderr_complete: bool,
+    stdout_transferred: bool,
+    stderr_transferred: bool,
 }
 
 impl TotalOutputBudget {
@@ -51,6 +63,8 @@ impl TotalOutputBudget {
                 stderr_truncated: false,
                 stdout_complete: false,
                 stderr_complete: false,
+                stdout_transferred: false,
+                stderr_transferred: false,
             }),
         }
     }
@@ -126,6 +140,46 @@ impl TotalOutputBudget {
         )
     }
 
+    /// Combines joined stream results with snapshots for streams not joined.
+    pub(in crate::command_runner) fn captured_output_with_joined(
+        &self,
+        joined: Option<&CommandCapturedOutput>,
+    ) -> CommandCapturedOutput {
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (stdout_bytes, stdout_truncated, stdout_complete) = if state.stdout_transferred {
+            joined.map_or_else(
+                || (Vec::new(), state.stdout_truncated, false),
+                |output| {
+                    (
+                        output.stdout().to_vec(),
+                        output.stdout_truncated(),
+                        output.stdout_complete(),
+                    )
+                },
+            )
+        } else {
+            (state.stdout.clone(), state.stdout_truncated, state.stdout_complete)
+        };
+        let (stderr_bytes, stderr_truncated, stderr_complete) = if state.stderr_transferred {
+            joined.map_or_else(
+                || (Vec::new(), state.stderr_truncated, false),
+                |output| {
+                    (
+                        output.stderr().to_vec(),
+                        output.stderr_truncated(),
+                        output.stderr_complete(),
+                    )
+                },
+            )
+        } else {
+            (state.stderr.clone(), state.stderr_truncated, state.stderr_complete)
+        };
+        CommandCapturedOutput::new(
+            (stdout_bytes, stdout_truncated, stdout_complete),
+            (stderr_bytes, stderr_truncated, stderr_complete),
+        )
+    }
+
     pub(in crate::command_runner) fn captured_stream(&self, stream: OutputStream) -> CapturedOutput {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match stream {
@@ -139,6 +193,64 @@ impl TotalOutputBudget {
                 truncated: state.stderr_truncated,
                 complete: state.stderr_complete,
             },
+        }
+    }
+
+    /// Moves one stream's retained bytes after its reader has been joined.
+    ///
+    /// The transfer flag makes a second take explicit: it returns empty bytes
+    /// with the original metadata and cannot present an empty buffer as the
+    /// original complete output.
+    pub(in crate::command_runner) fn take_captured_stream(&self, stream: OutputStream) -> CapturedOutput {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        match stream {
+            OutputStream::Stdout => {
+                let truncated = state.stdout_truncated;
+                let complete = state.stdout_complete;
+                if state.stdout_transferred {
+                    return CapturedOutput {
+                        bytes: Vec::new(),
+                        truncated,
+                        complete,
+                    };
+                }
+                state.stdout_transferred = true;
+                CapturedOutput {
+                    bytes: std::mem::take(&mut state.stdout),
+                    truncated,
+                    complete,
+                }
+            }
+            OutputStream::Stderr => {
+                let truncated = state.stderr_truncated;
+                let complete = state.stderr_complete;
+                if state.stderr_transferred {
+                    return CapturedOutput {
+                        bytes: Vec::new(),
+                        truncated,
+                        complete,
+                    };
+                }
+                state.stderr_transferred = true;
+                CapturedOutput {
+                    bytes: std::mem::take(&mut state.stderr),
+                    truncated,
+                    complete,
+                }
+            }
+        }
+    }
+
+    pub(in crate::command_runner) fn captured_stream_metadata(&self, stream: OutputStream) -> CapturedOutput {
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (truncated, complete) = match stream {
+            OutputStream::Stdout => (state.stdout_truncated, state.stdout_complete),
+            OutputStream::Stderr => (state.stderr_truncated, state.stderr_complete),
+        };
+        CapturedOutput {
+            bytes: Vec::new(),
+            truncated,
+            complete,
         }
     }
 }
@@ -172,6 +284,7 @@ mod tests {
     use std::io::Cursor;
 
     use super::TotalOutputBudget;
+    use crate::CommandCapturedOutput;
     use crate::OutputStream;
 
     #[test]
@@ -200,5 +313,40 @@ mod tests {
             5
         );
         assert_eq!(budget.exceeded(), None);
+    }
+
+    #[test]
+    fn test_total_output_take_moves_buffer_once_and_preserves_metadata() {
+        let budget = TotalOutputBudget::new(8, None, None);
+        let mut reader = Cursor::new(b"payload");
+        let mut buffer = [0; 8];
+        budget
+            .read_ready(&mut reader, &mut buffer, 8, OutputStream::Stdout)
+            .expect("read succeeds");
+        let expected_ptr = budget
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .stdout
+            .as_ptr();
+
+        let first = budget.take_captured_stream(OutputStream::Stdout);
+        let second = budget.take_captured_stream(OutputStream::Stdout);
+
+        assert_eq!(first.bytes.as_ptr(), expected_ptr);
+        assert_eq!(first.bytes, b"payload");
+        assert!(!first.complete);
+        assert!(second.bytes.is_empty());
+        assert!(!second.complete);
+        assert!(budget.captured_output().stdout().is_empty());
+
+        let joined = CommandCapturedOutput::new((b"joined".to_vec(), false, true), (b"err".to_vec(), false, true));
+        let merged = budget.captured_output_with_joined(Some(&joined));
+        assert_eq!(merged.stdout(), b"joined");
+        assert!(merged.stdout_complete());
+        assert!(merged.stderr().is_empty());
+        assert!(!merged.stderr_complete());
+        let missing_joined = budget.captured_output_with_joined(None);
+        assert!(!missing_joined.stdout_complete());
     }
 }

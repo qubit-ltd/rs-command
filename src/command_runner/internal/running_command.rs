@@ -286,10 +286,10 @@ impl RunningCommand {
             Ok(finished) => finished,
             Err(error) => {
                 if let StopReason::OutputLimitExceeded { limit, observed, .. } = reason {
-                    let captured = total_budget
-                        .as_ref()
-                        .map(|budget| budget.captured_output())
-                        .or_else(|| error.captured_output().cloned());
+                    let captured = total_budget.as_ref().map_or_else(
+                        || error.captured_output().cloned(),
+                        |budget| Some(budget.captured_output_with_joined(error.captured_output())),
+                    );
                     let mut primary = CommandError::from_reason(
                         command_text,
                         crate::CommandErrorReason::OutputLimitExceeded { limit, observed },
@@ -310,10 +310,7 @@ impl RunningCommand {
             }
         };
         if let StopReason::OutputLimitExceeded { limit, observed, .. } = reason {
-            let captured = total_budget
-                .as_ref()
-                .map(|budget| budget.captured_output())
-                .unwrap_or_else(|| finished.output.captured_output().clone());
+            let captured = finished.output.into_captured_output();
             return Err(CommandError::from_reason(
                 finished.command_text,
                 crate::CommandErrorReason::OutputLimitExceeded { limit, observed },

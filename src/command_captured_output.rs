@@ -2,6 +2,8 @@
 //    Copyright (c) 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 //! Captured stdout and stderr bytes with collection metadata.
 
@@ -9,6 +11,14 @@ use std::fmt;
 
 /// Output bytes retained by a command runner, including partial output on
 /// failure.
+///
+/// Each stream is kept independently. Truncation means the retained bytes are
+/// a prefix limited by the runner's configured per-stream cap; completion
+/// means that stream reached EOF, even when tee output failed. A command error
+/// may carry this value without an [`ExitStatus`](std::process::ExitStatus):
+/// for example, an output-budget error has no final process status, while
+/// [`CommandError::captured_output`](crate::CommandError::captured_output)
+/// still exposes the bytes observed before termination.
 #[derive(Clone, PartialEq, Eq)]
 #[must_use]
 pub struct CommandCapturedOutput {

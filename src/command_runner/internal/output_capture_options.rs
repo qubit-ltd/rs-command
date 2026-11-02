@@ -21,6 +21,8 @@ pub(in crate::command_runner) struct OutputCaptureOptions {
     pub(in crate::command_runner) total_budget: Option<Arc<TotalOutputBudget>>,
     /// Output stream charged to the aggregate budget.
     pub(in crate::command_runner) total_budget_stream: Option<OutputStream>,
+    /// Defers moving budget-owned bytes until the corresponding reader joins.
+    pub(in crate::command_runner) transfer_budget_after_join: bool,
 }
 
 impl OutputCaptureOptions {
@@ -42,6 +44,7 @@ impl OutputCaptureOptions {
             tee,
             total_budget: None,
             total_budget_stream: None,
+            transfer_budget_after_join: false,
         }
     }
 
@@ -52,6 +55,7 @@ impl OutputCaptureOptions {
     ) -> Self {
         self.total_budget = Some(budget);
         self.total_budget_stream = Some(stream);
+        self.transfer_budget_after_join = true;
         self
     }
 }

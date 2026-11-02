@@ -59,10 +59,17 @@ pub(in crate::command_runner) fn read_output_stream<R: CancellableReader>(
 ) -> io::Result<OutputReader> {
     reader.prepare_for_cancellation()?;
     let (cancellation, token) = IoCancellation::pair()?;
+    let budget = options
+        .transfer_budget_after_join
+        .then(|| options.total_budget.clone().zip(options.total_budget_stream))
+        .flatten();
     let join = thread::Builder::new()
         .name("qubit-command-output-reader".to_owned())
         .spawn(move || read_output_until_cancelled(reader, options, token))?;
-    Ok(OutputReader::new(join, cancellation))
+    Ok(match budget {
+        Some((budget, stream)) => OutputReader::new_with_budget(join, cancellation, budget, stream),
+        None => OutputReader::new(join, cancellation),
+    })
 }
 
 /// Reads one output stream until EOF or cancellation is requested.
@@ -227,6 +234,11 @@ fn read_output_inner(
         write_error = Some((tee.path.clone(), source));
     }
     let output = match (options.total_budget.as_ref(), options.total_budget_stream) {
+        (Some(budget), Some(stream))
+            if options.transfer_budget_after_join && write_error.is_none() && read_result.is_ok() =>
+        {
+            budget.captured_stream_metadata(stream)
+        }
         (Some(budget), Some(stream)) => budget.captured_stream(stream),
         _ => CapturedOutput {
             bytes,
@@ -403,8 +415,13 @@ pub(in crate::command_runner) fn collect_output_results(
             {
                 cleanup_failures.push(failure);
             }
+            let captured = crate::CommandCapturedOutput::new(
+                (stdout.bytes, stdout.truncated, stdout.complete),
+                (stderr.bytes, stderr.truncated, stderr.complete),
+            );
             return Err(
                 CommandError::from_reason(command, CommandErrorReason::TimeFailed { source }, None)
+                    .with_captured_output(captured)
                     .with_cleanup_failures(cleanup_failures),
             );
         }
@@ -463,7 +480,7 @@ pub(in crate::command_runner) fn collect_output_results(
         Some(error) if matches!(error.kind(), crate::CommandErrorKind::WriteInputFailed) => {
             Err(error.with_output(output))
         }
-        Some(error) => Err(error),
+        Some(error) => Err(error.with_captured_output(output.into_captured_output())),
     }
 }
 
@@ -592,18 +609,7 @@ fn map_output_reader_error(
 pub(in crate::command_runner) fn join_output_reader(
     reader: OutputReader,
 ) -> Result<CapturedOutput, OutputCaptureError> {
-    match reader.join() {
-        Ok(Ok(output)) => Ok(output),
-        Ok(Err(error)) => Err(error),
-        Err(_) => Err(OutputCaptureError::Read {
-            source: io::Error::other("output reader thread panicked"),
-            output: CapturedOutput {
-                bytes: Vec::new(),
-                truncated: false,
-                complete: false,
-            },
-        }),
-    }
+    reader.join()
 }
 
 #[cfg(test)]
@@ -641,6 +647,7 @@ mod tests {
     use super::super::output_reader::OutputReader;
     use super::super::output_tee::OutputTee;
     use super::super::stop_reason::StopReason;
+    use super::super::total_output_budget::TotalOutputBudget;
     use super::collect_output_results;
     use super::join_output_reader;
     use super::read_output;
@@ -1106,6 +1113,35 @@ mod tests {
     }
 
     #[test]
+    fn test_output_collector_budget_sentinel_survives_tee_failure() {
+        let budget = std::sync::Arc::new(TotalOutputBudget::new(3, Some(2), Some(2)));
+        let error = read_output(
+            &mut Cursor::new(b"abcd"),
+            OutputCaptureOptions::new(
+                Some(2),
+                Some(OutputTee::new(
+                    Box::new(FailingWriter { fail_write: true }),
+                    "budget-tee.log".into(),
+                )),
+            )
+            .with_total_budget(budget.clone(), OutputStream::Stdout),
+        )
+        .expect_err("tee failure should be retained after reading the budget sentinel");
+
+        let OutputCaptureError::Write { output, .. } = error else {
+            panic!("expected tee write failure");
+        };
+        assert_eq!(budget.exceeded(), Some((3, 4)));
+        assert_eq!(output.bytes, b"ab");
+        assert!(output.truncated);
+        assert!(!output.complete);
+        let snapshot = budget.captured_output();
+        assert_eq!(snapshot.stdout(), b"ab");
+        assert!(snapshot.stdout_truncated());
+        assert!(!snapshot.stdout_complete());
+    }
+
+    #[test]
     fn test_output_collector_flush_failure_preserves_tee_path() {
         let error = read_output(
             &mut Cursor::new(b"output"),
@@ -1145,6 +1181,83 @@ mod tests {
         assert!(!output.complete);
     }
 
+    fn budget_with_stdout(bytes: &[u8]) -> std::sync::Arc<TotalOutputBudget> {
+        let budget = std::sync::Arc::new(TotalOutputBudget::new(32, Some(3), Some(3)));
+        let mut reader = Cursor::new(bytes);
+        let mut buffer = [0; 32];
+        budget
+            .read_ready(&mut reader, &mut buffer, 32, OutputStream::Stdout)
+            .expect("budget fixture should be captured");
+        budget
+    }
+
+    #[test]
+    fn test_join_output_reader_takes_budget_after_successful_join() {
+        let budget = budget_with_stdout(b"payload");
+        let (cancellation, _token) = IoCancellation::pair().expect("cancellation pair should initialize");
+        let reader = OutputReader::new_with_budget(
+            thread::spawn(|| Ok(CapturedOutput::default())),
+            cancellation,
+            budget.clone(),
+            OutputStream::Stdout,
+        );
+
+        let output = join_output_reader(reader).expect("reader should join");
+
+        assert_eq!(output.bytes, b"pay");
+        assert!(output.truncated);
+        assert!(!output.complete);
+        assert!(budget.captured_output().stdout().is_empty());
+    }
+
+    #[test]
+    fn test_join_output_reader_preserves_budget_bytes_on_reader_error() {
+        let budget = budget_with_stdout(b"payload");
+        let (cancellation, _token) = IoCancellation::pair().expect("cancellation pair should initialize");
+        let reader = OutputReader::new_with_budget(
+            thread::spawn(|| {
+                Err(OutputCaptureError::Read {
+                    source: io::Error::other("injected read failure"),
+                    output: CapturedOutput::default(),
+                })
+            }),
+            cancellation,
+            budget,
+            OutputStream::Stdout,
+        );
+
+        let error = join_output_reader(reader).expect_err("reader error should be preserved");
+        let OutputCaptureError::Read { source, output } = error else {
+            panic!("expected read error");
+        };
+
+        assert_eq!(source.to_string(), "injected read failure");
+        assert_eq!(output.bytes, b"pay");
+        assert!(output.truncated);
+    }
+
+    #[test]
+    fn test_join_output_reader_preserves_budget_bytes_after_worker_panic() {
+        let budget = budget_with_stdout(b"payload");
+        let (cancellation, _token) = IoCancellation::pair().expect("cancellation pair should initialize");
+        let reader = OutputReader::new_with_budget(
+            thread::spawn(|| -> Result<CapturedOutput, OutputCaptureError> { panic!("injected worker panic") }),
+            cancellation,
+            budget,
+            OutputStream::Stdout,
+        );
+
+        let error = join_output_reader(reader).expect_err("worker panic should become a read error");
+        let OutputCaptureError::Read { source, output } = error else {
+            panic!("expected read error");
+        };
+
+        assert_eq!(source.to_string(), "output reader thread panicked");
+        assert_eq!(output.bytes, b"pay");
+        assert!(output.truncated);
+        assert!(!output.complete);
+    }
+
     #[test]
     fn test_collect_output_prioritizes_elapsed_failure_and_retains_helpers() {
         let elapsed_error = TimeError::TimerUnavailable {
@@ -1155,12 +1268,12 @@ mod tests {
         };
         let stdout_error = OutputCaptureError::Read {
             source: io::Error::other("injected stdout read failure"),
-            output: CapturedOutput::default(),
+            output: captured(b"out", false, false),
         };
         let stderr_error = OutputCaptureError::Write {
             path: "stderr.log".into(),
             source: io::Error::other("injected stderr write failure"),
-            output: CapturedOutput::default(),
+            output: captured(b"err", false, false),
         };
         let stdin_error = CommandError::from_reason(
             "command",
@@ -1190,6 +1303,11 @@ mod tests {
             ]
         ));
         assert!(error.output().is_none());
+        let captured = error
+            .captured_output()
+            .expect("elapsed failure must retain joined partial stream bytes");
+        assert_eq!(captured.stdout(), b"out");
+        assert_eq!(captured.stderr(), b"err");
     }
 
     #[test]

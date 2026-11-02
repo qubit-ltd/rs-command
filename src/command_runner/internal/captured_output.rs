@@ -6,6 +6,11 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 /// Captured output bytes plus truncation and completion metadata.
+///
+/// The value owns its retained buffer. `complete` records pipe EOF
+/// independently of tee success; when a read or cleanup operation fails,
+/// retained partial output and its metadata remain available. A truncated value
+/// contains only the configured prefix.
 #[derive(Debug, Clone)]
 pub(in crate::command_runner) struct CapturedOutput {
     /// Bytes retained in memory.

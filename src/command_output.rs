@@ -119,6 +119,14 @@ impl CommandOutput {
         }
     }
 
+    /// Consumes the command output and returns its captured streams.
+    ///
+    /// This internal conversion preserves the retained bytes and their
+    /// truncation and completion metadata without cloning the buffers.
+    pub(crate) fn into_captured_output(self) -> CommandCapturedOutput {
+        self.captured
+    }
+
     /// Returns the command exit code.
     ///
     /// # Returns
@@ -334,5 +342,47 @@ impl CommandOutput {
     #[inline]
     pub const fn captured_output(&self) -> &CommandCapturedOutput {
         &self.captured
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::CommandOutput;
+
+    #[test]
+    fn test_into_captured_output_moves_nonempty_stream_buffers() {
+        let stdout = vec![1, 2, 3, 4];
+        let stderr = vec![5, 6, 7];
+        let stdout_ptr = stdout.as_ptr();
+        let stderr_ptr = stderr.as_ptr();
+        let output = CommandOutput::new(
+            test_status(),
+            (stdout, false, true),
+            (stderr, false, true),
+            Duration::ZERO,
+        );
+
+        let captured = output.into_captured_output();
+
+        assert_eq!(captured.stdout().as_ptr(), stdout_ptr);
+        assert_eq!(captured.stderr().as_ptr(), stderr_ptr);
+        assert_eq!(captured.stdout(), [1, 2, 3, 4]);
+        assert_eq!(captured.stderr(), [5, 6, 7]);
+        assert!(captured.stdout_complete());
+        assert!(captured.stderr_complete());
+    }
+
+    #[cfg(unix)]
+    fn test_status() -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(0)
+    }
+
+    #[cfg(windows)]
+    fn test_status() -> std::process::ExitStatus {
+        use std::os::windows::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(0)
     }
 }

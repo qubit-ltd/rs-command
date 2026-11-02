@@ -5,11 +5,14 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+use std::sync::Arc;
 use std::thread;
 
 use super::captured_output::CapturedOutput;
 use super::io_cancellation::IoCancellation;
 use super::output_capture_error::OutputCaptureError;
+use super::total_output_budget::TotalOutputBudget;
+use crate::OutputStream;
 
 /// Output reader thread result type.
 #[derive(Debug)]
@@ -18,6 +21,8 @@ pub(in crate::command_runner) struct OutputReader {
     join: thread::JoinHandle<Result<CapturedOutput, OutputCaptureError>>,
     /// Cancellation state used to interrupt the worker during cleanup.
     cancellation: IoCancellation,
+    /// Budget whose bytes are transferred only after this reader joins.
+    budget: Option<(Arc<TotalOutputBudget>, OutputStream)>,
 }
 
 impl OutputReader {
@@ -36,7 +41,26 @@ impl OutputReader {
         join: thread::JoinHandle<Result<CapturedOutput, OutputCaptureError>>,
         cancellation: IoCancellation,
     ) -> Self {
-        Self { join, cancellation }
+        Self {
+            join,
+            cancellation,
+            budget: None,
+        }
+    }
+
+    /// Creates a budgeted output reader that transfers its bytes after join.
+    #[inline]
+    pub(in crate::command_runner) fn new_with_budget(
+        join: thread::JoinHandle<Result<CapturedOutput, OutputCaptureError>>,
+        cancellation: IoCancellation,
+        budget: Arc<TotalOutputBudget>,
+        stream: OutputStream,
+    ) -> Self {
+        Self {
+            join,
+            cancellation,
+            budget: Some((budget, stream)),
+        }
     }
 
     /// Returns whether the worker thread has stopped.
@@ -76,7 +100,45 @@ impl OutputReader {
     /// thread panicked.
     #[must_use = "handle both thread and output capture failures"]
     #[inline]
-    pub(in crate::command_runner) fn join(self) -> thread::Result<Result<CapturedOutput, OutputCaptureError>> {
-        self.join.join()
+    pub(in crate::command_runner) fn join(self) -> Result<CapturedOutput, OutputCaptureError> {
+        let Self { join, budget, .. } = self;
+        let result = match join.join() {
+            Ok(result) => result,
+            Err(_) => Err(OutputCaptureError::Read {
+                source: std::io::Error::other("output reader thread panicked"),
+                output: CapturedOutput {
+                    complete: false,
+                    ..CapturedOutput::default()
+                },
+            }),
+        };
+        match budget {
+            Some((budget, stream)) => {
+                let output = budget.take_captured_stream(stream);
+                match result {
+                    Ok(_) => Ok(output),
+                    Err(error) => Err(replace_error_output(error, output)),
+                }
+            }
+            None => result,
+        }
+    }
+}
+
+fn replace_error_output(error: OutputCaptureError, output: CapturedOutput) -> OutputCaptureError {
+    match error {
+        OutputCaptureError::Read { source, .. } => OutputCaptureError::Read { source, output },
+        OutputCaptureError::Write { path, source, .. } => OutputCaptureError::Write { path, source, output },
+        OutputCaptureError::ReadAfterWrite {
+            path,
+            write_source,
+            read_source,
+            ..
+        } => OutputCaptureError::ReadAfterWrite {
+            path,
+            write_source,
+            read_source,
+            output,
+        },
     }
 }

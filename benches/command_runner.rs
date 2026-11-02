@@ -34,6 +34,23 @@ fn silent_command() -> Command {
     }
 }
 
+/// Builds a deterministic command that writes a fixed number of zero bytes.
+fn output_command(bytes: usize) -> Command {
+    #[cfg(unix)]
+    {
+        Command::shell(&format!("head -c {bytes} /dev/zero"))
+    }
+    #[cfg(windows)]
+    {
+        Command::new("powershell")
+            .arg("-NoProfile")
+            .arg("-Command")
+            .arg(format!(
+                "$b = New-Object byte[] {bytes}; [Console]::OpenStandardOutput().Write($b, 0, $b.Length)"
+            ))
+    }
+}
+
 /// Verifies that a runner can execute the benchmark fixture before timing it.
 ///
 /// # Parameters
@@ -100,9 +117,32 @@ fn benchmark_silent_command_runner(criterion: &mut Criterion) {
     group.finish();
 }
 
+/// Measures successful and over-budget capture of large, controlled output.
+fn benchmark_total_output_budget(criterion: &mut Criterion) {
+    let mut group = criterion.benchmark_group("total_output_budget");
+    for retained in [1024 * 1024, 16 * 1024 * 1024] {
+        for (scenario, emitted) in [("within_limit", retained), ("limit_plus_one", retained + 1)] {
+            let runner = CommandRunner::without_timeout()
+                .max_output_bytes(retained)
+                .max_total_output_bytes(retained as u64);
+            let command = output_command(emitted);
+            let result = runner.run(command.clone());
+            match scenario {
+                "within_limit" => assert!(result.is_ok(), "in-limit fixture should succeed"),
+                _ => assert!(result.is_err(), "over-limit fixture should fail"),
+            }
+            group.bench_function(format!("{retained}_{scenario}"), |bencher| {
+                bencher.iter(|| black_box(runner.run(black_box(command.clone()))));
+            });
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_short_lived_command_runner,
     benchmark_silent_command_runner,
+    benchmark_total_output_budget,
 );
 criterion_main!(benches);
