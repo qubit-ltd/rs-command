@@ -45,7 +45,7 @@ fn output_command(bytes: usize) -> Command {
         Command::new("powershell")
             .arg("-NoProfile")
             .arg("-Command")
-            .arg(format!(
+            .arg(&format!(
                 "$b = New-Object byte[] {bytes}; [Console]::OpenStandardOutput().Write($b, 0, $b.Length)"
             ))
     }
