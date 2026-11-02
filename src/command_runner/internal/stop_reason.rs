@@ -141,6 +141,8 @@ mod tests {
 
     use qubit_clock::TimeError;
 
+    use super::super::captured_output::CapturedOutput;
+    use super::super::output_collector::collect_output_results;
     use super::StopReason;
     use crate::CommandCleanupFailure;
     use crate::CommandError;
@@ -180,5 +182,41 @@ mod tests {
             error.cleanup_failures(),
             [CommandCleanupFailure::StdoutRead { .. }]
         ));
+    }
+
+    #[test]
+    fn test_finalization_retains_collected_bytes_after_clock_failure() {
+        let finalize_error = collect_output_results(
+            "command",
+            status(0),
+            Err(TimeError::InstantOverflow),
+            Ok(CapturedOutput {
+                bytes: b"prefix".to_vec(),
+                truncated: true,
+                complete: false,
+            }),
+            Ok(CapturedOutput {
+                bytes: b"err".to_vec(),
+                truncated: false,
+                complete: true,
+            }),
+            Ok(()),
+        )
+        .expect_err("clock failure must produce a finalization error");
+        let reason = StopReason::Cancelled {
+            status: Some(status(0)),
+        };
+        let error = reason.into_error_after_finalize("command", finalize_error);
+
+        assert_eq!(error.kind(), CommandErrorKind::Cancelled);
+        assert!(error.output().is_none());
+        let captured = error.captured_output().expect("collected bytes must survive");
+        assert_eq!(captured.stdout(), b"prefix");
+        assert_eq!(captured.stderr(), b"err");
+        assert!(captured.stdout_truncated());
+        assert!(!captured.stderr_truncated());
+        assert!(!captured.stdout_complete());
+        assert!(captured.stderr_complete());
+        assert!(matches!(error.cleanup_failures(), [CommandCleanupFailure::Time { .. }]));
     }
 }

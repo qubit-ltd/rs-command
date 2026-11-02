@@ -140,11 +140,13 @@ impl CommandError {
     /// Merges a finalization error without changing the selected primary
     /// reason.
     ///
-    /// Moves retained output when this error has none and records helper/time
+    /// Preserves this error's output first, then moves either output carrier
+    /// from the finalization error when neither is present. Records helper/time
     /// failures as cleanup evidence. The input must be a finalization error.
     pub(crate) fn with_finalization_error(mut self, mut error: CommandError) -> Self {
-        if self.output.is_none() {
+        if self.output.is_none() && self.captured_output.is_none() {
             self.output = error.output.take();
+            self.captured_output = error.captured_output.take();
         }
         self.with_cleanup_failures(error.into_cleanup_failures())
     }
