@@ -130,10 +130,10 @@ fn read_output_inner(
         }
         let mut ready_capacity = buffer.len();
         if options.total_budget.is_none()
-            && let (Some(cancellation), Some(fd)) = (cancellation, fd)
+            && let (Some(_cancellation), Some(_fd)) = (cancellation, fd)
         {
             #[cfg(unix)]
-            match cancellation.wait_for_fd(fd, libc::POLLIN) {
+            match _cancellation.wait_for_fd(_fd, libc::POLLIN) {
                 Ok(true) => {}
                 Ok(false) => break Ok(false),
                 Err(source) => break Err(source),
