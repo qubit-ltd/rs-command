@@ -90,14 +90,17 @@ impl OutputReader {
     ///
     /// # Returns
     ///
-    /// The inner result contains captured output or an output-capture error;
-    /// the outer result contains that worker result or the worker's panic
-    /// payload.
+    /// Returns the captured stream bytes and metadata after the worker joins.
     ///
     /// # Errors
     ///
-    /// Returns an outer error containing the panic payload if the worker
-    /// thread panicked.
+    /// Returns an output-capture error when reading or teeing failed. A worker
+    /// panic is mapped to a read error; its original panic payload is not
+    /// returned.
+    ///
+    /// When a total budget is configured, retained bytes are moved from that
+    /// budget after joining and replace the capture data in either the success
+    /// or error result.
     #[must_use = "handle both thread and output capture failures"]
     #[inline]
     pub(in crate::command_runner) fn join(self) -> Result<CapturedOutput, OutputCaptureError> {

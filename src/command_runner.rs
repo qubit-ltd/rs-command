@@ -768,8 +768,48 @@ impl CommandRunner {
 
     /// Sets a hard byte limit shared by stdout and stderr for each run.
     ///
-    /// Bytes count even when they are not retained in memory or are sent to a
-    /// tee.
+    /// Stdout and stderr share this per-run budget. Bytes count even when they
+    /// are not retained in memory or are sent to a tee. The runner observes at
+    /// most `limit + 1` bytes; the extra byte proves that the limit was
+    /// exceeded. A zero limit therefore permits empty output, while the first
+    /// output byte exceeds it.
+    ///
+    /// Exceeding the limit requests termination of the managed process tree,
+    /// including when no timeout or cancellation is configured. Termination
+    /// follows the runner's existing best-effort cleanup contract and does not
+    /// impose a hard wall-clock deadline. The resulting
+    /// [`CommandErrorReason::OutputLimitExceeded`] includes the limit and
+    /// observed byte count. [`CommandError::output`] returns `None`, while
+    /// [`CommandError::captured_output`] may return incomplete raw bytes.
+    /// Per-stream retention limits remain controlled by
+    /// [`Self::max_output_bytes`] or [`Self::bounded_output`]; removing them
+    /// with [`Self::unbounded_output`] does not remove this total budget.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use qubit_command::CommandError;
+    /// use qubit_command::CommandErrorKind;
+    /// use qubit_command::CommandErrorReason;
+    /// use qubit_command::CommandOutput;
+    /// use qubit_command::CommandRunner;
+    ///
+    /// let runner = CommandRunner::without_timeout().max_total_output_bytes(1024);
+    /// assert_eq!(runner.configured_max_total_output_bytes(), Some(1024));
+    /// fn inspect(result: Result<CommandOutput, CommandError>) {
+    ///     if let Err(error) = result
+    ///         && error.kind() == CommandErrorKind::OutputLimitExceeded
+    ///     {
+    ///         assert!(error.output().is_none());
+    ///         if let CommandErrorReason::OutputLimitExceeded { limit, observed } = error.reason() {
+    ///             assert!(*observed > u128::from(*limit));
+    ///         }
+    ///         if let Some(bytes) = error.captured_output() {
+    ///             let _ = (bytes.stdout(), bytes.stderr(), bytes.stdout_complete(), bytes.stderr_complete());
+    ///         }
+    ///     }
+    /// }
+    /// ```
     #[inline]
     pub const fn max_total_output_bytes(mut self, limit: u64) -> Self {
         self.max_total_output_bytes = Some(limit);

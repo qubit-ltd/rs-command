@@ -53,6 +53,7 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 - 启用超时或取消管理时，runner 会通过 Unix process group 或 Windows Job Object 尝试终止进程树。
 - Windows 正常路径会使用 `CancelSynchronousIo`，确认并 join 每个 I/O helper。如果系统取消请求本身失败且 100 ms 的确认窗口耗尽，为保证返回有界，结果会保留 cancellation cleanup failure；受影响的 helper 可能一直存活到管道关闭。
 - 默认每个输出流最多在内存中保留 1 MiB。通过 tee 文件可以保留完整流，同时让内存中的结果保持有界。
+- 可选的 stdout/stderr 总预算会停止超量输出的命令，与每流内存保留上限独立。发生 `OutputLimitExceeded` 时，通过 `CommandError::captured_output()` 检查部分字节；`output()` 为 `None`。详见[中文用户手册](doc/user_guide.zh_CN.md)。
 - 命令诊断和生命周期日志会遮盖敏感参数、环境变量、shell 内容和路径。捕获到的进程输出与 tee 文件仍是原始输出，需要由调用方自行处理。
 
 重要边界：
