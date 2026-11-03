@@ -71,13 +71,13 @@ fn test_command_error_enforces_every_reason_contract() {
             source: Box::new(io_error()),
         },
     };
-    let time_display = format!("time handling failed for command 'command': {time_source}");
+    let time_display = "time handling failed for command 'command': <time error details omitted>".to_owned();
     let cases = vec![
         ErrorCase {
             label: "SpawnFailed",
             reason: CommandErrorReason::SpawnFailed { source: io_error() },
             reason_debug_key: "SpawnFailed",
-            expected_display: "failed to spawn command `command`: injected error source".into(),
+            expected_display: "failed to spawn command `command`: kind=Other, raw_os_error=None".into(),
             expected_kind: CommandErrorKind::SpawnFailed,
             has_source: true,
             retains_output: false,
@@ -90,7 +90,7 @@ fn test_command_error_enforces_every_reason_contract() {
             label: "WaitFailed",
             reason: CommandErrorReason::WaitFailed { source: io_error() },
             reason_debug_key: "WaitFailed",
-            expected_display: "failed to wait for command `command`: injected error source".into(),
+            expected_display: "failed to wait for command `command`: kind=Other, raw_os_error=None".into(),
             expected_kind: CommandErrorKind::WaitFailed,
             has_source: true,
             retains_output: false,
@@ -119,7 +119,7 @@ fn test_command_error_enforces_every_reason_contract() {
                 source: io_error(),
             },
             reason_debug_key: "ReadOutputFailed",
-            expected_display: "failed to read stdout for command `command`: injected error source".into(),
+            expected_display: "failed to read stdout for command `command`: kind=Other, raw_os_error=None".into(),
             expected_kind: CommandErrorKind::ReadOutputFailed,
             has_source: true,
             retains_output: true,
@@ -136,7 +136,8 @@ fn test_command_error_enforces_every_reason_contract() {
             },
             reason_debug_key: "OpenInputFailed",
             expected_display:
-                "failed to open stdin file `<redacted path>` for command `command`: injected error source".into(),
+                "failed to open stdin file `<redacted path>` for command `command`: kind=Other, raw_os_error=None"
+                    .into(),
             expected_kind: CommandErrorKind::OpenInputFailed,
             has_source: true,
             retains_output: false,
@@ -167,7 +168,8 @@ fn test_command_error_enforces_every_reason_contract() {
             },
             reason_debug_key: "OpenOutputFailed",
             expected_display:
-                "failed to open stdout file `<redacted path>` for command `command`: injected error source".into(),
+                "failed to open stdout file `<redacted path>` for command `command`: kind=Other, raw_os_error=None"
+                    .into(),
             expected_kind: CommandErrorKind::OpenOutputFailed,
             has_source: true,
             retains_output: false,
@@ -236,7 +238,8 @@ fn test_command_error_enforces_every_reason_contract() {
             },
             reason_debug_key: "InspectIoFileFailed",
             expected_display:
-                "failed to inspect I/O file '<redacted path>' for command 'command': injected error source".into(),
+                "failed to inspect I/O file '<redacted path>' for command 'command': kind=Other, raw_os_error=None"
+                    .into(),
             expected_kind: CommandErrorKind::InspectIoFileFailed,
             has_source: true,
             retains_output: false,
@@ -249,7 +252,8 @@ fn test_command_error_enforces_every_reason_contract() {
             label: "StartInputThreadFailed",
             reason: CommandErrorReason::StartInputThreadFailed { source: io_error() },
             reason_debug_key: "StartInputThreadFailed",
-            expected_display: "failed to start stdin writer for command 'command': injected error source".into(),
+            expected_display: "failed to start stdin writer for command 'command': kind=Other, raw_os_error=None"
+                .into(),
             expected_kind: CommandErrorKind::StartInputThreadFailed,
             has_source: true,
             retains_output: false,
@@ -265,7 +269,8 @@ fn test_command_error_enforces_every_reason_contract() {
                 source: io_error(),
             },
             reason_debug_key: "StartOutputThreadFailed",
-            expected_display: "failed to start stderr reader for command 'command': injected error source".into(),
+            expected_display: "failed to start stderr reader for command 'command': kind=Other, raw_os_error=None"
+                .into(),
             expected_kind: CommandErrorKind::StartOutputThreadFailed,
             has_source: true,
             retains_output: false,
@@ -291,7 +296,7 @@ fn test_command_error_enforces_every_reason_contract() {
             label: "WriteInputFailed",
             reason: CommandErrorReason::WriteInputFailed { source: io_error() },
             reason_debug_key: "WriteInputFailed",
-            expected_display: "failed to write stdin for command `command`: injected error source".into(),
+            expected_display: "failed to write stdin for command `command`: kind=Other, raw_os_error=None".into(),
             expected_kind: CommandErrorKind::WriteInputFailed,
             has_source: true,
             retains_output: true,
@@ -309,7 +314,8 @@ fn test_command_error_enforces_every_reason_contract() {
             },
             reason_debug_key: "WriteOutputFailed",
             expected_display:
-                "failed to write stdout for command `command` to `<redacted path>`: injected error source".into(),
+                "failed to write stdout for command `command` to `<redacted path>`: kind=Other, raw_os_error=None"
+                    .into(),
             expected_kind: CommandErrorKind::WriteOutputFailed,
             has_source: true,
             retains_output: true,
@@ -387,6 +393,14 @@ fn test_command_error_enforces_every_reason_contract() {
             "{} reason Debug contract changed: {reason_debug}",
             case.label,
         );
+        assert!(
+            !reason_debug.contains("injected error source"),
+            "{} reason Debug exposed source text: {reason_debug}",
+            case.label,
+        );
+        if case.label == "TimeFailed" {
+            assert!(reason_debug.contains("<time error details omitted>"));
+        }
         assert_eq!(error.command(), "command", "{} command", case.label);
         assert_eq!(error.kind(), case.expected_kind, "{} kind", case.label);
         assert_eq!(error.to_string(), case.expected_display, "{} Display", case.label);

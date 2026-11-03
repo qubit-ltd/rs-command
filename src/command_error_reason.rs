@@ -16,6 +16,8 @@ use qubit_clock::TimeError;
 use qubit_redact::Redactor;
 
 use crate::OutputStream;
+use crate::internal::diagnostic_source::TIME_SOURCE_SUMMARY;
+use crate::internal::diagnostic_source::io_source_summary;
 
 /// Redacts one debug-only value before it crosses the diagnostic boundary.
 #[must_use]
@@ -170,18 +172,24 @@ pub enum CommandErrorReason {
 impl fmt::Debug for CommandErrorReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SpawnFailed { source } => formatter.debug_struct("SpawnFailed").field("source", source).finish(),
-            Self::WaitFailed { source } => formatter.debug_struct("WaitFailed").field("source", source).finish(),
+            Self::SpawnFailed { source } => formatter
+                .debug_struct("SpawnFailed")
+                .field("source", &io_source_summary(source))
+                .finish(),
+            Self::WaitFailed { source } => formatter
+                .debug_struct("WaitFailed")
+                .field("source", &io_source_summary(source))
+                .finish(),
             Self::CancelledBeforeStart => formatter.write_str("CancelledBeforeStart"),
             Self::ReadOutputFailed { stream, source } => formatter
                 .debug_struct("ReadOutputFailed")
                 .field("stream", stream)
-                .field("source", source)
+                .field("source", &io_source_summary(source))
                 .finish(),
             Self::OpenInputFailed { path, source } => formatter
                 .debug_struct("OpenInputFailed")
                 .field("path", &redacted_debug_text(path))
-                .field("source", source)
+                .field("source", &io_source_summary(source))
                 .finish(),
             Self::NonRegularInputFile { path } => formatter
                 .debug_struct("NonRegularInputFile")
@@ -191,7 +199,7 @@ impl fmt::Debug for CommandErrorReason {
                 .debug_struct("OpenOutputFailed")
                 .field("stream", stream)
                 .field("path", &redacted_debug_text(path))
-                .field("source", source)
+                .field("source", &io_source_summary(source))
                 .finish(),
             Self::NonRegularOutputFile { stream, path } => formatter
                 .debug_struct("NonRegularOutputFile")
@@ -219,27 +227,30 @@ impl fmt::Debug for CommandErrorReason {
             Self::InspectIoFileFailed { path, source } => formatter
                 .debug_struct("InspectIoFileFailed")
                 .field("path", &redacted_debug_text(path))
-                .field("source", source)
+                .field("source", &io_source_summary(source))
                 .finish(),
             Self::StartInputThreadFailed { source } => formatter
                 .debug_struct("StartInputThreadFailed")
-                .field("source", source)
+                .field("source", &io_source_summary(source))
                 .finish(),
             Self::StartOutputThreadFailed { stream, source } => formatter
                 .debug_struct("StartOutputThreadFailed")
                 .field("stream", stream)
-                .field("source", source)
+                .field("source", &io_source_summary(source))
                 .finish(),
-            Self::TimeFailed { source } => formatter.debug_struct("TimeFailed").field("source", source).finish(),
+            Self::TimeFailed { .. } => formatter
+                .debug_struct("TimeFailed")
+                .field("source", &TIME_SOURCE_SUMMARY)
+                .finish(),
             Self::WriteInputFailed { source } => formatter
                 .debug_struct("WriteInputFailed")
-                .field("source", source)
+                .field("source", &io_source_summary(source))
                 .finish(),
             Self::WriteOutputFailed { stream, path, source } => formatter
                 .debug_struct("WriteOutputFailed")
                 .field("stream", stream)
                 .field("path", &redacted_debug_text(path))
-                .field("source", source)
+                .field("source", &io_source_summary(source))
                 .finish(),
             Self::TimedOut { timeout } => formatter.debug_struct("TimedOut").field("timeout", timeout).finish(),
             Self::Cancelled => formatter.write_str("Cancelled"),

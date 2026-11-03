@@ -7,6 +7,7 @@
 // =============================================================================
 //! Tests crate-internal command error finalization contracts.
 
+use std::error::Error;
 use std::io;
 use std::process::ExitStatus;
 use std::time::Duration;
@@ -262,4 +263,117 @@ fn test_finalization_keeps_existing_primary_output() {
         error.cleanup_failures(),
         [CommandCleanupFailure::StdoutRead { .. }]
     ));
+}
+
+#[test]
+fn test_command_error_formatting_omits_source_text_but_preserves_source() {
+    #[derive(Debug)]
+    struct SecretSource;
+    impl std::fmt::Display for SecretSource {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("source-secret-/private/token")
+        }
+    }
+    impl std::error::Error for SecretSource {}
+
+    let error = CommandError::from_reason(
+        "command",
+        CommandErrorReason::ReadOutputFailed {
+            stream: OutputStream::Stdout,
+            source: io::Error::other(SecretSource),
+        },
+        None,
+    );
+    let display = error.to_string();
+    let debug = format!("{error:?}");
+    assert!(display.contains("kind=Other"));
+    assert!(!display.contains("source-secret"));
+    assert!(!debug.contains("source-secret"));
+    assert_eq!(error.source().unwrap().to_string(), "source-secret-/private/token");
+    assert!(matches!(
+        error.reason(),
+        CommandErrorReason::ReadOutputFailed { source, .. }
+            if source.to_string() == "source-secret-/private/token"
+    ));
+}
+
+#[test]
+fn test_command_error_display_uses_summaries_for_all_io_source_reasons() {
+    let secret = "source-secret-/private/token";
+    let source = || io::Error::other(secret);
+    let reasons = [
+        CommandErrorReason::SpawnFailed { source: source() },
+        CommandErrorReason::WaitFailed { source: source() },
+        CommandErrorReason::ReadOutputFailed {
+            stream: OutputStream::Stdout,
+            source: source(),
+        },
+        CommandErrorReason::ReadOutputFailed {
+            stream: OutputStream::Stderr,
+            source: source(),
+        },
+        CommandErrorReason::OpenInputFailed {
+            path: "input".into(),
+            source: source(),
+        },
+        CommandErrorReason::OpenOutputFailed {
+            stream: OutputStream::Stdout,
+            path: "stdout".into(),
+            source: source(),
+        },
+        CommandErrorReason::OpenOutputFailed {
+            stream: OutputStream::Stderr,
+            path: "stderr".into(),
+            source: source(),
+        },
+        CommandErrorReason::InspectIoFileFailed {
+            path: "file".into(),
+            source: source(),
+        },
+        CommandErrorReason::StartInputThreadFailed { source: source() },
+        CommandErrorReason::StartOutputThreadFailed {
+            stream: OutputStream::Stdout,
+            source: source(),
+        },
+        CommandErrorReason::StartOutputThreadFailed {
+            stream: OutputStream::Stderr,
+            source: source(),
+        },
+        CommandErrorReason::WriteInputFailed { source: source() },
+        CommandErrorReason::WriteOutputFailed {
+            stream: OutputStream::Stdout,
+            path: "stdout".into(),
+            source: source(),
+        },
+        CommandErrorReason::WriteOutputFailed {
+            stream: OutputStream::Stderr,
+            path: "stderr".into(),
+            source: source(),
+        },
+    ];
+
+    for reason in reasons {
+        let error = CommandError::from_reason("command", reason, None);
+        let display = error.to_string();
+        let debug = format!("{error:?}");
+        assert!(!display.contains(secret), "{display}");
+        assert!(!debug.contains(secret), "{debug}");
+        assert!(display.contains("kind=Other"), "{display}");
+    }
+}
+
+#[test]
+fn test_command_error_time_display_omits_source_details() {
+    let error = CommandError::from_reason(
+        "command",
+        CommandErrorReason::TimeFailed {
+            source: TimeError::InstantOverflow,
+        },
+        None,
+    );
+    let display = error.to_string();
+    let debug = format!("{error:?}");
+    assert!(display.contains("<time error details omitted>"));
+    assert!(!display.contains("InstantOverflow"));
+    assert!(debug.contains("<time error details omitted>"));
 }

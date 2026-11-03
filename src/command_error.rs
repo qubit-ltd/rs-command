@@ -17,6 +17,8 @@ use crate::CommandErrorKind;
 use crate::CommandErrorReason;
 use crate::CommandOutput;
 use crate::OutputStream;
+use crate::internal::diagnostic_source::TIME_SOURCE_SUMMARY;
+use crate::internal::diagnostic_source::io_source_summary;
 
 /// Error returned while preparing, spawning, waiting for, or collecting a
 /// command.
@@ -333,20 +335,33 @@ impl fmt::Display for CommandError {
         let command = &self.command;
         match (self.reason.as_ref(), self.output.as_deref()) {
             (CommandErrorReason::SpawnFailed { source }, _) => {
-                write!(formatter, "failed to spawn command `{command}`: {source}")
+                write!(
+                    formatter,
+                    "failed to spawn command `{command}`: {}",
+                    io_source_summary(source)
+                )
             }
             (CommandErrorReason::WaitFailed { source }, _) => {
-                write!(formatter, "failed to wait for command `{command}`: {source}")
+                write!(
+                    formatter,
+                    "failed to wait for command `{command}`: {}",
+                    io_source_summary(source)
+                )
             }
             (CommandErrorReason::CancelledBeforeStart, _) => {
                 write!(formatter, "command `{command}` was cancelled before it started")
             }
             (CommandErrorReason::ReadOutputFailed { stream, source }, _) => {
-                write!(formatter, "failed to read {stream} for command `{command}`: {source}")
+                write!(
+                    formatter,
+                    "failed to read {stream} for command `{command}`: {}",
+                    io_source_summary(source)
+                )
             }
             (CommandErrorReason::OpenInputFailed { source, .. }, _) => write!(
                 formatter,
-                "failed to open stdin file `<redacted path>` for command `{command}`: {source}"
+                "failed to open stdin file `<redacted path>` for command `{command}`: {}",
+                io_source_summary(source)
             ),
             (CommandErrorReason::NonRegularInputFile { .. }, _) => write!(
                 formatter,
@@ -354,7 +369,8 @@ impl fmt::Display for CommandError {
             ),
             (CommandErrorReason::OpenOutputFailed { stream, source, .. }, _) => write!(
                 formatter,
-                "failed to open {stream} file `<redacted path>` for command `{command}`: {source}"
+                "failed to open {stream} file `<redacted path>` for command `{command}`: {}",
+                io_source_summary(source)
             ),
             (CommandErrorReason::NonRegularOutputFile { stream, .. }, _) => {
                 write!(
@@ -373,28 +389,39 @@ impl fmt::Display for CommandError {
             (CommandErrorReason::InspectIoFileFailed { source, .. }, _) => {
                 write!(
                     formatter,
-                    "failed to inspect I/O file '<redacted path>' for command '{command}': {source}"
+                    "failed to inspect I/O file '<redacted path>' for command '{command}': {}",
+                    io_source_summary(source)
                 )
             }
             (CommandErrorReason::StartInputThreadFailed { source }, _) => {
                 write!(
                     formatter,
-                    "failed to start stdin writer for command '{command}': {source}"
+                    "failed to start stdin writer for command '{command}': {}",
+                    io_source_summary(source)
                 )
             }
             (CommandErrorReason::StartOutputThreadFailed { stream, source }, _) => write!(
                 formatter,
-                "failed to start {stream} reader for command '{command}': {source}"
+                "failed to start {stream} reader for command '{command}': {}",
+                io_source_summary(source)
             ),
-            (CommandErrorReason::TimeFailed { source }, _) => {
-                write!(formatter, "time handling failed for command '{command}': {source}")
+            (CommandErrorReason::TimeFailed { .. }, _) => {
+                write!(
+                    formatter,
+                    "time handling failed for command '{command}': {TIME_SOURCE_SUMMARY}"
+                )
             }
             (CommandErrorReason::WriteInputFailed { source }, _) => {
-                write!(formatter, "failed to write stdin for command `{command}`: {source}")
+                write!(
+                    formatter,
+                    "failed to write stdin for command `{command}`: {}",
+                    io_source_summary(source)
+                )
             }
             (CommandErrorReason::WriteOutputFailed { stream, source, .. }, _) => write!(
                 formatter,
-                "failed to write {stream} for command `{command}` to `<redacted path>`: {source}"
+                "failed to write {stream} for command `{command}` to `<redacted path>`: {}",
+                io_source_summary(source)
             ),
             (CommandErrorReason::TimedOut { timeout }, _) => {
                 write!(formatter, "command `{command}` timed out after {timeout:?}")

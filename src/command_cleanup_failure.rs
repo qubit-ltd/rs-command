@@ -14,6 +14,9 @@ use std::path::PathBuf;
 use qubit_clock::TimeError;
 use qubit_redact::Redactor;
 
+use crate::internal::diagnostic_source::TIME_SOURCE_SUMMARY;
+use crate::internal::diagnostic_source::io_source_summary;
+
 /// Redacts one debug-only value before it crosses the diagnostic boundary.
 #[must_use]
 fn redacted_debug_text(value: &impl fmt::Debug) -> String {
@@ -109,40 +112,55 @@ pub enum CommandCleanupFailure {
 impl fmt::Debug for CommandCleanupFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Time { source } => formatter.debug_struct("Time").field("source", source).finish(),
-            Self::Wait { source } => formatter.debug_struct("Wait").field("source", source).finish(),
+            Self::Time { .. } => formatter
+                .debug_struct("Time")
+                .field("source", &TIME_SOURCE_SUMMARY)
+                .finish(),
+            Self::Wait { source } => formatter
+                .debug_struct("Wait")
+                .field("source", &io_source_summary(source))
+                .finish(),
             Self::ProcessTreeTermination { source } => formatter
                 .debug_struct("ProcessTreeTermination")
-                .field("source", source)
+                .field("source", &io_source_summary(source))
                 .finish(),
             Self::ChildTermination { source } => formatter
                 .debug_struct("ChildTermination")
-                .field("source", source)
+                .field("source", &io_source_summary(source))
                 .finish(),
-            Self::Stdin { source } => formatter.debug_struct("Stdin").field("source", source).finish(),
+            Self::Stdin { source } => formatter
+                .debug_struct("Stdin")
+                .field("source", &io_source_summary(source))
+                .finish(),
             Self::StdinCancellation { source } => formatter
                 .debug_struct("StdinCancellation")
-                .field("source", source)
+                .field("source", &io_source_summary(source))
                 .finish(),
             Self::StdoutCancellation { source } => formatter
                 .debug_struct("StdoutCancellation")
-                .field("source", source)
+                .field("source", &io_source_summary(source))
                 .finish(),
             Self::StderrCancellation { source } => formatter
                 .debug_struct("StderrCancellation")
-                .field("source", source)
+                .field("source", &io_source_summary(source))
                 .finish(),
-            Self::StdoutRead { source } => formatter.debug_struct("StdoutRead").field("source", source).finish(),
+            Self::StdoutRead { source } => formatter
+                .debug_struct("StdoutRead")
+                .field("source", &io_source_summary(source))
+                .finish(),
             Self::StdoutWrite { path, source } => formatter
                 .debug_struct("StdoutWrite")
                 .field("path", &redacted_debug_text(path))
-                .field("source", source)
+                .field("source", &io_source_summary(source))
                 .finish(),
-            Self::StderrRead { source } => formatter.debug_struct("StderrRead").field("source", source).finish(),
+            Self::StderrRead { source } => formatter
+                .debug_struct("StderrRead")
+                .field("source", &io_source_summary(source))
+                .finish(),
             Self::StderrWrite { path, source } => formatter
                 .debug_struct("StderrWrite")
                 .field("path", &redacted_debug_text(path))
-                .field("source", source)
+                .field("source", &io_source_summary(source))
                 .finish(),
         }
     }
