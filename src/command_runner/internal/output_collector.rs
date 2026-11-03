@@ -1735,6 +1735,7 @@ mod windows_cancellation_interleaving_tests {
                 .as_mut()
                 .expect("tee reader should remain owned until reaping")
                 .read_to_end(drained)
+                .map(|_| ())
         }
 
         fn close_tee_reader(&mut self) {
@@ -1836,8 +1837,8 @@ mod windows_cancellation_interleaving_tests {
 
         for attempt in 0..ATTEMPTS {
             let attempt_start = Instant::now();
-            let (source_reader, source_writer) = anonymous_pipe().expect("source pipe should be created");
-            let (mut tee_reader, mut tee_writer) = anonymous_pipe().expect("tee pipe should be created");
+            let (source_reader, mut source_writer) = anonymous_pipe().expect("source pipe should be created");
+            let (tee_reader, mut tee_writer) = anonymous_pipe().expect("tee pipe should be created");
             let tee_capacity = fill_pipe(&mut tee_writer).expect("tee pipe should be filled and checked");
             let (read_tx, read_rx) = mpsc::channel();
             let (tee_tx, tee_rx) = mpsc::channel();
