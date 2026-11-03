@@ -154,6 +154,8 @@ fails, the runner waits no longer than 100 ms for the helper to report that it
 stopped. After that deadline it returns a bounded result with a
 `StdoutCancellation`, `StderrCancellation`, or `StdinCancellation` cleanup
 failure as applicable; the helper may remain alive until its pipe closes.
+The successful-cancellation interleaving investigation and its current evidence
+are recorded in [RC-002 Windows cancellation verification](rc-002-verification.md).
 
 Output truncation is independent of stream completeness. A complete stream can
 be truncated in memory, and an incomplete stream can contain fewer bytes than

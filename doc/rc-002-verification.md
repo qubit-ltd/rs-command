@@ -5,15 +5,26 @@
 **Not completed: a Windows runner is required to verify the reported race.**
 This investigation found plausible interleaving windows in the source, but no
 Windows reproduction or equivalent operating-system evidence was available in
-the local environment. No production code was changed for RC-002.
+the local environment. During the 2026-11-03 implementation, the active host
+was again confirmed to be Linux x86_64 and no Windows execution tool was
+available in the current workspace. The controlled Windows test was therefore
+not run, and no production code was changed for RC-002.
 
 ## Environment
 
 - Host: Linux x86_64 (`Linux 6.8.0-147-generic`)
+- Rust: `rustc 1.94.0 (4a4ef493e 2026-03-02)`
+- Baseline commit: `d09a6624f10790d2bc0b171c919ee18f83105586`
 - Windows execution: unavailable locally
-- Relevant repository CI: `.github/workflows/ci.yml` includes `windows-2022`
-- Local verification command: `.infra/bin/ci-check.sh` (passed on Linux;
-  this is not Windows evidence)
+- Relevant repository CI: `.github/workflows/ci.yml` includes `windows-2022`,
+  but this implementation session has no attached Windows runner or remote job
+  controls to run the required test there.
+- Local Windows interleaving command:
+  `cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1 --nocapture`
+  was not run because the host is Linux and no Windows execution resource is
+  available. Cross-compilation or Linux test results would not establish the
+  required `CancelSynchronousIo` behavior.
+- Linux CI may be run for general regressions, but is not Windows evidence.
 
 ## Source Trace
 

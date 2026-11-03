@@ -110,6 +110,7 @@ Unix reader 和 stdin writer 使用非阻塞操作及唤醒通道，因此不会
 runner 最多等待 100 ms 来确认 helper 已停止。超过期限后，runner 返回有界结果，并按需
 保留 `StdoutCancellation`、`StderrCancellation` 或 `StdinCancellation` 清理失败；对应
 helper 可能一直存活到管道关闭。
+成功取消后的交错核查及当前证据记录在 [RC-002 Windows 取消验证](rc-002-verification.md) 中。
 
 输出截断与流完整性相互独立。完整流仍可能在内存中被截断，不完整流也可能只包含少量
 字节。将保留字节当成完整 transcript 前，调用方必须同时检查这两类元数据。
