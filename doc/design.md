@@ -37,6 +37,18 @@ as success. `stdin_file` and tee paths must identify ordinary files. A tee is
 replaced at the beginning of a run, not appended. Callers that use
 `unbounded_output()` accept unbounded in-memory process data themselves.
 
+Relative paths configured with `stdin_file`, `tee_stdout_to_file`, and
+`tee_stderr_to_file` are opened relative to the parent process's current
+directory. A command or runner working-directory setting changes only the
+child process directory. Callers that want a file under the child directory
+must join the path to an explicit directory before configuration.
+
+Error formatting uses controlled source summaries: I/O sources expose only
+their `ErrorKind` and optional raw OS error code, while time-source details are
+omitted. The original source objects and `Error::source()` chain remain
+available and may contain arbitrary text. Callers that format a complete raw
+error chain are responsible for handling that text.
+
 `max_total_output_bytes(limit)` optionally sets a hard budget shared by stdout
 and stderr. It also enables process-tree management when no timeout or
 cancellation policy is configured. The reader observes at most `limit + 1`

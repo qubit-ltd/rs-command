@@ -27,6 +27,14 @@ helper、终止流程以及错误保留信息的维护者和调用方。可运�
 文件；每次运行开始时 tee 会被替换而不是追加。调用 `unbounded_output()` 就意味着调用方
 自行接受无界的进程内存输出。
 
+通过 `stdin_file`、`tee_stdout_to_file` 和 `tee_stderr_to_file` 配置的相对路径，以父进程
+当前目录为基准打开。command 或 runner 的工作目录设置只改变子进程目录。若调用方希望访问
+子进程目录下的文件，必须在配置前将路径显式拼接到指定目录。
+
+错误格式化使用受控 source 摘要：I/O source 仅显示其 `ErrorKind` 和可选的原始 OS 错误
+编号，时间 source 详情则省略。原始 source 对象及 `Error::source()` 链仍可访问，其中可能
+包含任意文本。调用方若格式化完整原始错误链，应自行负责这些文本的处理。
+
 `max_total_output_bytes(limit)` 可选设置 stdout 与 stderr 共享的硬预算。即使没有配置超时或
 取消策略，它也会启用进程树管理。reader 总共最多观察 `limit + 1` 个字节；额外的一个字节
 作为哨兵证明预算已超限。每流保留上限仍可使部分字节不进入内存，但这些字节仍计入共享预算，

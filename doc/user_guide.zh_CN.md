@@ -152,6 +152,23 @@ assert_eq!(output.stdout_text()?, "input\n");
 
 `stdin_file` 只接受普通文件。目录、FIFO、设备、套接字及其他特殊文件会在启动子进程前被拒绝。
 
+传给 `stdin_file`、`tee_stdout_to_file` 或 `tee_stderr_to_file` 的相对路径，均以
+父进程当前工作目录为基准解析。`Command::working_directory` 和
+`CommandRunner::working_directory` 只修改子进程的工作目录。若要访问子进程目录下的文件，
+请在配置文件路径前显式构造绝对路径：
+
+```rust
+use qubit_command::Command;
+
+let child_dir = std::env::current_dir()?.join("workspace").join("project");
+let input_path = child_dir.join("input.txt");
+let command = Command::new("tool")
+    .working_directory(&child_dir)
+    .stdin_file(input_path);
+# let _ = command;
+# Ok::<(), std::io::Error>(())
+```
+
 ### 定义成功退出码
 
 默认只有退出码 `0` 表示成功。如果工具文档说明另一个状态也代表成功，应明确配置：
@@ -295,6 +312,11 @@ let command = Command::new("uploader")
 
 `CommandError` 是字段私有的稳定容器。使用 `kind()` 做可前向兼容的分类，只有
 需要详细字段时才读取 `reason()`；不要匹配其存储布局。重要类别包括：
+
+`CommandError` 的 Display/Debug、`CommandErrorReason` 的 Debug 和清理失败的 Debug
+会为 I/O source 使用受控摘要：错误 kind，以及可用时的原始 OS 错误编号；时间 source
+详情会省略。这些摘要不会格式化任意 source 文本。原始 source 对象仍可通过错误接口访问，
+其中可能包含未经筛选的文本；显式格式化完整错误链由调用方负责。
 
 | 类别 | 示例 | 下一步诊断 |
 | --- | --- | --- |

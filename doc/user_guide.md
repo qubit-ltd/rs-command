@@ -152,6 +152,24 @@ assert_eq!(output.stdout_text()?, "input\n");
 
 `stdin_file` accepts ordinary files only. Directories, FIFOs, devices, sockets, and other special files are rejected before the child is spawned.
 
+Relative paths passed to `stdin_file`, `tee_stdout_to_file`, or
+`tee_stderr_to_file` are resolved from the parent process's current working
+directory. `Command::working_directory` and `CommandRunner::working_directory`
+change only the child process directory. To address a file under the child
+directory, construct an absolute path before configuring the file:
+
+```rust
+use qubit_command::Command;
+
+let child_dir = std::env::current_dir()?.join("workspace").join("project");
+let input_path = child_dir.join("input.txt");
+let command = Command::new("tool")
+    .working_directory(&child_dir)
+    .stdin_file(input_path);
+# let _ = command;
+# Ok::<(), std::io::Error>(())
+```
+
 ### Define Successful Exit Codes
 
 Exit code `0` is successful by default. If a tool documents another successful status, configure it explicitly:
@@ -302,6 +320,13 @@ Lifecycle records are emitted at `debug` level. `disable_logging(true)` suppress
 `CommandError` is a stable container with private storage. Use `kind()` for
 forward-compatible classification and `reason()` only when detailed fields are
 needed; do not match its storage layout. The important categories are:
+
+`CommandError` display/debug output, `CommandErrorReason` debug output, and
+cleanup-failure debug output use controlled summaries for I/O sources: the
+error kind and raw OS code when available. Time-source details are omitted.
+These summaries do not format arbitrary source text. The original source
+objects remain available through the error APIs and may contain unfiltered
+text; explicitly formatting a full error chain is the caller's responsibility.
 
 | Category | Examples | Next diagnostic step |
 | --- | --- | --- |

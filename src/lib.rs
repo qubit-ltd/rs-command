@@ -7,7 +7,40 @@
 // =============================================================================
 //! # Qubit Command
 //!
-//! Provides command-line process running utilities for Rust.
+//! Run external programs with explicit policies for process lifetime, output,
+//! cancellation, and diagnostics.
+//!
+//! ```
+//! use qubit_command::{Command, CommandRunner};
+//! use std::time::Duration;
+//!
+//! let output = CommandRunner::new(Duration::from_secs(10))
+//!     .run(Command::new("rustc").arg("--version"))?;
+//! assert!(!output.stdout().is_empty());
+//! # Ok::<(), qubit_command::CommandError>(())
+//! ```
+//!
+//! [`Command`] describes a program and its arguments. [`CommandRunner`] runs
+//! it and returns [`CommandOutput`] or a structured [`CommandError`].
+//! [`CommandRunOptions`] adds per-run settings, while [`CommandCancellation`]
+//! allows a caller to request cancellation.
+//!
+//! By default, the runner retains at most 1 MiB per output stream in memory
+//! and treats successful output truncation as an error. These retention limits
+//! are separate from the optional combined stdout/stderr budget configured by
+//! [`CommandRunner::max_total_output_bytes`]. If that budget is exceeded,
+//! [`CommandError::output`] is `None`; inspect partial bytes through
+//! [`CommandError::captured_output`].
+//!
+//! A configured timeout starts after the child is spawned. It does not bound
+//! preparation, spawn, or every operating-system operation. Timeout and
+//! cancellation errors can contain partial output; check
+//! [`CommandOutput::stdout_complete`] and [`CommandOutput::stderr_complete`]
+//! before treating retained bytes as complete streams.
+//!
+//! See the [English user guide](https://github.com/qubit-ltd/rs-command/blob/main/doc/user_guide.md)
+//! and [中文用户指南](https://github.com/qubit-ltd/rs-command/blob/main/doc/user_guide.zh_CN.md)
+//! for the full usage documentation.
 
 mod command;
 mod command_argument;
