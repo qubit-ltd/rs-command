@@ -179,8 +179,12 @@ impl CommandIo {
                     command,
                     status,
                     elapsed(),
-                    stdout_result.unwrap_or_else(detached_output),
-                    stderr_result.unwrap_or_else(detached_output),
+                    stdout_result
+                        .map(OutputReaderFinish::into_output_result)
+                        .unwrap_or_else(detached_output),
+                    stderr_result
+                        .map(OutputReaderFinish::into_output_result)
+                        .unwrap_or_else(detached_output),
                     stdin_result.unwrap_or(Ok(())),
                 );
                 (output, cleanup_failures)
@@ -245,8 +249,8 @@ fn finish_helpers<R>(
     stderr_reader: Option<OutputReader>,
     stdin_writer: OptionalStdinWriter,
     finish: impl FnOnce(
-        Option<Result<CapturedOutput, OutputCaptureError>>,
-        Option<Result<CapturedOutput, OutputCaptureError>>,
+        Option<OutputReaderFinish>,
+        Option<OutputReaderFinish>,
         Option<Result<(), CommandError>>,
         Option<io::Error>,
         Option<io::Error>,
@@ -271,8 +275,14 @@ fn finish_helpers<R>(
         confirmation_deadline,
     );
 
-    let stdout_cancellation = retain_cancellation_failure(stdout_cancellation, stdout_result.is_some());
-    let stderr_cancellation = retain_cancellation_failure(stderr_cancellation, stderr_result.is_some());
+    let stdout_cancellation = retain_cancellation_failure(
+        stdout_cancellation,
+        matches!(stdout_result.as_ref(), Some(OutputReaderFinish::Joined(_))),
+    );
+    let stderr_cancellation = retain_cancellation_failure(
+        stderr_cancellation,
+        matches!(stderr_result.as_ref(), Some(OutputReaderFinish::Joined(_))),
+    );
     let stdin_cancellation = retain_cancellation_failure(stdin_cancellation, stdin_result.is_some());
 
     finish(
@@ -286,15 +296,29 @@ fn finish_helpers<R>(
 }
 
 /// Joins a reader unless a failed cancellation remains unconfirmed.
+enum OutputReaderFinish {
+    Joined(Result<CapturedOutput, OutputCaptureError>),
+    Detached(CapturedOutput),
+}
+
+impl OutputReaderFinish {
+    fn into_output_result(self) -> Result<CapturedOutput, OutputCaptureError> {
+        match self {
+            Self::Joined(result) => result,
+            Self::Detached(output) => Ok(output),
+        }
+    }
+}
+
 fn finish_output_reader(
     reader: OutputReader,
     cancellation_failed: bool,
     confirmation_deadline: Instant,
-) -> Option<Result<CapturedOutput, OutputCaptureError>> {
+) -> Option<OutputReaderFinish> {
     if cancellation_failed && !wait_until_finished(|| reader.is_finished(), confirmation_deadline) {
-        return None;
+        return Some(OutputReaderFinish::Detached(reader.detached_output()));
     }
-    Some(join_output_reader(reader))
+    Some(OutputReaderFinish::Joined(join_output_reader(reader)))
 }
 
 /// Joins an optional writer unless a failed cancellation remains unconfirmed.
@@ -339,10 +363,10 @@ fn cancellation_found_no_pending_io(error: &io::Error) -> bool {
 /// Appends stdout read/write and cancellation failures in causal order.
 fn push_stdout_failures(
     failures: &mut Vec<CommandCleanupFailure>,
-    result: Option<Result<CapturedOutput, OutputCaptureError>>,
+    result: Option<OutputReaderFinish>,
     cancellation: Option<io::Error>,
 ) {
-    if let Some(result) = result {
+    if let Some(OutputReaderFinish::Joined(result)) = result {
         let (_, output_failures) = split_output_result(result);
         failures.extend(
             output_failures
@@ -358,10 +382,10 @@ fn push_stdout_failures(
 /// Appends stderr read/write and cancellation failures in causal order.
 fn push_stderr_failures(
     failures: &mut Vec<CommandCleanupFailure>,
-    result: Option<Result<CapturedOutput, OutputCaptureError>>,
+    result: Option<OutputReaderFinish>,
     cancellation: Option<io::Error>,
 ) {
-    if let Some(result) = result {
+    if let Some(OutputReaderFinish::Joined(result)) = result {
         let (_, output_failures) = split_output_result(result);
         failures.extend(
             output_failures

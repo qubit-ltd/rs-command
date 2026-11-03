@@ -434,6 +434,9 @@ mod tests {
     use std::process::ExitStatus;
     use std::process::Stdio;
     use std::sync::Arc;
+    use std::sync::Weak;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
     use std::thread;
     use std::time::Duration;
     use std::time::Instant;
@@ -706,6 +709,264 @@ mod tests {
         );
         assert_eq!(budget.exceeded(), Some((1, 2)));
         budget
+    }
+
+    fn budget_with_stdout(limit: u64, maximum: Option<usize>, bytes: &[u8]) -> Arc<TotalOutputBudget> {
+        let budget = Arc::new(TotalOutputBudget::new(limit, maximum, Some(16)));
+        let mut reader = Cursor::new(bytes);
+        let mut buffer = [0_u8; 32];
+        let ready_capacity = buffer.len();
+        budget
+            .read_ready(&mut reader, &mut buffer, ready_capacity, crate::OutputStream::Stdout)
+            .expect("scripted ready bytes should be read");
+        budget
+    }
+
+    struct HelperRelease {
+        release: Arc<AtomicBool>,
+        worker_lifetime: Weak<AtomicBool>,
+    }
+
+    impl Drop for HelperRelease {
+        fn drop(&mut self) {
+            self.release.store(true, Ordering::Release);
+            while self.worker_lifetime.upgrade().is_some() {
+                thread::yield_now();
+            }
+        }
+    }
+
+    fn blocked_budget_reader(budget: Arc<TotalOutputBudget>) -> (OutputReader, HelperRelease) {
+        let release = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(AtomicBool::new(false));
+        let worker_lifetime = Arc::new(AtomicBool::new(false));
+        let worker_release = Arc::clone(&release);
+        let worker_started = Arc::clone(&started);
+        let worker_lifetime_ref = Arc::clone(&worker_lifetime);
+        let join = thread::spawn(move || {
+            let _worker_lifetime_ref = worker_lifetime_ref;
+            worker_started.store(true, Ordering::Release);
+            while !worker_release.load(Ordering::Acquire) {
+                thread::yield_now();
+            }
+            Ok(CapturedOutput {
+                bytes: b"late bytes".to_vec(),
+                truncated: false,
+                complete: true,
+            })
+        });
+        while !started.load(Ordering::Acquire) {
+            thread::yield_now();
+        }
+        (
+            OutputReader::new_with_budget(
+                join,
+                IoCancellation::failing("stdout cancellation failed"),
+                budget,
+                crate::OutputStream::Stdout,
+            ),
+            HelperRelease {
+                release,
+                worker_lifetime: Arc::downgrade(&worker_lifetime),
+            },
+        )
+    }
+
+    fn blocked_unbudgeted_reader() -> (OutputReader, HelperRelease) {
+        let release = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(AtomicBool::new(false));
+        let worker_lifetime = Arc::new(AtomicBool::new(false));
+        let worker_release = Arc::clone(&release);
+        let worker_started = Arc::clone(&started);
+        let worker_lifetime_ref = Arc::clone(&worker_lifetime);
+        let join = thread::spawn(move || {
+            let _worker_lifetime_ref = worker_lifetime_ref;
+            worker_started.store(true, Ordering::Release);
+            while !worker_release.load(Ordering::Acquire) {
+                thread::yield_now();
+            }
+            Ok(CapturedOutput::default())
+        });
+        while !started.load(Ordering::Acquire) {
+            thread::yield_now();
+        }
+        (
+            OutputReader::new(join, IoCancellation::failing("stdout cancellation failed")),
+            HelperRelease {
+                release,
+                worker_lifetime: Arc::downgrade(&worker_lifetime),
+            },
+        )
+    }
+
+    fn joined_stderr_reader() -> OutputReader {
+        OutputReader::new(
+            thread::spawn(|| {
+                Ok(CapturedOutput {
+                    bytes: b"joined stderr".to_vec(),
+                    truncated: false,
+                    complete: true,
+                })
+            }),
+            IoCancellation::failing("stderr cancellation failed"),
+        )
+    }
+
+    fn joined_budget_reader(budget: Arc<TotalOutputBudget>) -> OutputReader {
+        OutputReader::new_with_budget(
+            thread::spawn(|| {
+                Ok(CapturedOutput {
+                    bytes: b"worker bytes must not replace budget ownership".to_vec(),
+                    truncated: false,
+                    complete: true,
+                })
+            }),
+            IoCancellation::failing("stdout cancellation failed"),
+            budget,
+            crate::OutputStream::Stdout,
+        )
+    }
+
+    fn assert_detached_budget_snapshot(
+        event: RunEvent,
+        budget: Arc<TotalOutputBudget>,
+        expected_kind: CommandErrorKind,
+        expected_stdout: &[u8],
+        expected_truncated: bool,
+    ) {
+        let (stdout, _release) = blocked_budget_reader(Arc::clone(&budget));
+        let error = expect_error(
+            running_with_budget(
+                terminating_child(status(0)),
+                CommandIo::new(stdout, joined_stderr_reader(), None),
+                budget,
+            )
+            .resolve_event(event, None),
+            "stop reason should remain an error after helper cleanup",
+        );
+        assert_eq!(error.kind(), expected_kind);
+        let captured = error.captured_output().expect("stop reason should retain output");
+        assert_eq!(captured.stdout(), expected_stdout);
+        assert!(!captured.stdout_complete());
+        assert_eq!(captured.stdout_truncated(), expected_truncated);
+        assert_eq!(captured.stderr(), b"joined stderr");
+        assert!(captured.stderr_complete());
+        assert!(
+            error
+                .cleanup_failures()
+                .iter()
+                .any(|failure| matches!(failure, CommandCleanupFailure::StdoutCancellation { .. })),
+            "failed cancellation must remain in cleanup failures"
+        );
+    }
+
+    #[test]
+    fn test_unjoined_budget_snapshot_is_retained_for_output_limit() {
+        assert_detached_budget_snapshot(
+            RunEvent::OutputLimitExceeded {
+                limit: 1,
+                observed: 2,
+                status: None,
+            },
+            budget_with_stdout(1, Some(1), b"ab"),
+            CommandErrorKind::OutputLimitExceeded,
+            b"a",
+            true,
+        );
+    }
+
+    #[test]
+    fn test_unjoined_budget_snapshot_is_retained_for_timeout() {
+        assert_detached_budget_snapshot(
+            RunEvent::TimedOut {
+                timeout: Duration::from_secs(2),
+                status: None,
+            },
+            budget_with_stdout(100, Some(2), b"abc"),
+            CommandErrorKind::TimedOut,
+            b"ab",
+            true,
+        );
+    }
+
+    #[test]
+    fn test_unjoined_budget_snapshot_is_retained_for_cancellation() {
+        assert_detached_budget_snapshot(
+            RunEvent::Cancelled { status: None },
+            budget_with_stdout(100, Some(2), b"abc"),
+            CommandErrorKind::Cancelled,
+            b"ab",
+            true,
+        );
+    }
+
+    #[test]
+    fn test_unjoined_budget_snapshot_preserves_zero_retention_metadata() {
+        assert_detached_budget_snapshot(
+            RunEvent::TimedOut {
+                timeout: Duration::from_secs(2),
+                status: None,
+            },
+            budget_with_stdout(100, Some(0), b"a"),
+            CommandErrorKind::TimedOut,
+            b"",
+            true,
+        );
+    }
+
+    #[test]
+    fn test_joined_budget_output_is_transferred_once_without_detached_snapshot() {
+        let budget = budget_with_stdout(1, Some(1), b"ab");
+        let error = expect_error(
+            running_with_budget(
+                terminating_child(status(0)),
+                CommandIo::new(joined_budget_reader(Arc::clone(&budget)), joined_stderr_reader(), None),
+                Arc::clone(&budget),
+            )
+            .resolve_event(
+                RunEvent::OutputLimitExceeded {
+                    limit: 1,
+                    observed: 2,
+                    status: None,
+                },
+                None,
+            ),
+            "output budget violation should remain primary after joined collection",
+        );
+        assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
+        let captured = error.captured_output().expect("budget error should retain output");
+        assert_eq!(captured.stdout(), b"a");
+        assert!(captured.stdout_truncated());
+        assert!(!captured.stdout_complete());
+        assert!(
+            budget.captured_output().stdout().is_empty(),
+            "joining should transfer the budget prefix exactly once"
+        );
+        assert_eq!(captured.stderr(), b"joined stderr");
+    }
+
+    #[test]
+    fn test_unjoined_reader_without_budget_keeps_empty_incomplete_output() {
+        let (stdout, _release) = blocked_unbudgeted_reader();
+        let error = expect_error(
+            running(
+                terminating_child(status(0)),
+                CommandIo::new(stdout, joined_stderr_reader(), None),
+            )
+            .resolve_event(
+                RunEvent::TimedOut {
+                    timeout: Duration::from_secs(2),
+                    status: None,
+                },
+                None,
+            ),
+            "timeout should remain primary without a budgeted reader",
+        );
+        let captured = error.captured_output().expect("timeout should retain output metadata");
+        assert!(captured.stdout().is_empty());
+        assert!(!captured.stdout_complete());
+        assert_eq!(captured.stderr(), b"joined stderr");
+        assert!(captured.stderr_complete());
     }
 
     fn termination_failure_child() -> ManagedChildProcess {

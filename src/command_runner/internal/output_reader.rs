@@ -74,6 +74,22 @@ impl OutputReader {
         self.join.is_finished()
     }
 
+    /// Clones the retained budget prefix when this reader cannot be joined.
+    ///
+    /// The snapshot is incomplete because the live reader may still append
+    /// bytes after this point. Readers without a shared budget have no
+    /// retained fallback data.
+    pub(in crate::command_runner) fn detached_output(&self) -> CapturedOutput {
+        let mut output = self
+            .budget
+            .as_ref()
+            .map_or_else(CapturedOutput::default, |(budget, stream)| {
+                budget.captured_stream(*stream)
+            });
+        output.complete = false;
+        output
+    }
+
     /// Requests cancellation of the worker thread.
     ///
     /// # Errors
