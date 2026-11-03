@@ -7,8 +7,6 @@
 // =============================================================================
 //! Tests for [`CommandError`](qubit_command::CommandError).
 
-#![cfg(not(windows))]
-
 use std::error::Error;
 
 use qubit_command::Command;
@@ -17,6 +15,9 @@ use qubit_command::CommandErrorKind;
 use qubit_command::CommandErrorReason;
 use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
+
+mod support;
+use support::output_command;
 
 #[test]
 fn test_command_error_kind_and_reason_are_stable() {
@@ -29,7 +30,7 @@ fn test_command_error_kind_and_reason_are_stable() {
     assert!(spawn.cleanup_failures().is_empty());
 
     let unexpected = CommandRunner::without_timeout()
-        .run(Command::shell("printf output; exit 9"))
+        .run(output_command(b"output", b"", 9))
         .expect_err("non-zero exit should fail");
     assert_eq!(unexpected.kind(), CommandErrorKind::UnexpectedExit);
     assert!(unexpected.is_unexpected_exit());
@@ -42,7 +43,7 @@ fn test_command_error_kind_and_reason_are_stable() {
 
     let truncated = CommandRunner::without_timeout()
         .max_stdout_bytes(3)
-        .run(Command::shell("printf output"))
+        .run(output_command(b"output", b"", 0))
         .expect_err("truncated output should fail");
     assert_eq!(truncated.kind(), CommandErrorKind::OutputTruncated);
     assert!(!truncated.is_unexpected_exit());
@@ -68,9 +69,13 @@ fn test_command_error_cancelled_before_start_has_no_output() {
 #[test]
 fn test_command_error_debug_redacts_output_and_paths() {
     let error = CommandRunner::without_timeout()
-        .run(Command::shell("printf stdout-secret; printf stderr-secret >&2; exit 7"))
+        .run(output_command(b"stdout-secret", b"stderr-secret", 7))
         .expect_err("command should fail");
     let debug = format!("{error:?}");
+    let stdout_debug = format!("{:?}", b"stdout-secret".to_vec());
+    let stderr_debug = format!("{:?}", b"stderr-secret".to_vec());
     assert!(!debug.contains("stdout-secret"));
     assert!(!debug.contains("stderr-secret"));
+    assert!(!debug.contains(&stdout_debug));
+    assert!(!debug.contains(&stderr_debug));
 }

@@ -7,17 +7,19 @@
 // =============================================================================
 //! Tests for [`CommandOutput`](qubit_command::CommandOutput).
 
-#![cfg(not(windows))]
-
 use std::time::Duration;
 
+#[cfg(unix)]
 use qubit_command::Command;
 use qubit_command::CommandRunner;
+
+mod support;
+use support::output_command;
 
 #[test]
 fn test_command_output_stdout_returns_bytes_and_text() {
     let output = CommandRunner::new(Duration::from_secs(10))
-        .run(Command::shell("printf hello"))
+        .run(output_command(b"hello", b"", 0))
         .expect("command should run successfully");
 
     assert_eq!(output.stdout(), b"hello");
@@ -30,7 +32,7 @@ fn test_command_output_stdout_returns_bytes_and_text() {
 #[test]
 fn test_command_output_stderr_returns_bytes_and_text() {
     let output = CommandRunner::new(Duration::from_secs(10))
-        .run(Command::shell("printf error >&2"))
+        .run(output_command(b"", b"error", 0))
         .expect("command should run successfully");
 
     assert_eq!(output.stderr(), b"error");
@@ -42,11 +44,11 @@ fn test_command_output_stderr_returns_bytes_and_text() {
 #[test]
 fn test_command_output_consuming_stream_accessors_preserve_bytes() {
     let stdout = CommandRunner::new(Duration::from_secs(10))
-        .run(Command::shell("printf stdout"))
+        .run(output_command(b"stdout", b"", 0))
         .expect("command should run successfully")
         .into_stdout();
     let stderr = CommandRunner::new(Duration::from_secs(10))
-        .run(Command::shell("printf stderr >&2"))
+        .run(output_command(b"", b"stderr", 0))
         .expect("command should run successfully")
         .into_stderr();
 
@@ -57,7 +59,7 @@ fn test_command_output_consuming_stream_accessors_preserve_bytes() {
 #[test]
 fn test_command_output_rejects_invalid_utf8_for_strict_text() {
     let output = CommandRunner::new(Duration::from_secs(10))
-        .run(Command::shell("printf '\\377'; printf '\\377' >&2"))
+        .run(output_command(&[0xff], &[0xff], 0))
         .expect("command should run successfully");
 
     assert!(output.stdout_text().is_err());
@@ -69,7 +71,7 @@ fn test_command_output_rejects_invalid_utf8_for_strict_text() {
 #[test]
 fn test_command_output_always_exposes_lossy_text() {
     let output = CommandRunner::new(Duration::from_secs(10))
-        .run(Command::shell("printf '\\377'; printf '\\377' >&2"))
+        .run(output_command(&[0xff], &[0xff], 0))
         .expect("command should run successfully");
 
     assert_eq!(output.stdout_lossy_text(), "\u{fffd}");
@@ -78,6 +80,7 @@ fn test_command_output_always_exposes_lossy_text() {
     assert_eq!(output.stderr(), &[0xff]);
 }
 
+#[cfg(unix)]
 #[test]
 fn test_command_output_reports_unix_termination_signal() {
     let error = CommandRunner::new(Duration::from_secs(10))
@@ -92,7 +95,7 @@ fn test_command_output_reports_unix_termination_signal() {
 #[test]
 fn test_command_output_debug_redacts_captured_streams() {
     let output = CommandRunner::new(Duration::from_secs(10))
-        .run(Command::shell("printf stdout-secret; printf stderr-secret >&2"))
+        .run(output_command(b"stdout-secret", b"stderr-secret", 0))
         .expect("command should run successfully");
 
     let debug = format!("{output:?}");

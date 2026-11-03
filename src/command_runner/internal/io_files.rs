@@ -15,7 +15,6 @@ use std::io;
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
@@ -440,7 +439,7 @@ fn validate_normalized_paths(
     let stdout = normalized_path(command, stdout_path)?;
     let stderr = normalized_path(command, stderr_path)?;
 
-    if let (Some(input), Some(output)) = (&stdin, &stdout)
+    if let (Some(Some(input)), Some(Some(output))) = (&stdin, &stdout)
         && input == output
     {
         return Err(input_output_conflict(
@@ -450,7 +449,7 @@ fn validate_normalized_paths(
             stdout_path.expect("normalized stdout has an original path"),
         ));
     }
-    if let (Some(input), Some(output)) = (&stdin, &stderr)
+    if let (Some(Some(input)), Some(Some(output))) = (&stdin, &stderr)
         && input == output
     {
         return Err(input_output_conflict(
@@ -460,7 +459,7 @@ fn validate_normalized_paths(
             stderr_path.expect("normalized stderr has an original path"),
         ));
     }
-    if let (Some(stdout), Some(stderr)) = (&stdout, &stderr)
+    if let (Some(Some(stdout)), Some(Some(stderr))) = (&stdout, &stderr)
         && stdout == stderr
     {
         return Err(output_files_conflict(
@@ -481,13 +480,15 @@ fn validate_normalized_paths(
 ///
 /// # Returns
 ///
-/// A canonical or lexically normalized absolute path when configured.
+/// A canonical absolute path when configured and resolvable. A configured
+/// path whose parent does not yet exist is represented as indeterminate so
+/// normal file opening reports the error.
 ///
 /// # Errors
 ///
 /// Returns [CommandError] when the current directory or
 /// an existing path cannot be resolved.
-fn normalized_path(command: &str, path: Option<&Path>) -> Result<Option<PathBuf>, CommandError> {
+fn normalized_path(command: &str, path: Option<&Path>) -> Result<Option<Option<PathBuf>>, CommandError> {
     path.map(|path| {
         let absolute = if path.is_absolute() {
             path.to_path_buf()
@@ -497,36 +498,22 @@ fn normalized_path(command: &str, path: Option<&Path>) -> Result<Option<PathBuf>
                 .join(path)
         };
         match fs::canonicalize(&absolute) {
-            Ok(path) => Ok(path),
-            Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(normalize_lexically(&absolute)),
+            Ok(path) => Ok(Some(path)),
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {
+                let Some(file_name) = absolute.file_name() else {
+                    return Ok(None);
+                };
+                let parent = absolute.parent().expect("absolute file path has a parent");
+                match fs::canonicalize(parent) {
+                    Ok(parent) => Ok(Some(parent.join(file_name))),
+                    Err(parent_error) if parent_error.kind() == io::ErrorKind::NotFound => Ok(None),
+                    Err(parent_error) => Err(inspect_error(command, path, parent_error)),
+                }
+            }
             Err(source) => Err(inspect_error(command, path, source)),
         }
     })
     .transpose()
-}
-
-/// Normalizes current- and parent-directory path components lexically.
-///
-/// # Parameters
-///
-/// * `path` - Absolute or relative path to normalize.
-///
-/// # Returns
-///
-/// Lexically normalized path.
-#[must_use]
-pub(in crate::command_runner) fn normalize_lexically(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            other => normalized.push(other.as_os_str()),
-        }
-    }
-    normalized
 }
 
 /// Rejects open files that identify the same filesystem object.

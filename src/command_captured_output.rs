@@ -10,7 +10,8 @@
 use std::fmt;
 
 /// Output bytes retained by a command runner, including partial output on
-/// failure.
+/// failure. Raw bytes can contain sensitive data; the `Debug` output reports
+/// lengths and metadata without rendering those bytes.
 ///
 /// Each stream is kept independently. Truncation means the retained bytes are
 /// a prefix limited by the runner's configured per-stream cap; completion
@@ -19,18 +20,54 @@ use std::fmt;
 /// for example, an output-budget error has no final process status, while
 /// [`CommandError::captured_output`](crate::CommandError::captured_output)
 /// still exposes the bytes observed before termination.
+///
+/// # Examples
+///
+/// ```
+/// use qubit_command::CommandError;
+///
+/// fn inspect(error: &CommandError) {
+///     if let Some(captured) = error.captured_output() {
+///         let _stdout = captured.stdout();
+///         let _stderr = captured.stderr();
+///         let _stdout_complete = captured.stdout_complete();
+///         let _stderr_complete = captured.stderr_complete();
+///         let _stdout_truncated = captured.stdout_truncated();
+///         let _stderr_truncated = captured.stderr_truncated();
+///     }
+/// }
+/// ```
 #[derive(Clone, PartialEq, Eq)]
 #[must_use]
 pub struct CommandCapturedOutput {
+    /// Retained stdout bytes, which may be only a prefix of the stream.
     pub(crate) stdout: Vec<u8>,
+    /// Retained stderr bytes, which may be only a prefix of the stream.
     pub(crate) stderr: Vec<u8>,
+    /// Whether stdout exceeded its retention cap.
     stdout_truncated: bool,
+    /// Whether stderr exceeded its retention cap.
     stderr_truncated: bool,
+    /// Whether stdout EOF was observed.
     stdout_complete: bool,
+    /// Whether stderr EOF was observed.
     stderr_complete: bool,
 }
 
 impl CommandCapturedOutput {
+    /// Creates captured output from retained bytes and stream metadata.
+    ///
+    /// This constructor is crate-private; callers obtain values from command
+    /// results and errors.
+    ///
+    /// # Parameters
+    ///
+    /// * `stdout` - Retained bytes, truncation flag, and EOF flag for stdout.
+    /// * `stderr` - Retained bytes, truncation flag, and EOF flag for stderr.
+    ///
+    /// # Returns
+    ///
+    /// Captured bytes with their per-stream collection metadata.
     pub(crate) fn new(stdout: (Vec<u8>, bool, bool), stderr: (Vec<u8>, bool, bool)) -> Self {
         let (stdout, stdout_truncated, stdout_complete) = stdout;
         let (stderr, stderr_truncated, stderr_complete) = stderr;
@@ -44,33 +81,74 @@ impl CommandCapturedOutput {
         }
     }
 
-    /// Returns retained stdout bytes.
+    /// Returns the retained stdout bytes.
+    ///
+    /// The bytes may be a prefix of the full stream when
+    /// [`Self::stdout_truncated`] is true.
+    ///
+    /// # Returns
+    ///
+    /// A borrowed slice of retained raw bytes.
     pub fn stdout(&self) -> &[u8] {
         &self.stdout
     }
-    /// Returns retained stderr bytes.
+    /// Returns the retained stderr bytes.
+    ///
+    /// The bytes may be a prefix of the full stream when
+    /// [`Self::stderr_truncated`] is true.
+    ///
+    /// # Returns
+    ///
+    /// A borrowed slice of retained raw bytes.
     pub fn stderr(&self) -> &[u8] {
         &self.stderr
     }
     /// Whether stdout exceeded its in-memory retention limit.
+    ///
+    /// This is independent of whether the stream reached EOF.
+    ///
+    /// # Returns
+    ///
+    /// `true` when bytes were omitted due to the retention cap.
     pub const fn stdout_truncated(&self) -> bool {
         self.stdout_truncated
     }
     /// Whether stderr exceeded its in-memory retention limit.
+    ///
+    /// This is independent of whether the stream reached EOF.
+    ///
+    /// # Returns
+    ///
+    /// `true` when bytes were omitted due to the retention cap.
     pub const fn stderr_truncated(&self) -> bool {
         self.stderr_truncated
     }
     /// Whether stdout reached EOF.
+    ///
+    /// `false` does not identify why collection stopped; inspect the error
+    /// reason. Completion is independent of truncation.
+    ///
+    /// # Returns
+    ///
+    /// `true` when EOF was observed.
     pub const fn stdout_complete(&self) -> bool {
         self.stdout_complete
     }
     /// Whether stderr reached EOF.
+    ///
+    /// `false` does not identify why collection stopped; inspect the error
+    /// reason. Completion is independent of truncation.
+    ///
+    /// # Returns
+    ///
+    /// `true` when EOF was observed.
     pub const fn stderr_complete(&self) -> bool {
         self.stderr_complete
     }
 }
 
 impl fmt::Debug for CommandCapturedOutput {
+    /// Formats lengths and stream metadata without exposing raw bytes.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CommandCapturedOutput")
             .field("stdout_len", &self.stdout.len())

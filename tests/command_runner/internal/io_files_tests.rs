@@ -45,6 +45,66 @@ fn temp_dir() -> LocalTempDir {
     LocalTempDir::with_prefix("qubit-command-io-files-").expect("command I/O test temp directory should be created")
 }
 
+#[cfg(unix)]
+#[test]
+fn test_runner_allows_distinct_new_tee_paths_through_symlink_parent() {
+    let temp_dir = temp_dir();
+    let base = temp_dir.path().join("base");
+    let other_dir = temp_dir.path().join("other/dir");
+    fs::create_dir_all(&base).expect("base directory should be created");
+    fs::create_dir_all(&other_dir).expect("other directory should be created");
+    std::os::unix::fs::symlink(&other_dir, base.join("link")).expect("symlink should be created");
+    let through_link = base.join("link/../new.log");
+    let direct = base.join("new.log");
+    assert!(!through_link.exists());
+    assert!(!direct.exists());
+
+    let result = CommandRunner::new(Duration::from_secs(10)).run_with(
+        Command::shell("printf stdout; printf stderr >&2"),
+        CommandRunOptions::new()
+            .tee_stdout_to_file(&through_link)
+            .tee_stderr_to_file(&direct),
+    );
+
+    let output = result.expect("distinct tee paths should be accepted");
+    assert_eq!(output.stdout(), b"stdout");
+    assert_eq!(output.stderr(), b"stderr");
+    assert_eq!(
+        fs::read(temp_dir.path().join("other/new.log")).expect("linked output"),
+        b"stdout"
+    );
+    assert_eq!(fs::read(&direct).expect("direct output"), b"stderr");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_runner_rejects_alias_and_direct_tee_paths_without_truncating() {
+    let temp_dir = temp_dir();
+    let base = temp_dir.path().join("base");
+    let other_dir = temp_dir.path().join("other/dir");
+    fs::create_dir_all(&base).expect("base directory should be created");
+    fs::create_dir_all(&other_dir).expect("other directory should be created");
+    std::os::unix::fs::symlink(&other_dir, base.join("link")).expect("symlink should be created");
+    let through_link = base.join("link/../new.log");
+    let direct = temp_dir.path().join("other/new.log");
+    fs::write(&direct, b"preserve-me").expect("existing tee file should be written");
+
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            unspawnable_command(),
+            CommandRunOptions::new()
+                .tee_stdout_to_file(&through_link)
+                .tee_stderr_to_file(&direct),
+        )
+        .expect_err("aliases of the same output path should be rejected");
+
+    assert_eq!(error.kind(), CommandErrorKind::OutputFilesConflict);
+    assert_eq!(
+        fs::read(&direct).expect("existing file remains readable"),
+        b"preserve-me"
+    );
+}
+
 /// Creates a Unix FIFO at `path` for special-file rejection tests.
 #[cfg(unix)]
 fn create_fifo(path: &Path) {

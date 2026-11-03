@@ -7,6 +7,8 @@
 // =============================================================================
 use std::sync::Mutex;
 
+mod total_output_budget_state;
+use self::total_output_budget_state::TotalOutputBudgetState;
 use super::captured_output::CapturedOutput;
 use crate::CommandCapturedOutput;
 use crate::OutputStream;
@@ -22,28 +24,18 @@ use crate::OutputStream;
 /// output as the authoritative stream result.
 #[derive(Debug)]
 pub(in crate::command_runner) struct TotalOutputBudget {
+    /// Configured combined byte limit; one extra byte is read as a sentinel.
     limit: u64,
-    state: Mutex<State>,
+    /// Serializes combined accounting and both retained stream prefixes.
+    state: Mutex<TotalOutputBudgetState>,
+    /// Independent stdout retention cap.
     max_stdout_bytes: Option<usize>,
+    /// Independent stderr retention cap.
     max_stderr_bytes: Option<usize>,
 }
 
-#[derive(Debug)]
-struct State {
-    used: u128,
-    exceeded: bool,
-    halted: bool,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-    stdout_truncated: bool,
-    stderr_truncated: bool,
-    stdout_complete: bool,
-    stderr_complete: bool,
-    stdout_transferred: bool,
-    stderr_transferred: bool,
-}
-
 impl TotalOutputBudget {
+    /// Creates an empty budget with configured combined and per-stream limits.
     pub(in crate::command_runner) fn new(
         limit: u64,
         max_stdout_bytes: Option<usize>,
@@ -53,7 +45,7 @@ impl TotalOutputBudget {
             limit,
             max_stdout_bytes,
             max_stderr_bytes,
-            state: Mutex::new(State {
+            state: Mutex::new(TotalOutputBudgetState {
                 used: 0,
                 exceeded: false,
                 halted: false,
@@ -70,7 +62,9 @@ impl TotalOutputBudget {
     }
 
     /// Reads only bytes already reported ready. The caller must establish
-    /// readiness first.
+    /// readiness first. The mutex covers both streams' accounting so the
+    /// combined limit cannot be exceeded by concurrent readers except for the
+    /// single sentinel byte.
     pub(in crate::command_runner) fn read_ready(
         &self,
         reader: &mut dyn std::io::Read,
@@ -112,11 +106,13 @@ impl TotalOutputBudget {
         Ok(read)
     }
 
+    /// Returns the configured limit and observed count after the sentinel.
     pub(in crate::command_runner) fn exceeded(&self) -> Option<(u64, u128)> {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.exceeded.then_some((self.limit, state.used))
     }
 
+    /// Returns whether the budget has stopped further stream reads.
     pub(in crate::command_runner) fn is_halted(&self) -> bool {
         self.state
             .lock()
@@ -124,6 +120,7 @@ impl TotalOutputBudget {
             .halted
     }
 
+    /// Records that the selected stream reached EOF.
     pub(in crate::command_runner) fn mark_complete(&self, stream: OutputStream) {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match stream {
@@ -132,6 +129,7 @@ impl TotalOutputBudget {
         }
     }
 
+    /// Clones a point-in-time snapshot; a live reader may still be appending.
     pub(in crate::command_runner) fn captured_output(&self) -> CommandCapturedOutput {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         CommandCapturedOutput::new(
@@ -141,6 +139,8 @@ impl TotalOutputBudget {
     }
 
     /// Combines joined stream results with snapshots for streams not joined.
+    /// Joined results are authoritative for transferred streams; live streams
+    /// use the mutex-protected snapshot because their reader may still run.
     pub(in crate::command_runner) fn captured_output_with_joined(
         &self,
         joined: Option<&CommandCapturedOutput>,
@@ -180,6 +180,7 @@ impl TotalOutputBudget {
         )
     }
 
+    /// Clones one stream's current snapshot while its reader may still run.
     pub(in crate::command_runner) fn captured_stream(&self, stream: OutputStream) -> CapturedOutput {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match stream {
@@ -241,6 +242,7 @@ impl TotalOutputBudget {
         }
     }
 
+    /// Returns stream flags without retaining or cloning its byte buffer.
     pub(in crate::command_runner) fn captured_stream_metadata(&self, stream: OutputStream) -> CapturedOutput {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (truncated, complete) = match stream {
@@ -255,8 +257,15 @@ impl TotalOutputBudget {
     }
 }
 
-fn retain(state: &mut State, stream: OutputStream, max_stdout: Option<usize>, max_stderr: Option<usize>, chunk: &[u8]) {
-    let State {
+/// Retains only the configured prefix and records omitted bytes as truncation.
+fn retain(
+    state: &mut TotalOutputBudgetState,
+    stream: OutputStream,
+    max_stdout: Option<usize>,
+    max_stderr: Option<usize>,
+    chunk: &[u8],
+) {
+    let TotalOutputBudgetState {
         stdout,
         stderr,
         stdout_truncated,

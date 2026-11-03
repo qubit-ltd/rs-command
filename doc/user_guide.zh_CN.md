@@ -205,6 +205,8 @@ if output.stdout_truncated() {
 
 `bounded_output(max_bytes)` 同时修改两个流的内存保留上限，并保留默认的截断失败策略。`max_stdout_bytes` 和 `max_stderr_bytes` 可以分别配置两个流。这些上限只控制保留在内存中的字节，不会阻止命令继续输出。使用 `max_total_output_bytes(limit)` 可选地设置 stdout 与 stderr 共享的硬上限。超过上限会终止受管进程树，并返回 `CommandErrorKind::OutputLimitExceeded`；通过 `CommandErrorReason::OutputLimitExceeded { limit, observed }` 可读取上限及包含哨兵字节的实际观察量。部分捕获字节可通过 `CommandError::captured_output()` 读取；由于不会伪造自然进程状态，`CommandError::output()` 保持为 `None`。`without_total_output_limit()` 会移除硬上限。`unbounded_output()` 只移除内存保留限制，不会解除已配置的总输出预算。
 
+`bounded_output(max_bytes)` 还会开启“输出截断时失败”策略；`unbounded_output()` 则会关闭该策略。两者都会覆盖更早调用的 `fail_on_output_truncation(...)`，因此调用顺序会影响结果。`max_*_bytes` 方法只修改保留上限。例如，`unbounded_output().max_output_bytes(1024)` 仍接受截断；最后追加 `.fail_on_output_truncation(true)` 会改为拒绝截断。反过来，`fail_on_output_truncation(false).bounded_output(1024)` 会重新开启拒绝策略。这些单流设置不会修改 stdout 与 stderr 共享的总输出预算。
+
 例如，可分别检查预算超限分类和部分捕获内容，而普通输出对象不会存在：
 
 ```rust,no_run

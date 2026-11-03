@@ -727,6 +727,11 @@ impl CommandRunner {
 
     /// Limits both captured streams and rejects any truncated result.
     ///
+    /// This also enables failure on output truncation, overriding a prior
+    /// [`Self::fail_on_output_truncation`] setting. The order of builder calls
+    /// therefore matters. This changes only per-stream retention limits and
+    /// truncation handling; it does not change the combined output budget.
+    ///
     /// # Parameters
     ///
     /// * `max_bytes` - Maximum number of retained bytes for each stream.
@@ -742,11 +747,14 @@ impl CommandRunner {
         self
     }
 
-    /// Removes both per-stream in-memory capture limits and accepts complete
+    /// Removes both per-stream in-memory capture limits and accepts truncated
     /// output.
     ///
-    /// This does not remove a configured combined output budget. Without one,
-    /// the child can consume unbounded memory through stdout or stderr.
+    /// This also disables failure on output truncation, overriding a prior
+    /// [`Self::fail_on_output_truncation`] setting. The order of builder calls
+    /// therefore matters. It does not remove a configured combined output
+    /// budget. Without one, the child can consume unbounded memory through
+    /// stdout or stderr.
     ///
     /// # Returns
     ///

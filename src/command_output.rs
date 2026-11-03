@@ -38,9 +38,14 @@ fn redacted_debug_text(value: &impl fmt::Debug) -> String {
 /// `CommandOutput` stores retained raw stdout and stderr bytes. When the runner
 /// is configured with per-stream capture limits, the retained bytes may be a
 /// prefix of the full output; use [`Self::stdout_truncated`] and
-/// [`Self::stderr_truncated`] to detect that case. If a timeout or
-/// cancellation interrupts collection, use [`Self::stdout_complete`] and
-/// [`Self::stderr_complete`] to detect partial streams. [`Self::stdout`] and
+/// [`Self::stderr_truncated`] to detect that case. If collection stops before
+/// EOF because of a read failure, cancellation, or
+/// output-budget termination, use [`Self::stdout_complete`] and
+/// [`Self::stderr_complete`] to detect that condition. These flags report
+/// whether EOF was observed, not why collection stopped. Completion is
+/// independent of truncation: a stream can reach EOF after its retained bytes
+/// were truncated. A tee flush failure can also occur after a stream reached
+/// EOF. [`Self::stdout`] and
 /// [`Self::stderr`] return raw bytes exactly as retained. Use
 /// [`Self::stdout_text`] and [`Self::stderr_text`] for strict UTF-8 text, or
 /// [`Self::stdout_lossy_text`] and [`Self::stderr_lossy_text`] to replace
@@ -204,30 +209,32 @@ impl CommandOutput {
         self.captured.stderr()
     }
 
-    /// Returns whether stdout was drained through EOF.
+    /// Returns whether stdout reached EOF.
     ///
-    /// A `false` value means collection was cancelled, so the retained bytes
-    /// may be only a prefix of the process output even when no capture limit
-    /// was configured.
+    /// A `false` value means EOF was not observed. Collection may have stopped
+    /// because of a read failure, cancellation, or output-budget termination;
+    /// inspect the command error for the reason. This is independent of
+    /// truncation, and a tee flush failure may occur after EOF.
     ///
     /// # Returns
     ///
-    /// `true` when stdout reached EOF before collection stopped.
+    /// `true` when stdout reached EOF; `false` when EOF was not observed.
     #[must_use]
     #[inline]
     pub const fn stdout_complete(&self) -> bool {
         self.captured.stdout_complete()
     }
 
-    /// Returns whether stderr was drained through EOF.
+    /// Returns whether stderr reached EOF.
     ///
-    /// A `false` value means collection was cancelled, so the retained bytes
-    /// may be only a prefix of the process output even when no capture limit
-    /// was configured.
+    /// A `false` value means EOF was not observed. Collection may have stopped
+    /// because of a read failure, cancellation, or output-budget termination;
+    /// inspect the command error for the reason. This is independent of
+    /// truncation, and a tee flush failure may occur after EOF.
     ///
     /// # Returns
     ///
-    /// `true` when stderr reached EOF before collection stopped.
+    /// `true` when stderr reached EOF; `false` when EOF was not observed.
     #[must_use]
     #[inline]
     pub const fn stderr_complete(&self) -> bool {

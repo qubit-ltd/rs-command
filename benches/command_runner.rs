@@ -14,6 +14,9 @@ use criterion::Criterion;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use qubit_command::Command;
+use qubit_command::CommandError;
+use qubit_command::CommandErrorReason;
+use qubit_command::CommandOutput;
 use qubit_command::CommandRunner;
 
 /// Builds a shell command that exits successfully without producing output.
@@ -127,16 +130,84 @@ fn benchmark_total_output_budget(criterion: &mut Criterion) {
                 .max_total_output_bytes(retained as u64);
             let command = output_command(emitted);
             let result = runner.run(command.clone());
-            match scenario {
-                "within_limit" => assert!(result.is_ok(), "in-limit fixture should succeed"),
-                _ => assert!(result.is_err(), "over-limit fixture should fail"),
+            let over_limit = scenario == "limit_plus_one";
+            assert!(
+                classifies_budget_result(&result, over_limit, retained as u64),
+                "fixture result should match {scenario}"
+            );
+            if !over_limit {
+                let output = result.as_ref().expect("in-limit fixture should succeed");
+                assert!(
+                    output.stdout().iter().all(|byte| *byte == 0),
+                    "fixture should contain only zero bytes"
+                );
+                assert_eq!(
+                    output.stdout().len(),
+                    emitted,
+                    "fixture should have expected stdout length"
+                );
+                assert_eq!(output.stderr().len(), 0, "fixture should not write stderr");
+                assert!(
+                    output.stdout().len() <= retained,
+                    "capture should respect retention cap"
+                );
+            } else {
+                let error = result.as_ref().expect_err("over-limit fixture should fail");
+                let captured = error
+                    .captured_output()
+                    .expect("budget failure should retain its output snapshot");
+                assert!(
+                    captured.stdout().iter().all(|byte| *byte == 0),
+                    "fixture should contain only zero bytes"
+                );
+                assert!(
+                    captured.stderr().iter().all(|byte| *byte == 0),
+                    "fixture should contain only zero bytes"
+                );
+                assert!(
+                    captured.stdout().len() <= retained,
+                    "stdout capture should respect retention cap"
+                );
+                assert!(
+                    captured.stderr().len() <= retained,
+                    "stderr capture should respect retention cap"
+                );
             }
+            let mut unexpected = 0;
             group.bench_function(format!("{retained}_{scenario}"), |bencher| {
-                bencher.iter(|| black_box(runner.run(black_box(command.clone()))));
+                bencher.iter(|| {
+                    let result = runner.run(black_box(command.clone()));
+                    if !classifies_budget_result(&result, over_limit, retained as u64) {
+                        unexpected += 1;
+                    }
+                    black_box(result)
+                });
             });
+            assert_eq!(unexpected, 0, "benchmark iterations must match {scenario}");
         }
     }
     group.finish();
+}
+
+/// Classifies one benchmark result without scanning captured stream contents.
+fn classifies_budget_result(result: &Result<CommandOutput, CommandError>, over_limit: bool, limit: u64) -> bool {
+    if over_limit {
+        matches!(
+            result,
+            Err(error)
+                if matches!(error.reason(), CommandErrorReason::OutputLimitExceeded { limit: actual_limit, observed }
+                    if *actual_limit == limit && *observed == u128::from(limit) + 1)
+                    && error.output().is_none()
+        )
+    } else {
+        matches!(result, Ok(output)
+            if output.stdout().len() == limit as usize
+                && output.stderr().is_empty()
+                && output.stdout_complete()
+                && output.stderr_complete()
+                && !output.stdout_truncated()
+                && !output.stderr_truncated())
+    }
 }
 
 criterion_group!(
