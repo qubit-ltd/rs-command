@@ -3,12 +3,11 @@
 ## Status
 
 **Not completed: the controlled cancellation interleaving remains unverified.**
-The source contains plausible interleaving windows. The active implementation
-host is Linux x86_64, but GitHub Actions was available for the commit. Its
-Windows 2022 job passed the existing CI suite; the repository did not contain
-the planned `windows_successful_cancel_interleaving` test, so that run does not
-establish whether the reported race occurs. No production code was changed for
-RC-002.
+The source contains plausible interleaving windows. A Windows-only repeated
+read-to-tee probe has now been added, but has not yet run on Windows. The
+earlier Windows 2022 job passed the existing CI suite without this targeted
+probe, so it does not establish whether the reported race occurs. No production
+code was changed for RC-002.
 
 ## Environment
 
@@ -130,3 +129,55 @@ error precedence, captured bytes, EOF state, and cancellation cleanup contract.
 
 The current result is **unresolved because a valid schedule was not executed**;
 it is neither a successful race check nor evidence that the race is absent.
+
+## Controlled Harness Added (Execution Pending)
+
+`src/command_runner/internal/output_collector.rs` now contains the Windows-only
+test `test_windows_real_cancel_read_to_blocked_tee_interleaving`. Each attempt
+uses real anonymous Windows pipes backed by owning `File` handles. It fills
+the tee pipe and checks its queued byte count, then starts the real
+`read_output_inner` worker on a blocking source-pipe read. After observing the
+read wrapper's entry event, a barrier releases a source-pipe write and the
+controller's real `IoCancellation::cancel` concurrently.
+
+An attempt is counted as a valid hit only if all of these events are observed
+in that attempt: the first real cancellation returns success; its return
+timestamp precedes the tee writer's event immediately before its actual
+`File::write`; the worker remains unfinished for the bounded observation
+interval; and a second real `CancelSynchronousIo` call succeeds, confirming a
+synchronous operation is pending on that worker. The tee pipe was verified
+full before the attempt. Every attempt closes/releases the source writer,
+drains the tee reader to EOF, and joins the workers before continuing. Bounded
+event receives prevent a missing transition from waiting forever. The test
+prints attempt counts, cancellation OS error codes, and the hit timeline.
+
+The probe currently calls `read_output_inner` with `fd=None` so the test can
+exercise an actual blocking `File::read`; this bypasses Windows' outer
+`PeekNamedPipe` readiness loop. It therefore tests the real read-to-tee core
+interleaving but does not establish that the full production scheduling path
+reproduces it. A zero-hit run is explicitly reported as still unverified. A
+valid hit fails the test with the trace so the production path can be repaired
+before CI is accepted. The harness has not yet run on Windows; its first
+execution is pending a Windows CI run.
+
+## 已添加受控测试（尚未执行）
+
+`src/command_runner/internal/output_collector.rs` 新增 Windows 专用测试
+`test_windows_real_cancel_read_to_blocked_tee_interleaving`。每次尝试都使用
+由 `File` 所有的真实 Windows 匿名管道。测试先填满 tee 管道并核对其中的字节数，
+再启动真实的 `read_output_inner` 工作线程，使其阻塞读取 source 管道。观察到
+read wrapper 的入口事件后，通过 barrier 同时放行 source 管道写入和控制线程对
+真实 `IoCancellation::cancel` 的调用。
+
+只有同一次尝试同时满足以下条件才计为有效命中：第一次真实取消返回成功；其返回
+时间早于 tee writer 在实际 `File::write` 前发送的事件；观察窗口内 worker 仍未结束；
+并且对该 worker 再调用一次真实 `CancelSynchronousIo` 成功，确认其同步 I/O 当时
+仍处于 pending 状态。测试开始前已验证 tee 管道填满。每次尝试都会释放 source
+写端、将 tee 读端排空至 EOF，并 join worker；等待事件均有超时。测试会输出尝试数、
+取消错误码和命中时间线。
+
+当前探针调用 `read_output_inner(..., fd=None)`，以便真实 `File::read` 阻塞；这会
+绕过 Windows 外层的 `PeekNamedPipe` readiness 循环。因此它核查真实 read-to-tee
+核心交错，但不能证明完整生产调度路径会复现。零命中会明确报告仍待验证。若发现
+有效命中，测试会带时间线失败，以便先修复生产路径再接受 CI。该 harness 尚未在
+Windows 执行，等待首次 Windows CI 运行。
