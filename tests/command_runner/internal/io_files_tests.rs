@@ -8,6 +8,7 @@
 //! Tests for conflict-safe command I/O file preparation.
 
 use std::fs;
+#[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
 #[cfg(unix)]
