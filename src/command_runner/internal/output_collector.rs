@@ -212,6 +212,12 @@ fn read_output_inner(
                 None => bytes.extend_from_slice(chunk),
             }
         }
+        // A successful synchronous read can complete while cancellation is
+        // being requested. Preserve its captured bytes, but do not start a
+        // new synchronous tee write after that request.
+        if cancellation.is_some_and(IoCancellationToken::is_cancelled) {
+            break Ok(false);
+        }
         if let Some(tee) = options.tee.as_mut()
             && let Err(source) = tee.writer.write_all(chunk)
         {
@@ -625,6 +631,7 @@ mod tests {
     use std::path::Path;
     use std::process::ExitStatus;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
     #[cfg(unix)]
@@ -680,6 +687,71 @@ mod tests {
             },
             None,
         )
+    }
+
+    struct CancellingReader {
+        cancelled: Arc<AtomicBool>,
+        read: bool,
+    }
+
+    impl Read for CancellingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if self.read {
+                return Ok(0);
+            }
+            self.read = true;
+            buffer[..6].copy_from_slice(b"output");
+            self.cancelled.store(true, Ordering::Release);
+            Ok(6)
+        }
+    }
+
+    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .expect("shared tee buffer should not be poisoned")
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_cancellation_after_read_preserves_bytes_without_starting_tee_write() {
+        let (_sender, token) = IoCancellation::pair().expect("cancellation pair should initialize");
+        let tee_bytes = Arc::new(Mutex::new(Vec::new()));
+        let output = read_output_inner(
+            &mut CancellingReader {
+                cancelled: Arc::clone(&token.cancelled),
+                read: false,
+            },
+            OutputCaptureOptions::new(
+                Some(4),
+                Some(OutputTee::new(
+                    Box::new(SharedWriter(Arc::clone(&tee_bytes))),
+                    "cancelled-tee.log".into(),
+                )),
+            ),
+            Some(&token),
+            None,
+        )
+        .expect("cancellation after read should return captured output");
+
+        assert_eq!(output.bytes, b"outp");
+        assert!(output.truncated);
+        assert!(!output.complete);
+        assert!(
+            tee_bytes
+                .lock()
+                .expect("shared tee buffer should remain healthy")
+                .is_empty()
+        );
     }
 
     struct FailingReader {
@@ -1945,12 +2017,12 @@ mod windows_cancellation_interleaving_tests {
         );
         for (attempt, attempt_start, read_entry, source_release, cancel_call, cancel_return, tee_entry) in &valid_hits {
             eprintln!(
-                "valid hit attempt={attempt} timeline_ms(attempt_start=0, read_entry={}, source_release={}, cancel_call={}, cancel_return={}, tee_write_entry={})",
-                read_entry.duration_since(*attempt_start).as_millis(),
-                source_release.duration_since(*attempt_start).as_millis(),
-                cancel_call.duration_since(*attempt_start).as_millis(),
-                cancel_return.duration_since(*attempt_start).as_millis(),
-                tee_entry.duration_since(*attempt_start).as_millis(),
+                "valid hit attempt={attempt} timeline_ns(attempt_start=0, read_entry={}, source_release={}, cancel_call={}, cancel_return={}, tee_write_entry={})",
+                read_entry.duration_since(*attempt_start).as_nanos(),
+                source_release.duration_since(*attempt_start).as_nanos(),
+                cancel_call.duration_since(*attempt_start).as_nanos(),
+                cancel_return.duration_since(*attempt_start).as_nanos(),
+                tee_entry.duration_since(*attempt_start).as_nanos(),
             );
         }
         assert!(

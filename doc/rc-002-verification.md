@@ -2,12 +2,12 @@
 
 ## Status
 
-**Not completed: the controlled cancellation interleaving remains unverified.**
-The source contains plausible interleaving windows. A Windows-only repeated
-read-to-tee probe has now been added, but has not yet run on Windows. The
-earlier Windows 2022 job passed the existing CI suite without this targeted
-probe, so it does not establish whether the reported race occurs. No production
-code was changed for RC-002.
+**Confirmed: the Windows read-to-tee cancellation interleaving reproduced.**
+The controlled harness observed a successful real `CancelSynchronousIo` return
+before the helper entered a new blocked synchronous tee write. A narrow
+production fix and deterministic regression test are now being validated. The
+reproduction was on the harness commit before that fix; the next Windows CI run
+must confirm the new cancellation check prevents the schedule.
 
 ## Environment
 
@@ -121,16 +121,16 @@ resolve RC-002 or substitute for its Windows interleaving evidence.
 
 ## Decision
 
-No confirmed contract violation has been established, so the conditional repair
-branches were not applied. RC-002 remains open until the controlled Windows
-interleaving is run. If it reproduces a helper continuing into new I/O after a
-successful cancellation request, repair only that path and retain the existing
-error precedence, captured bytes, EOF state, and cancellation cleanup contract.
+The controlled Windows probe confirmed that a helper can continue into a
+blocking tee write after `CancelSynchronousIo` succeeds on the preceding read.
+The repair now checks the cancellation token after retaining the bytes and
+before starting that tee write. This keeps bytes already read, leaves the
+stream incomplete, and allows the helper to stop without entering another
+synchronous operation. The deterministic regression verifies those results.
+The fix still requires a passing Windows CI run; zero hits on a post-fix probe
+will remain limited evidence because the schedule is race-driven.
 
-The current result is **unresolved because a valid schedule was not executed**;
-it is neither a successful race check nor evidence that the race is absent.
-
-## Controlled Harness Added (Execution Pending)
+## Windows CI Reproduction
 
 `src/command_runner/internal/output_collector.rs` now contains the Windows-only
 test `test_windows_real_cancel_read_to_blocked_tee_interleaving`. Each attempt
@@ -151,16 +151,28 @@ drains the tee reader to EOF, and joins the workers before continuing. Bounded
 event receives prevent a missing transition from waiting forever. The test
 prints attempt counts, cancellation OS error codes, and the hit timeline.
 
-The probe currently calls `read_output_inner` with `fd=None` so the test can
-exercise an actual blocking `File::read`; this bypasses Windows' outer
-`PeekNamedPipe` readiness loop. It therefore tests the real read-to-tee core
-interleaving but does not establish that the full production scheduling path
-reproduces it. A zero-hit run is explicitly reported as still unverified. A
-valid hit fails the test with the trace so the production path can be repaired
-before CI is accepted. The harness has not yet run on Windows; its first
-execution is pending a Windows CI run.
+The probe calls `read_output_inner` with `fd=None` to exercise an actual
+blocking `File::read`; this bypasses Windows' outer `PeekNamedPipe` readiness
+loop. It therefore reproduces the real read-to-tee core interleaving but does
+not establish that the full production scheduling path follows the same
+schedule. A zero-hit run remains unverified. A valid hit fails the test with
+the trace so the production path can be repaired before CI is accepted.
 
-## 已添加受控测试（尚未执行）
+The first targeted run was GitHub Actions
+[Rust CI run 41740883288](https://github.com/qubit-ltd/rs-command/actions/runs/41740883288),
+commit `92c39123856df37f85d9b109d15cd6534189e275`, on `windows-2022`. It
+reported 3 attempts, 3 successful first cancellations, 0 `ERROR_NOT_FOUND`
+results, 2 tee write entries, 1 confirmed blocked write, and 1 valid hit on
+attempt 2. The hit required a second successful real `CancelSynchronousIo`
+while the worker remained unfinished after the bounded observation interval.
+The timeline was initially printed in milliseconds, which rounded all event
+offsets to zero; the harness now records nanosecond offsets for subsequent runs.
+The Windows test failed intentionally on the confirmed hit. The same workflow's
+macOS job also had a transient failure in the existing
+`stdin_hold_is_cancelled_within_watchdog` test; its next run passed. The new
+production check is not yet covered by a completed Windows CI run.
+
+## Windows CI 已复现交错
 
 `src/command_runner/internal/output_collector.rs` 新增 Windows 专用测试
 `test_windows_real_cancel_read_to_blocked_tee_interleaving`。每次尝试都使用
@@ -176,8 +188,17 @@ read wrapper 的入口事件后，通过 barrier 同时放行 source 管道写�
 写端、将 tee 读端排空至 EOF，并 join worker；等待事件均有超时。测试会输出尝试数、
 取消错误码和命中时间线。
 
-当前探针调用 `read_output_inner(..., fd=None)`，以便真实 `File::read` 阻塞；这会
-绕过 Windows 外层的 `PeekNamedPipe` readiness 循环。因此它核查真实 read-to-tee
-核心交错，但不能证明完整生产调度路径会复现。零命中会明确报告仍待验证。若发现
-有效命中，测试会带时间线失败，以便先修复生产路径再接受 CI。该 harness 尚未在
-Windows 执行，等待首次 Windows CI 运行。
+当前探针使用 `read_output_inner(..., fd=None)`，以便真实 `File::read` 阻塞；这会
+绕过 Windows 外层的 `PeekNamedPipe` readiness 循环。因此它复现了真实 read-to-tee
+核心交错，但不证明完整生产调度路径一定采用相同顺序。零命中仍表示待验证。有效
+命中会带时间线使测试失败，以便在接受 CI 前修复生产路径。
+
+首次目标运行是 GitHub Actions
+[Rust CI run 41740883288](https://github.com/qubit-ltd/rs-command/actions/runs/41740883288)，
+提交 `92c39123856df37f85d9b109d15cd6534189e275`，平台为 `windows-2022`。结果为
+3 次尝试、3 次首次取消成功、0 次 `ERROR_NOT_FOUND`、2 次 tee 写入口、1 次确认
+阻塞写，并在第 2 次尝试中出现 1 次有效命中。有效命中还要求有界观察窗口后 worker
+仍未结束，且第二次真实 `CancelSynchronousIo` 也成功。初版时间线以毫秒打印，所有
+偏移都被舍入为零；后续运行已改为记录纳秒偏移。Windows 测试因命中而按设计失败。
+同一 workflow 的 macOS job 还曾遇到既有 `stdin_hold_is_cancelled_within_watchdog`
+测试的瞬时失败，下一次运行已通过。生产取消检查修复尚未通过完整 Windows CI 验证。
