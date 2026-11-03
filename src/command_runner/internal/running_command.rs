@@ -44,6 +44,7 @@ pub(in crate::command_runner) struct RunningCommand {
     timer: Arc<dyn Timer>,
     /// Optional shared cancellation handle.
     cancellation_token: Option<CommandCancellation>,
+    /// Optional byte budget shared by this command's stdout and stderr.
     total_budget: Option<Arc<TotalOutputBudget>>,
 }
 
@@ -58,6 +59,8 @@ impl RunningCommand {
     /// * `started_at` - Monotonic instant sampled immediately after spawning.
     /// * `timer` - Timer in the same clock domain as `started_at`.
     /// * `cancellation_token` - Optional shared cancellation handle.
+    /// * `total_budget` - Optional byte budget shared across this run's stdout
+    ///   and stderr capture.
     ///
     /// # Returns
     ///
@@ -83,11 +86,14 @@ impl RunningCommand {
         }
     }
 
-    /// Waits for the child process to complete, time out, or be cancelled.
+    /// Waits for the child process to complete, time out, be cancelled, or
+    /// exceed its total output budget.
     ///
-    /// This method blocks the current thread. Without a timeout or a
-    /// cancellation handle it delegates directly to the child process's
-    /// blocking wait operation.
+    /// This method blocks the current thread. It delegates directly to the
+    /// child process's blocking wait operation only when no timeout,
+    /// cancellation handle, or total output budget is configured. Otherwise,
+    /// it monitors for process exit, timeout, cancellation, and budget
+    /// exhaustion.
     ///
     /// # Parameters
     ///
@@ -111,9 +117,9 @@ impl RunningCommand {
 
     /// Waits until process monitoring produces one terminal event.
     ///
-    /// This phase only observes the child, cancellation token, and timer. It
-    /// does not terminate the process, finalize helpers, or construct a
-    /// [`CommandError`].
+    /// This phase monitors the child, cancellation token, timer, and total
+    /// output budget. It does not terminate the process, finalize helpers, or
+    /// construct a [`CommandError`].
     fn wait_for_event(&mut self, timeout: Option<Duration>) -> RunEvent {
         if timeout.is_none() && self.cancellation_token.is_none() && self.total_budget.is_none() {
             return match self.child_process.wait() {

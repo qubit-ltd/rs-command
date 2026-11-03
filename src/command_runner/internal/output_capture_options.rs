@@ -48,6 +48,19 @@ impl OutputCaptureOptions {
         }
     }
 
+    /// Adds a shared stdout/stderr retention budget to these capture options.
+    ///
+    /// `budget` accounts for retained bytes across the command's output
+    /// streams, while `stream` identifies which stream this reader contributes
+    /// to. Bytes remain owned by the shared budget until this reader joins;
+    /// joining then transfers this stream's retained bytes into its capture
+    /// result.
+    ///
+    /// # Returns
+    ///
+    /// Capture options configured with the shared budget and this reader's
+    /// stream attribution.
+    #[inline]
     pub(in crate::command_runner) fn with_total_budget(
         mut self,
         budget: Arc<TotalOutputBudget>,

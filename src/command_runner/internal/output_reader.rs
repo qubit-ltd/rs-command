@@ -128,6 +128,11 @@ impl OutputReader {
     }
 }
 
+/// Replaces an error's captured data while preserving its failure reason.
+///
+/// The replacement carries the bytes retained by the shared budget after this
+/// reader joins; the original `Read`, `Write`, or `ReadAfterWrite` cause and
+/// its associated source/path information remain authoritative.
 fn replace_error_output(error: OutputCaptureError, output: CapturedOutput) -> OutputCaptureError {
     match error {
         OutputCaptureError::Read { source, .. } => OutputCaptureError::Read { source, output },
