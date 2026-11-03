@@ -2,29 +2,29 @@
 
 ## Status
 
-**Not completed: a Windows runner is required to verify the reported race.**
-This investigation found plausible interleaving windows in the source, but no
-Windows reproduction or equivalent operating-system evidence was available in
-the local environment. During the 2026-11-03 implementation, the active host
-was again confirmed to be Linux x86_64 and no Windows execution tool was
-available in the current workspace. The controlled Windows test was therefore
-not run, and no production code was changed for RC-002.
+**Not completed: the controlled cancellation interleaving remains unverified.**
+The source contains plausible interleaving windows. The active implementation
+host is Linux x86_64, but GitHub Actions was available for the commit. Its
+Windows 2022 job passed the existing CI suite; the repository did not contain
+the planned `windows_successful_cancel_interleaving` test, so that run does not
+establish whether the reported race occurs. No production code was changed for
+RC-002.
 
 ## Environment
 
 - Host: Linux x86_64 (`Linux 6.8.0-147-generic`)
 - Rust: `rustc 1.94.0 (4a4ef493e 2026-03-02)`
 - Baseline commit: `d09a6624f10790d2bc0b171c919ee18f83105586`
-- Windows execution: unavailable locally
+- Direct Windows execution from the active workspace: unavailable
 - Relevant repository CI: `.github/workflows/ci.yml` includes `windows-2022`,
-  but this implementation session has no attached Windows runner or remote job
-  controls to run the required test there.
-- Local Windows interleaving command:
+  and was used for the committed changes.
+- GitHub Actions run: [Rust CI run 41689180683](https://github.com/qubit-ltd/rs-command/actions/runs/41689180683),
+  commit `ab636a295c717fa3bbd2f23dc5ac95614aabf06b`; `rust-ci / verify
+  (windows-2022)` completed successfully on 2026-11-03.
+- Planned Windows interleaving command:
   `cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1 --nocapture`
-  was not run because the host is Linux and no Windows execution resource is
-  available. Cross-compilation or Linux test results would not establish the
-  required `CancelSynchronousIo` behavior.
-- Linux CI may be run for general regressions, but is not Windows evidence.
+  was not run because that test is not present in the repository. The Windows
+  CI job ran existing tests and checks, not the planned controlled interleaving.
 
 ## Source Trace
 
@@ -59,11 +59,12 @@ uses already completed helpers and does not cover a live Windows synchronous
 I/O completion race. Existing cancellation-failure tests likewise do not
 substitute for the successful-cancellation interleaving.
 
-No controlled reader/tee/stdin interleaving test was added because a fake
-worker that ignores cancellation would only prove the join strategy, not the
-Windows operating-system race. The required Windows run should exercise a
-barrier-controlled read-to-tee, EOF-to-flush, and stdin check-to-write schedule,
-with a watchdog and release path, and record the exact test names and results.
+No controlled reader/tee/stdin interleaving test was added. A fake worker that
+ignores cancellation would only prove the join strategy, not the Windows
+operating-system race. The successful Windows CI run above had no test that
+exercised barrier-controlled read-to-tee, EOF-to-flush, or stdin check-to-write
+schedules with a real `CancelSynchronousIo` result and watchdog release path.
+Those experiments and their exact test results remain outstanding.
 
 ## Decision
 
