@@ -131,12 +131,12 @@ fn platform_current_dir_command() -> Command {
 
 #[cfg(windows)]
 fn platform_stdin_command() -> Command {
-    Command::new("cmd").args(["/C", "more"])
+    Command::new("cmd").args(&["/C", "more"])
 }
 
 #[cfg(windows)]
 fn platform_current_dir_command() -> Command {
-    Command::new("cmd").args(["/C", "cd"])
+    Command::new("cmd").args(&["/C", "cd"])
 }
 
 #[test]
