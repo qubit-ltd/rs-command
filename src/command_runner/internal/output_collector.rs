@@ -1779,12 +1779,13 @@ mod windows_cancellation_interleaving_tests {
         Ok(unsafe { (File::from_raw_handle(reader), File::from_raw_handle(writer)) })
     }
 
-    fn fill_pipe(pipe: &mut File) -> io::Result<u32> {
+    fn fill_pipe(pipe: &mut File, observer: &File) -> io::Result<u32> {
         let mut capacity = 0;
-        // SAFETY: the handle is valid and only the outbound capacity is read.
+        // SAFETY: the readable pipe handle is valid and only the outbound
+        // capacity is read.
         if unsafe {
             GetNamedPipeInfo(
-                pipe.as_raw_handle(),
+                observer.as_raw_handle(),
                 std::ptr::null_mut(),
                 &mut capacity,
                 std::ptr::null_mut(),
@@ -1808,7 +1809,7 @@ mod windows_cancellation_interleaving_tests {
         // SAFETY: only the queued byte count is requested.
         if unsafe {
             PeekNamedPipe(
-                pipe.as_raw_handle(),
+                observer.as_raw_handle(),
                 std::ptr::null_mut(),
                 0,
                 std::ptr::null_mut(),
@@ -1839,7 +1840,7 @@ mod windows_cancellation_interleaving_tests {
             let attempt_start = Instant::now();
             let (source_reader, mut source_writer) = anonymous_pipe().expect("source pipe should be created");
             let (tee_reader, mut tee_writer) = anonymous_pipe().expect("tee pipe should be created");
-            let tee_capacity = fill_pipe(&mut tee_writer).expect("tee pipe should be filled and checked");
+            let tee_capacity = fill_pipe(&mut tee_writer, &tee_reader).expect("tee pipe should be filled and checked");
             let (read_tx, read_rx) = mpsc::channel();
             let (tee_tx, tee_rx) = mpsc::channel();
             let (source_release_tx, source_release_rx) = mpsc::channel();
