@@ -27,3 +27,4 @@ jobs:
     uses: qubit-ltd/rs-infra-ci/.github/workflows/github-ci.yml@main
     with:
       verify-os: '["ubuntu-latest", "windows-2022", "macos-15"]'
+      verify-extra-script: cargo bench --bench command_runner -- silent_command_runner --test
