@@ -96,19 +96,7 @@ impl CommandError {
 
     /// Converts a helper error into its cleanup representation.
     pub(crate) fn into_cleanup_failure(self) -> Option<CommandCleanupFailure> {
-        match *self.reason {
-            CommandErrorReason::TimeFailed { source } => Some(CommandCleanupFailure::Time { source }),
-            CommandErrorReason::WriteInputFailed { source } => Some(CommandCleanupFailure::Stdin { source }),
-            CommandErrorReason::ReadOutputFailed { stream, source } => match stream {
-                OutputStream::Stdout => Some(CommandCleanupFailure::StdoutRead { source }),
-                OutputStream::Stderr => Some(CommandCleanupFailure::StderrRead { source }),
-            },
-            CommandErrorReason::WriteOutputFailed { stream, path, source } => match stream {
-                OutputStream::Stdout => Some(CommandCleanupFailure::StdoutWrite { path, source }),
-                OutputStream::Stderr => Some(CommandCleanupFailure::StderrWrite { path, source }),
-            },
-            _ => None,
-        }
+        primary_cleanup_failure(*self.reason)
     }
 
     /// Converts this error and its cleanup details into cleanup failures.
@@ -121,20 +109,10 @@ impl CommandError {
             cleanup_failures,
             ..
         } = self;
-        let primary = match *reason {
-            CommandErrorReason::TimeFailed { source } => Some(CommandCleanupFailure::Time { source }),
-            CommandErrorReason::WriteInputFailed { source } => Some(CommandCleanupFailure::Stdin { source }),
-            CommandErrorReason::ReadOutputFailed { stream, source } => match stream {
-                OutputStream::Stdout => Some(CommandCleanupFailure::StdoutRead { source }),
-                OutputStream::Stderr => Some(CommandCleanupFailure::StderrRead { source }),
-            },
-            CommandErrorReason::WriteOutputFailed { stream, path, source } => match stream {
-                OutputStream::Stdout => Some(CommandCleanupFailure::StdoutWrite { path, source }),
-                OutputStream::Stderr => Some(CommandCleanupFailure::StderrWrite { path, source }),
-            },
-            _ => None,
-        };
-        primary.into_iter().chain(cleanup_failures).collect()
+        primary_cleanup_failure(*reason)
+            .into_iter()
+            .chain(cleanup_failures)
+            .collect()
     }
 
     /// Merges a finalization error without changing the selected primary
@@ -183,12 +161,29 @@ impl CommandError {
         self.reason.as_ref()
     }
 
-    /// Returns captured output retained by the primary failure.
+    /// Returns retained output with an exit status and elapsed time.
     ///
     /// # Returns
     ///
-    /// `Some(output)` when the failure retained partial or complete output;
-    /// otherwise `None`.
+    /// `Some(output)` when a `CommandOutput` was retained. Its streams may be
+    /// incomplete or truncated. `None` means this carrier is absent, not that
+    /// no bytes were captured. For example, an output-budget failure can retain
+    /// bytes through [`Self::captured_output`] without a `CommandOutput`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use qubit_command::CommandError;
+    ///
+    /// fn inspect(error: &CommandError) {
+    ///     if let Some(output) = error.output() {
+    ///         let _ = (output.exit_code(), output.stdout(), output.stderr());
+    ///     } else if let Some(captured) = error.captured_output() {
+    ///         let _ = (captured.stdout(), captured.stderr());
+    ///         let _ = (captured.stdout_complete(), captured.stderr_complete());
+    ///     }
+    /// }
+    /// ```
     #[must_use]
     #[inline(always)]
     pub fn output(&self) -> Option<&CommandOutput> {
@@ -211,11 +206,15 @@ impl CommandError {
         self
     }
 
-    /// Consumes the error and returns captured output, when available.
+    /// Consumes the error and returns its retained `CommandOutput`.
     ///
     /// # Returns
     ///
-    /// The retained output, or `None` when no output was available.
+    /// `Some(output)` when output with an exit status and elapsed time was
+    /// retained. `None` does not mean no bytes were captured. Consuming this
+    /// error discards any independent captured-byte carrier. Inspect
+    /// [`Self::captured_output`] first, and clone that value if owned bytes
+    /// are needed after consuming the error.
     #[must_use]
     #[inline(always)]
     pub fn into_output(self) -> Option<CommandOutput> {
@@ -284,6 +283,31 @@ impl CommandError {
             CommandCleanupFailure::ChildTermination { source } => Some(source),
             _ => None,
         })
+    }
+}
+
+/// Converts a primary helper failure into cleanup evidence.
+///
+/// # Parameters
+///
+/// * `reason` - Owned primary reason whose source and path are moved.
+///
+/// # Returns
+///
+/// `Some(failure)` for time or stream I/O failures; `None` for other reasons.
+fn primary_cleanup_failure(reason: CommandErrorReason) -> Option<CommandCleanupFailure> {
+    match reason {
+        CommandErrorReason::TimeFailed { source } => Some(CommandCleanupFailure::Time { source }),
+        CommandErrorReason::WriteInputFailed { source } => Some(CommandCleanupFailure::Stdin { source }),
+        CommandErrorReason::ReadOutputFailed { stream, source } => match stream {
+            OutputStream::Stdout => Some(CommandCleanupFailure::StdoutRead { source }),
+            OutputStream::Stderr => Some(CommandCleanupFailure::StderrRead { source }),
+        },
+        CommandErrorReason::WriteOutputFailed { stream, path, source } => match stream {
+            OutputStream::Stdout => Some(CommandCleanupFailure::StdoutWrite { path, source }),
+            OutputStream::Stderr => Some(CommandCleanupFailure::StderrWrite { path, source }),
+        },
+        _ => None,
     }
 }
 
