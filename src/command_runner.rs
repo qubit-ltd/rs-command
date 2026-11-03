@@ -137,8 +137,9 @@ pub const DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM: usize = 1024 * 1024;
 /// Use [`CommandOutput::stdout_text`] and [`CommandOutput::stderr_text`] for
 /// strict UTF-8 text, or [`CommandOutput::stdout_lossy_text`] and
 /// [`CommandOutput::stderr_lossy_text`] when invalid UTF-8 should be replaced.
-/// Timeout and cancellation handling use a blocking timer adapter, so the
-/// configured timer backend must keep progressing while this thread is parked.
+/// Timeout, cancellation, and total-output-budget monitoring use timer-based
+/// polling. Even when only a total output budget is configured, the timer
+/// backend must keep progressing independently while this thread is parked.
 ///
 /// # Examples
 ///
@@ -453,8 +454,8 @@ impl CommandRunner {
     ///
     /// # Returns
     ///
-    /// Timer used for elapsed measurement and blocking sleeps during timeout or
-    /// cancellation handling.
+    /// Timer used for elapsed measurement and blocking sleeps during timeout,
+    /// cancellation, or total-output-budget monitoring.
     #[must_use]
     #[inline]
     pub fn configured_timer(&self) -> &dyn Timer {
@@ -462,11 +463,12 @@ impl CommandRunner {
     }
 
     /// Replaces the monotonic timer used for elapsed measurement and blocking
-    /// sleeps during timeout or cancellation handling.
+    /// sleeps during timeout, cancellation, or total-output-budget monitoring.
     ///
     /// Command execution waits on this timer synchronously. Its backend must
-    /// therefore make progress independently of the caller thread. In
-    /// particular, do not use a Tokio timer whose only driver is the same
+    /// therefore make progress independently of the caller thread, including
+    /// when a total output budget is the only monitoring policy. In particular,
+    /// do not use a Tokio timer whose only driver is the same
     /// current-thread runtime that calls [`Self::run`].
     ///
     /// # Parameters
@@ -787,7 +789,12 @@ impl CommandRunner {
     /// exceeded. A zero limit therefore permits empty output, while the first
     /// output byte exceeds it.
     ///
-    /// Exceeding the limit requests termination of the managed process tree,
+    /// A configured total budget uses timer-based polling even when timeout
+    /// and cancellation are disabled; the timer must progress independently
+    /// while synchronous `run` blocks. The budget is a byte limit, not a hard
+    /// wall-clock deadline, and does not bound preparation, spawning, or
+    /// arbitrary filesystem operations. Exceeding the limit requests
+    /// termination of the managed process tree,
     /// including when no timeout or cancellation is configured. Termination
     /// follows the runner's existing best-effort cleanup contract and does not
     /// impose a hard wall-clock deadline. The resulting

@@ -436,6 +436,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Weak;
     use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::thread;
     use std::time::Duration;
@@ -444,7 +445,10 @@ mod tests {
     use process_wrap::std::ChildWrapper;
     use qubit_clock::ManualMonotonicClock;
     use qubit_clock::MonotonicClock;
+    use qubit_clock::MonotonicInstant;
     use qubit_clock::TimeError;
+    use qubit_clock::Timer;
+    use qubit_clock::TimerFuture;
 
     use super::super::captured_output::CapturedOutput;
     use super::super::command_io::CommandIo;
@@ -462,6 +466,33 @@ mod tests {
     use crate::CommandError;
     use crate::CommandErrorKind;
     use crate::CommandErrorReason;
+
+    struct FailingTimer {
+        clock: ManualMonotonicClock,
+        at_calls: Arc<AtomicUsize>,
+    }
+
+    impl Timer for FailingTimer {
+        fn clock(&self) -> &dyn MonotonicClock {
+            &self.clock
+        }
+
+        fn at(&self, _deadline: MonotonicInstant) -> Result<TimerFuture, TimeError> {
+            self.at_calls.fetch_add(1, Ordering::SeqCst);
+            Err(TimeError::InstantOverflow)
+        }
+    }
+
+    fn failing_timer() -> (Arc<FailingTimer>, Arc<AtomicUsize>) {
+        let at_calls = Arc::new(AtomicUsize::new(0));
+        (
+            Arc::new(FailingTimer {
+                clock: ManualMonotonicClock::new(),
+                at_calls: Arc::clone(&at_calls),
+            }),
+            at_calls,
+        )
+    }
 
     #[cfg(unix)]
     fn status(code: i32) -> ExitStatus {
@@ -694,6 +725,60 @@ mod tests {
             None,
             Some(budget),
         )
+    }
+
+    fn running_with_budget_and_timer(
+        child: ManagedChildProcess,
+        io: CommandIo,
+        budget: Arc<TotalOutputBudget>,
+        timer: Arc<dyn Timer>,
+    ) -> RunningCommand {
+        let started_at = timer.clock().now();
+        RunningCommand::new(
+            "test command".to_owned(),
+            child,
+            io,
+            started_at,
+            timer,
+            None,
+            Some(budget),
+        )
+    }
+
+    #[test]
+    fn budget_only_timer_live_child_uses_timer() {
+        let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(None)]);
+        let (timer, at_calls) = failing_timer();
+        let result = running_with_budget_and_timer(
+            ManagedChildProcess::new(Box::new(child), true),
+            CommandIo::new(successful_reader(), successful_reader(), None),
+            Arc::new(TotalOutputBudget::new(10, None, None)),
+            timer,
+        )
+        .wait_for_completion(None);
+
+        let error = expect_error(result, "budget-only monitoring should consult its timer");
+        assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
+        assert_eq!(at_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn budget_only_timer_after_exit_uses_timer() {
+        let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(Some(status(0)))]);
+        let budget = Arc::new(TotalOutputBudget::new(10, None, None));
+        let (reader, _release) = blocked_budget_reader(Arc::clone(&budget));
+        let (timer, at_calls) = failing_timer();
+        let result = running_with_budget_and_timer(
+            ManagedChildProcess::new(Box::new(child), true),
+            CommandIo::new(reader, joined_stderr_reader(), None),
+            budget,
+            timer,
+        )
+        .wait_for_completion(None);
+
+        let error = expect_error(result, "budget-only helper monitoring should consult its timer");
+        assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
+        assert_eq!(at_calls.load(Ordering::SeqCst), 1);
     }
 
     fn exceeded_total_budget() -> Arc<TotalOutputBudget> {

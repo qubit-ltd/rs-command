@@ -203,7 +203,7 @@ let result = CommandRunner::new(std::time::Duration::from_secs(10))
 
 When the deadline is reached, the runner attempts to terminate the managed process tree, collects available output, joins its I/O helpers, and returns a `CommandError` whose `kind()` is `CommandErrorKind::TimedOut`. A timeout error can contain partial output.
 
-Use `without_timeout()` only when an unlimited wait is deliberate. If cancellation is configured, the runner still polls its timer and manages the process tree even without a timeout.
+Use `without_timeout()` only when an unlimited wait is deliberate. If cancellation or a total output budget is configured, the runner still polls its timer and manages the process tree even without a timeout.
 
 ### Application-Owned Cancellation
 
@@ -237,7 +237,7 @@ request: the managed process tree is terminated and `kind()` is `Cancelled`,
 with retained output when available. The handle is one-shot; calling `cancel()`
 more than once has no additional effect.
 
-For timeout- or cancellation-aware waiting, the configured timer must continue progressing while `run()` blocks synchronously. A Tokio timer must not depend on a current-thread runtime driven only by that same blocked thread.
+Timeout, cancellation, and total-output-budget monitoring use timer-based polling. This includes a total output budget configured by itself. The configured timer must continue progressing independently while `run()` blocks synchronously. A Tokio timer must not depend on a current-thread runtime driven only by that same blocked thread.
 
 On Windows, the normal helper-cancellation path uses `CancelSynchronousIo` and
 joins each helper after the cancellation request. If that system request fails,
@@ -271,7 +271,7 @@ if output.stdout_truncated() {
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-`bounded_output(max_bytes)` changes both per-stream memory limits while retaining the default failure policy. `max_stdout_bytes` and `max_stderr_bytes` configure streams independently. These limits control retained memory; they do not stop a command from emitting more bytes. Set `max_total_output_bytes(limit)` to impose an opt-in hard limit shared by stdout and stderr. Exceeding it terminates the managed process tree and returns `CommandErrorKind::OutputLimitExceeded`; inspect `CommandErrorReason::OutputLimitExceeded { limit, observed }` for the configured limit and observed sentinel byte. The partial bytes are available through `CommandError::captured_output()`, while `CommandError::output()` remains `None` because no natural process status is fabricated. `without_total_output_limit()` removes the hard limit. `unbounded_output()` removes only the memory retention limits and does not remove a configured total budget.
+`bounded_output(max_bytes)` changes both per-stream memory limits while retaining the default failure policy. `max_stdout_bytes` and `max_stderr_bytes` configure streams independently. These limits control retained memory; they do not stop a command from emitting more bytes. Set `max_total_output_bytes(limit)` to impose an opt-in hard limit shared by stdout and stderr. Exceeding it terminates the managed process tree and returns `CommandErrorKind::OutputLimitExceeded`; inspect `CommandErrorReason::OutputLimitExceeded { limit, observed }` for the configured limit and observed sentinel byte. The partial bytes are available through `CommandError::captured_output()`, while `CommandError::output()` remains `None` because no natural process status is fabricated. `without_total_output_limit()` removes the hard limit. `unbounded_output()` removes only the memory retention limits and does not remove a configured total budget. The total budget limits observed bytes; it is not a hard wall-clock deadline and does not bound preparation, spawning, or arbitrary filesystem operations.
 
 `bounded_output(max_bytes)` also enables failure when either stream is truncated, while `unbounded_output()` disables that failure policy. Both methods override an earlier `fail_on_output_truncation(...)` call, so call order matters. The `max_*_bytes` methods change retention limits only. For example, `unbounded_output().max_output_bytes(1024)` keeps truncation failures disabled; adding `.fail_on_output_truncation(true)` last enables them. Conversely, `fail_on_output_truncation(false).bounded_output(1024)` enables them again. These per-stream settings do not change the combined output budget.
 
@@ -416,7 +416,7 @@ Use `sensitive_arg` for caller-known secrets and review redaction allow rules ca
 - Use tee files instead of unbounded memory capture for large logs.
 - Keep stdin and tee paths as separate ordinary files.
 - Configure cancellation from the application's existing shutdown policy; this crate does not install global signal handlers.
-- Choose a timer backend that progresses independently of the synchronous caller when timeout or cancellation is enabled.
+- Choose a timer backend that progresses independently of the synchronous caller when timeout, cancellation, or a total output budget is enabled.
 - Treat captured output and tee files as untrusted process data even though diagnostics are redacted.
 
 ## Related Resources

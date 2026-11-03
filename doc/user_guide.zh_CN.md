@@ -201,7 +201,7 @@ let result = CommandRunner::new(std::time::Duration::from_secs(10))
 
 达到 deadline 后，runner 会尝试终止受管进程树，收集可用输出，等待 I/O 辅助线程结束，并返回 `CommandError`，其 `kind()` 为 `CommandErrorKind::TimedOut`。超时错误可能只包含部分输出。
 
-只有在明确需要无限等待时才使用 `without_timeout()`。如果配置了取消句柄，即使没有超时，runner 仍会轮询 timer 并管理进程树。
+只有在明确需要无限等待时才使用 `without_timeout()`。如果配置了取消句柄或总输出预算，即使没有超时，runner 仍会轮询 timer 并管理进程树。
 
 ### 使用应用自己的取消策略
 
@@ -232,7 +232,7 @@ let result = worker.join().expect("command worker should not panic");
 runner 会终止受管进程树，`kind()` 为 `Cancelled`，并在可用时保留输出。
 句柄是一次性的；多次调用 `cancel()` 不会产生额外效果。
 
-启用超时或取消的等待时，timer 必须能在 `run()` 同步阻塞调用方线程时继续推进。Tokio timer 不应依赖只能由同一阻塞线程驱动的 current-thread runtime。
+超时、取消和总输出预算监控都使用基于 timer 的轮询；即使只配置总输出预算也如此。调用方线程在 `run()` 中同步阻塞时，timer 仍必须独立推进。Tokio timer 不应依赖只能由同一阻塞线程驱动的 current-thread runtime。
 
 在 Windows 上，正常的 helper 取消路径会使用 `CancelSynchronousIo`，并在取消请求后
 join 每个 helper。如果系统取消请求失败，runner 最多等待 100 ms 来确认 helper 已经
@@ -264,7 +264,7 @@ if output.stdout_truncated() {
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-`bounded_output(max_bytes)` 同时修改两个流的内存保留上限，并保留默认的截断失败策略。`max_stdout_bytes` 和 `max_stderr_bytes` 可以分别配置两个流。这些上限只控制保留在内存中的字节，不会阻止命令继续输出。使用 `max_total_output_bytes(limit)` 可选地设置 stdout 与 stderr 共享的硬上限。超过上限会终止受管进程树，并返回 `CommandErrorKind::OutputLimitExceeded`；通过 `CommandErrorReason::OutputLimitExceeded { limit, observed }` 可读取上限及包含哨兵字节的实际观察量。部分捕获字节可通过 `CommandError::captured_output()` 读取；由于不会伪造自然进程状态，`CommandError::output()` 保持为 `None`。`without_total_output_limit()` 会移除硬上限。`unbounded_output()` 只移除内存保留限制，不会解除已配置的总输出预算。
+`bounded_output(max_bytes)` 同时修改两个流的内存保留上限，并保留默认的截断失败策略。`max_stdout_bytes` 和 `max_stderr_bytes` 可以分别配置两个流。这些上限只控制保留在内存中的字节，不会阻止命令继续输出。使用 `max_total_output_bytes(limit)` 可选地设置 stdout 与 stderr 共享的硬上限。超过上限会终止受管进程树，并返回 `CommandErrorKind::OutputLimitExceeded`；通过 `CommandErrorReason::OutputLimitExceeded { limit, observed }` 可读取上限及包含哨兵字节的实际观察量。部分捕获字节可通过 `CommandError::captured_output()` 读取；由于不会伪造自然进程状态，`CommandError::output()` 保持为 `None`。`without_total_output_limit()` 会移除硬上限。`unbounded_output()` 只移除内存保留限制，不会解除已配置的总输出预算。 总输出预算限制观察到的字节数，不是墙钟硬期限，也不限制准备、spawn 或任意文件系统操作。
 
 `bounded_output(max_bytes)` 还会开启“输出截断时失败”策略；`unbounded_output()` 则会关闭该策略。两者都会覆盖更早调用的 `fail_on_output_truncation(...)`，因此调用顺序会影响结果。`max_*_bytes` 方法只修改保留上限。例如，`unbounded_output().max_output_bytes(1024)` 仍接受截断；最后追加 `.fail_on_output_truncation(true)` 会改为拒绝截断。反过来，`fail_on_output_truncation(false).bounded_output(1024)` 会重新开启拒绝策略。这些单流设置不会修改 stdout 与 stderr 共享的总输出预算。
 
@@ -403,7 +403,7 @@ runner 会返回失败证据，不再进入无界等待。子进程此时可能�
 - 大日志使用 tee 文件，不要轻易使用无界内存捕获。
 - 将 stdin 和 tee 路径配置为互不相同的普通文件。
 - 从应用已有的关闭策略配置取消；本 crate 不安装全局信号处理器。
-- 启用超时或取消时，选择能独立于同步调用方持续推进的 timer 后端。
+- 启用超时、取消或总输出预算时，选择能独立于同步调用方持续推进的 timer 后端。
 - 即使诊断已脱敏，也要把捕获输出和 tee 文件当作不可信的进程数据处理。
 
 ## 相关资源

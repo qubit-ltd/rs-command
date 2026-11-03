@@ -107,17 +107,22 @@ The normal event order is:
 2. Spawn the child and configure process-tree management.
 3. Record the post-spawn monotonic start instant.
 4. Start the optional stdin writer and stdout/stderr readers, then poll child
-   status, timeout, and application cancellation.
+   status, timeout, application cancellation, and total-output-budget state.
 5. On ordinary exit, join helpers and assemble output.
 6. On timeout or cancellation, terminate the managed process tree, request
    helper cancellation, collect available bytes, and classify the primary
    policy result.
 
 The timeout starts after spawn, before I/O helper startup. Helper initialization
-time counts toward the timeout; command preparation and spawn time do not. A
-timer must continue progressing while the synchronous `run` call blocks. A
-cancellation handle is one-shot and idempotent; repeated `cancel()` calls do
-not create additional transitions.
+time counts toward the timeout; command preparation and spawn time do not.
+Timeout, cancellation, and total-output-budget monitoring use timer-based
+polling. This applies when a total output budget is configured by itself, so
+its timer must continue progressing independently while the synchronous `run`
+call blocks.
+The byte budget is not a hard wall-clock deadline and does not bound preparation,
+spawning, or arbitrary filesystem operations. A cancellation handle is
+one-shot and idempotent; repeated `cancel()` calls do not create additional
+transitions.
 
 ## Termination
 
