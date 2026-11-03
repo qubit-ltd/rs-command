@@ -5,9 +5,10 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use crate::Command;
-use crate::CommandErrorKind;
-use crate::CommandRunner;
+use qubit_command::Command;
+use qubit_command::CommandErrorKind;
+use qubit_command::CommandErrorReason;
+use qubit_command::CommandRunner;
 
 fn command(script: &str) -> Command {
     #[cfg(unix)]
@@ -59,7 +60,7 @@ fn test_total_output_combines_both_streams_and_retains_sentinel() {
     assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
     assert!(matches!(
         error.reason(),
-        crate::CommandErrorReason::OutputLimitExceeded { limit: 8, observed: 9 }
+        CommandErrorReason::OutputLimitExceeded { limit: 8, observed: 9 }
     ));
     assert!(error.output().is_none(), "budget errors must not invent an ExitStatus");
     let captured = error
@@ -109,7 +110,7 @@ fn test_total_output_idle_stream_does_not_reserve_budget() {
         .expect_err("the active stdout stream must be charged when stderr is idle");
     assert!(matches!(
         error.reason(),
-        crate::CommandErrorReason::OutputLimitExceeded { limit: 8, observed: 9 }
+        CommandErrorReason::OutputLimitExceeded { limit: 8, observed: 9 }
     ));
 }
 
