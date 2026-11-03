@@ -28,7 +28,7 @@ pub(crate) fn output_command(stdout: &[u8], stderr: &[u8], exit_code: i32) -> Co
             .arg("-NoProfile")
             .arg("-NonInteractive")
             .arg("-Command")
-            .arg(script)
+            .arg(&script)
     }
 }
 
