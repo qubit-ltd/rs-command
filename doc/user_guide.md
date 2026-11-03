@@ -296,6 +296,8 @@ if let Err(error) = result
 
 Timeout, cancellation, unexpected exit, and output-truncation errors can expose a `CommandOutput` through `CommandError::output()` or move it with `CommandError::into_output()`. For timeout and cancellation, inspect `stdout_complete()` and `stderr_complete()` before treating retained bytes as complete streams.
 
+Use `CommandError::into_captured_output()` when you need to move captured bytes into an independent value, including bytes retained by an output-budget error whose `output()` is `None`. The method prefers a retained `CommandOutput` when both output carriers exist and preserves the stream completeness and truncation markers. It moves the buffers without cloning them and consumes the error and its diagnostics, so inspect any needed reason or cleanup details first. Captured bytes are raw process output and may contain sensitive data; handle them accordingly.
+
 Tee paths must be ordinary files. The runner checks stdin/tee and stdout-tee/stderr-tee conflicts before truncating any tee file.
 Tee files are truncated and replaced for each run; they are never appended. Cloning `CommandRunOptions` copies the configured paths, so concurrent runs must use distinct paths when their logs must remain separate.
 

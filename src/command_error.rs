@@ -216,11 +216,45 @@ impl CommandError {
     /// retained. `None` does not mean no bytes were captured. Consuming this
     /// error discards any independent captured-byte carrier. Inspect
     /// [`Self::captured_output`] first, and clone that value if owned bytes
-    /// are needed after consuming the error.
+    /// are needed after consuming the error. Use
+    /// [`Self::into_captured_output`] to move the captured bytes out instead.
     #[must_use]
     #[inline(always)]
     pub fn into_output(self) -> Option<CommandOutput> {
         self.output.map(|output| *output)
+    }
+
+    /// Consumes the error and returns its retained captured bytes.
+    ///
+    /// # Returns
+    ///
+    /// `Some(captured)` when either output carrier was retained, including an
+    /// empty capture. A retained [`CommandOutput`] takes precedence over the
+    /// independent captured-byte carrier. The returned value preserves stream
+    /// completeness and truncation markers and moves the retained byte buffers
+    /// without cloning them. `None` means neither carrier was retained.
+    ///
+    /// Consuming the error also consumes its diagnostic information. Inspect
+    /// the error's reason, cleanup failures, or other diagnostics before
+    /// calling this method when they are needed afterward.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use qubit_command::{CommandCapturedOutput, CommandError};
+    ///
+    /// fn retain_capture(error: CommandError) -> Option<CommandCapturedOutput> {
+    ///     // Inspect diagnostics before consuming the error if needed.
+    ///     error.into_captured_output()
+    /// }
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn into_captured_output(self) -> Option<CommandCapturedOutput> {
+        match self.output {
+            Some(output) => Some((*output).into_captured_output()),
+            None => self.captured_output.map(|captured| *captured),
+        }
     }
 
     /// Returns every cleanup failure observed after the primary failure.

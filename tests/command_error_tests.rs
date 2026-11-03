@@ -11,6 +11,7 @@ use std::error::Error;
 
 use qubit_command::Command;
 use qubit_command::CommandCancellation;
+use qubit_command::CommandCapturedOutput;
 use qubit_command::CommandErrorKind;
 use qubit_command::CommandErrorReason;
 use qubit_command::CommandRunOptions;
@@ -78,4 +79,62 @@ fn test_command_error_debug_redacts_output_and_paths() {
     assert!(!debug.contains("stderr-secret"));
     assert!(!debug.contains(&stdout_debug));
     assert!(!debug.contains(&stderr_debug));
+}
+
+fn assert_moved_capture(error: qubit_command::CommandError) -> CommandCapturedOutput {
+    let before = error.captured_output().expect("capture should exist");
+    let expected = before.clone();
+    let stdout_ptr = before.stdout().as_ptr();
+    let stderr_ptr = before.stderr().as_ptr();
+    let captured = error.into_captured_output().expect("capture should move");
+    assert_eq!(captured, expected);
+    if !captured.stdout().is_empty() {
+        assert_eq!(captured.stdout().as_ptr(), stdout_ptr);
+    }
+    if !captured.stderr().is_empty() {
+        assert_eq!(captured.stderr().as_ptr(), stderr_ptr);
+    }
+    captured
+}
+
+#[test]
+fn test_command_error_into_captured_output_moves_each_carrier() {
+    let unexpected = CommandRunner::without_timeout()
+        .run(output_command(b"stdout", b"stderr", 9))
+        .expect_err("non-zero exit should fail");
+    let capture = assert_moved_capture(unexpected);
+    assert_eq!(capture.stdout(), b"stdout");
+    assert_eq!(capture.stderr(), b"stderr");
+    assert!(capture.stdout_complete() && capture.stderr_complete());
+    assert!(!capture.stdout_truncated() && !capture.stderr_truncated());
+
+    let truncated = CommandRunner::without_timeout()
+        .max_stdout_bytes(3)
+        .max_stderr_bytes(3)
+        .run(output_command(b"stdout", b"stderr", 0))
+        .expect_err("truncated output should fail");
+    let capture = assert_moved_capture(truncated);
+    assert_eq!(capture.stdout(), b"std");
+    assert_eq!(capture.stderr(), b"std");
+    assert!(capture.stdout_truncated() && capture.stderr_truncated());
+
+    let budget = CommandRunner::without_timeout()
+        .max_total_output_bytes(4)
+        .run(output_command(b"stdout", b"stderr", 0))
+        .expect_err("output budget should be exceeded");
+    assert_eq!(budget.kind(), CommandErrorKind::OutputLimitExceeded);
+    assert!(budget.output().is_none());
+    let capture = assert_moved_capture(budget);
+    assert!(!capture.stdout().is_empty() || !capture.stderr().is_empty());
+
+    let spawn = CommandRunner::without_timeout()
+        .run(Command::new("__qubit_command_missing_executable__"))
+        .expect_err("missing executable should fail");
+    assert_eq!(spawn.into_captured_output(), None);
+
+    let empty = CommandRunner::without_timeout()
+        .run(output_command(b"", b"", 9))
+        .expect_err("non-zero exit should fail");
+    let capture = empty.into_captured_output().expect("empty capture exists");
+    assert!(capture.stdout().is_empty() && capture.stderr().is_empty());
 }

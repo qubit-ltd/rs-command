@@ -289,6 +289,8 @@ if let Err(error) = result
 
 超时、取消、非预期退出和输出截断错误都可能通过 `CommandError::output()` 暴露 `CommandOutput`，也可以通过 `CommandError::into_output()` 将其取出。对于超时和取消，请先检查 `stdout_complete()` 与 `stderr_complete()`，再判断保留字节是否代表完整流。
 
+若要将捕获字节移为独立值，可使用 `CommandError::into_captured_output()`；这也适用于 `output()` 为 `None` 的输出预算错误。两个输出载体同时存在时，该方法优先选择保留的 `CommandOutput`，并保留流完整性和截断标记。方法会移动缓冲区而不克隆它们，同时消费错误及其诊断信息，因此请先读取仍需要的错误原因或清理详情。捕获字节是原始进程输出，可能含有敏感数据，请妥善处理。
+
 tee 路径必须是普通文件。runner 会在截断任何 tee 文件前检查 stdin/tee 以及 stdout tee/stderr tee 之间的冲突。
 每次运行都会截断并替换 tee 文件，不会追加。复制 `CommandRunOptions` 会复制已配置的路径；如果并发运行需要分别保留日志，必须使用不同路径。
 

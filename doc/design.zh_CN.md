@@ -21,7 +21,10 @@ helper、终止流程以及错误保留信息的维护者和调用方。可运�
 - `CommandOutput` 携带退出状态、保留的 stdout/stderr 字节、耗时、截断标志和
   `stdout_complete()`/`stderr_complete()`。
 - `CommandError` 通过稳定的 `kind()` 分类并可选地携带输出。`output()` 借用保留输出，
-  `into_output()` 将其取出；清理失败由 `cleanup_failures()` 提供，不替代主错误。
+  `into_output()` 将其取出。`captured_output()` 借用捕获字节，
+  `into_captured_output()` 独立移出字节并保留流标记；两个载体同时存在时优先选择
+  `CommandOutput`。消费式方法也会消费错误诊断。清理失败由 `cleanup_failures()` 提供，
+  不替代主错误。
 
 默认每个流最多捕获 1 MiB，退出码 0 表示成功。`stdin_file` 和 tee 路径必须指向普通
 文件；每次运行开始时 tee 会被替换而不是追加。调用 `unbounded_output()` 就意味着调用方
@@ -45,6 +48,10 @@ helper、终止流程以及错误保留信息的维护者和调用方。可运�
 收尾成功组装 `CommandOutput` 时才会有 `output()`；若无法组装自然状态、耗时或完整 helper
 结果，`captured_output()` 仍可能提供部分数据。捕获访问器暴露原始进程字节，调用方需自行
 负责敏感输出的处理。
+
+调用 `CommandError::into_captured_output()` 可将保留字节作为独立值移出，包括仅有预算错误
+载体的情况。该方法保留流完整性和截断标记，不会克隆缓冲区；原始进程输出可能包含敏感数据，
+调用方仍需负责安全处理。
 
 ## 所有权状态
 

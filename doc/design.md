@@ -28,9 +28,12 @@ shell language, cache command output, or make captured process data safe.
 - `CommandOutput` carries exit status, retained stdout/stderr bytes, elapsed
   time, truncation flags, and `stdout_complete()`/`stderr_complete()`.
 - `CommandError` exposes a stable `kind()` classification and optional output.
-  `output()` borrows retained output and `into_output()` moves it out. Cleanup
-  failures are available through `cleanup_failures()` and do not replace the
-  primary error.
+  `output()` borrows retained output and `into_output()` moves it out.
+  `captured_output()` borrows captured bytes, while `into_captured_output()`
+  moves them out independently, preserving stream markers and preferring a
+  retained `CommandOutput` when both carriers exist. The consuming method also
+  consumes the error diagnostics. Cleanup failures are available through
+  `cleanup_failures()` and do not replace the primary error.
 
 The default captures at most 1 MiB per output stream and treats exit code zero
 as success. `stdin_file` and tee paths must identify ordinary files. A tee is
@@ -61,6 +64,11 @@ available.
 An exceeded budget returns `OutputLimitExceeded` without inventing a natural
 process exit status. Its partial bytes are available from
 `CommandError::captured_output()`, while `CommandError::output()` is `None`.
+Use `CommandError::into_captured_output()` to move retained bytes out as an
+independent value, including for this budget-only carrier. It preserves stream
+completeness and truncation markers and does not clone the buffers. Captured
+bytes are raw process output and may contain sensitive data; callers remain
+responsible for handling them safely.
 For other errors, `output()` is present only when finalization assembled a
 `CommandOutput`; `captured_output()` can still expose partial data when no
 natural status, elapsed time, or complete helper result could be assembled.

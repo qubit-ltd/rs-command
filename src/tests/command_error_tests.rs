@@ -377,3 +377,25 @@ fn test_command_error_time_display_omits_source_details() {
     assert!(!display.contains("InstantOverflow"));
     assert!(debug.contains("<time error details omitted>"));
 }
+
+#[test]
+fn test_into_captured_output_prefers_command_output_when_both_carriers_exist() {
+    let output = CommandOutput::new(
+        status(),
+        (b"output carrier".to_vec(), false, true),
+        (b"stderr".to_vec(), true, false),
+        Duration::from_secs(1),
+    );
+    let expected = CommandCapturedOutput::new(
+        (b"output carrier".to_vec(), false, true),
+        (b"stderr".to_vec(), true, false),
+    );
+    let independent = CommandCapturedOutput::new(
+        (b"independent carrier".to_vec(), true, false),
+        (Vec::new(), true, false),
+    );
+    let error = CommandError::from_reason("command", CommandErrorReason::Cancelled, Some(Box::new(output)))
+        .with_captured_output(independent);
+
+    assert_eq!(error.into_captured_output(), Some(expected));
+}
