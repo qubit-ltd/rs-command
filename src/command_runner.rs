@@ -496,6 +496,11 @@ impl CommandRunner {
 
     /// Sets the default working directory.
     ///
+    /// This directory affects only the child process. Relative stdin and tee
+    /// file paths are resolved from the parent process current working
+    /// directory. To access a file relative to this directory, pass an
+    /// explicitly joined absolute path.
+    ///
     /// # Parameters
     ///
     /// * `working_directory` - Directory used when a command has no per-command

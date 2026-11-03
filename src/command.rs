@@ -372,6 +372,11 @@ impl Command {
 
     /// Sets a per-command working directory.
     ///
+    /// This directory affects only the child process. Relative paths passed to
+    /// [`stdin_file`](Self::stdin_file) are opened relative to the parent
+    /// process current working directory. To open a file relative to this
+    /// directory, pass an explicitly joined absolute path.
+    ///
     /// # Type Parameters
     ///
     /// * `P` - A path-like type that can be converted into an owned path.
@@ -549,6 +554,8 @@ impl Command {
     /// Directories, FIFOs, devices, sockets, and other special files are
     /// rejected before the child is spawned. The runner opens this path before
     /// spawning the child and before starting its timeout clock.
+    /// Relative paths are resolved from the parent process current working
+    /// directory, regardless of the child process working directory.
     ///
     /// # Type Parameters
     ///

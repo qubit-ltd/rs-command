@@ -113,6 +113,8 @@ impl CommandRunOptions {
     /// each run. The path is validated by the runner before spawning. Cloning
     /// these options clones the path; callers running concurrently must provide
     /// distinct paths when they need to retain both streams.
+    /// Relative paths are resolved from the parent process current working
+    /// directory, regardless of the child process working directory.
     ///
     /// # Parameters
     ///
@@ -136,6 +138,8 @@ impl CommandRunOptions {
     /// each run. The path is validated by the runner before spawning. Cloning
     /// these options clones the path; callers running concurrently must provide
     /// distinct paths when they need to retain both streams.
+    /// Relative paths are resolved from the parent process current working
+    /// directory, regardless of the child process working directory.
     ///
     /// # Parameters
     ///

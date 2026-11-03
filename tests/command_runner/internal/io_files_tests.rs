@@ -8,9 +8,7 @@
 //! Tests for conflict-safe command I/O file preparation.
 
 use std::fs;
-#[cfg(unix)]
 use std::path::Path;
-#[cfg(not(windows))]
 use std::path::PathBuf;
 #[cfg(unix)]
 use std::process::Command as ProcessCommand;
@@ -43,6 +41,117 @@ fn unspawnable_command() -> Command {
 /// An armed temporary-directory guard.
 fn temp_dir() -> LocalTempDir {
     LocalTempDir::with_prefix("qubit-command-io-files-").expect("command I/O test temp directory should be created")
+}
+
+/// Verifies stdin and tee paths use the parent process directory for each
+/// supported child working-directory configuration.
+fn assert_relative_file_paths_use_parent_cwd(configuration: &str) {
+    let temp_dir = tempfile::Builder::new()
+        .prefix("qubit-command-io-files-relative-")
+        .tempdir_in(".")
+        .expect("relative test directory should be created under the parent cwd");
+    let relative_root = PathBuf::from(
+        temp_dir
+            .path()
+            .file_name()
+            .expect("temporary directory should have a name"),
+    );
+    let relative_files = relative_root.join("R");
+    let child_directory = temp_dir.path().join("C");
+    let runner_directory = temp_dir.path().join("D");
+    fs::create_dir_all(&relative_files).expect("parent relative-path directory should be created");
+    fs::create_dir_all(&child_directory).expect("child working directory should be created");
+    fs::create_dir_all(&runner_directory).expect("runner working directory should be created");
+    let child_directory = fs::canonicalize(child_directory).expect("child directory should be absolute");
+    let runner_directory = fs::canonicalize(runner_directory).expect("runner directory should be absolute");
+    let child_working_directory = if configuration == "runner default" {
+        &runner_directory
+    } else {
+        &child_directory
+    };
+    let child_files = child_working_directory.join(&relative_files);
+    fs::create_dir_all(&child_files).expect("child relative-path directory should be created");
+    fs::write(relative_files.join("input.txt"), b"parent-input").expect("parent stdin fixture should be written");
+    fs::write(child_files.join("input.txt"), b"child-input").expect("child stdin fixture should be written");
+
+    let command = platform_stdin_command().stdin_file(relative_files.join("input.txt"));
+    let runner = CommandRunner::new(Duration::from_secs(10));
+    let runner = if matches!(configuration, "runner default" | "both") {
+        runner.working_directory(&runner_directory)
+    } else {
+        runner
+    };
+    let command = if matches!(configuration, "command override" | "both") {
+        command.working_directory(&child_directory)
+    } else {
+        command
+    };
+    let options = CommandRunOptions::new()
+        .tee_stdout_to_file(relative_files.join("stdout.log"))
+        .tee_stderr_to_file(relative_files.join("stderr.log"));
+    let output = runner
+        .run_with(command, options)
+        .expect("relative stdin and tee paths should be prepared from parent cwd");
+
+    assert_eq!(output.stdout(), b"parent-input");
+    assert!(!String::from_utf8_lossy(output.stdout()).contains("child-input"));
+    assert_eq!(
+        fs::read(relative_files.join("stdout.log")).expect("parent stdout tee should exist"),
+        output.stdout()
+    );
+    assert_eq!(
+        fs::read(relative_files.join("stderr.log")).expect("parent stderr tee should be readable"),
+        output.stderr()
+    );
+    assert!(!child_files.join("stdout.log").exists());
+    assert!(!child_files.join("stderr.log").exists());
+
+    if configuration == "both" {
+        let output = CommandRunner::new(Duration::from_secs(10))
+            .working_directory(&runner_directory)
+            .run(platform_current_dir_command().working_directory(&child_directory))
+            .expect("command working directory should override runner default");
+        let actual = PathBuf::from(output.stdout_text().expect("cwd should be valid UTF-8").trim());
+        assert_eq!(
+            fs::canonicalize(actual).expect("reported cwd should exist"),
+            fs::canonicalize(child_directory).expect("override cwd should exist")
+        );
+    }
+}
+
+#[cfg(unix)]
+fn platform_stdin_command() -> Command {
+    Command::new("cat")
+}
+
+#[cfg(unix)]
+fn platform_current_dir_command() -> Command {
+    Command::new("pwd")
+}
+
+#[cfg(windows)]
+fn platform_stdin_command() -> Command {
+    Command::new("cmd").args(["/C", "more"])
+}
+
+#[cfg(windows)]
+fn platform_current_dir_command() -> Command {
+    Command::new("cmd").args(["/C", "cd"])
+}
+
+#[test]
+fn test_stdin_and_tee_relative_paths_use_parent_cwd_with_command_override_path_base() {
+    assert_relative_file_paths_use_parent_cwd("command override");
+}
+
+#[test]
+fn test_stdin_and_tee_relative_paths_use_parent_cwd_with_runner_default_path_base() {
+    assert_relative_file_paths_use_parent_cwd("runner default");
+}
+
+#[test]
+fn test_stdin_and_tee_relative_paths_use_parent_cwd_with_both_workdirs_path_base() {
+    assert_relative_file_paths_use_parent_cwd("both");
 }
 
 #[cfg(unix)]
