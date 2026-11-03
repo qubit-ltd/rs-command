@@ -51,11 +51,27 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 
 `stdout()` and `stderr()` return the retained raw bytes. Use `stdout_text()` or `stderr_text()` only when strict UTF-8 is required; use `stdout_lossy_text()` or `stderr_lossy_text()` when invalid bytes should be replaced with `�`.
 
+Requires a Unix-like environment with the `printf` utility:
+
 ```rust
 use qubit_command::{Command, CommandRunner};
 
 let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::new("printf").arg("hello"))?;
+
+assert_eq!(output.stdout_text()?, "hello");
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+On Windows, use Windows PowerShell with structured arguments instead:
+
+```rust
+use qubit_command::{Command, CommandRunner};
+
+let output = CommandRunner::new(std::time::Duration::from_secs(10))
+    .run(Command::new("powershell").args(&[
+        "-NoProfile", "-Command", "[Console]::Write('hello')",
+    ]))?;
 
 assert_eq!(output.stdout_text()?, "hello");
 # Ok::<(), Box<dyn std::error::Error>>(())
@@ -80,10 +96,21 @@ For non-UTF-8 program or argument values, use `new_os`, `arg_os`, `args_os`, `en
 
 ### Use a Shell Only Intentionally
 
+The script below uses Unix shell syntax and requires a Unix-like environment with `sh`, `printf`, and `tr`:
+
 ```rust
 let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::shell("printf hello | tr a-z A-Z"))?;
 assert_eq!(output.stdout_text()?, "HELLO");
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+On Windows, `Command::shell` uses `cmd /C`; provide a `cmd` script, not a PowerShell script. This example prints `hello` (the trailing line ending is ignored):
+
+```rust
+let output = CommandRunner::new(std::time::Duration::from_secs(10))
+    .run(Command::shell("echo hello"))?;
+assert_eq!(output.stdout_text()?.trim(), "hello");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -93,6 +120,8 @@ On Unix-like platforms `Command::shell` runs `sh -c`; on Windows it runs `cmd /C
 
 `Command` can inherit stdin, use null stdin, provide bytes, or read from a file. It can inherit the environment, add or override variables, remove variables, or clear the inherited environment before applying explicit values:
 
+Requires a Unix-like environment with the `cat` utility:
+
 ```rust
 use qubit_command::{Command, CommandRunner};
 
@@ -100,6 +129,21 @@ let output = CommandRunner::new(std::time::Duration::from_secs(10)).run(
     Command::new("cat")
         .stdin_bytes("input\n")
         .env("LANG", "C"),
+)?;
+
+assert_eq!(output.stdout_text()?, "input\n");
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+On Windows, this structured-argument version requires Windows PowerShell. It echoes the supplied stdin bytes unchanged:
+
+```rust
+use qubit_command::{Command, CommandRunner};
+
+let output = CommandRunner::new(std::time::Duration::from_secs(10)).run(
+    Command::new("powershell").args(&[
+        "-NoProfile", "-Command", "[Console]::Out.Write([Console]::In.ReadToEnd())",
+    ]).stdin_bytes("input\n"),
 )?;
 
 assert_eq!(output.stdout_text()?, "input\n");

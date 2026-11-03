@@ -51,11 +51,27 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 
 `stdout()` 和 `stderr()` 返回保留的原始字节。只有确实要求严格 UTF-8 时才使用 `stdout_text()` 或 `stderr_text()`；如果希望把非法字节替换为 `�`，使用 `stdout_lossy_text()` 或 `stderr_lossy_text()`。
 
+以下示例需要 Unix 工具环境，并且系统中有 `printf`：
+
 ```rust
 use qubit_command::{Command, CommandRunner};
 
 let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::new("printf").arg("hello"))?;
+
+assert_eq!(output.stdout_text()?, "hello");
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Windows 上可使用 Windows PowerShell，并通过结构化参数调用：
+
+```rust
+use qubit_command::{Command, CommandRunner};
+
+let output = CommandRunner::new(std::time::Duration::from_secs(10))
+    .run(Command::new("powershell").args(&[
+        "-NoProfile", "-Command", "[Console]::Write('hello')",
+    ]))?;
 
 assert_eq!(output.stdout_text()?, "hello");
 # Ok::<(), Box<dyn std::error::Error>>(())
@@ -80,10 +96,21 @@ let command = Command::new("git")
 
 ### 只在明确需要时使用 shell
 
+下面的脚本使用 Unix shell 语法，需要 Unix 工具环境以及 `sh`、`printf`、`tr`：
+
 ```rust
 let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::shell("printf hello | tr a-z A-Z"))?;
 assert_eq!(output.stdout_text()?, "HELLO");
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Windows 上 `Command::shell` 使用 `cmd /C`，因此要传入 `cmd` 脚本，不能把 PowerShell 脚本直接交给它。下面的命令输出 `hello`；断言会忽略行尾换行：
+
+```rust
+let output = CommandRunner::new(std::time::Duration::from_secs(10))
+    .run(Command::shell("echo hello"))?;
+assert_eq!(output.stdout_text()?.trim(), "hello");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -93,6 +120,8 @@ assert_eq!(output.stdout_text()?, "HELLO");
 
 `Command` 可以继承 stdin、使用空 stdin、提供字节或从文件读取；也可以继承环境、添加或覆盖变量、删除变量，或者先清空继承环境再应用显式值：
 
+Unix 工具环境下，可用 `cat` 原样回显 stdin：
+
 ```rust
 use qubit_command::{Command, CommandRunner};
 
@@ -100,6 +129,21 @@ let output = CommandRunner::new(std::time::Duration::from_secs(10)).run(
     Command::new("cat")
         .stdin_bytes("input\n")
         .env("LANG", "C"),
+)?;
+
+assert_eq!(output.stdout_text()?, "input\n");
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Windows 上可通过结构化参数调用 Windows PowerShell，把输入字节原样写回 stdout：
+
+```rust
+use qubit_command::{Command, CommandRunner};
+
+let output = CommandRunner::new(std::time::Duration::from_secs(10)).run(
+    Command::new("powershell").args(&[
+        "-NoProfile", "-Command", "[Console]::Out.Write([Console]::In.ReadToEnd())",
+    ]).stdin_bytes("input\n"),
 )?;
 
 assert_eq!(output.stdout_text()?, "input\n");
