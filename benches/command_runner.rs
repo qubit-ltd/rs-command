@@ -12,12 +12,14 @@ use std::time::Duration;
 
 use criterion::Criterion;
 use criterion::criterion_group;
-use criterion::criterion_main;
 use qubit_command::Command;
 use qubit_command::CommandError;
 use qubit_command::CommandErrorReason;
 use qubit_command::CommandOutput;
 use qubit_command::CommandRunner;
+
+const SILENT_FIXTURE_ARG: &str = "--qubit-command-silent-fixture";
+const SILENT_FIXTURE_DELAY: Duration = Duration::from_millis(10);
 
 /// Builds a shell command that exits successfully without producing output.
 ///
@@ -28,13 +30,9 @@ fn short_lived_command() -> Command {
     Command::shell("exit 0")
 }
 
-/// Builds a command whose output pipes remain idle briefly before closing.
+/// Builds a command that runs this benchmark executable's silent fixture.
 fn silent_command() -> Command {
-    if cfg!(windows) {
-        Command::shell("ping -n 1 127.0.0.1 >NUL")
-    } else {
-        Command::shell("sleep 0.01")
-    }
+    Command::new_os(std::env::current_exe().expect("benchmark executable should resolve")).arg(SILENT_FIXTURE_ARG)
 }
 
 /// Builds a deterministic command that writes a fixed number of zero bytes.
@@ -107,14 +105,22 @@ fn benchmark_short_lived_command_runner(criterion: &mut Criterion) {
     group.finish();
 }
 
-/// Measures helper-thread overhead while both output pipes remain silent.
+/// Measures process startup, a fixed silent wait, and runner completion end to
+/// end.
 fn benchmark_silent_command_runner(criterion: &mut Criterion) {
     let runner = CommandRunner::new(Duration::from_secs(10));
-    verify_fixture(&runner);
+    let command = silent_command();
+    let output = runner.run(command.clone()).expect("silent fixture should succeed");
+    assert!(output.stdout().is_empty(), "silent fixture stdout should be empty");
+    assert!(output.stderr().is_empty(), "silent fixture stderr should be empty");
+    assert!(output.stdout_complete() && output.stderr_complete());
+    assert!(!output.stdout_truncated() && !output.stderr_truncated());
+    assert!(output.elapsed() >= SILENT_FIXTURE_DELAY);
+
     let mut group = criterion.benchmark_group("silent_command_runner");
     group.bench_function("default_timeout", |bencher| {
         let mut failures = 0;
-        bencher.iter(|| black_box(runner.run(black_box(silent_command())).inspect_err(|_| failures += 1)));
+        bencher.iter(|| black_box(runner.run(black_box(command.clone())).inspect_err(|_| failures += 1)));
         assert_eq!(failures, 0, "benchmark commands must succeed");
     });
     group.finish();
@@ -216,4 +222,13 @@ criterion_group!(
     benchmark_silent_command_runner,
     benchmark_total_output_budget,
 );
-criterion_main!(benches);
+
+fn main() {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.len() == 1 && args[0] == SILENT_FIXTURE_ARG {
+        std::thread::sleep(SILENT_FIXTURE_DELAY);
+        return;
+    }
+    benches();
+    Criterion::default().configure_from_args().final_summary();
+}
