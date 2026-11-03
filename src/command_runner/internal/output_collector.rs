@@ -234,11 +234,7 @@ fn read_output_inner(
         write_error = Some((tee.path.clone(), source));
     }
     let output = match (options.total_budget.as_ref(), options.total_budget_stream) {
-        (Some(budget), Some(stream))
-            if options.transfer_budget_after_join && write_error.is_none() && read_result.is_ok() =>
-        {
-            budget.captured_stream_metadata(stream)
-        }
+        (Some(budget), Some(stream)) if options.transfer_budget_after_join => budget.captured_stream_metadata(stream),
         (Some(budget), Some(stream)) => budget.captured_stream(stream),
         _ => CapturedOutput {
             bytes,
@@ -1115,30 +1111,177 @@ mod tests {
     #[test]
     fn test_output_collector_budget_sentinel_survives_tee_failure() {
         let budget = std::sync::Arc::new(TotalOutputBudget::new(3, Some(2), Some(2)));
-        let error = read_output(
-            &mut Cursor::new(b"abcd"),
-            OutputCaptureOptions::new(
-                Some(2),
-                Some(OutputTee::new(
-                    Box::new(FailingWriter { fail_write: true }),
-                    "budget-tee.log".into(),
-                )),
-            )
-            .with_total_budget(budget.clone(), OutputStream::Stdout),
+        let options = OutputCaptureOptions::new(
+            Some(2),
+            Some(OutputTee::new(
+                Box::new(FailingWriter { fail_write: true }),
+                "budget-tee.log".into(),
+            )),
         )
-        .expect_err("tee failure should be retained after reading the budget sentinel");
-
-        let OutputCaptureError::Write { output, .. } = error else {
-            panic!("expected tee write failure");
-        };
+        .with_total_budget(budget.clone(), OutputStream::Stdout);
+        let (cancellation, token) = IoCancellation::pair().expect("cancellation pair should initialize");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let handle = thread::spawn(move || {
+            let result = read_output_inner(&mut Cursor::new(b"abcd"), options, Some(&token), None);
+            let OutputCaptureError::Write { output, .. } = result.as_ref().expect_err("tee should fail") else {
+                panic!("expected tee write failure");
+            };
+            sender.send(output.bytes.clone()).expect("test receiver remains open");
+            result
+        });
+        assert!(receiver.recv().expect("collector reports pre-join metadata").is_empty());
         assert_eq!(budget.exceeded(), Some((3, 4)));
-        assert_eq!(output.bytes, b"ab");
-        assert!(output.truncated);
-        assert!(!output.complete);
         let snapshot = budget.captured_output();
         assert_eq!(snapshot.stdout(), b"ab");
         assert!(snapshot.stdout_truncated());
         assert!(!snapshot.stdout_complete());
+
+        let error = join_output_reader(OutputReader::new_with_budget(
+            handle,
+            cancellation,
+            budget,
+            OutputStream::Stdout,
+        ))
+        .expect_err("tee failure should survive join");
+        let OutputCaptureError::Write { output, .. } = error else {
+            panic!("expected joined tee write failure");
+        };
+        assert_eq!(output.bytes, b"ab");
+        assert!(output.truncated);
+        assert!(!output.complete);
+    }
+
+    #[test]
+    fn test_budget_error_keeps_snapshot_without_deferred_transfer() {
+        let budget = Arc::new(TotalOutputBudget::new(64, None, None));
+        let mut options = OutputCaptureOptions::new(None, None).with_total_budget(budget.clone(), OutputStream::Stdout);
+        options.transfer_budget_after_join = false;
+        let error = read_output(
+            &mut FailingReader {
+                prefix: Cursor::new(b"partial".to_vec()),
+            },
+            options,
+        )
+        .expect_err("read failure should be returned");
+        let OutputCaptureError::Read { output, .. } = error else {
+            panic!("expected read failure");
+        };
+        assert_eq!(output.bytes, b"partial");
+        assert_eq!(budget.captured_output().stdout(), b"partial");
+    }
+
+    fn assert_budget_error_defers_capture_until_join(
+        reader: impl Read + Send + 'static,
+        tee: Option<OutputTee>,
+        expected_kind: &'static str,
+        expected_complete: bool,
+    ) {
+        let budget = Arc::new(TotalOutputBudget::new(64, None, None));
+        let (cancellation, token) = IoCancellation::pair().expect("cancellation pair should initialize");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker_budget = Arc::clone(&budget);
+        let handle = thread::spawn(move || {
+            let result = read_output_inner(
+                &mut { reader },
+                OutputCaptureOptions::new(None, tee).with_total_budget(worker_budget, OutputStream::Stdout),
+                Some(&token),
+                None,
+            );
+            let output = match &result {
+                Err(OutputCaptureError::Read { output, .. })
+                | Err(OutputCaptureError::Write { output, .. })
+                | Err(OutputCaptureError::ReadAfterWrite { output, .. }) => output,
+                Ok(_) => panic!("expected collector error"),
+            };
+            sender.send(output.bytes.clone()).expect("test receiver remains open");
+            result
+        });
+        assert!(
+            receiver
+                .recv()
+                .expect("collector reports its pre-join result")
+                .is_empty()
+        );
+        let snapshot = budget.captured_output();
+        assert_eq!(snapshot.stdout(), b"partial");
+        assert_eq!(snapshot.stdout_complete(), expected_complete);
+
+        let error = join_output_reader(OutputReader::new_with_budget(
+            handle,
+            cancellation,
+            budget,
+            OutputStream::Stdout,
+        ))
+        .expect_err("collector error must survive join");
+        let (output, path, description) = match error {
+            OutputCaptureError::Read { source, output } => (output, None, source.to_string()),
+            OutputCaptureError::Write { path, source, output } => (output, Some(path), source.to_string()),
+            OutputCaptureError::ReadAfterWrite {
+                path,
+                write_source,
+                read_source,
+                output,
+            } => (output, Some(path), format!("{}; {}", write_source, read_source)),
+        };
+        assert_eq!(description, expected_kind);
+        if let Some(path) = path {
+            assert_eq!(path, Path::new("budget-tee.log"));
+        }
+        assert_eq!(output.bytes, b"partial");
+        assert_eq!(output.complete, expected_complete);
+    }
+
+    #[test]
+    fn test_budget_error_defers_capture_until_join_read() {
+        assert_budget_error_defers_capture_until_join(
+            FailingReader {
+                prefix: Cursor::new(b"partial".to_vec()),
+            },
+            None,
+            "injected read failure",
+            false,
+        );
+    }
+
+    #[test]
+    fn test_budget_error_defers_capture_until_join_write() {
+        assert_budget_error_defers_capture_until_join(
+            Cursor::new(b"partial"),
+            Some(OutputTee::new(
+                Box::new(FailingWriter { fail_write: true }),
+                "budget-tee.log".into(),
+            )),
+            "write failure",
+            true,
+        );
+    }
+
+    #[test]
+    fn test_budget_error_defers_capture_until_join_read_after_write() {
+        assert_budget_error_defers_capture_until_join(
+            FailingReader {
+                prefix: Cursor::new(b"partial".to_vec()),
+            },
+            Some(OutputTee::new(
+                Box::new(FailingWriter { fail_write: true }),
+                "budget-tee.log".into(),
+            )),
+            "write failure; injected read failure",
+            false,
+        );
+    }
+
+    #[test]
+    fn test_budget_error_defers_capture_until_join_flush() {
+        assert_budget_error_defers_capture_until_join(
+            Cursor::new(b"partial"),
+            Some(OutputTee::new(
+                Box::new(FailingWriter { fail_write: false }),
+                "budget-tee.log".into(),
+            )),
+            "flush failure",
+            true,
+        );
     }
 
     #[test]

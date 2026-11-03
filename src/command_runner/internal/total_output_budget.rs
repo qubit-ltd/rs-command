@@ -290,8 +290,16 @@ fn retain(
 
 #[cfg(test)]
 mod tests {
+    use std::io;
     use std::io::Cursor;
+    use std::sync::Arc;
+    use std::thread;
 
+    use super::super::io_cancellation::IoCancellation;
+    use super::super::output_capture_error::OutputCaptureError;
+    use super::super::output_collector::join_output_reader;
+    use super::super::output_reader::OutputReader;
+    use super::CapturedOutput;
     use super::TotalOutputBudget;
     use crate::CommandCapturedOutput;
     use crate::OutputStream;
@@ -357,5 +365,42 @@ mod tests {
         assert!(!merged.stderr_complete());
         let missing_joined = budget.captured_output_with_joined(None);
         assert!(!missing_joined.stdout_complete());
+    }
+
+    #[test]
+    fn test_total_output_error_join_moves_buffer_without_copy() {
+        let budget = Arc::new(TotalOutputBudget::new(32, None, None));
+        let mut reader = Cursor::new(b"payload");
+        let mut buffer = [0; 8];
+        budget
+            .read_ready(&mut reader, &mut buffer, 8, OutputStream::Stdout)
+            .expect("read succeeds");
+        let expected_ptr = budget
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .stdout
+            .as_ptr();
+
+        let (cancellation, _token) = IoCancellation::pair().expect("cancellation pair initializes");
+        let reader = OutputReader::new_with_budget(
+            thread::spawn(|| {
+                Err(OutputCaptureError::Read {
+                    source: io::Error::other("injected read failure"),
+                    output: CapturedOutput::default(),
+                })
+            }),
+            cancellation,
+            budget,
+            OutputStream::Stdout,
+        );
+
+        let error = join_output_reader(reader).expect_err("reader failure is preserved");
+        let OutputCaptureError::Read { output, .. } = error else {
+            panic!("expected reader error");
+        };
+
+        assert_eq!(output.bytes.as_ptr(), expected_ptr);
+        assert_eq!(output.bytes, b"payload");
     }
 }
