@@ -93,7 +93,11 @@ fn assert_relative_file_paths_use_parent_cwd(configuration: &str) {
         .run_with(command, options)
         .expect("relative stdin and tee paths should be prepared from parent cwd");
 
-    assert_eq!(output.stdout(), b"parent-input");
+    #[cfg(unix)]
+    let expected_stdout = &b"parent-input"[..];
+    #[cfg(windows)]
+    let expected_stdout = &b"parent-input\r\n"[..];
+    assert_eq!(output.stdout(), expected_stdout);
     assert!(!String::from_utf8_lossy(output.stdout()).contains("child-input"));
     assert_eq!(
         fs::read(relative_files.join("stdout.log")).expect("parent stdout tee should exist"),
