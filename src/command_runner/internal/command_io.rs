@@ -295,13 +295,23 @@ fn finish_helpers<R>(
     )
 }
 
-/// Joins a reader unless a failed cancellation remains unconfirmed.
+/// The result of finishing an output reader.
 enum OutputReaderFinish {
+    /// The reader thread was joined; the payload contains its capture result.
     Joined(Result<CapturedOutput, OutputCaptureError>),
+    /// The reader was not joined; the payload is a snapshot of retained output.
+    ///
+    /// The reader thread may still be alive, and the snapshot may be partial.
+    /// Without a shared output budget, the snapshot can contain no bytes.
     Detached(CapturedOutput),
 }
 
 impl OutputReaderFinish {
+    /// Returns the captured output result represented by this finish state.
+    ///
+    /// A detached snapshot is returned as `Ok`, but this does not mean its
+    /// reader thread has stopped or erase a cancellation failure. That failure
+    /// is retained separately by the outer cleanup result.
     fn into_output_result(self) -> Result<CapturedOutput, OutputCaptureError> {
         match self {
             Self::Joined(result) => result,
@@ -310,6 +320,14 @@ impl OutputReaderFinish {
     }
 }
 
+/// Finishes an output reader, joining it unless a failed cancellation remains
+/// unconfirmed at the shared confirmation deadline.
+///
+/// The deadline is consulted only when cancellation failed. If cancellation
+/// succeeded, this waits by joining the reader without applying that deadline.
+/// On the failed-cancellation path, an unconfirmed reader is detached and its
+/// retained output is returned as a potentially partial snapshot; the reader
+/// may remain alive after this function returns.
 fn finish_output_reader(
     reader: OutputReader,
     cancellation_failed: bool,

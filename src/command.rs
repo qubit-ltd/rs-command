@@ -20,8 +20,9 @@ use crate::command_argument::CommandArgument;
 use crate::command_env::env_key_eq;
 use crate::command_stdin::CommandStdin;
 
+/// Marker substituted for a path hidden from diagnostics.
 const REDACTED_PATH: &str = "<redacted path>";
-/// Marker used when a command path is redacted from diagnostics.
+/// Marker appended when a diagnostic batch is truncated.
 const TRUNCATED_REDACTION: &str = "<truncated>";
 
 /// Structured description of an external command to run.
