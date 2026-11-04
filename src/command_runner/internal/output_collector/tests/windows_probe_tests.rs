@@ -887,38 +887,28 @@ fn run_production_command_io_probe() {
         .metadata()
         .expect("tee file metadata should be readable")
         .len();
-    let trace = serde_json::json!({
-        "event": "scenario_classification",
-        "scenario": "production_command_io_blocked_read",
-        "source_sha": std::env::var("GITHUB_SHA")
-            .unwrap_or_else(|_| "local-uncommitted-worktree".to_owned()),
-        "attempts": 1,
-        "relative_ns": {
-            "read_entry_observed": read_entry_observed_ns,
-            "cleanup_started": cleanup_started_ns,
-            "cancel_result_observed": cancellation_result_observed_ns,
-            "read_return_observed": read_return_observed_ns,
-            "cleanup_joined": cleanup_joined_ns,
-        },
-        "cancel_success": cancel_result.is_none(),
-        "cancel_raw_os_error": cancel_result,
-        "cleanup_thread_unfinished_when_cancel_observer_fired": cleanup_pending,
-        "production_join_pending_witness": false,
-        "source_read_bytes": read_bytes,
-        "source_read_raw_os_error": read_error,
-        "original_io_return_is_subsequent_io": false,
-        "tee_path_kind": "ordinary_file",
-        "tee_write_entries": tee_write_entries,
-        "tee_file_len": tee_len,
-        "stdout_complete": captured.stdout_complete(),
-        "stdout_truncated": captured.stdout_truncated(),
-        "cleanup_failures": cleanup_failures.len(),
-        "reader_helper_joined": true,
-        "exit_status_process_reaped": true,
-        "source_writer_manually_released": true,
-        "watchdog_released": false,
-        "classification": "unresolved",
-    });
+    let source_sha = std::env::var("GITHUB_SHA").unwrap_or_else(|_| "local-uncommitted-worktree".to_owned());
+    let cancel_raw_os_error = cancel_result.map_or_else(|| "null".to_owned(), |code| code.to_string());
+    let source_read_bytes = read_bytes.map_or_else(|| "null".to_owned(), |count| count.to_string());
+    let source_read_raw_os_error = read_error.map_or_else(|| "null".to_owned(), |code| code.to_string());
+    let trace = format!(
+        "{{\"event\":\"scenario_classification\",\"scenario\":\"production_command_io_blocked_read\",\
+         \"source_sha\":\"{source_sha}\",\"attempts\":1,\"relative_ns\":{{\
+         \"read_entry_observed\":{read_entry_observed_ns},\"cleanup_started\":{cleanup_started_ns},\
+         \"cancel_result_observed\":{cancellation_result_observed_ns},\"read_return_observed\":{read_return_observed_ns},\
+         \"cleanup_joined\":{cleanup_joined_ns}}},\"cancel_success\":{},\"cancel_raw_os_error\":{cancel_raw_os_error},\
+         \"cleanup_thread_unfinished_when_cancel_observer_fired\":{cleanup_pending},\
+         \"production_join_pending_witness\":false,\"source_read_bytes\":{source_read_bytes},\
+         \"source_read_raw_os_error\":{source_read_raw_os_error},\"original_io_return_is_subsequent_io\":false,\
+         \"tee_path_kind\":\"ordinary_file\",\"tee_write_entries\":{tee_write_entries},\"tee_file_len\":{tee_len},\
+         \"stdout_complete\":{},\"stdout_truncated\":{},\"cleanup_failures\":{},\
+         \"reader_helper_joined\":true,\"exit_status_process_reaped\":true,\
+         \"source_writer_manually_released\":true,\"watchdog_released\":false,\"classification\":\"unresolved\"}}",
+        cancel_result.is_none(),
+        captured.stdout_complete(),
+        captured.stdout_truncated(),
+        cleanup_failures.len(),
+    );
     eprintln!("{trace}");
     assert_eq!(tee_path, tee_file.path());
     assert_eq!(tee_write_entries, 0, "a cancelled blocked read has no bytes to tee");
