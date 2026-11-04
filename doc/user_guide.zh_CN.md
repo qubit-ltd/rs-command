@@ -45,7 +45,7 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 }
 ```
 
-`CommandRunner::new(std::time::Duration::from_secs(10))` 默认使用十秒超时，把退出码 `0` 视为成功，并在内存中为每个输出流最多保留 1 MiB。`run` 会同步等待命令成功，或返回 `CommandError`。
+`CommandRunner::new(std::time::Duration::from_secs(10))` 使用调用方传入的十秒超时，把退出码 `0` 视为成功，并在内存中为每个输出流最多保留 1 MiB。`run` 会同步等待命令成功，或返回 `CommandError`。
 
 ### 判断输出含义
 
@@ -198,6 +198,8 @@ use qubit_command::{Command, CommandRunner};
 let result = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::new("long-running-tool"));
 ```
+
+`CommandRunner::new(timeout)` 使用调用方传入的超时；`CommandRunner::without_timeout()` 会显式禁用超时。
 
 达到 deadline 后，runner 会尝试终止受管进程树，收集可用输出，等待 I/O 辅助线程结束，并返回 `CommandError`，其 `kind()` 为 `CommandErrorKind::TimedOut`。超时错误可能只包含部分输出。
 
@@ -398,7 +400,7 @@ runner 会返回失败证据，不再进入无界等待。子进程此时可能�
 ## 限制与最佳实践
 
 - 优先使用带显式参数的 `Command::new`。只有 shell 行为本身是需求时才使用 `Command::shell`。
-- 除非命令行为确实要求改变，否则保留默认超时和有界捕获。
+- 为命令配置合适的超时；除非命令行为确实要求改变，否则保留有界输出捕获。
 - 把超时和取消输出视为可能不完整。
 - 大日志使用 tee 文件，不要轻易使用无界内存捕获。
 - 将 stdin 和 tee 路径配置为互不相同的普通文件。

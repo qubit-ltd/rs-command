@@ -201,6 +201,8 @@ let result = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::new("long-running-tool"));
 ```
 
+`CommandRunner::new(timeout)` uses the timeout supplied by the caller; `CommandRunner::without_timeout()` explicitly disables the timeout.
+
 When the deadline is reached, the runner attempts to terminate the managed process tree, collects available output, joins its I/O helpers, and returns a `CommandError` whose `kind()` is `CommandErrorKind::TimedOut`. A timeout error can contain partial output.
 
 Use `without_timeout()` only when an unlimited wait is deliberate. If cancellation or a total output budget is configured, the runner still polls its timer and manages the process tree even without a timeout.
@@ -411,7 +413,7 @@ Use `sensitive_arg` for caller-known secrets and review redaction allow rules ca
 ## Limitations and Best Practices
 
 - Prefer `Command::new` with explicit arguments. Use `Command::shell` only when shell behavior is part of the requirement.
-- Keep the default timeout and bounded capture unless the command's behavior justifies a different policy.
+- Configure a timeout appropriate for the command, and keep bounded output capture unless the command's behavior justifies a different policy.
 - Treat timeout and cancellation output as potentially incomplete.
 - Use tee files instead of unbounded memory capture for large logs.
 - Keep stdin and tee paths as separate ordinary files.
