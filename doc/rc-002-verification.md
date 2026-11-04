@@ -18,13 +18,19 @@ suites. The Windows probe passed after exhausting all 128 attempts, so it
 observed no valid post-fix hit. As a race-driven probe, this is evidence about
 the tested schedule, not a proof that every production schedule is impossible.
 
-## Current worktree probe scope (no run recorded yet)
+## Current worktree probe result
 
 The worktree adds `.github/workflows/windows-cancellation-interleaving.yml`. It runs
 the named test on `windows-2022`, prints the actual `GITHUB_SHA` into the job log,
-and uploads that log with `if: always()`. Until a run for the exact worktree
-head SHA is reviewed, this section records code-based coverage limits only; the
-historical runs above are not evidence for this worktree.
+and uploads that log with `if: always()`. The full GitHub Actions run for exact
+head `e4ca5a3c812b17b12e824b1ee71edcc03b54f7be` passed:
+[Rust CI run 41755997380](https://github.com/qubit-ltd/rs-command/actions/runs/41755997380).
+Its Windows job ran the named probe successfully and emitted all classification
+records below. Across 128 read-to-tee attempts, 26 first cancellations
+succeeded, 102 returned `ERROR_NOT_FOUND` (1168), no tee write began, and no
+partial candidate was observed. The scenario remains `uncovered` because this
+probe does not demonstrate a watchdog-rescued production cleanup join; the
+overall RC-002 result remains `unresolved`.
 
 The test first verifies the watchdog with a full real anonymous pipe and a blocked
 writer helper; a separate watchdog thread drains the pipe and the helper is
@@ -56,7 +62,8 @@ Current local checks on Linux: `cargo check --lib` passed; the requested focused
 Rustfmt syntax checks with `--emit stdout --config skip_children=true
 --edition 2024` and `git diff --check` passed. A Windows-target `cargo check --tests
 --target x86_64-pc-windows-gnu` could not reach this crate because the environment
-lacks `x86_64-w64-mingw32-gcc`. No Windows run has been triggered for this worktree.
+lacks `x86_64-w64-mingw32-gcc`. The required Windows run was performed by GitHub
+CI as recorded above.
 
 ## What the probe establishes
 
@@ -104,8 +111,9 @@ On Linux x86_64 with `rustc 1.94.0 (4a4ef493e 2026-03-02)`:
   because the tee received the bytes.
 
 The Windows runner was not run locally. Per the implementation instruction,
-the pushed commit triggered GitHub CI, where the Windows job and the full
-workflow passed in run 41745608628.
+GitHub CI ran the Windows probe and full workflow successfully on the current
+task head in run 41755997380. Earlier post-fix run 41745608628 is historical
+evidence for the production fix and remains separate from this worktree result.
 
 ---
 
@@ -126,12 +134,17 @@ matrix 和配置的 infrastructure suites 也通过。Windows 探针完成全部
 通过，因此修复后没有观察到有效命中。该探针依赖竞态调度；结果是针对所测交错的证据，
 不能证明所有生产调度都不可能发生类似顺序。
 
-## 当前 worktree 探针范围（尚无本轮 run）
+## 当前 worktree 探针结果
 
 worktree 新增 `.github/workflows/windows-cancellation-interleaving.yml`：在
 `windows-2022` 运行指定测试，把实际 `GITHUB_SHA` 写入 job 日志，并通过
-`if: always()` 上传日志。核对与 worktree head SHA 一致的 run 之前，本节只记录
-基于代码的覆盖限制；上面的历史 run 不构成本 worktree 的证据。
+`if: always()` 上传日志。完整 GitHub Actions run 在精确 head
+`e4ca5a3c812b17b12e824b1ee71edcc03b54f7be` 上通过：
+[Rust CI run 41755997380](https://github.com/qubit-ltd/rs-command/actions/runs/41755997380)。
+Windows job 成功运行指定探针并输出以下分类记录。128 次 read-to-tee 尝试中，26 次
+首次取消成功，102 次返回 `ERROR_NOT_FOUND`（1168），没有开始 tee 写入，也没有观察到
+partial candidate。由于该探针没有证明生产 cleanup join 需要 watchdog 释放，该场景仍为
+`uncovered`；RC-002 总体仍为 `unresolved`。
 
 测试先用真实填满的匿名管道和阻塞 writer helper 验证 watchdog：独立 watchdog 线程排空
 管道，并在外层进程 watchdog 超时前 join helper。结束子进程只作为外层 watchdog 的兜底。
@@ -158,7 +171,7 @@ read-to-tee 循环作为旧探针保留，但它直接调用 `read_output_inner`
 `rustfmt --emit stdout --config skip_children=true --edition 2024` 的语法检查和
 `git diff --check` 均通过。尝试 Windows 目标检查
 `cargo check --tests --target x86_64-pc-windows-gnu` 时，环境缺少
-`x86_64-w64-mingw32-gcc`，未能编译到本 crate。本 worktree 尚未触发 Windows run。
+`x86_64-w64-mingw32-gcc`，未能编译到本 crate。所需 Windows run 已由上文 GitHub CI 执行。
 
 ## 探针验证范围
 
@@ -196,5 +209,6 @@ read-to-tee 循环作为旧探针保留，但它直接调用 `read_output_inner`
 - 生产修复后，`cargo test --lib test_cancellation_after_read_preserves_bytes_without_starting_tee_write`
   通过。生产修复前，该回归测试因 tee 收到字节而失败。
 
-按实施指示，本地没有运行 Windows runner。提交推送后由 GitHub CI 执行，Windows job 和
-完整 workflow 均在 run 41745608628 中通过。
+按实施指示，本地没有运行 Windows runner。GitHub CI 在当前任务 head 上运行 Windows 探针，
+并在 run 41755997380 中通过完整 workflow。此前的 post-fix run 41745608628 是生产修复的
+历史证据，与本 worktree 的验证结果分开记录。
