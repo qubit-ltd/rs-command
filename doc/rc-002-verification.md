@@ -18,6 +18,46 @@ suites. The Windows probe passed after exhausting all 128 attempts, so it
 observed no valid post-fix hit. As a race-driven probe, this is evidence about
 the tested schedule, not a proof that every production schedule is impossible.
 
+## Current worktree probe scope (no run recorded yet)
+
+The worktree adds `.github/workflows/windows-cancellation-interleaving.yml`. It runs
+the named test on `windows-2022`, prints the actual `GITHUB_SHA` into the job log,
+and uploads that log with `if: always()`. Until a run for the exact worktree
+head SHA is reviewed, this section records code-based coverage limits only; the
+historical runs above are not evidence for this worktree.
+
+The test first verifies the watchdog with a full real anonymous pipe and a blocked
+writer helper; a separate watchdog thread drains the pipe and the helper is
+joined before the outer process watchdog deadline. Child termination is only the
+outer watchdog's fallback. The test emits JSON Lines records named
+`scenario_classification` and `overall_classification`. When all 128 attempts finish
+without a partial candidate, the log includes these records:
+
+```json
+{"event":"scenario_classification","schema":1,"scenario":"read_to_tee","classification":"uncovered","attempts":128,"partial_probe_hits":0,"reason":"probe calls read_output_inner directly and reaps by a second cancellation plus manual pipe drain; it does not establish that production OutputReader cleanup join requires watchdog rescue"}
+{"event":"scenario_classification","schema":1,"scenario":"eof_to_flush","classification":"uncovered","attempts":0,"reason":"production tee is an unbuffered File writer; no buffered bytes remain for a blocking flush after EOF. A BufferWriter/BufWriter would change the production path and cannot establish this interleaving"}
+{"event":"scenario_classification","schema":1,"scenario":"stdin_check_to_write","classification":"uncovered","attempts":0,"reason":"Windows wait_writable only checks the cancellation token; there is no pending synchronous I/O in the check-to-write gap for CancelSynchronousIo to successfully cancel. A success would target the write after it entered the kernel"}
+{"event":"overall_classification","schema":1,"rc002":"unresolved","reason":"all three planned scenarios lack a complete witness satisfying successful cancellation, normal completion, subsequent blocked I/O, production cleanup join, and watchdog release"}
+```
+
+The read-to-tee loop is retained as a partial legacy probe, but it calls
+`read_output_inner` directly and reaps by a second cancellation and manual pipe
+drain. It does not establish a production `OutputReader` cleanup join blocked
+until watchdog release. EOF-to-flush has no buffered tee data in the production
+`File` writer path; substituting a `BufWriter` would test a different path. On
+Windows, `PollableStdin::wait_writable` only checks the token, so the
+check-to-write gap has no pending synchronous operation for a successful
+`CancelSynchronousIo` result to identify. These boundaries are explicitly
+uncovered, not no-hit results. RC-002 remains unresolved.
+
+Current local checks on Linux: `cargo check --lib` passed; the requested focused
+`cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1
+--nocapture` exited 0 but discovered zero tests because the probe is Windows-only.
+Rustfmt syntax checks with `--emit stdout --config skip_children=true
+--edition 2024` and `git diff --check` passed. A Windows-target `cargo check --tests
+--target x86_64-pc-windows-gnu` could not reach this crate because the environment
+lacks `x86_64-w64-mingw32-gcc`. No Windows run has been triggered for this worktree.
+
 ## What the probe establishes
 
 `src/command_runner/internal/output_collector.rs` contains the Windows-only
@@ -85,6 +125,40 @@ Windows 专用探针在修复前复现了待核实交错：对阻塞 source 读�
 matrix 和配置的 infrastructure suites 也通过。Windows 探针完成全部 128 次尝试后
 通过，因此修复后没有观察到有效命中。该探针依赖竞态调度；结果是针对所测交错的证据，
 不能证明所有生产调度都不可能发生类似顺序。
+
+## 当前 worktree 探针范围（尚无本轮 run）
+
+worktree 新增 `.github/workflows/windows-cancellation-interleaving.yml`：在
+`windows-2022` 运行指定测试，把实际 `GITHUB_SHA` 写入 job 日志，并通过
+`if: always()` 上传日志。核对与 worktree head SHA 一致的 run 之前，本节只记录
+基于代码的覆盖限制；上面的历史 run 不构成本 worktree 的证据。
+
+测试先用真实填满的匿名管道和阻塞 writer helper 验证 watchdog：独立 watchdog 线程排空
+管道，并在外层进程 watchdog 超时前 join helper。结束子进程只作为外层 watchdog 的兜底。
+测试输出名为 `scenario_classification` 和 `overall_classification` 的 JSON Lines 记录。
+128 次尝试均无 partial candidate 时，日志包含以下记录：
+
+```json
+{"event":"scenario_classification","schema":1,"scenario":"read_to_tee","classification":"uncovered","attempts":128,"partial_probe_hits":0,"reason":"probe calls read_output_inner directly and reaps by a second cancellation plus manual pipe drain; it does not establish that production OutputReader cleanup join requires watchdog rescue"}
+{"event":"scenario_classification","schema":1,"scenario":"eof_to_flush","classification":"uncovered","attempts":0,"reason":"production tee is an unbuffered File writer; no buffered bytes remain for a blocking flush after EOF. A BufferWriter/BufWriter would change the production path and cannot establish this interleaving"}
+{"event":"scenario_classification","schema":1,"scenario":"stdin_check_to_write","classification":"uncovered","attempts":0,"reason":"Windows wait_writable only checks the cancellation token; there is no pending synchronous I/O in the check-to-write gap for CancelSynchronousIo to successfully cancel. A success would target the write after it entered the kernel"}
+{"event":"overall_classification","schema":1,"rc002":"unresolved","reason":"all three planned scenarios lack a complete witness satisfying successful cancellation, normal completion, subsequent blocked I/O, production cleanup join, and watchdog release"}
+```
+
+read-to-tee 循环作为旧探针保留，但它直接调用 `read_output_inner`，并通过第二次
+取消和手动排空管道回收；它没有证明生产 `OutputReader` 收尾 join 会一直阻塞到 watchdog
+释放。生产 `File` tee writer 在 EOF 后没有待 flush 的缓冲数据；换成 `BufWriter` 会测试
+不同路径。Windows 的 `PollableStdin::wait_writable` 只检查 token，因此 check-to-write
+间隔没有可供成功 `CancelSynchronousIo` 命中的同步操作。这些边界分类为明确未覆盖，
+而不是“无命中”。RC-002 仍未解决。
+
+当前 Linux 本地检查：`cargo check --lib` 通过；请求的 focused 命令
+`cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1
+--nocapture` 退出码为 0，但因探针仅在 Windows 编译而发现 0 个测试。使用
+`rustfmt --emit stdout --config skip_children=true --edition 2024` 的语法检查和
+`git diff --check` 均通过。尝试 Windows 目标检查
+`cargo check --tests --target x86_64-pc-windows-gnu` 时，环境缺少
+`x86_64-w64-mingw32-gcc`，未能编译到本 crate。本 worktree 尚未触发 Windows run。
 
 ## 探针验证范围
 

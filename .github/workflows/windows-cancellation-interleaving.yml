@@ -1,0 +1,30 @@
+name: Windows Cancellation Interleaving
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-interleaving:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.0
+      - name: Run real-pipe cancellation probe
+        shell: pwsh
+        run: |
+          Set-Content -Path windows-cancellation-interleaving.log -Value "ci_checkout_sha=$env:GITHUB_SHA"
+          cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1 --nocapture 2>&1 | Tee-Object -FilePath windows-cancellation-interleaving.log -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload probe trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-cancellation-interleaving-trace
+          path: windows-cancellation-interleaving.log
+          if-no-files-found: warn

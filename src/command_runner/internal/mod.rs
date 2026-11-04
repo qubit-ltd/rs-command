@@ -41,5 +41,8 @@ pub(in crate::command_runner) mod stop_reason;
 pub(in crate::command_runner) mod total_output_budget;
 pub(in crate::command_runner) mod wait_policy;
 
+#[cfg(all(test, windows))]
+mod windows_cancel_interleaving;
+
 #[cfg(test)]
 pub(super) mod scripted_child;
