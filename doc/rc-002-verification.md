@@ -167,10 +167,16 @@ attempt 2. The hit required a second successful real `CancelSynchronousIo`
 while the worker remained unfinished after the bounded observation interval.
 The timeline was initially printed in milliseconds, which rounded all event
 offsets to zero; the harness now records nanosecond offsets for subsequent runs.
-The Windows test failed intentionally on the confirmed hit. The same workflow's
-macOS job also had a transient failure in the existing
-`stdin_hold_is_cancelled_within_watchdog` test; its next run passed. The new
-production check is not yet covered by a completed Windows CI run.
+The Windows test failed intentionally on the confirmed hit. On the post-fix
+commit `8fa796a`, Windows CI run
+[41742850551](https://github.com/qubit-ltd/rs-command/actions/runs/41742850551)
+passed all 99 library tests, including the interleaving test. Since the test
+passes only when its valid-hit list remains empty after all 128 attempts, this
+run found no valid post-fix hit. The overall Windows job then failed in Clippy
+because the harness retained an unused `WriteFile` declaration; that
+declaration has been removed, and a full CI rerun is pending. Ubuntu and macOS
+passed this workflow. The earlier macOS watchdog failure was transient and did
+not recur.
 
 ## Windows CI 已复现交错
 
@@ -200,5 +206,11 @@ read wrapper 的入口事件后，通过 barrier 同时放行 source 管道写�
 阻塞写，并在第 2 次尝试中出现 1 次有效命中。有效命中还要求有界观察窗口后 worker
 仍未结束，且第二次真实 `CancelSynchronousIo` 也成功。初版时间线以毫秒打印，所有
 偏移都被舍入为零；后续运行已改为记录纳秒偏移。Windows 测试因命中而按设计失败。
-同一 workflow 的 macOS job 还曾遇到既有 `stdin_hold_is_cancelled_within_watchdog`
-测试的瞬时失败，下一次运行已通过。生产取消检查修复尚未通过完整 Windows CI 验证。
+
+修复后的提交 `8fa796a` 在 Windows CI run
+[41742850551](https://github.com/qubit-ltd/rs-command/actions/runs/41742850551)
+中通过了全部 99 个库测试，包括该交错测试。根据测试断言，只有 128 次尝试后有效
+命中列表仍为空才会通过，因此本次修复后运行没有有效命中。整条 Windows job 随后在
+Clippy 阶段因测试 harness 中未使用的 `WriteFile` 声明失败；该声明已移除，完整 CI
+重跑等待中。同一 workflow 的 Ubuntu 和 macOS 均通过。先前 macOS 上既有
+`stdin_hold_is_cancelled_within_watchdog` 测试的瞬时失败未再次出现。

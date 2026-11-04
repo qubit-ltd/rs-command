@@ -1753,13 +1753,6 @@ mod windows_cancellation_interleaving_tests {
             available: *mut u32,
             left: *mut u32,
         ) -> i32;
-        fn WriteFile(
-            pipe: RawHandle,
-            buffer: *const c_void,
-            size: u32,
-            written: *mut u32,
-            overlapped: *mut c_void,
-        ) -> i32;
     }
 
     struct ReadEntry(File, mpsc::Sender<Instant>);
