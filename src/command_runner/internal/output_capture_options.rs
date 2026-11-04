@@ -50,11 +50,14 @@ impl OutputCaptureOptions {
 
     /// Adds a shared stdout/stderr retention budget to these capture options.
     ///
-    /// `budget` accounts for retained bytes across the command's output
-    /// streams, while `stream` identifies which stream this reader contributes
-    /// to. Bytes remain owned by the shared budget until this reader joins;
-    /// joining then transfers this stream's retained bytes into its capture
-    /// result.
+    /// `budget` counts bytes read from both output streams, including bytes
+    /// discarded because of a per-stream retention limit, while `stream`
+    /// identifies which stream this reader contributes to. At most one byte
+    /// beyond the configured limit is read as a sentinel to prove the limit
+    /// was exceeded. Retention is controlled separately by each stream's
+    /// in-memory limit. Bytes remain owned by the shared budget until this
+    /// reader joins; joining then transfers this stream's retained bytes into
+    /// its capture result.
     ///
     /// # Returns
     ///
