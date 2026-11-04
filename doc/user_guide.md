@@ -241,12 +241,16 @@ more than once has no additional effect.
 
 Timeout, cancellation, and total-output-budget monitoring use timer-based polling. This includes a total output budget configured by itself. The configured timer must continue progressing independently while `run()` blocks synchronously. A Tokio timer must not depend on a current-thread runtime driven only by that same blocked thread.
 
-On Windows, the normal helper-cancellation path uses `CancelSynchronousIo` and
-joins each helper after the cancellation request. If that system request fails,
-the runner waits at most 100 ms for the helper to confirm that it stopped. When
-the confirmation window expires, the returned error retains a cancellation
-cleanup failure so the result stays bounded; the affected helper may remain
-alive until its pipe closes.
+On Windows, a successful `CancelSynchronousIo` means the cancellation request
+succeeded; it does not prove that the helper has stopped. The runner then joins
+the helper, and that join is not limited by the 100 ms deadline. The runner
+establishes one shared 100 ms helper-confirmation deadline before issuing
+cancellation requests and consults it only when a request fails; it is not
+reset for each helper or a hard deadline for the whole call. If that deadline expires,
+the returned error retains a cancellation cleanup failure so the result stays
+bounded; the affected helper may remain alive until its pipe closes. The
+current investigation status is recorded in [RC-002 Windows cancellation
+verification](rc-002-verification.md).
 
 ## Bounded and Large Output
 

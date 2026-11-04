@@ -64,8 +64,9 @@ runner 按以下状态转移：
 3. **已观察：** 子进程已退出、超时或观察到取消。runner 仍保留进程状态和 helper 结果，
    直到完成策略处理完毕。
 4. **已终结：** 契约允许 join 的 helper 已结束，其结果已合并到 `CommandOutput` 或清理
-   诊断。在 Windows 上，helper 取消失败有有界的确认窗口；未确认的 helper 可能脱离
-   join，并在管道关闭后结束。
+   诊断。在 Windows 上，runner 会在发出 helper 取消请求前统一设定一个共享确认截止时间，
+   只有取消请求失败时才会检查，且不会为每个 helper 重置。如果在该截止时间前确认 helper
+   已结束，后续 join 不受该时间限制；未确认的 helper 可能脱离 join，并在管道关闭后结束。
 
 启动前的最终取消检查是线性化点。此前取消返回 `CancelledBeforeStart`，不会创建或截断
 tee 文件；此后取消属于运行中取消，并可能保留部分输出。
@@ -108,8 +109,10 @@ spawn 时间不计入。超时、取消和总输出预算监控都使用基于 t
 的 `*_complete()` 会为 false。
 
 Unix reader 和 stdin writer 使用非阻塞操作及唤醒通道，因此不会等待逃逸的后代关闭继承
-的管道。Windows 使用 `CancelSynchronousIo` 中断同步操作。如果 Windows 取消请求失败，
-runner 最多等待 100 ms 来确认 helper 已停止。超过期限后，runner 返回有界结果，并按需
+的管道。Windows 使用 `CancelSynchronousIo` 中断同步操作。调用成功只表示取消请求成功，
+并不能证明 helper 已停止。随后 runner 会 join 该 helper；这个 join 不受 100 ms 截止时间限制。
+runner 会在发出取消请求前统一设定一个共享的 100 ms helper 确认截止时间，只有请求失败时才会
+检查该时间，且不会为每个 helper 重置；它也不是整个调用的硬期限。超过该截止时间后，runner 返回有界结果，并按需
 保留 `StdoutCancellation`、`StderrCancellation` 或 `StdinCancellation` 清理失败；对应
 helper 可能一直存活到管道关闭。
 成功取消后的交错核查及当前证据记录在 [RC-002 Windows 取消验证](rc-002-verification.md) 中。
@@ -147,8 +150,9 @@ Unix 使用 process group 和非阻塞管道轮询。文件型 stdin 与 tee 文
 
 Windows 在配置可用时使用 Job Object 管理进程树，管道句柄保持同步 I/O 语义，并通过
 `CancelSynchronousIo` 作为正常 helper 中断机制。该调用失败会通过类型化 cancellation
-cleanup failure 和上述 100 ms 确认规则暴露出来。确认规则保证返回有界，不保证操作系统
-立即关闭管道。
+cleanup failure 和上述共享的 100 ms 确认截止时间暴露出来；该时间只有请求失败时才会检查，且
+不会为每个 helper 重置。它不限制后续 join 或整个调用，也不保证操作系统立即关闭管道。当前核查状态记录在 [RC-002
+Windows 取消验证](rc-002-verification.md) 中。
 
 其他平台仍会依据活动句柄检查普通文件，但没有可移植的方法保证所有设备命名空间的打开
 都能及时返回。损坏的远程或 FUSE 文件系统仍可能让操作系统调用停滞，这不属于命令超时

@@ -236,10 +236,12 @@ runner 会终止受管进程树，`kind()` 为 `Cancelled`，并在可用时保�
 
 超时、取消和总输出预算监控都使用基于 timer 的轮询；即使只配置总输出预算也如此。调用方线程在 `run()` 中同步阻塞时，timer 仍必须独立推进。Tokio timer 不应依赖只能由同一阻塞线程驱动的 current-thread runtime。
 
-在 Windows 上，正常的 helper 取消路径会使用 `CancelSynchronousIo`，并在取消请求后
-join 每个 helper。如果系统取消请求失败，runner 最多等待 100 ms 来确认 helper 已经
-停止。确认窗口耗尽后，为保证返回有界，错误会保留 cancellation cleanup failure；受
-影响的 helper 可能一直存活到管道关闭。
+在 Windows 上，`CancelSynchronousIo` 成功只表示取消请求成功，并不能证明 helper 已经
+停止。随后 runner 会 join 该 helper；这个 join 不受 100 ms 截止时间限制。runner 会在发出
+取消请求前统一设定一个共享的 100 ms helper 确认截止时间，只有请求失败时才会检查该时间，
+且不会为每个 helper 重置；它也不是整个调用的硬期限。若该截止时间耗尽，为保证
+返回有界，错误会保留 cancellation cleanup failure；受影响的 helper 可能一直存活到管道
+关闭。当前核查状态记录在 [RC-002 Windows 取消验证](rc-002-verification.md) 中。
 
 ## 有界输出与大输出
 

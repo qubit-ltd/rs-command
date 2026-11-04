@@ -90,9 +90,12 @@ The runner moves through these ownership states:
    the completion policy.
 4. **Finalized:** every helper that can be joined within the contract has been
    joined and its result has been folded into `CommandOutput` or cleanup
-   diagnostics. On Windows, a failed helper cancellation has a bounded
-   confirmation window; an unconfirmed helper may be detached and finish when
-   its pipe closes.
+   diagnostics. On Windows, one shared confirmation deadline is established
+   before cancellation requests are issued and is consulted only after a
+   failed helper-cancellation request; it is not reset for each helper. If
+   completion is confirmed before that deadline, the subsequent join is not
+   bounded by it; an unconfirmed helper may be detached and finish when its
+   pipe closes.
 
 The final startup cancellation check is the linearization point. Cancellation
 before it produces `CancelledBeforeStart` without creating or truncating tee
@@ -154,9 +157,13 @@ returned. On interruption, available bytes are retained and the corresponding
 On Unix, readers and stdin writers use non-blocking operations plus a wake-up
 channel so cancellation can be observed without waiting for an escaped
 descendant to close an inherited pipe. On Windows, synchronous operations are
-interrupted through `CancelSynchronousIo`. If a Windows cancellation request
-fails, the runner waits no longer than 100 ms for the helper to report that it
-stopped. After that deadline it returns a bounded result with a
+interrupted through `CancelSynchronousIo`. Success means the cancellation
+request succeeded; it does not establish that the helper has stopped. The
+runner then joins that helper, and this join is not limited by the 100 ms
+deadline. The runner establishes one shared 100 ms helper-confirmation
+deadline before issuing cancellation requests and consults it only when a
+Windows cancellation request fails; it is not reset for each helper or a hard
+deadline for the whole call. After that deadline expires it returns a bounded result with a
 `StdoutCancellation`, `StderrCancellation`, or `StdinCancellation` cleanup
 failure as applicable; the helper may remain alive until its pipe closes.
 The successful-cancellation interleaving investigation and its current evidence
@@ -210,9 +217,11 @@ replacement from blocking preparation.
 Windows uses Job Objects for process-tree management where configured and
 keeps pipe handles suitable for synchronous I/O. `CancelSynchronousIo` is the
 normal helper interruption mechanism. Its failure is observable through the
-typed cancellation cleanup failure and the 100 ms confirmation rule above;
-the rule is a bounded-return guarantee, not a promise that the operating
-system closes a pipe immediately.
+typed cancellation cleanup failure and the shared 100 ms confirmation
+deadline above, which is consulted only after a failed request. That rule does
+not bound the subsequent join or the whole call, and does not imply that the
+operating system closes a pipe immediately. The current investigation status is recorded in [RC-002 Windows
+cancellation verification](rc-002-verification.md).
 
 Other platforms perform handle-authoritative ordinary-file checks but cannot
 portably guarantee that every device-namespace open returns promptly. Broken
