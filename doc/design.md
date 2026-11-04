@@ -68,10 +68,13 @@ error chain are responsible for handling that text.
 and stderr. It also enables process-tree management when no timeout or
 cancellation policy is configured. The reader observes at most `limit + 1`
 bytes in total; the extra byte is a sentinel proving that the budget was
-exceeded. Per-stream retention limits can still discard bytes before they are
-retained, but those bytes count toward the shared budget and are still sent to
-the configured tee. The sentinel is included in the observed count when
-available.
+exceeded. Bytes omitted by per-stream retention caps still count toward the
+shared budget. Retention caps alone do not prevent tee writes, but cancellation
+observed after a read can skip tee I/O for bytes already read and accounted. A
+tee write failure disables further writes to that destination while draining
+may continue; a flush failure may also leave the tee incomplete. Neither the
+observed byte count nor retained capture proves tee completeness. The sentinel
+is included in the observed count when available.
 
 An exceeded budget returns `OutputLimitExceeded` without inventing a natural
 process exit status. Its partial bytes are available from
