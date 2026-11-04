@@ -218,7 +218,10 @@ fn windows_successful_cancel_interleaving() {
                 Some(0),
                 "real-pipe watchdog self-test failed"
             );
-            eprintln!(r#"{"event":"watchdog_parent_check","child_reaped":true,"child_kill_used":false}"#);
+            eprintln!(
+                "{}",
+                r#"{"event":"watchdog_parent_check","child_reaped":true,"child_kill_used":false}"#
+            );
             let probe = run_child("probe", WATCHDOG_LIMIT);
             assert!(!probe.timed_out, "Windows real-pipe probe exceeded watchdog limit");
             assert_eq!(
