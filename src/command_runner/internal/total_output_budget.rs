@@ -36,6 +36,21 @@ pub(in crate::command_runner) struct TotalOutputBudget {
 
 impl TotalOutputBudget {
     /// Creates an empty budget with configured combined and per-stream limits.
+    ///
+    /// # Parameters
+    ///
+    /// * `limit` - Maximum combined number of bytes accepted before the
+    ///   sentinel byte. The budget may read and charge one additional byte to
+    ///   detect exceeded output.
+    /// * `max_stdout_bytes` - Optional maximum number of stdout bytes retained
+    ///   in snapshots.
+    /// * `max_stderr_bytes` - Optional maximum number of stderr bytes retained
+    ///   in snapshots.
+    ///
+    /// # Returns
+    ///
+    /// A shared accounting budget with empty stream buffers and no stream
+    /// marked complete, halted, exceeded, or transferred.
     pub(in crate::command_runner) fn new(
         limit: u64,
         max_stdout_bytes: Option<usize>,
@@ -61,10 +76,39 @@ impl TotalOutputBudget {
         }
     }
 
-    /// Reads only bytes already reported ready. The caller must establish
-    /// readiness first. The mutex covers both streams' accounting so the
-    /// combined limit cannot be exceeded by concurrent readers except for the
-    /// single sentinel byte.
+    /// Reads at most the bytes already reported ready and allowed by the
+    /// remaining combined budget, then accounts for and retains those bytes.
+    ///
+    /// The caller must establish readiness before calling and provide the
+    /// exclusive reader for `stream`; the mutex serializes accounting and
+    /// retained prefixes across stdout and stderr. It remains locked while
+    /// `reader.read`, accounting, and retention run. The budget permits one
+    /// extra sentinel byte beyond `limit`; observing it marks the budget
+    /// exceeded and halted. Per-stream retention caps may truncate stored
+    /// bytes without changing the number charged to the combined budget.
+    ///
+    /// A zero return does not by itself mean EOF: it can also mean the budget
+    /// was already halted or the requested read length was zero. Only a zero
+    /// returned by the underlying reader establishes EOF for the caller, which
+    /// records that separately with [`Self::mark_complete`].
+    ///
+    /// # Parameters
+    ///
+    /// * `reader` - The stream reader, which must have been reported ready.
+    /// * `buffer` - Destination buffer for bytes read.
+    /// * `ready_capacity` - Maximum number of bytes the readiness check
+    ///   established can be read without blocking.
+    /// * `stream` - Stream whose bytes are charged and retained.
+    ///
+    /// # Returns
+    ///
+    /// The number of bytes read and accounted, possibly zero as described
+    /// above.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying reader's error. No bytes from a failed read are
+    /// accounted or retained.
     pub(in crate::command_runner) fn read_ready(
         &self,
         reader: &mut dyn std::io::Read,
@@ -139,8 +183,16 @@ impl TotalOutputBudget {
     }
 
     /// Combines joined stream results with snapshots for streams not joined.
-    /// Joined results are authoritative for transferred streams; live streams
-    /// use the mutex-protected snapshot because their reader may still run.
+    ///
+    /// For a stream whose retained bytes were transferred after its reader was
+    /// joined, the corresponding joined result is authoritative, including
+    /// its bytes, truncation flag, and EOF-derived completeness flag. If no
+    /// joined result is supplied for such a stream, this returns no bytes and
+    /// marks it incomplete. Streams not transferred use a mutex-protected
+    /// point-in-time snapshot; their reader may still append bytes, so the
+    /// snapshot may be incomplete. Truncation describes bytes omitted by a
+    /// per-stream retention cap; completeness describes reaching EOF, and
+    /// neither is implied by the other.
     pub(in crate::command_runner) fn captured_output_with_joined(
         &self,
         joined: Option<&CommandCapturedOutput>,
@@ -181,6 +233,10 @@ impl TotalOutputBudget {
     }
 
     /// Clones one stream's current snapshot while its reader may still run.
+    /// The returned bytes and flags describe the state while the mutex was
+    /// held; a live reader may append more bytes or later reach EOF. A
+    /// truncated snapshot may still be incomplete, and a snapshot is not a
+    /// joined reader result.
     pub(in crate::command_runner) fn captured_stream(&self, stream: OutputStream) -> CapturedOutput {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match stream {

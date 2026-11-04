@@ -295,13 +295,24 @@ fn finish_helpers<R>(
     )
 }
 
-/// Joins a reader unless a failed cancellation remains unconfirmed.
+/// Result of finishing an output reader after requesting cancellation.
 enum OutputReaderFinish {
+    /// The helper was joined; its result is either captured output or a
+    /// capture error.
     Joined(Result<CapturedOutput, OutputCaptureError>),
+    /// The helper was not joined because cancellation failed and completion
+    /// was not observed before the shared confirmation deadline. The output
+    /// is a point-in-time snapshot and the helper may still be running.
     Detached(CapturedOutput),
 }
 
 impl OutputReaderFinish {
+    /// Converts the finish state to the output result used by collection.
+    ///
+    /// A detached snapshot is returned as `Ok`, but does not indicate that
+    /// collection completed successfully: its `complete` flag is false and
+    /// its bytes may be incomplete. Cancellation errors are retained
+    /// separately by the cleanup path.
     fn into_output_result(self) -> Result<CapturedOutput, OutputCaptureError> {
         match self {
             Self::Joined(result) => result,
@@ -310,6 +321,28 @@ impl OutputReaderFinish {
     }
 }
 
+/// Joins the reader unless a failed cancellation remains unconfirmed.
+///
+/// Cancellation success proceeds directly to joining. If cancellation
+/// failed, this waits until the one shared confirmation deadline; an observed
+/// finished state proceeds to joining, while an unconfirmed state returns a
+/// detached snapshot without joining. The bounded confirmation wait does not
+/// bound the subsequent join.
+///
+/// # Parameters
+///
+/// * `reader` - Output helper whose cancellation has already been requested.
+/// * `cancellation_failed` - Whether that cancellation request returned an
+///   error.
+/// * `confirmation_deadline` - Shared deadline used to confirm helper
+///   completion after cancellation failure.
+///
+/// # Returns
+///
+/// `Some(Joined(..))` when the reader is joined, including a captured output
+/// or capture error; `Some(Detached(..))` when a failed cancellation remains
+/// unconfirmed at the deadline. This function currently always returns
+/// `Some`.
 fn finish_output_reader(
     reader: OutputReader,
     cancellation_failed: bool,
