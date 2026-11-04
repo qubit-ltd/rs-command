@@ -29,10 +29,11 @@ fn extractor_preserves_hidden_lines_and_rejects_invalid_markers() {
         }]
     );
 
-    let absent = extract_examples("```rust\n1;\n```", "sample.md").unwrap();
-    assert!(absent.is_empty());
+    let absent = extract_examples("```rust\n1;\n```", "sample.md").unwrap_err();
+    assert!(absent.contains("sample.md:1"));
+    assert!(absent.contains("unclassified Rust fence"));
     assert!(
-        require_markers(&absent, &[("wanted", "compile")], "sample.md")
+        require_markers(&[], &[("wanted", "compile")], "sample.md")
             .unwrap_err()
             .contains("missing required marker")
     );
@@ -77,6 +78,36 @@ fn extractor_preserves_hidden_lines_and_rejects_invalid_markers() {
             .contains("unclosed")
     );
     assert!(extract_examples("<!-- doc-example:a:run -->\n```rust,ignore\n1;\n```", "sample.md").is_err());
+}
+
+#[test]
+fn extractor_tracks_fragments_and_validates_fence_attributes() {
+    let parsed = extract_examples(
+        "<!-- doc-example:context:fragment -->\n```rust\nlet value = 1;\n```\n<!-- doc-example:complete:compile -->\n```rust\nassert_eq!(1, 1);\n```\n```text\nignored\n```\n",
+        "sample.md",
+    )
+    .expect("fragment and compile examples should be classified");
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].mode, "fragment");
+    assert_eq!(parsed[1].id, "complete");
+
+    assert!(extract_examples("<!-- doc-example:x:fragment -->\n```rust,no_run\n1;\n```", "sample.md").is_err());
+    assert!(extract_examples("<!-- doc-example:x:no_run -->\n```rust\n1;\n```", "sample.md").is_err());
+    assert!(extract_examples("<!-- doc-example:x:fragment -->\n```rust,no_run\n1;\n```", "sample.md").is_err());
+}
+
+#[test]
+fn bilingual_guide_examples_have_matching_ids_and_modes() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let english = std::fs::read_to_string(root.join("doc/user_guide.md")).unwrap();
+    let chinese = std::fs::read_to_string(root.join("doc/user_guide.zh_CN.md")).unwrap();
+    let en = extract_examples(&english, "doc/user_guide.md").unwrap();
+    let zh = extract_examples(&chinese, "doc/user_guide.zh_CN.md").unwrap();
+    let mut en_pairs: Vec<_> = en.iter().map(|e| (&e.id, &e.mode)).collect();
+    let mut zh_pairs: Vec<_> = zh.iter().map(|e| (&e.id, &e.mode)).collect();
+    en_pairs.sort();
+    zh_pairs.sort();
+    assert_eq!(en_pairs, zh_pairs, "bilingual guide example IDs/modes differ");
 }
 
 #[test]

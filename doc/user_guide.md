@@ -86,11 +86,16 @@ If strict decoding fails, the bytes remain available through `stdout()` or `stde
 
 ### Prefer Structured Commands
 
+<!-- doc-example:structured-command:compile -->
 ```rust
+use qubit_command::Command;
+
 let command = Command::new("git")
     .args(&["status", "--short"])
     .working_directory("/workspace/project")
     .env("LC_ALL", "C");
+# let _ = command;
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 Arguments are passed to the target program without shell quoting or expansion. The target program still interprets its own options. If a value may begin with `-`, follow that program's documented argument rules, commonly by placing it after `--`.
@@ -169,6 +174,7 @@ directory. `Command::working_directory` and `CommandRunner::working_directory`
 change only the child process directory. To address a file under the child
 directory, construct an absolute path before configuring the file:
 
+<!-- doc-example:path-configuration:compile -->
 ```rust
 use qubit_command::Command;
 
@@ -178,14 +184,17 @@ let command = Command::new("tool")
     .working_directory(&child_dir)
     .stdin_file(input_path);
 # let _ = command;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 ### Define Successful Exit Codes
 
 Exit code `0` is successful by default. If a tool documents another successful status, configure it explicitly:
 
+<!-- doc-example:success-exit-codes:compile -->
 ```rust
+use qubit_command::{Command, CommandRunner};
+
 let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .success_exit_codes(&[0, 2])
     .run(Command::new("tool"))?;
@@ -204,6 +213,7 @@ The examples below use ten seconds.
 The timeout starts after the child has been spawned, so preparation and
 spawning time are outside that duration.
 
+<!-- doc-example:timeout-configuration:compile -->
 ```rust
 use std::time::Duration;
 use qubit_command::{Command, CommandRunner};
@@ -222,6 +232,7 @@ Use `without_timeout()` only when an unlimited wait is deliberate. If cancellati
 
 Create one cancellation handle, clone it into the runner, and call `cancel()` from the application's existing shutdown policy:
 
+<!-- doc-example:application-cancellation:compile -->
 ```rust
 use qubit_command::{Command, CommandCancellation, CommandRunOptions, CommandRunner};
 
@@ -269,6 +280,7 @@ Each stream is limited to `DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM`, currently 1 MiB
 
 For large logs, keep memory bounded and tee each stream to a file:
 
+<!-- doc-example:tee-output:compile -->
 ```rust
 use qubit_command::{Command, CommandRunOptions, CommandRunner};
 
@@ -330,7 +342,10 @@ Tee files are truncated and replaced for each run; they are never appended. Clon
 
 Runner logs, `CommandError::command()`, and `Command` debug output redact sensitive structured arguments, explicit environment overrides, shell payloads, and configured paths. Use `sensitive_arg` or `sensitive_arg_os` for positional values such as customer file paths:
 
+<!-- doc-example:sensitive-argument:compile -->
 ```rust
+use qubit_command::Command;
+
 let command = Command::new("uploader")
     .arg("--file")
     .sensitive_arg("customer-report.csv");
@@ -365,6 +380,7 @@ text; explicitly formatting a full error chain is the caller's responsibility.
 
 For a policy error with output:
 
+<!-- doc-example:policy-error:compile -->
 ```rust
 use qubit_command::{Command, CommandErrorKind, CommandRunner};
 

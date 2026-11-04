@@ -86,11 +86,16 @@ assert_eq!(output.stdout_text()?, "hello");
 
 ### 优先使用结构化命令
 
+<!-- doc-example:structured-command:compile -->
 ```rust
+use qubit_command::Command;
+
 let command = Command::new("git")
     .args(&["status", "--short"])
     .working_directory("/workspace/project")
     .env("LC_ALL", "C");
+# let _ = command;
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 参数会直接传递给目标程序，不进行 shell 引号处理或变量展开。目标程序仍会按照自己的规则解析选项。如果值可能以 `-` 开头，应遵循目标程序的参数规则，通常是把它放在 `--` 之后。
@@ -168,6 +173,7 @@ assert_eq!(output.stdout_text()?, "input\n");
 `CommandRunner::working_directory` 只修改子进程的工作目录。若要访问子进程目录下的文件，
 请在配置文件路径前显式构造绝对路径：
 
+<!-- doc-example:path-configuration:compile -->
 ```rust
 use qubit_command::Command;
 
@@ -177,14 +183,17 @@ let command = Command::new("tool")
     .working_directory(&child_dir)
     .stdin_file(input_path);
 # let _ = command;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 ### 定义成功退出码
 
 默认只有退出码 `0` 表示成功。如果工具文档说明另一个状态也代表成功，应明确配置：
 
+<!-- doc-example:success-exit-codes:compile -->
 ```rust
+use qubit_command::{Command, CommandRunner};
+
 let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .success_exit_codes(&[0, 2])
     .run(Command::new("tool"))?;
@@ -202,6 +211,7 @@ let output = CommandRunner::new(std::time::Duration::from_secs(10))
 以下示例使用十秒超时。
 它从子进程启动后开始计时，因此准备和启动耗时不计入该时长。
 
+<!-- doc-example:timeout-configuration:compile -->
 ```rust
 use std::time::Duration;
 use qubit_command::{Command, CommandRunner};
@@ -220,6 +230,7 @@ let result = CommandRunner::new(std::time::Duration::from_secs(10))
 
 创建一个取消句柄，将其 clone 后交给 runner，并从应用已有的关闭策略中调用 `cancel()`：
 
+<!-- doc-example:application-cancellation:compile -->
 ```rust
 use qubit_command::{Command, CommandCancellation, CommandRunOptions, CommandRunner};
 
@@ -260,6 +271,7 @@ runner 会终止受管进程树，`kind()` 为 `Cancelled`，并在可用时保�
 
 对于大量日志，保持内存有界，并把每个流 tee 到文件：
 
+<!-- doc-example:tee-output:compile -->
 ```rust
 use qubit_command::{Command, CommandRunOptions, CommandRunner};
 
@@ -321,7 +333,10 @@ tee 路径必须是普通文件。runner 会在截断任何 tee 文件前检查 
 
 Runner 日志、`CommandError::command()` 和 `Command` 的 debug 输出会遮盖敏感结构化参数、显式环境变量覆盖、shell 内容和已配置路径。对于客户文件路径等位置参数，使用 `sensitive_arg` 或 `sensitive_arg_os`：
 
+<!-- doc-example:sensitive-argument:compile -->
 ```rust
+use qubit_command::Command;
+
 let command = Command::new("uploader")
     .arg("--file")
     .sensitive_arg("customer-report.csv");
@@ -353,6 +368,7 @@ let command = Command::new("uploader")
 
 处理带输出的策略错误时，可以这样检查：
 
+<!-- doc-example:policy-error:compile -->
 ```rust
 use qubit_command::{Command, CommandErrorKind, CommandRunner};
 

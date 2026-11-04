@@ -20,8 +20,8 @@ pub(crate) struct Example {
 pub(crate) fn extract_examples(markdown: &str, label: &str) -> Result<Vec<Example>, String> {
     let mut examples = Vec::new();
     let mut marker = None;
-    let mut lines = markdown.lines().peekable();
-    while let Some(line) = lines.next() {
+    let mut lines = markdown.lines().enumerate().peekable();
+    while let Some((line_index, line)) = lines.next() {
         if marker.is_some() && !line.starts_with("```") {
             return Err(format!("{label}: marker must be immediately followed by a Rust fence"));
         }
@@ -37,15 +37,20 @@ pub(crate) fn extract_examples(markdown: &str, label: &str) -> Result<Vec<Exampl
             let (id, mode) = value
                 .split_once(':')
                 .ok_or_else(|| format!("{label}: malformed marker {value}"))?;
-            if id.is_empty() || !matches!(mode, "compile" | "run" | "unix" | "windows" | "no_run") {
+            if id.is_empty() || !matches!(mode, "compile" | "run" | "unix" | "windows" | "no_run" | "fragment") {
                 return Err(format!("{label}: unsupported marker {value}"));
             }
             marker = Some((id.to_owned(), mode.to_owned()));
         } else if line.starts_with("```") {
+            let fence = line.trim();
+            let rust_fence = fence == "```rust" || fence == "```rust,no_run" || fence.starts_with("```rust,");
+            if rust_fence && marker.is_none() {
+                return Err(format!("{label}:{}: unclassified Rust fence", line_index + 1));
+            }
             let Some((id, mode)) = marker.take() else {
                 continue;
             };
-            if !matches!(line.trim(), "```rust" | "```rust,no_run") {
+            if !matches!(fence, "```rust" | "```rust,no_run") {
                 return Err(format!("{label}: {id} must precede a supported Rust fence"));
             }
             let no_run = line.trim() == "```rust,no_run";
@@ -54,7 +59,7 @@ pub(crate) fn extract_examples(markdown: &str, label: &str) -> Result<Vec<Exampl
             }
             let mut code = String::new();
             let mut closed = false;
-            for code_line in lines.by_ref() {
+            for (_, code_line) in lines.by_ref() {
                 if code_line.starts_with("```") {
                     closed = true;
                     break;
@@ -117,6 +122,14 @@ pub(crate) fn check_documents(root: &Path) {
                 ("windows-shell", "windows"),
                 ("unix-stdin", "unix"),
                 ("windows-stdin", "windows"),
+                ("structured-command", "compile"),
+                ("path-configuration", "compile"),
+                ("success-exit-codes", "compile"),
+                ("timeout-configuration", "compile"),
+                ("application-cancellation", "compile"),
+                ("tee-output", "compile"),
+                ("sensitive-argument", "compile"),
+                ("policy-error", "compile"),
                 ("total-output-budget", "no_run"),
             ][..],
         ),
@@ -130,6 +143,14 @@ pub(crate) fn check_documents(root: &Path) {
                 ("windows-shell", "windows"),
                 ("unix-stdin", "unix"),
                 ("windows-stdin", "windows"),
+                ("structured-command", "compile"),
+                ("path-configuration", "compile"),
+                ("success-exit-codes", "compile"),
+                ("timeout-configuration", "compile"),
+                ("application-cancellation", "compile"),
+                ("tee-output", "compile"),
+                ("sensitive-argument", "compile"),
+                ("policy-error", "compile"),
                 ("total-output-budget", "no_run"),
             ][..],
         ),
@@ -166,6 +187,7 @@ pub(crate) fn check_documents(root: &Path) {
             "windows" => ("#[cfg(windows)]\n", false),
             "run" => ("", false),
             "compile" | "no_run" => ("", true),
+            "fragment" => continue,
             other => panic!("unsupported mode {other}"),
         };
         source.push_str(cfg);
