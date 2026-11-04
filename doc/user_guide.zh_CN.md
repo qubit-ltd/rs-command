@@ -295,8 +295,15 @@ if let Err(error) = result
 
 若要将捕获字节移为独立值，可使用 `CommandError::into_captured_output()`；这也适用于 `output()` 为 `None` 的输出预算错误。两个输出载体同时存在时，该方法优先选择保留的 `CommandOutput`，并保留流完整性和截断标记。方法会移动缓冲区而不克隆它们，同时消费错误及其诊断信息，因此请先读取仍需要的错误原因或清理详情。捕获字节是原始进程输出，可能含有敏感数据，请妥善处理。
 
-tee 路径必须是普通文件。runner 会在截断任何 tee 文件前检查 stdin/tee 以及 stdout tee/stderr tee 之间的冲突。
-每次运行都会截断并替换 tee 文件，不会追加。复制 `CommandRunOptions` 会复制已配置的路径；如果并发运行需要分别保留日志，必须使用不同路径。
+tee 路径必须是普通文件。runner 会在截断任何 tee 文件前检查 stdin/tee 以及 stdout tee/stderr tee 之间的冲突。这些检查旨在减少破坏性冲突，但文件准备不是事务：
+
+1. 路径验证和文件身份检查旨在避免冲突文件被截断，但不保证所有失败都没有文件副作用。
+2. commit 先打开 stdout，再打开 stderr。若打开 stderr 失败，原本不存在的 stdout 路径可能已经创建为空文件。
+3. 两个句柄通过身份检查后，commit 先截断 stdout，再截断 stderr。若截断 stderr 失败，stdout 可能已为空，而 stderr 保留旧字节；子进程尚未启动。
+4. 文件提交后若 spawn 失败，不会恢复 tee 文件原有内容。
+5. 若要保留旧日志，每次运行使用独立路径，并由应用在成功后决定如何归档或替换。库不承诺原子替换。
+
+每次运行都会截断并替换 tee 文件，不会追加。复制 `CommandRunOptions` 会复制已配置的路径；如果并发运行需要分别保留日志，必须使用不同路径。未启动子进程不等于没有 tee 文件副作用。
 
 ## 诊断与脱敏
 

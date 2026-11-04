@@ -46,6 +46,18 @@ directory. A command or runner working-directory setting changes only the
 child process directory. Callers that want a file under the child directory
 must join the path to an explicit directory before configuration.
 
+Output-file preparation and commit are not a filesystem transaction. Path and
+file-identity checks are intended to keep conflicting files from being
+truncated, but they do not promise that every failure has no side effects.
+Commit opens stdout before stderr, so an absent stdout path may be created as
+an empty file if opening stderr fails. After both handles pass identity checks,
+stdout is truncated before stderr; if the second truncation fails, stdout may
+be empty while stderr retains its old bytes, and the child has not started. A
+later spawn failure does not restore old tee contents. Applications that must
+retain prior logs should use a distinct path per run and decide how to archive
+or replace files after success; the library makes no atomic-replacement
+promise. No child process does not mean no tee file side effects.
+
 Error formatting uses controlled source summaries: I/O sources expose only
 their `ErrorKind` and optional raw OS error code, while time-source details are
 omitted. The original source objects and `Error::source()` chain remain

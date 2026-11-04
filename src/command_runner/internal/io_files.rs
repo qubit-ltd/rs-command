@@ -206,8 +206,14 @@ impl IoFiles {
             stdout_path.zip(stdout_file.as_ref()),
             stderr_path.zip(stderr_file.as_ref()),
         )?;
-        truncate_output(command, OutputStream::Stdout, stdout_path, stdout_file.as_ref())?;
-        truncate_output(command, OutputStream::Stderr, stderr_path, stderr_file.as_ref())?;
+        truncate_outputs_with(
+            command,
+            stdout_path,
+            stdout_file.as_ref(),
+            stderr_path,
+            stderr_file.as_ref(),
+            truncate_output,
+        )?;
         if let Some(file) = self.stdin_file.take() {
             process_command.stdin(Stdio::from(file));
         }
@@ -660,6 +666,19 @@ fn truncate_output_with(
     Ok(())
 }
 
+/// Truncates configured output files in commit order, stdout before stderr.
+fn truncate_outputs_with(
+    command: &str,
+    stdout_path: Option<&Path>,
+    stdout_file: Option<&File>,
+    stderr_path: Option<&Path>,
+    stderr_file: Option<&File>,
+    mut truncate: impl FnMut(&str, OutputStream, Option<&Path>, Option<&File>) -> Result<(), CommandError>,
+) -> Result<(), CommandError> {
+    truncate(command, OutputStream::Stdout, stdout_path, stdout_file)?;
+    truncate(command, OutputStream::Stderr, stderr_path, stderr_file)
+}
+
 /// Builds an input/output conflict error.
 ///
 /// # Parameters
@@ -790,6 +809,7 @@ mod tests {
     use std::io;
 
     use super::truncate_output_with;
+    use super::truncate_outputs_with;
     use crate::CommandErrorKind;
     use crate::OutputStream;
 
@@ -815,6 +835,54 @@ mod tests {
         assert_eq!(
             std::fs::read(output.path()).expect("output fixture should remain readable"),
             b"preserve-on-failure",
+        );
+    }
+
+    #[test]
+    fn test_second_truncate_failure_leaves_stdout_empty_and_stderr_unchanged() {
+        let stdout = tempfile::NamedTempFile::new().expect("stdout fixture should be created");
+        let stderr = tempfile::NamedTempFile::new().expect("stderr fixture should be created");
+        std::fs::write(stdout.path(), b"old stdout").expect("stdout should be populated");
+        std::fs::write(stderr.path(), b"old stderr").expect("stderr should be populated");
+        let stdout_file = OpenOptions::new()
+            .write(true)
+            .open(stdout.path())
+            .expect("stdout should be opened");
+        let stderr_file = OpenOptions::new()
+            .write(true)
+            .open(stderr.path())
+            .expect("stderr should be opened");
+
+        let error = truncate_outputs_with(
+            "command",
+            Some(stdout.path()),
+            Some(&stdout_file),
+            Some(stderr.path()),
+            Some(&stderr_file),
+            |command, stream, path, file| {
+                if stream == OutputStream::Stderr {
+                    truncate_output_with(command, stream, path, file, |_| {
+                        Err(io::Error::other("injected stderr truncate failure"))
+                    })
+                } else {
+                    super::truncate_output(command, stream, path, file)
+                }
+            },
+        )
+        .expect_err("injected stderr truncation should fail");
+
+        assert_eq!(error.kind(), CommandErrorKind::OpenOutputFailed);
+        assert!(matches!(
+            error.reason(),
+            crate::CommandErrorReason::OpenOutputFailed {
+                stream: OutputStream::Stderr,
+                ..
+            }
+        ));
+        assert_eq!(std::fs::read(stdout.path()).expect("stdout should be readable"), b"",);
+        assert_eq!(
+            std::fs::read(stderr.path()).expect("stderr should be readable"),
+            b"old stderr",
         );
     }
 }

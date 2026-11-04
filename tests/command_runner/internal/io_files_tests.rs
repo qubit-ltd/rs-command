@@ -17,11 +17,9 @@ use std::time::Duration;
 
 use qubit_command::Command;
 use qubit_command::CommandErrorKind;
-#[cfg(unix)]
 use qubit_command::CommandErrorReason;
 use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
-#[cfg(unix)]
 use qubit_command::OutputStream;
 
 use crate::support::LocalTempDir;
@@ -285,6 +283,49 @@ fn test_runner_rejects_stdout_stderr_conflict_before_creating_file() {
 
     assert_eq!(error.kind(), CommandErrorKind::OutputFilesConflict);
     assert!(!path.exists());
+}
+
+#[test]
+fn test_runner_stdout_is_created_when_stderr_open_fails() {
+    let temp_dir = temp_dir();
+    let stdout_path = temp_dir.path().join("new-stdout");
+    let stderr_path = temp_dir.path().join("missing-parent").join("stderr");
+
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            unspawnable_command(),
+            CommandRunOptions::new()
+                .tee_stdout_to_file(&stdout_path)
+                .tee_stderr_to_file(&stderr_path),
+        )
+        .expect_err("stderr open should fail before the unspawnable command is launched");
+
+    assert_eq!(error.kind(), CommandErrorKind::OpenOutputFailed);
+    assert!(matches!(
+        error.reason(),
+        CommandErrorReason::OpenOutputFailed {
+            stream: OutputStream::Stderr,
+            ..
+        }
+    ));
+    assert_eq!(fs::read(stdout_path).expect("stdout should have been created"), b"",);
+}
+
+#[test]
+fn test_runner_spawn_failure_keeps_truncated_tee() {
+    let temp_dir = temp_dir();
+    let stdout_path = temp_dir.path().join("stdout");
+    fs::write(&stdout_path, b"old tee bytes").expect("tee fixture should be populated");
+
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            unspawnable_command(),
+            CommandRunOptions::new().tee_stdout_to_file(&stdout_path),
+        )
+        .expect_err("the missing command should fail to spawn");
+
+    assert_eq!(error.kind(), CommandErrorKind::SpawnFailed);
+    assert_eq!(fs::read(stdout_path).expect("tee file should remain readable"), b"",);
 }
 
 #[cfg(unix)]

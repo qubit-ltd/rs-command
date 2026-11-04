@@ -304,8 +304,15 @@ Timeout, cancellation, unexpected exit, and output-truncation errors can expose 
 
 Use `CommandError::into_captured_output()` when you need to move captured bytes into an independent value, including bytes retained by an output-budget error whose `output()` is `None`. The method prefers a retained `CommandOutput` when both output carriers exist and preserves the stream completeness and truncation markers. It moves the buffers without cloning them and consumes the error and its diagnostics, so inspect any needed reason or cleanup details first. Captured bytes are raw process output and may contain sensitive data; handle them accordingly.
 
-Tee paths must be ordinary files. The runner checks stdin/tee and stdout-tee/stderr-tee conflicts before truncating any tee file.
-Tee files are truncated and replaced for each run; they are never appended. Cloning `CommandRunOptions` copies the configured paths, so concurrent runs must use distinct paths when their logs must remain separate.
+Tee paths must be ordinary files. The runner checks stdin/tee and stdout-tee/stderr-tee conflicts before truncating any tee file. These checks reduce destructive conflicts but do not make file preparation transactional:
+
+1. Validation and file-identity checks are intended to prevent conflicting files from being truncated; they do not guarantee that every failure has no file side effect.
+2. Commit opens stdout before stderr. If opening stderr fails, a previously nonexistent stdout path may already exist as an empty file.
+3. After both handles pass identity checks, commit truncates stdout and then stderr. If stderr truncation fails, stdout may already be empty while stderr retains its previous bytes; the child has not started.
+4. A spawn failure after file commit does not restore the previous tee contents.
+5. To retain prior logs, use a distinct path for each run and let the application archive or replace files after success. The library does not promise atomic replacement.
+
+Tee files are truncated and replaced for each run; they are never appended. Cloning `CommandRunOptions` copies the configured paths, so concurrent runs must use distinct paths when their logs must remain separate. No child process does not mean no tee file side effects.
 
 ## Diagnostics and Redaction
 

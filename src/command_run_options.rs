@@ -110,11 +110,19 @@ impl CommandRunOptions {
     /// Streams stdout to a file while still capturing it in memory.
     ///
     /// The file is opened with truncation, so an existing file is replaced for
-    /// each run. The path is validated by the runner before spawning. Cloning
-    /// these options clones the path; callers running concurrently must provide
-    /// distinct paths when they need to retain both streams.
-    /// Relative paths are resolved from the parent process current working
-    /// directory, regardless of the child process working directory.
+    /// each run. Validation and file-identity checks are intended to prevent
+    /// conflicting files from being truncated, but file preparation is not
+    /// transactional. Commit opens stdout before stderr, then truncates stdout
+    /// before stderr after identity checks. A stderr open failure can leave a
+    /// newly created empty stdout file; a stderr truncation failure can leave
+    /// stdout empty and stderr unchanged before the child starts. A later spawn
+    /// failure does not restore previous tee contents. Use a distinct path per
+    /// run when prior logs must be retained; the library does not promise
+    /// atomic replacement. No child process does not mean no file side
+    /// effects. Cloning these options clones the path; concurrent runs need
+    /// distinct paths when both logs must be retained. Relative paths are
+    /// resolved from the parent process current working directory,
+    /// regardless of the child process working directory.
     ///
     /// # Parameters
     ///
@@ -135,11 +143,19 @@ impl CommandRunOptions {
     /// Streams stderr to a file while still capturing it in memory.
     ///
     /// The file is opened with truncation, so an existing file is replaced for
-    /// each run. The path is validated by the runner before spawning. Cloning
-    /// these options clones the path; callers running concurrently must provide
-    /// distinct paths when they need to retain both streams.
-    /// Relative paths are resolved from the parent process current working
-    /// directory, regardless of the child process working directory.
+    /// each run. Validation and file-identity checks are intended to prevent
+    /// conflicting files from being truncated, but file preparation is not
+    /// transactional. Commit opens stdout before stderr, then truncates stdout
+    /// before stderr after identity checks. A stderr open failure can leave a
+    /// newly created empty stdout file; a stderr truncation failure can leave
+    /// stdout empty and stderr unchanged before the child starts. A later spawn
+    /// failure does not restore previous tee contents. Use a distinct path per
+    /// run when prior logs must be retained; the library does not promise
+    /// atomic replacement. No child process does not mean no file side
+    /// effects. Cloning these options clones the path; concurrent runs need
+    /// distinct paths when both logs must be retained. Relative paths are
+    /// resolved from the parent process current working directory,
+    /// regardless of the child process working directory.
     ///
     /// # Parameters
     ///
