@@ -13,6 +13,7 @@ use std::process::Stdio;
 
 use qubit_redact::RedactionPolicy;
 
+use super::committed_command::CommittedCommand;
 use super::io_files::IoFiles;
 use super::process_setup::configure_environment;
 use crate::Command;
@@ -31,10 +32,6 @@ pub(in crate::command_runner) struct PreparedCommand {
     pub(in crate::command_runner) stdin_path: Option<PathBuf>,
     /// Open stdin file retained through the cancellation linearization point.
     pub(in crate::command_runner) stdin_file: Option<File>,
-    /// Open tee file for stdout.
-    pub(in crate::command_runner) stdout_file: Option<File>,
-    /// Open tee file for stderr.
-    pub(in crate::command_runner) stderr_file: Option<File>,
     /// Diagnostic path for stdout tee writes.
     pub(in crate::command_runner) stdout_file_path: Option<PathBuf>,
     /// Diagnostic path for stderr tee writes.
@@ -84,8 +81,8 @@ impl PreparedCommand {
             stdin_path,
             stdin_bytes,
             stdin_file,
-            stdout_file: _,
-            stderr_file: _,
+            stdout_tee: _,
+            stderr_tee: _,
         } = IoFiles::prepare(
             &command_text,
             command.into_stdin_configuration(),
@@ -100,21 +97,19 @@ impl PreparedCommand {
             stdin_bytes,
             stdin_path,
             stdin_file,
-            stdout_file: None,
-            stderr_file: None,
             stdout_file_path: stdout_file_path.map(Path::to_path_buf),
             stderr_file_path: stderr_file_path.map(Path::to_path_buf),
         })
     }
 
     /// Commits tee file creation and attaches the validated stdin file.
-    pub(in crate::command_runner) fn commit(mut self) -> Result<Self, CommandError> {
+    pub(in crate::command_runner) fn commit(mut self) -> Result<CommittedCommand, CommandError> {
         let mut io_files = IoFiles {
             stdin_bytes: self.stdin_bytes.take(),
             stdin_path: self.stdin_path.take(),
             stdin_file: self.stdin_file.take(),
-            stdout_file: self.stdout_file.take(),
-            stderr_file: self.stderr_file.take(),
+            stdout_tee: None,
+            stderr_tee: None,
         };
         io_files.commit(
             &self.command_text,
@@ -122,11 +117,12 @@ impl PreparedCommand {
             self.stderr_file_path.as_deref(),
             &mut self.process_command,
         )?;
-        self.stdin_bytes = io_files.stdin_bytes;
-        self.stdin_path = io_files.stdin_path;
-        self.stdin_file = io_files.stdin_file;
-        self.stdout_file = io_files.stdout_file;
-        self.stderr_file = io_files.stderr_file;
-        Ok(self)
+        Ok(CommittedCommand {
+            command_text: self.command_text,
+            process_command: self.process_command,
+            stdin_bytes: io_files.stdin_bytes,
+            stdout_tee: io_files.stdout_tee,
+            stderr_tee: io_files.stderr_tee,
+        })
     }
 }

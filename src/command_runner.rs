@@ -18,13 +18,14 @@ use qubit_redact::RedactionPolicy;
 use qubit_redact::Redactor;
 
 mod internal;
+use internal::committed_command::CommittedCommand;
 use internal::error_mapping::output_pipe_error;
 use internal::error_mapping::spawn_failed;
+use internal::file_tee::FileTee;
 use internal::finished_command::FinishedCommand;
 use internal::output_capture_options::OutputCaptureOptions;
 use internal::output_collector::read_output_stream;
 use internal::output_reader::OutputReader;
-use internal::output_tee::OutputTee;
 use internal::prepared_command::PreparedCommand;
 use internal::process_launcher::spawn_child;
 use internal::running_command::RunningCommand;
@@ -314,15 +315,12 @@ impl CommandRunner {
                 None,
             ));
         }
-        let PreparedCommand {
+        let CommittedCommand {
             command_text,
             process_command,
             stdin_bytes,
-            stdout_file,
-            stderr_file,
-            stdout_file_path,
-            stderr_file_path,
-            ..
+            stdout_tee,
+            stderr_tee,
         } = prepared.commit()?;
 
         if !self.disable_logging {
@@ -362,10 +360,8 @@ impl CommandRunner {
         };
         let stdout_reader = match start_output_reader(&command_text, OutputStream::Stdout, || {
             read_output_stream(stdout, {
-                let options = OutputCaptureOptions::new(
-                    self.max_stdout_bytes,
-                    OutputTee::from_parts(stdout_file.map(|file| Box::new(file) as _), stdout_file_path),
-                );
+                let options =
+                    OutputCaptureOptions::new(self.max_stdout_bytes, stdout_tee.map(FileTee::into_output_tee));
                 if let Some(budget) = total_budget.as_ref() {
                     options.with_total_budget(Arc::clone(budget), OutputStream::Stdout)
                 } else {
@@ -379,10 +375,8 @@ impl CommandRunner {
         starting_command.set_stdout_reader(stdout_reader);
         let stderr_reader = match start_output_reader(&command_text, OutputStream::Stderr, || {
             read_output_stream(stderr, {
-                let options = OutputCaptureOptions::new(
-                    self.max_stderr_bytes,
-                    OutputTee::from_parts(stderr_file.map(|file| Box::new(file) as _), stderr_file_path),
-                );
+                let options =
+                    OutputCaptureOptions::new(self.max_stderr_bytes, stderr_tee.map(FileTee::into_output_tee));
                 if let Some(budget) = total_budget.as_ref() {
                     options.with_total_budget(Arc::clone(budget), OutputStream::Stderr)
                 } else {

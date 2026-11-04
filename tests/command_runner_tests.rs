@@ -1423,6 +1423,49 @@ mod unix {
     }
 }
 
+#[test]
+fn test_command_runner_tee_configurations_keep_streams_separate() {
+    for configuration in ["none", "stdout", "stderr", "both"] {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-tee-config-")
+            .expect("command test temp directory should be created");
+        let stdout_path = temp_dir.path().join("stdout.txt");
+        let stderr_path = temp_dir.path().join("stderr.txt");
+        let mut options = CommandRunOptions::new();
+        if matches!(configuration, "stdout" | "both") {
+            options = options.tee_stdout_to_file(&stdout_path);
+        }
+        if matches!(configuration, "stderr" | "both") {
+            options = options.tee_stderr_to_file(&stderr_path);
+        }
+
+        let output = CommandRunner::new(Duration::from_secs(10))
+            .run_with(
+                support::output_command(b"stdout-payload", b"stderr-payload", 0),
+                options,
+            )
+            .expect("command should run successfully");
+
+        assert_eq!(output.stdout(), b"stdout-payload");
+        assert_eq!(output.stderr(), b"stderr-payload");
+        if matches!(configuration, "stdout" | "both") {
+            assert_eq!(
+                fs::read(&stdout_path).expect("stdout tee should exist"),
+                b"stdout-payload"
+            );
+        } else {
+            assert!(!stdout_path.exists());
+        }
+        if matches!(configuration, "stderr" | "both") {
+            assert_eq!(
+                fs::read(&stderr_path).expect("stderr tee should exist"),
+                b"stderr-payload"
+            );
+        } else {
+            assert!(!stderr_path.exists());
+        }
+    }
+}
+
 #[cfg(windows)]
 mod windows {
     use std::thread;

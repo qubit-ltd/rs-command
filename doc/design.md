@@ -96,14 +96,20 @@ The runner moves through these ownership states:
 
 1. **Prepared:** command values and file paths are validated. Input/tee path
    conflicts and non-regular files fail before a child is spawned or a tee is
-   truncated.
-2. **Started:** the child and all requested I/O helpers have been created.
+   truncated. Open tee handles remain paired with their diagnostic paths;
+   pairing does not mean that the files have been committed.
+2. **Committed:** the final startup cancellation check has passed, tee files
+   have been opened, validated, and truncated in the documented order, and
+   stdin has been attached to the process command. This state owns the
+   command text, spawn-ready process command, pending stdin bytes, and paired
+   tee handles. A failed commit releases these resources.
+3. **Started:** the child and all requested I/O helpers have been created.
    The child process, reader threads, writer thread, cancellation handles, and
    timer are owned by one running-command state.
-3. **Observed:** the child has exited, timed out, or cancellation was observed.
+4. **Observed:** the child has exited, timed out, or cancellation was observed.
    The runner still owns the child status and helper results while it applies
    the completion policy.
-4. **Finalized:** every helper that can be joined within the contract has been
+5. **Finalized:** every helper that can be joined within the contract has been
    joined and its result has been folded into `CommandOutput` or cleanup
    diagnostics. On Windows, one shared confirmation deadline is established
    before cancellation requests are issued and is consulted only after a

@@ -22,6 +22,7 @@ use std::process::Stdio;
 
 use same_file::Handle;
 
+use super::file_tee::FileTee;
 use crate::CommandError;
 use crate::CommandErrorReason;
 use crate::OutputStream;
@@ -139,9 +140,9 @@ pub(in crate::command_runner) struct IoFiles {
     /// Open and validated stdin file retained until commit.
     pub(in crate::command_runner) stdin_file: Option<File>,
     /// Open, validated, and truncated stdout tee file after commit.
-    pub(in crate::command_runner) stdout_file: Option<File>,
+    pub(in crate::command_runner) stdout_tee: Option<FileTee>,
     /// Open, validated, and truncated stderr tee file after commit.
-    pub(in crate::command_runner) stderr_file: Option<File>,
+    pub(in crate::command_runner) stderr_tee: Option<FileTee>,
 }
 
 impl IoFiles {
@@ -185,8 +186,8 @@ impl IoFiles {
             stdin_bytes,
             stdin_path,
             stdin_file,
-            stdout_file: None,
-            stderr_file: None,
+            stdout_tee: None,
+            stderr_tee: None,
         })
     }
 
@@ -198,27 +199,27 @@ impl IoFiles {
         stderr_path: Option<&Path>,
         process_command: &mut ProcessCommand,
     ) -> Result<(), CommandError> {
-        let stdout_file = open_output(command, OutputStream::Stdout, stdout_path)?;
-        let stderr_file = open_output(command, OutputStream::Stderr, stderr_path)?;
+        let stdout_tee = open_output(command, OutputStream::Stdout, stdout_path)?;
+        let stderr_tee = open_output(command, OutputStream::Stderr, stderr_path)?;
         validate_file_identities(
             command,
             self.stdin_path.as_deref().zip(self.stdin_file.as_ref()),
-            stdout_path.zip(stdout_file.as_ref()),
-            stderr_path.zip(stderr_file.as_ref()),
+            stdout_tee.as_ref().map(|tee| (tee.path(), tee.file())),
+            stderr_tee.as_ref().map(|tee| (tee.path(), tee.file())),
         )?;
         truncate_outputs_with(
             command,
-            stdout_path,
-            stdout_file.as_ref(),
-            stderr_path,
-            stderr_file.as_ref(),
+            stdout_tee.as_ref().map(FileTee::path),
+            stdout_tee.as_ref().map(FileTee::file),
+            stderr_tee.as_ref().map(FileTee::path),
+            stderr_tee.as_ref().map(FileTee::file),
             truncate_output,
         )?;
         if let Some(file) = self.stdin_file.take() {
             process_command.stdin(Stdio::from(file));
         }
-        self.stdout_file = stdout_file;
-        self.stderr_file = stderr_file;
+        self.stdout_tee = stdout_tee;
+        self.stderr_tee = stderr_tee;
         Ok(())
     }
 }
@@ -282,13 +283,13 @@ fn open_input(
 /// # Errors
 ///
 /// Returns [CommandError] when the file cannot be opened.
-fn open_output(command: &str, stream: OutputStream, path: Option<&Path>) -> Result<Option<File>, CommandError> {
+fn open_output(command: &str, stream: OutputStream, path: Option<&Path>) -> Result<Option<FileTee>, CommandError> {
     path.map(|path| {
         ensure_regular_output(command, stream, path)?;
         let file = open_output_candidate(path).map_err(|source| open_output_error(command, stream, path, source))?;
         ensure_regular_output_handle(command, stream, path, &file)?;
         clear_nonblocking(&file).map_err(|source| open_output_error(command, stream, path, source))?;
-        Ok(file)
+        Ok(FileTee::new(file, path.to_path_buf()))
     })
     .transpose()
 }
