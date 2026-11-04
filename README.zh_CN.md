@@ -22,6 +22,7 @@ qubit-command = "0.11"
 
 假设服务需要运行一次仓库检查，并把命令输出放入结果中。使用程序和参数值构造结构化命令，用默认策略运行，确认命令成功后再解码 stdout：
 
+<!-- doc-example:quick-start:compile -->
 ```rust
 use qubit_command::{Command, CommandRunner};
 

@@ -34,6 +34,7 @@ qubit-command = "0.11"
 
 Use structured arguments for ordinary commands. This keeps argument boundaries explicit and does not invoke a shell:
 
+<!-- doc-example:basic-run:compile -->
 ```rust
 use qubit_command::{Command, CommandRunner};
 
@@ -53,6 +54,7 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 
 Requires a Unix-like environment with the `printf` utility:
 
+<!-- doc-example:unix-output:unix -->
 ```rust
 use qubit_command::{Command, CommandRunner};
 
@@ -65,6 +67,7 @@ assert_eq!(output.stdout_text()?, "hello");
 
 On Windows, use Windows PowerShell with structured arguments instead:
 
+<!-- doc-example:windows-output:windows -->
 ```rust
 use qubit_command::{Command, CommandRunner};
 
@@ -98,6 +101,7 @@ For non-UTF-8 program or argument values, use `new_os`, `arg_os`, `args_os`, `en
 
 The script below uses Unix shell syntax and requires a Unix-like environment with `sh`, `printf`, and `tr`:
 
+<!-- doc-example:unix-shell:unix -->
 ```rust
 let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::shell("printf hello | tr a-z A-Z"))?;
@@ -107,6 +111,7 @@ assert_eq!(output.stdout_text()?, "HELLO");
 
 On Windows, `Command::shell` uses `cmd /C`; provide a `cmd` script, not a PowerShell script. This example prints `hello` (the trailing line ending is ignored):
 
+<!-- doc-example:windows-shell:windows -->
 ```rust
 let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::shell("echo hello"))?;
@@ -122,6 +127,7 @@ On Unix-like platforms `Command::shell` runs `sh -c`; on Windows it runs `cmd /C
 
 Requires a Unix-like environment with the `cat` utility:
 
+<!-- doc-example:unix-stdin:unix -->
 ```rust
 use qubit_command::{Command, CommandRunner};
 
@@ -137,6 +143,7 @@ assert_eq!(output.stdout_text()?, "input\n");
 
 On Windows, this structured-argument version requires Windows PowerShell. It echoes the supplied stdin bytes unchanged:
 
+<!-- doc-example:windows-stdin:windows -->
 ```rust
 use qubit_command::{Command, CommandRunner};
 
@@ -283,6 +290,7 @@ if output.stdout_truncated() {
 
 For example, inspect the limit error's classification and partial capture separately from ordinary command output:
 
+<!-- doc-example:total-output-budget:no_run -->
 ```rust,no_run
 use qubit_command::{Command, CommandErrorKind, CommandRunner};
 

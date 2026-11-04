@@ -22,6 +22,7 @@ qubit-command = "0.11"
 
 Suppose a service needs to run a repository check and include its output in a result. Build the command from the program and argument values, run it with the default policy, and decode stdout only after the command succeeds:
 
+<!-- doc-example:quick-start:compile -->
 ```rust
 use qubit_command::{Command, CommandRunner};
 

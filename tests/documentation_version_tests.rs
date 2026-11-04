@@ -5,10 +5,6 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use qubit_command::Command;
-use qubit_command::CommandErrorKind;
-use qubit_command::CommandRunner;
-
 const CARGO_TOML: &str = include_str!("../Cargo.toml");
 const README_EN: &str = include_str!("../README.md");
 const README_ZH: &str = include_str!("../README.zh_CN.md");
@@ -39,21 +35,4 @@ fn documentation_install_constraints_match_the_crate_compatibility_line() {
 
     assert!(GUIDE_EN.contains(&format!("qubit-command` {version}")));
     assert!(GUIDE_ZH.contains(&format!("qubit-command` {version}")));
-}
-
-#[test]
-fn documented_total_output_budget_api_type_checks() {
-    // Keep the guide's API usage compiled without spawning a platform-specific
-    // process.
-    let example = || {
-        let result = CommandRunner::without_timeout()
-            .max_total_output_bytes(1024)
-            .run(Command::new("example"));
-        if let Err(error) = result
-            && error.kind() == CommandErrorKind::OutputLimitExceeded
-        {
-            let _ = error.captured_output();
-        }
-    };
-    let _ = example;
 }

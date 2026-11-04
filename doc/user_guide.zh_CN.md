@@ -34,6 +34,7 @@ qubit-command = "0.11"
 
 普通命令使用结构化参数。这样参数边界明确，也不会调用 shell：
 
+<!-- doc-example:basic-run:compile -->
 ```rust
 use qubit_command::{Command, CommandRunner};
 
@@ -53,6 +54,7 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 
 以下示例需要 Unix 工具环境，并且系统中有 `printf`：
 
+<!-- doc-example:unix-output:unix -->
 ```rust
 use qubit_command::{Command, CommandRunner};
 
@@ -65,6 +67,7 @@ assert_eq!(output.stdout_text()?, "hello");
 
 Windows 上可使用 Windows PowerShell，并通过结构化参数调用：
 
+<!-- doc-example:windows-output:windows -->
 ```rust
 use qubit_command::{Command, CommandRunner};
 
@@ -98,6 +101,7 @@ let command = Command::new("git")
 
 下面的脚本使用 Unix shell 语法，需要 Unix 工具环境以及 `sh`、`printf`、`tr`：
 
+<!-- doc-example:unix-shell:unix -->
 ```rust
 let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::shell("printf hello | tr a-z A-Z"))?;
@@ -107,6 +111,7 @@ assert_eq!(output.stdout_text()?, "HELLO");
 
 Windows 上 `Command::shell` 使用 `cmd /C`，因此要传入 `cmd` 脚本，不能把 PowerShell 脚本直接交给它。下面的命令输出 `hello`；断言会忽略行尾换行：
 
+<!-- doc-example:windows-shell:windows -->
 ```rust
 let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::shell("echo hello"))?;
@@ -122,6 +127,7 @@ assert_eq!(output.stdout_text()?.trim(), "hello");
 
 Unix 工具环境下，可用 `cat` 原样回显 stdin：
 
+<!-- doc-example:unix-stdin:unix -->
 ```rust
 use qubit_command::{Command, CommandRunner};
 
@@ -137,6 +143,7 @@ assert_eq!(output.stdout_text()?, "input\n");
 
 Windows 上可通过结构化参数调用 Windows PowerShell，把输入字节原样写回 stdout：
 
+<!-- doc-example:windows-stdin:windows -->
 ```rust
 use qubit_command::{Command, CommandRunner};
 
@@ -274,6 +281,7 @@ if output.stdout_truncated() {
 
 例如，可分别检查预算超限分类和部分捕获内容，而普通输出对象不会存在：
 
+<!-- doc-example:total-output-budget:no_run -->
 ```rust,no_run
 use qubit_command::{Command, CommandErrorKind, CommandRunner};
 
