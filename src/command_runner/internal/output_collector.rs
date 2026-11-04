@@ -1697,6 +1697,5 @@ mod tests {
     }
 
     #[cfg(windows)]
-    #[path = "windows_probe_tests.rs"]
     mod windows_probe_tests;
 }
