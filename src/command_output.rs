@@ -124,11 +124,30 @@ impl CommandOutput {
         }
     }
 
-    /// Consumes the command output and returns its captured streams.
+    /// Consumes the command output and returns its captured streams and
+    /// metadata.
     ///
-    /// This internal conversion preserves the retained bytes and their
-    /// truncation and completion metadata without cloning the buffers.
-    pub(crate) fn into_captured_output(self) -> CommandCapturedOutput {
+    /// The returned value retains the truncation and completion flags for each
+    /// stream. Truncation means the bytes may be only a prefix of the process
+    /// output; a `false` completion flag means EOF was not observed and does
+    /// not identify why collection stopped. This moves the existing buffers
+    /// without copying them.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use qubit_command::{Command, CommandRunner};
+    ///
+    /// let output = CommandRunner::without_timeout()
+    ///     .run(Command::new("rustc").arg("--version"))
+    ///     .expect("rustc should run");
+    /// let captured = output.into_captured_output();
+    /// let (stdout, stderr) = captured.into_streams();
+    /// assert!(!stdout.is_empty());
+    /// assert!(stderr.is_empty());
+    /// ```
+    #[inline]
+    pub fn into_captured_output(self) -> CommandCapturedOutput {
         self.captured
     }
 
@@ -379,6 +398,29 @@ mod tests {
         assert_eq!(captured.stderr(), [5, 6, 7]);
         assert!(captured.stdout_complete());
         assert!(captured.stderr_complete());
+    }
+
+    #[test]
+    fn test_into_captured_output_preserves_incomplete_and_truncated_flags() {
+        let output = CommandOutput::new(
+            test_status(),
+            (vec![1], true, false),
+            (vec![2], false, false),
+            Duration::ZERO,
+        );
+
+        assert!(output.stdout_truncated());
+        assert!(!output.stdout_complete());
+        assert!(!output.stderr_truncated());
+        assert!(!output.stderr_complete());
+
+        let captured = output.into_captured_output();
+        assert!(captured.stdout_truncated());
+        assert!(!captured.stdout_complete());
+        assert!(!captured.stderr_truncated());
+        assert!(!captured.stderr_complete());
+        assert_eq!(captured.stdout(), [1]);
+        assert_eq!(captured.stderr(), [2]);
     }
 
     #[cfg(unix)]

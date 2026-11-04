@@ -145,6 +145,38 @@ impl CommandCapturedOutput {
     pub const fn stderr_complete(&self) -> bool {
         self.stderr_complete
     }
+
+    /// Consumes the captured output and returns owned stdout and stderr bytes.
+    ///
+    /// The bytes are moved without copying. This discards the per-stream
+    /// truncation and completion metadata, so inspect those flags before
+    /// calling this method when they are relevant. Truncated bytes may be only
+    /// a prefix of the process output, and incomplete streams did not reach
+    /// observed EOF. Treat the returned raw bytes as sensitive according to
+    /// your application's data-handling requirements.
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing `(stdout, stderr)` exactly as retained by the
+    /// runner.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use qubit_command::{Command, CommandRunner};
+    ///
+    /// let captured = CommandRunner::without_timeout()
+    ///     .run(Command::new("rustc").arg("--version"))
+    ///     .expect("rustc should run")
+    ///     .into_captured_output();
+    /// let (stdout, stderr) = captured.into_streams();
+    /// assert!(!stdout.is_empty());
+    /// assert!(stderr.is_empty());
+    /// ```
+    #[inline]
+    pub fn into_streams(self) -> (Vec<u8>, Vec<u8>) {
+        (self.stdout, self.stderr)
+    }
 }
 
 impl fmt::Debug for CommandCapturedOutput {
