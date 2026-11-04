@@ -688,17 +688,16 @@ fn run_real_probe(scenario: &str) {
                 }
             }
         }
-        if use_eof_flush {
-            if first_cancel_succeeded
-                && let (Some(eof_return), Some(flush_entry)) = (eof_return, flush_entry)
-                && first_cancel_return < eof_return
-                && eof_return < flush_entry
-            {
-                eof_pipe_successful_cancel_flush_hits.push(attempt);
-                eprintln!(
-                    "Windows RC-002 eof pipe sample attempt={attempt}: successful cancel return precedes EOF return and tee flush entry; pipe substitute only, not ordinary-file defect evidence"
-                );
-            }
+        if use_eof_flush
+            && first_cancel_succeeded
+            && let (Some(eof_return), Some(flush_entry)) = (eof_return, flush_entry)
+            && first_cancel_return < eof_return
+            && eof_return < flush_entry
+        {
+            eof_pipe_successful_cancel_flush_hits.push(attempt);
+            eprintln!(
+                "Windows RC-002 eof pipe sample attempt={attempt}: successful cancel return precedes EOF return and tee flush entry; pipe substitute only, not ordinary-file defect evidence"
+            );
         }
         if tee_entry.is_some() {
             tee_write_entries += 1;
