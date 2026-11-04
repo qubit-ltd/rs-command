@@ -278,7 +278,11 @@ verification](rc-002-verification.md).
 
 Each stream is limited to `DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM`, currently 1 MiB, by default. A successful command whose retained output is truncated returns a `CommandError` whose `kind()` is `CommandErrorKind::OutputTruncated` unless that policy is disabled.
 
-For large logs, keep memory bounded and tee each stream to a file:
+For large logs, keep memory bounded and tee each stream to a file. A per-stream
+retention limit alone does not stop draining or tee writes. A total output
+budget, timeout, cancellation, or pipe read failure can stop collection. A tee
+write failure can leave the tee file incomplete while draining continues; a
+tee flush failure can leave it incomplete after the stream was drained:
 
 <!-- doc-example:tee-output:compile -->
 ```rust
@@ -295,7 +299,7 @@ let output = CommandRunner::new(std::time::Duration::from_secs(10))
     )?;
 
 if output.stdout_truncated() {
-    eprintln!("stdout was truncated in memory; see stdout.log for the full stream");
+    eprintln!("stdout was truncated in memory; see stdout.log for collected output");
 }
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
@@ -435,7 +439,7 @@ Use the retained output for diagnostics, but check both completion flags. Descen
 
 ### Output is truncated
 
-Keep the bounded setting and use tee files for complete logs, or increase the stream limit. Disable failure on truncation only when the application explicitly accepts partial in-memory output. Avoid `unbounded_output()` for untrusted or open-ended commands.
+Keep the bounded setting and use tee files to retain output beyond the in-memory limit. A per-stream retention limit alone does not stop draining or tee writes, but a total output budget, timeout, cancellation, or pipe read failure can stop collection. A tee write failure can leave the tee file incomplete while draining continues; a tee flush failure can leave it incomplete after the stream was drained. Disable failure on truncation only when the application explicitly accepts partial in-memory output. Avoid `unbounded_output()` for untrusted or open-ended commands.
 
 ### Text decoding fails
 

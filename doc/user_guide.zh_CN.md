@@ -269,7 +269,7 @@ runner 会终止受管进程树，`kind()` 为 `Cancelled`，并在可用时保�
 
 默认每个流的上限是 `DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM`，当前为 1 MiB。成功命令的保留输出被截断时，除非关闭该策略，否则会返回 `CommandError`，其 `kind()` 为 `CommandErrorKind::OutputTruncated`。
 
-对于大量日志，保持内存有界，并把每个流 tee 到文件：
+对于大量日志，保持内存有界，并把每个流 tee 到文件。单流内存保留上限本身不会停止排空或 tee 写入；总输出预算、超时、取消或管道读取失败可能中断收集。tee 写入失败可能在读取继续时使 tee 不完整；tee flush 失败则可能在流已排空后使 tee 不完整：
 
 <!-- doc-example:tee-output:compile -->
 ```rust
@@ -286,7 +286,7 @@ let output = CommandRunner::new(std::time::Duration::from_secs(10))
     )?;
 
 if output.stdout_truncated() {
-    eprintln!("stdout was truncated in memory; see stdout.log for the full stream");
+    eprintln!("stdout was truncated in memory; see stdout.log for collected output");
 }
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
@@ -420,7 +420,7 @@ runner 会返回失败证据，不再进入无界等待。子进程此时可能�
 
 ### 输出被截断
 
-保持有界设置并使用 tee 文件保存完整日志，或提高流上限。只有业务明确接受内存中的部分输出时，才关闭截断失败策略。不要对不可信或开放式命令使用 `unbounded_output()`。
+保持有界设置并使用 tee 文件保留超出内存上限的输出，或提高流上限。单流内存保留上限本身不会停止排空或 tee 写入；但总输出预算、超时、取消或管道读取失败可能中断收集。tee 写入失败可能在读取继续时使 tee 不完整；tee flush 失败则可能在流已排空后使 tee 不完整。只有业务明确接受内存中的部分输出时，才关闭截断失败策略。不要对不可信或开放式命令使用 `unbounded_output()`。
 
 ### 文本解码失败
 

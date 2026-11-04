@@ -669,9 +669,11 @@ impl CommandRunner {
 
     /// Sets the maximum stdout bytes retained in memory.
     ///
-    /// The reader still drains the complete stdout stream. Bytes beyond this
-    /// limit are not retained in [`CommandOutput`], but they are still written
-    /// to a configured stdout tee file.
+    /// A per-stream retention limit alone does not stop draining stdout or
+    /// writing to its configured tee file. A total output budget, timeout,
+    /// cancellation, or a pipe read failure can stop collection. A tee write
+    /// failure can leave the tee incomplete while draining continues; a tee
+    /// flush failure can leave it incomplete after the stream was drained.
     ///
     /// # Parameters
     ///
@@ -699,9 +701,11 @@ impl CommandRunner {
 
     /// Sets the maximum stderr bytes retained in memory.
     ///
-    /// The reader still drains the complete stderr stream. Bytes beyond this
-    /// limit are not retained in [`CommandOutput`], but they are still written
-    /// to a configured stderr tee file.
+    /// A per-stream retention limit alone does not stop draining stderr or
+    /// writing to its configured tee file. A total output budget, timeout,
+    /// cancellation, or a pipe read failure can stop collection. A tee write
+    /// failure can leave the tee incomplete while draining continues; a tee
+    /// flush failure can leave it incomplete after the stream was drained.
     ///
     /// # Parameters
     ///

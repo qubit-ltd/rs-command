@@ -85,8 +85,13 @@ fn read_output_until_cancelled<R: CancellableReader>(
     read_output_inner(&mut reader, options, Some(&cancellation), fd)
 }
 
-/// Drains one output stream while retaining bounded bytes and teeing the full
-/// stream when configured.
+/// Reads one output stream while retaining bounded bytes and writing each
+/// read chunk to a configured tee unless cancellation is observed before tee
+/// I/O. A per-stream retention limit alone does not stop reads or tee writes.
+/// Cancellation or a total output budget can stop reading before EOF; a pipe
+/// read error also ends reading. A tee write error can leave the tee file
+/// incomplete while reading continues; a tee flush error can leave an already
+/// drained stream's tee incomplete.
 ///
 /// Every exit finalizes pending tee errors. A later pipe failure is retained
 /// alongside the earlier tee error; cancellation never erases either stored
