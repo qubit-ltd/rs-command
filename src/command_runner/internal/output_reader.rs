@@ -6,6 +6,8 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 use std::sync::Arc;
+#[cfg(all(test, windows))]
+use std::sync::mpsc::Sender;
 use std::thread;
 
 use super::captured_output::CapturedOutput;
@@ -100,6 +102,12 @@ impl OutputReader {
     #[inline]
     pub(in crate::command_runner) fn cancel(&self) -> std::io::Result<()> {
         self.cancellation.cancel(&self.join)
+    }
+
+    /// Attaches a Windows-only probe observer to the next cancellation call.
+    #[cfg(all(test, windows))]
+    pub(in crate::command_runner) fn observe_cancellation_for_test(&mut self, observer: Sender<Option<i32>>) {
+        self.cancellation.observe_test_cancellation(observer);
     }
 
     /// Joins the worker thread and returns its capture result.

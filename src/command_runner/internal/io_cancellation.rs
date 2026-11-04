@@ -11,6 +11,8 @@ use std::io;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+#[cfg(all(test, windows))]
+use std::sync::mpsc::Sender;
 use std::thread::JoinHandle;
 
 use super::io_cancellation_token::IoCancellationToken;
@@ -29,6 +31,9 @@ pub(in crate::command_runner) struct IoCancellation {
     /// Deterministic raw cancellation failure used by Windows unit tests.
     #[cfg(test)]
     test_raw_os_error: Option<i32>,
+    /// Reports the native cancellation result to a Windows probe.
+    #[cfg(all(test, windows))]
+    test_observer: Option<Sender<Option<i32>>>,
 }
 
 impl IoCancellation {
@@ -55,6 +60,8 @@ impl IoCancellation {
                     test_failure: None,
                     #[cfg(test)]
                     test_raw_os_error: None,
+                    #[cfg(all(test, windows))]
+                    test_observer: None,
                 },
                 IoCancellationToken { cancelled, wakeup },
             ))
@@ -70,6 +77,8 @@ impl IoCancellation {
                     test_failure: None,
                     #[cfg(test)]
                     test_raw_os_error: None,
+                    #[cfg(all(test, windows))]
+                    test_observer: None,
                 },
                 IoCancellationToken { cancelled },
             ))
@@ -106,27 +115,50 @@ impl IoCancellation {
         self.cancelled.store(true, Ordering::Release);
         #[cfg(test)]
         if let Some(raw_os_error) = self.test_raw_os_error {
-            return Err(io::Error::from_raw_os_error(raw_os_error));
+            let result = Err(io::Error::from_raw_os_error(raw_os_error));
+            #[cfg(windows)]
+            self.observe_test_result(&result);
+            return result;
         }
         #[cfg(test)]
         if let Some((kind, message)) = self.test_failure {
-            return Err(io::Error::new(kind, message));
+            let result = Err(io::Error::new(kind, message));
+            #[cfg(windows)]
+            self.observe_test_result(&result);
+            return result;
         }
-        #[cfg(unix)]
-        {
-            use std::io::Write;
-
-            if let Err(error) = (&self.notifier).write_all(&[1])
-                && error.kind() != io::ErrorKind::BrokenPipe
+        let result = {
+            #[cfg(unix)]
             {
-                return Err(error);
+                use std::io::Write;
+
+                if let Err(error) = (&self.notifier).write_all(&[1])
+                    && error.kind() != io::ErrorKind::BrokenPipe
+                {
+                    return Err(error);
+                }
+                let _ = join;
+                Ok(())
             }
-            let _ = join;
-            Ok(())
-        }
-        #[cfg(windows)]
-        {
-            super::cancel::cancel_synchronous_io(join)
+            #[cfg(windows)]
+            {
+                super::cancel::cancel_synchronous_io(join)
+            }
+        };
+        #[cfg(all(test, windows))]
+        self.observe_test_result(&result);
+        result
+    }
+
+    #[cfg(all(test, windows))]
+    pub(super) fn observe_test_cancellation(&mut self, observer: Sender<Option<i32>>) {
+        self.test_observer = Some(observer);
+    }
+
+    #[cfg(all(test, windows))]
+    fn observe_test_result(&self, result: &io::Result<()>) {
+        if let Some(observer) = &self.test_observer {
+            let _ = observer.send(result.as_ref().err().and_then(io::Error::raw_os_error));
         }
     }
 }

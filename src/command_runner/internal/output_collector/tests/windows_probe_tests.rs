@@ -24,7 +24,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 use super::super::super::cancel::cancel_synchronous_io;
+use super::super::super::cancellable_reader::CancellableReader;
 use super::super::super::captured_output::CapturedOutput;
+use super::super::super::command_io::CommandIo;
 use super::super::super::io_cancellation::IoCancellation;
 use super::super::super::output_capture_error::OutputCaptureError;
 use super::super::super::output_capture_options::OutputCaptureOptions;
@@ -32,6 +34,7 @@ use super::super::super::output_tee::OutputTee;
 use super::super::super::stdin_pipe::write_stdin_until_cancelled;
 use super::super::super::total_output_budget::TotalOutputBudget;
 use super::super::read_output_inner;
+use super::super::read_output_stream;
 use crate::OutputStream;
 
 const ATTEMPTS: usize = 128;
@@ -69,6 +72,48 @@ enum ProbeEvent {
     StdinWriteEntry(Instant),
     StdinWriteReturn(Instant, Option<usize>, Option<i32>, bool),
     WorkerDone(Instant),
+}
+
+enum ProductionReadEvent {
+    Entry,
+    Return(Option<usize>, Option<i32>),
+}
+
+struct ProductionPipeReader(File, mpsc::Sender<ProductionReadEvent>);
+
+impl Read for ProductionPipeReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let _ = self.1.send(ProductionReadEvent::Entry);
+        let result = self.0.read(buffer);
+        let _ = self.1.send(ProductionReadEvent::Return(
+            result.as_ref().ok().copied(),
+            result.as_ref().err().and_then(io::Error::raw_os_error),
+        ));
+        result
+    }
+}
+
+impl CancellableReader for ProductionPipeReader {
+    fn prepare_for_cancellation(&self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn raw_handle(&self) -> RawHandle {
+        self.0.as_raw_handle()
+    }
+}
+
+struct CountedFileWriter(File, Arc<std::sync::atomic::AtomicUsize>);
+
+impl Write for CountedFileWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.1.fetch_add(1, Ordering::AcqRel);
+        self.0.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
 }
 
 struct ReadEntry(File, mpsc::Sender<ProbeEvent>, Arc<std::sync::atomic::AtomicBool>, bool);
@@ -328,6 +373,7 @@ fn probe_child_entry() {
         },
         "probe" | "readiness" | "eof-flush" => run_real_probe(scenario.as_str()),
         "stdin-check-write" => run_stdin_probe(),
+        "production-command-io" => run_production_command_io_probe(),
         "failure" => panic!("intentional child failure"),
         "missing-completion" => return,
         _ => panic!("unknown Windows probe child scenario: {scenario}"),
@@ -410,6 +456,17 @@ fn test_windows_successful_cancel_interleaving_eof_to_flush() {
 fn test_windows_successful_cancel_interleaving_stdin_check_to_write() {
     let outcome = supervise_child("stdin-check-write", Duration::from_secs(30)).expect("child supervision should work");
     assert_completed(outcome, "stdin-check-write");
+}
+
+#[test]
+fn test_windows_successful_cancel_interleaving_production_command_io() {
+    let outcome =
+        supervise_child("production-command-io", Duration::from_secs(30)).expect("child supervision should work");
+    eprintln!(
+        "{{\"event\":\"probe_process_reaping\",\"scenario\":\"production_command_io_blocked_read\",\"probe_child_reaped\":{}}}",
+        outcome.status.is_some(),
+    );
+    assert_completed(outcome, "production-command-io");
 }
 
 #[test]
@@ -749,6 +806,124 @@ fn run_real_probe(scenario: &str) {
     if valid_hits.is_empty() {
         eprintln!("zero valid hits means this run remains unverified, not that the race is absent");
     }
+}
+
+/// Exercises real `read_output_stream` and `CommandIo` cleanup with an
+/// ordinary-file tee. This bounded case observes cancellation of a genuinely
+/// blocked source read; it does not claim a subsequent-I/O race witness.
+fn run_production_command_io_probe() {
+    let attempt_start = Instant::now();
+    let (source_reader, source_writer) = anonymous_pipe().expect("production source pipe should be created");
+    let (read_event_tx, read_event_rx) = mpsc::channel();
+    let read_events = Arc::new(Mutex::new(read_event_rx));
+    let tee_file = tempfile::NamedTempFile::new().expect("ordinary tee file should be created");
+    let tee_path = tee_file.path().to_path_buf();
+    let tee_entries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let tee = OutputTee::new(
+        Box::new(CountedFileWriter(
+            tee_file.reopen().expect("ordinary tee file should reopen"),
+            Arc::clone(&tee_entries),
+        )),
+        tee_path.clone(),
+    );
+    let mut stdout = read_output_stream(
+        ProductionPipeReader(source_reader, read_event_tx),
+        OutputCaptureOptions::new(None, Some(tee)),
+    )
+    .expect("production output reader should start");
+    let (cancel_observer_tx, cancel_observer_rx) = mpsc::channel();
+    stdout.observe_cancellation_for_test(cancel_observer_tx);
+    let (stderr_cancellation, _stderr_token) = IoCancellation::pair().expect("stderr cancellation should start");
+    let stderr = super::super::super::output_reader::OutputReader::new(
+        thread::spawn(|| Ok(CapturedOutput::default())),
+        stderr_cancellation,
+    );
+    let command_io = CommandIo::new(stdout, stderr, None);
+    let status = std::process::Command::new("cmd.exe")
+        .args(["/C", "exit", "0"])
+        .status()
+        .expect("a completed Windows command should provide an ExitStatus");
+
+    match read_events
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .recv_timeout(EVENT_TIMEOUT)
+        .expect("production helper should enter the real pipe read")
+    {
+        ProductionReadEvent::Entry => {}
+        ProductionReadEvent::Return(_, _) => panic!("source read returned before cancellation"),
+    }
+    let read_entry_observed_ns = attempt_start.elapsed().as_nanos();
+    // Allow the worker to enter the kernel read. A successful native cancel
+    // below is the evidence that synchronous I/O was pending.
+    thread::sleep(BLOCKED_WRITE_OBSERVATION);
+    let cleanup_started_ns = attempt_start.elapsed().as_nanos();
+    let cleanup =
+        thread::spawn(move || command_io.cancel_and_collect("production probe", status, || Ok(Duration::ZERO)));
+    let cancel_result = cancel_observer_rx
+        .recv_timeout(EVENT_TIMEOUT)
+        .expect("production CommandIo should report its cancellation result");
+    let cancellation_result_observed_ns = attempt_start.elapsed().as_nanos();
+    let cleanup_pending = !cleanup.is_finished();
+    drop(source_writer);
+    let read_return = read_events
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .recv_timeout(EVENT_TIMEOUT)
+        .expect("source read should return after cancellation or writer release");
+    let read_return_observed_ns = attempt_start.elapsed().as_nanos();
+    let (output, cleanup_failures) = cleanup.join().expect("production cleanup should join");
+    let cleanup_joined_ns = attempt_start.elapsed().as_nanos();
+    let captured = output
+        .expect("cancelled output should retain successful command status")
+        .into_captured_output();
+    let (read_bytes, read_error) = match read_return {
+        ProductionReadEvent::Return(bytes, error) => (bytes, error),
+        ProductionReadEvent::Entry => panic!("source read entered twice without a return"),
+    };
+    let tee_write_entries = tee_entries.load(Ordering::Acquire);
+    let tee_len = tee_file
+        .as_file()
+        .metadata()
+        .expect("tee file metadata should be readable")
+        .len();
+    let trace = serde_json::json!({
+        "event": "scenario_classification",
+        "scenario": "production_command_io_blocked_read",
+        "source_sha": std::env::var("GITHUB_SHA")
+            .unwrap_or_else(|_| "local-uncommitted-worktree".to_owned()),
+        "attempts": 1,
+        "relative_ns": {
+            "read_entry_observed": read_entry_observed_ns,
+            "cleanup_started": cleanup_started_ns,
+            "cancel_result_observed": cancellation_result_observed_ns,
+            "read_return_observed": read_return_observed_ns,
+            "cleanup_joined": cleanup_joined_ns,
+        },
+        "cancel_success": cancel_result.is_none(),
+        "cancel_raw_os_error": cancel_result,
+        "cleanup_thread_unfinished_when_cancel_observer_fired": cleanup_pending,
+        "production_join_pending_witness": false,
+        "source_read_bytes": read_bytes,
+        "source_read_raw_os_error": read_error,
+        "original_io_return_is_subsequent_io": false,
+        "tee_path_kind": "ordinary_file",
+        "tee_write_entries": tee_write_entries,
+        "tee_file_len": tee_len,
+        "stdout_complete": captured.stdout_complete(),
+        "stdout_truncated": captured.stdout_truncated(),
+        "cleanup_failures": cleanup_failures.len(),
+        "reader_helper_joined": true,
+        "exit_status_process_reaped": true,
+        "source_writer_manually_released": true,
+        "watchdog_released": false,
+        "classification": "unresolved",
+    });
+    eprintln!("{trace}");
+    assert_eq!(tee_path, tee_file.path());
+    assert_eq!(tee_write_entries, 0, "a cancelled blocked read has no bytes to tee");
+    assert_eq!(tee_len, 0);
+    assert!(!captured.stdout_truncated());
 }
 
 fn log_event(attempt: usize, start: Instant, event: ProbeEvent) {
