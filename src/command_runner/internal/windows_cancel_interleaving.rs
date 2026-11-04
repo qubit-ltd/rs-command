@@ -42,6 +42,11 @@ const TEST_FILTER: &str =
 const WATCHDOG_LIMIT: Duration = Duration::from_secs(30);
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 const BLOCKED_WRITE_OBSERVATION: Duration = Duration::from_millis(10);
+const WATCHDOG_PARENT_CHECK: &str = r#"{"event":"watchdog_parent_check","child_reaped":true,"child_kill_used":false}"#;
+const WATCHDOG_SELF_TEST: &str = r#"{"event":"watchdog_self_test","blocked_real_pipe":true,"watchdog_released_pipe":true,"helper_reaped":true,"child_kill_used":false}"#;
+const EOF_TO_FLUSH_CLASSIFICATION: &str = r#"{"event":"scenario_classification","schema":1,"scenario":"eof_to_flush","classification":"uncovered","attempts":0,"reason":"production tee is an unbuffered File writer; no buffered bytes remain for a blocking flush after EOF. A BufferWriter/BufWriter would change the production path and cannot establish this interleaving"}"#;
+const STDIN_CHECK_TO_WRITE_CLASSIFICATION: &str = r#"{"event":"scenario_classification","schema":1,"scenario":"stdin_check_to_write","classification":"uncovered","attempts":0,"reason":"Windows wait_writable only checks the cancellation token; there is no pending synchronous I/O in the check-to-write gap for CancelSynchronousIo to successfully cancel. A success would target the write after it entered the kernel"}"#;
+const OVERALL_CLASSIFICATION: &str = r#"{"event":"overall_classification","schema":1,"rc002":"unresolved","reason":"all three planned scenarios lack a complete witness satisfying successful cancellation, normal completion, subsequent blocked I/O, production cleanup join, and watchdog release"}"#;
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
@@ -218,10 +223,7 @@ fn windows_successful_cancel_interleaving() {
                 Some(0),
                 "real-pipe watchdog self-test failed"
             );
-            eprintln!(
-                "{}",
-                r#"{"event":"watchdog_parent_check","child_reaped":true,"child_kill_used":false}"#
-            );
+            eprintln!("{WATCHDOG_PARENT_CHECK}");
             let probe = run_child("probe", WATCHDOG_LIMIT);
             assert!(!probe.timed_out, "Windows real-pipe probe exceeded watchdog limit");
             assert_eq!(
@@ -259,10 +261,7 @@ fn run_watchdog_fault_self_test() {
         .expect("released helper write should succeed");
     let (drained, capacity) = watchdog.join().expect("pipe watchdog should be reaped");
     assert!(drained >= capacity as usize, "watchdog should drain the filled pipe");
-    eprintln!(
-        "{}",
-        r#"{"event":"watchdog_self_test","blocked_real_pipe":true,"watchdog_released_pipe":true,"helper_reaped":true,"child_kill_used":false}"#
-    );
+    eprintln!("{WATCHDOG_SELF_TEST}");
 }
 
 fn run_child(mode: &str, timeout: Duration) -> ChildOutcome {
@@ -436,18 +435,9 @@ fn run_read_to_tee_probe() {
         legacy_candidates.last().map_or(ATTEMPTS, |hit| hit.0 + 1),
         legacy_candidates.len(),
     );
-    eprintln!(
-        "{}",
-        r#"{"event":"scenario_classification","schema":1,"scenario":"eof_to_flush","classification":"uncovered","attempts":0,"reason":"production tee is an unbuffered File writer; no buffered bytes remain for a blocking flush after EOF. A BufferWriter/BufWriter would change the production path and cannot establish this interleaving"}"#
-    );
-    eprintln!(
-        "{}",
-        r#"{"event":"scenario_classification","schema":1,"scenario":"stdin_check_to_write","classification":"uncovered","attempts":0,"reason":"Windows wait_writable only checks the cancellation token; there is no pending synchronous I/O in the check-to-write gap for CancelSynchronousIo to successfully cancel. A success would target the write after it entered the kernel"}"#
-    );
-    eprintln!(
-        "{}",
-        r#"{"event":"overall_classification","schema":1,"rc002":"unresolved","reason":"all three planned scenarios lack a complete witness satisfying successful cancellation, normal completion, subsequent blocked I/O, production cleanup join, and watchdog release"}"#
-    );
+    eprintln!("{EOF_TO_FLUSH_CLASSIFICATION}");
+    eprintln!("{STDIN_CHECK_TO_WRITE_CLASSIFICATION}");
+    eprintln!("{OVERALL_CLASSIFICATION}");
     assert!(
         legacy_candidates.is_empty(),
         "legacy read-to-tee candidate observed; preserve this trace, but do not classify it without a watchdog-rescued production cleanup join"
