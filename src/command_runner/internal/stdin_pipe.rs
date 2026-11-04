@@ -192,6 +192,10 @@ pub(in crate::command_runner) fn join_stdin_writer(
 
 /// Writes configured stdin bytes until completion or cancellation.
 ///
+/// # Type Parameters
+///
+/// * `W` - Type used by this operation.
+///
 /// # Parameters
 ///
 /// * `stdin` - Non-blocking pipe that accepts the bytes.
@@ -250,6 +254,9 @@ pub(super) fn write_stdin_until_cancelled<W: PollableStdin>(
 ///
 /// Returns the operating-system error if reading or updating the descriptor
 /// flags fails.
+/// # Type Parameters
+///
+/// * `T` - Type of helper thread result.
 #[cfg(unix)]
 fn prepare_stdin_pipe<T: std::os::fd::AsRawFd>(pipe: &T) -> io::Result<()> {
     // SAFETY: fcntl operates on the valid descriptor owned by `pipe`.
@@ -267,6 +274,10 @@ fn prepare_stdin_pipe<T: std::os::fd::AsRawFd>(pipe: &T) -> io::Result<()> {
 
 /// Leaves Windows stdin handles unchanged because their handles use blocking
 /// writes managed by the platform-specific cancellation path.
+///
+/// # Type Parameters
+///
+/// * `T` - Child stdin handle type.
 ///
 /// # Parameters
 ///

@@ -87,6 +87,7 @@ impl IoCancellation {
 
     /// Creates cancellation state that reports a deterministic test failure.
     #[cfg(test)]
+    /// # Parameters
     pub(super) fn failing(message: &'static str) -> Self {
         let (mut cancellation, _token) = Self::pair().expect("test cancellation pair should be created");
         cancellation.test_failure = Some((io::ErrorKind::Other, message));
@@ -95,6 +96,7 @@ impl IoCancellation {
 
     /// Creates cancellation state that reports one raw OS error.
     #[cfg(all(test, windows))]
+    /// # Parameters
     pub(super) fn failing_raw_os_error(raw_os_error: i32) -> Self {
         let (mut cancellation, _token) = Self::pair().expect("test cancellation pair should be created");
         cancellation.test_raw_os_error = Some(raw_os_error);
@@ -111,6 +113,9 @@ impl IoCancellation {
     ///
     /// Returns an I/O error if the Unix wakeup write fails for a reason other
     /// than a broken pipe, or if interrupting the helper thread fails.
+    /// # Type Parameters
+    ///
+    /// * `T` - Type of helper thread result.
     pub(in crate::command_runner) fn cancel<T>(&self, join: &JoinHandle<T>) -> io::Result<()> {
         self.cancelled.store(true, Ordering::Release);
         #[cfg(test)]

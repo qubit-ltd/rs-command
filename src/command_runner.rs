@@ -48,6 +48,16 @@ const REDACTED_PATH: &str = "<redacted path>";
 
 /// Takes a prepared child output pipe and maps an absent pipe to a runner
 /// error.
+///
+/// # Type Parameters
+///
+/// * `T` - Type carried by the output pipe.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used in a missing-pipe error.
+/// * `stream` - Output stream whose pipe is requested.
+/// * `take` - Closure that removes the pipe from the child process.
 fn take_output_pipe<T>(
     command: &str,
     stream: OutputStream,
@@ -58,6 +68,12 @@ fn take_output_pipe<T>(
 
 /// Starts one output reader and annotates thread-start failures with its
 /// stream.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used in thread-start errors.
+/// * `stream` - Output stream assigned to the reader.
+/// * `start` - Closure that starts the reader and returns its handle.
 fn start_output_reader(
     command: &str,
     stream: OutputStream,
@@ -209,6 +225,11 @@ impl fmt::Debug for CommandRunner {
 
 impl CommandRunner {
     /// Creates a command runner with explicit timeout handling configuration.
+    ///
+    /// # Parameters
+    ///
+    /// * `timeout` - Optional duration after which a running command is timed
+    ///   out.
     #[inline]
     fn with_optional_timeout(timeout: Option<Duration>) -> Self {
         Self {
@@ -226,6 +247,10 @@ impl CommandRunner {
     }
 
     /// Creates a command runner with a post-spawn timeout.
+    ///
+    /// # Parameters
+    ///
+    /// * `timeout` - Maximum duration allowed after the child process starts.
     ///
     /// # Returns
     ///
@@ -496,6 +521,10 @@ impl CommandRunner {
     /// file paths are resolved from the parent process current working
     /// directory. To access a file relative to this directory, pass an
     /// explicitly joined absolute path.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `P` - Path-like value converted into an owned working-directory path.
     ///
     /// # Parameters
     ///
@@ -802,6 +831,10 @@ impl CommandRunner {
     /// Per-stream retention limits remain controlled by
     /// [`Self::max_output_bytes`] or [`Self::bounded_output`]; removing them
     /// with [`Self::unbounded_output`] does not remove this total budget.
+    ///
+    /// # Parameters
+    ///
+    /// * `limit` - Maximum combined stdout and stderr bytes observed.
     ///
     /// # Example
     ///

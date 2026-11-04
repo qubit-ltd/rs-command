@@ -38,7 +38,7 @@ use super::output_tee::OutputTee;
 const ATTEMPTS: usize = 128;
 const CHILD_MODE: &str = "QUBIT_WINDOWS_CANCEL_INTERLEAVING_CHILD";
 const TEST_FILTER: &str =
-    "command_runner::internal::windows_cancel_interleaving::windows_successful_cancel_interleaving";
+    "command_runner::internal::windows_cancel_interleaving_tests::windows_successful_cancel_interleaving";
 const WATCHDOG_LIMIT: Duration = Duration::from_secs(30);
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 const BLOCKED_WRITE_OBSERVATION: Duration = Duration::from_millis(10);
@@ -207,7 +207,7 @@ fn fill_pipe(pipe: &mut File, observer: &File) -> io::Result<u32> {
 }
 
 #[test]
-fn windows_successful_cancel_interleaving() {
+fn test_successful_cancellation_interleaving_completes() {
     match std::env::var(CHILD_MODE).as_deref() {
         Ok("probe") => run_read_to_tee_probe(),
         Ok("watchdog_fault") => run_watchdog_fault_self_test(),

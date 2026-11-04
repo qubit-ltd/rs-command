@@ -20,6 +20,7 @@ use super::output_collector::join_output_reader;
 use super::output_collector::output_cleanup_failure;
 use super::output_collector::split_output_result;
 use super::output_reader::OutputReader;
+use super::output_reader_finish::OutputReaderFinish;
 use super::stdin_pipe::join_stdin_writer;
 use super::stdin_writer::OptionalStdinWriter;
 use crate::CommandCleanupFailure;
@@ -100,6 +101,9 @@ impl CommandIo {
     /// # Errors
     ///
     /// Returns [`CommandError`] if stream collection or stdin writing fails.
+    /// # Type Parameters
+    ///
+    /// * `F` - Callback type used to sample command elapsed time.
     #[inline]
     pub(in crate::command_runner) fn collect<F>(
         self,
@@ -139,6 +143,9 @@ impl CommandIo {
     ///
     /// Returns [`CommandError`] if a completed helper or elapsed-time sampling
     /// failed.
+    /// # Type Parameters
+    ///
+    /// * `F` - Callback type used to sample command elapsed time.
     #[must_use = "handle output failures and retained cancellation failures"]
     pub(in crate::command_runner) fn cancel_and_collect<F>(
         self,
@@ -219,6 +226,7 @@ impl CommandIo {
 /// Cancellation requests are issued as one batch. Failures are returned in
 /// stdout, stderr, stdin order, with a helper's read or write failure before
 /// its cancellation failure.
+/// # Parameters
 #[must_use = "handle helper cleanup failures"]
 pub(super) fn cancel_and_join_started_helpers(
     command: &str,
@@ -243,6 +251,17 @@ pub(super) fn cancel_and_join_started_helpers(
 
 /// Cancels every supplied helper and passes bounded join results to one
 /// finalizer.
+/// # Parameters
+///
+/// * `command` - Redacted command text used in diagnostics.
+/// * `stdout_reader` - Helper draining stdout.
+/// * `stderr_reader` - Helper draining stderr.
+/// * `stdin_writer` - Optional helper writing stdin.
+/// * `finish` - Finalizer applied to the helper outcomes.
+///
+/// # Type Parameters
+///
+/// * `R` - Result returned by the helper finalizer.
 fn finish_helpers<R>(
     command: &str,
     stdout_reader: Option<OutputReader>,
@@ -295,32 +314,6 @@ fn finish_helpers<R>(
     )
 }
 
-/// Result of finishing an output reader after requesting cancellation.
-enum OutputReaderFinish {
-    /// The helper was joined; its result is either captured output or a
-    /// capture error.
-    Joined(Result<CapturedOutput, OutputCaptureError>),
-    /// The helper was not joined because cancellation failed and completion
-    /// was not observed before the shared confirmation deadline. The output
-    /// is a point-in-time snapshot and the helper may still be running.
-    Detached(CapturedOutput),
-}
-
-impl OutputReaderFinish {
-    /// Converts the finish state to the output result used by collection.
-    ///
-    /// A detached snapshot is returned as `Ok`, but does not indicate that
-    /// collection completed successfully: its `complete` flag is false and
-    /// its bytes may be incomplete. Cancellation errors are retained
-    /// separately by the cleanup path.
-    fn into_output_result(self) -> Result<CapturedOutput, OutputCaptureError> {
-        match self {
-            Self::Joined(result) => result,
-            Self::Detached(output) => Ok(output),
-        }
-    }
-}
-
 /// Joins the reader unless a failed cancellation remains unconfirmed.
 ///
 /// Cancellation success proceeds directly to joining. If cancellation
@@ -355,6 +348,13 @@ fn finish_output_reader(
 }
 
 /// Joins an optional writer unless a failed cancellation remains unconfirmed.
+/// # Parameters
+///
+/// * `command` - Redacted command text used in diagnostics.
+/// * `writer` - Optional stdin helper to join after cancellation.
+/// * `cancellation_failed` - Whether the cancellation request returned an
+///   error.
+/// * `confirmation_deadline` - Shared deadline for helper completion.
 fn finish_optional_stdin_writer(
     command: &str,
     writer: OptionalStdinWriter,
@@ -372,6 +372,10 @@ fn finish_optional_stdin_writer(
 
 /// Discards the Windows no-pending-operation race only after bounded
 /// confirmation observed helper completion.
+/// # Parameters
+///
+/// * `cancellation` - Cancellation request whose failure may be retained.
+/// * `completion_confirmed` - Whether helper completion was observed.
 fn retain_cancellation_failure(cancellation: Option<io::Error>, completion_confirmed: bool) -> Option<io::Error> {
     if completion_confirmed {
         cancellation.and_then(|error| (!cancellation_found_no_pending_io(&error)).then_some(error))
@@ -381,6 +385,9 @@ fn retain_cancellation_failure(cancellation: Option<io::Error>, completion_confi
 }
 
 /// Identifies the Windows `ERROR_NOT_FOUND` cancellation race.
+/// # Parameters
+///
+/// * `error` - I/O error returned by the cancellation API.
 fn cancellation_found_no_pending_io(error: &io::Error) -> bool {
     #[cfg(windows)]
     {
@@ -394,6 +401,11 @@ fn cancellation_found_no_pending_io(error: &io::Error) -> bool {
 }
 
 /// Appends stdout read/write and cancellation failures in causal order.
+/// # Parameters
+///
+/// * `failures` - Cleanup failures accumulated before the wait.
+/// * `result` - Helper result to inspect.
+/// * `cancellation` - Cancellation request whose failure may be retained.
 fn push_stdout_failures(
     failures: &mut Vec<CommandCleanupFailure>,
     result: Option<OutputReaderFinish>,
@@ -413,6 +425,11 @@ fn push_stdout_failures(
 }
 
 /// Appends stderr read/write and cancellation failures in causal order.
+/// # Parameters
+///
+/// * `failures` - Cleanup failures accumulated before the wait.
+/// * `result` - Helper result to inspect.
+/// * `cancellation` - Cancellation request whose failure may be retained.
 fn push_stderr_failures(
     failures: &mut Vec<CommandCleanupFailure>,
     result: Option<OutputReaderFinish>,
@@ -432,6 +449,11 @@ fn push_stderr_failures(
 }
 
 /// Appends stdin write and cancellation failures in causal order.
+/// # Parameters
+///
+/// * `failures` - Cleanup failures accumulated before the wait.
+/// * `result` - Helper result to inspect.
+/// * `cancellation` - Cancellation request whose failure may be retained.
 fn push_stdin_failures(
     failures: &mut Vec<CommandCleanupFailure>,
     result: Option<Result<(), CommandError>>,
@@ -446,6 +468,9 @@ fn push_stdin_failures(
 }
 
 /// Waits only until the shared cancellation-confirmation deadline.
+/// # Parameters
+///
+/// * `is_finished` - Predicate that observes helper completion.
 fn wait_until_finished(is_finished: impl Fn() -> bool, confirmation_deadline: Instant) -> bool {
     while !is_finished() {
         let now = Instant::now();

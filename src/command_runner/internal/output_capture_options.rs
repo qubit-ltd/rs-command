@@ -59,6 +59,11 @@ impl OutputCaptureOptions {
     /// reader joins; joining then transfers this stream's retained bytes into
     /// its capture result.
     ///
+    /// # Parameters
+    ///
+    /// * `budget` - Shared aggregate stdout/stderr byte budget.
+    /// * `stream` - Output stream attributed to this reader.
+    ///
     /// # Returns
     ///
     /// Capture options configured with the shared budget and this reader's

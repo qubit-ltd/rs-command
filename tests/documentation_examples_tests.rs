@@ -56,7 +56,7 @@ fn metadata(
 }
 
 #[test]
-fn relative_target_directory_is_resolved_from_package_root() {
+fn test_relative_target_directory_is_resolved_from_package_root() {
     let root = std::path::Path::new("/workspace/project");
     assert_eq!(
         resolve_target_dir(root, Some(std::ffi::OsStr::new("build/cache"))),
@@ -81,7 +81,7 @@ fn baseline_fixture(b_version: &str, b_source: &str) -> serde_json::Value {
 }
 
 #[test]
-fn production_dependency_baseline_compares_packages_sources_and_edges() {
+fn test_production_dependency_baseline_compares_packages_sources_and_edges() {
     let base = std::path::Path::new("/tmp/project");
     let v1_source = "registry+https://example.test/index";
     let baseline = baseline_fixture("1.0.0", v1_source);
@@ -164,7 +164,7 @@ fn production_dependency_baseline_compares_packages_sources_and_edges() {
 }
 
 #[test]
-fn cargo_commands_use_fixed_root_manifest_and_required_lock_offline_flags() {
+fn test_cargo_commands_use_fixed_root_manifest_and_required_lock_offline_flags() {
     use std::ffi::OsStr;
     use std::path::Path;
 
@@ -236,7 +236,7 @@ fn cargo_commands_use_fixed_root_manifest_and_required_lock_offline_flags() {
 }
 
 #[test]
-fn missing_root_lock_seed_is_reported_as_not_found() {
+fn test_missing_root_lock_seed_is_reported_as_not_found() {
     let temp = tempfile::tempdir().unwrap();
     let missing = temp.path().join("Cargo.lock");
     let error = read_lock_seed(&missing).unwrap_err();
@@ -244,7 +244,7 @@ fn missing_root_lock_seed_is_reported_as_not_found() {
 }
 
 #[test]
-fn extractor_preserves_hidden_lines_and_rejects_invalid_markers() {
+fn test_extractor_preserves_hidden_lines_and_rejects_invalid_markers() {
     let parsed = extract_examples(
         "<!-- doc-example:sample:compile -->\n```rust\nlet x = 1;\n# assert_eq!(x, 1);\n## shown\n```\n",
         "sample.md",
@@ -312,7 +312,7 @@ fn extractor_preserves_hidden_lines_and_rejects_invalid_markers() {
 }
 
 #[test]
-fn extractor_tracks_fragments_and_validates_fence_attributes() {
+fn test_extractor_tracks_fragments_and_validates_fence_attributes() {
     let parsed = extract_examples(
         "<!-- doc-example:context:fragment -->\n```rust\nlet value = 1;\n```\n<!-- doc-example:complete:compile -->\n```rust\nassert_eq!(1, 1);\n```\n```text\nignored\n```\n",
         "sample.md",
@@ -328,7 +328,7 @@ fn extractor_tracks_fragments_and_validates_fence_attributes() {
 }
 
 #[test]
-fn extractor_recognizes_commonmark_rust_fences_and_skips_nested_looking_text() {
+fn test_extractor_recognizes_commonmark_rust_fences_and_skips_nested_looking_text() {
     for source in ["  ```rust\n1;\n  ```", "~~~rust\n1;\n~~~", "```rust extra\n1;\n```"] {
         let error = extract_examples(source, "sample.md").unwrap_err();
         assert!(error.contains("unclassified Rust fence"), "{error}");
@@ -346,7 +346,7 @@ fn extractor_recognizes_commonmark_rust_fences_and_skips_nested_looking_text() {
 }
 
 #[test]
-fn bilingual_guide_examples_have_matching_ids_and_modes() {
+fn test_bilingual_guide_examples_have_matching_ids_and_modes() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let english = std::fs::read_to_string(root.join("doc/user_guide.md")).unwrap();
     let chinese = std::fs::read_to_string(root.join("doc/user_guide.zh_CN.md")).unwrap();
@@ -360,7 +360,7 @@ fn bilingual_guide_examples_have_matching_ids_and_modes() {
 }
 
 #[test]
-fn actual_markdown_examples_compile_and_run_for_this_platform() {
+fn test_actual_markdown_examples_compile_and_run_for_this_platform() {
     let root = std::env::var_os("DOCUMENTATION_EXAMPLES_ROOT")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")));

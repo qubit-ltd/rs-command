@@ -25,8 +25,9 @@ pub(in crate::command_runner) mod output_capture_failure;
 pub(in crate::command_runner) mod output_capture_options;
 pub(in crate::command_runner) mod output_collector;
 pub(in crate::command_runner) mod output_reader;
+mod output_reader_finish;
+pub(in crate::command_runner) mod output_readiness;
 pub(in crate::command_runner) mod output_tee;
-pub(in crate::command_runner) mod pollable_output;
 pub(in crate::command_runner) mod pollable_stdin;
 pub(in crate::command_runner) mod prepared_command;
 pub(in crate::command_runner) mod process_launcher;
@@ -44,7 +45,7 @@ pub(in crate::command_runner) mod total_output_budget;
 pub(in crate::command_runner) mod wait_policy;
 
 #[cfg(all(test, windows))]
-mod windows_cancel_interleaving;
+mod windows_cancel_interleaving_tests;
 
 #[cfg(test)]
 pub(super) mod scripted_child;

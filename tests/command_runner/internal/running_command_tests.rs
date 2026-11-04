@@ -23,7 +23,7 @@ use qubit_command::CommandErrorKind;
 use qubit_command::CommandRunner;
 
 #[cfg(not(windows))]
-use crate::support::SwitchingTimer;
+use crate::support::switching_timer::SwitchingTimer;
 
 #[test]
 fn test_running_command_completes_before_timeout() {

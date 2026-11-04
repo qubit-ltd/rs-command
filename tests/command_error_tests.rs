@@ -18,7 +18,7 @@ use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
 
 mod support;
-use support::output_command;
+use support::output_command::output_command;
 
 #[test]
 fn test_command_error_kind_and_reason_are_stable() {

@@ -18,6 +18,10 @@ use crate::internal::diagnostic_source::TIME_SOURCE_SUMMARY;
 use crate::internal::diagnostic_source::io_source_summary;
 
 /// Redacts one debug-only value before it crosses the diagnostic boundary.
+///
+/// # Parameters
+///
+/// * `value` - Debug value whose sensitive path content must be hidden.
 #[must_use]
 fn redacted_debug_text(value: &impl fmt::Debug) -> String {
     Redactor::strict()
@@ -110,6 +114,12 @@ pub enum CommandCleanupFailure {
 }
 
 impl fmt::Debug for CommandCleanupFailure {
+    /// Formats the cleanup failure while redacting paths and operating-system
+    /// details.
+    ///
+    /// # Parameters
+    ///
+    /// * `formatter` - Formatter receiving the redacted failure summary.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Time { .. } => formatter

@@ -22,7 +22,7 @@ use qubit_command::CommandErrorReason;
 use qubit_command::CommandRunner;
 
 #[cfg(not(windows))]
-use crate::support::LocalTempDir;
+use crate::support::temp_dir::LocalTempDir;
 
 #[cfg(not(windows))]
 #[test]

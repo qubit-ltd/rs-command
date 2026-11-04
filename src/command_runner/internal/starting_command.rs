@@ -143,6 +143,7 @@ impl<'a> StartingCommand<'a> {
     ///
     /// Cancels all started helpers even when process termination fails. Any
     /// additional failure is attached to the returned error instead of logged.
+    /// # Parameters
     pub(in crate::command_runner) fn abort(mut self, primary: CommandError) -> CommandError {
         primary.with_cleanup_failures(self.cleanup())
     }

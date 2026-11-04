@@ -16,7 +16,7 @@ use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
 use qubit_command::OutputStream;
 
-use crate::support::LocalTempDir;
+use crate::support::temp_dir::LocalTempDir;
 
 #[test]
 fn test_output_capture_error_reports_unopenable_stdout_file() {

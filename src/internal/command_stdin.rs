@@ -28,6 +28,15 @@ pub(crate) enum CommandStdin {
 }
 
 impl fmt::Debug for CommandStdin {
+    /// Formats the input mode while hiding file paths and byte contents.
+    ///
+    /// This representation is intended for diagnostics and does not expose
+    /// sensitive stdin data.
+    ///
+    /// # Parameters
+    ///
+    /// * `self` — the configured stdin source.
+    /// * `formatter` — the destination for the redacted representation.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Null => formatter.write_str("Null"),

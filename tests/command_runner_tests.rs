@@ -37,7 +37,7 @@ use qubit_redact::formats::argv::ArgvItem;
 
 mod command_runner;
 mod support;
-use support::LocalTempDir;
+use support::temp_dir::LocalTempDir;
 
 #[test]
 fn test_runner_pre_cancelled_command_does_not_prepare_output_file() {
@@ -160,10 +160,10 @@ mod unix {
     use super::Redactor;
     use super::Sensitivity;
     use super::fs;
+    use super::support::captured_logger::captured_log_records_containing;
+    use super::support::captured_logger::initialize_captured_logger;
     #[cfg(target_os = "linux")]
-    use super::support::EscapedProcessGuard;
-    use super::support::captured_log_records_containing;
-    use super::support::initialize_captured_logger;
+    use super::support::escaped_process_guard::EscapedProcessGuard;
 
     #[test]
     fn test_command_runner_default_configuration() {
@@ -1440,7 +1440,7 @@ fn test_command_runner_tee_configurations_keep_streams_separate() {
 
         let output = CommandRunner::new(Duration::from_secs(10))
             .run_with(
-                support::output_command(b"stdout-payload", b"stderr-payload", 0),
+                support::output_command::output_command(b"stdout-payload", b"stderr-payload", 0),
                 options,
             )
             .expect("command should run successfully");

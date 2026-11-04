@@ -181,6 +181,10 @@ impl CommandCapturedOutput {
 
 impl fmt::Debug for CommandCapturedOutput {
     /// Formats lengths and stream metadata without exposing raw bytes.
+    ///
+    /// # Parameters
+    ///
+    /// * `f` - Formatter receiving the redacted summary.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CommandCapturedOutput")
             .field("stdout_len", &self.stdout.len())

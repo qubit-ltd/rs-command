@@ -14,7 +14,7 @@ use qubit_command::Command;
 use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
 
-use crate::support::LocalTempDir;
+use crate::support::temp_dir::LocalTempDir;
 
 #[test]
 fn test_output_tee_streams_stderr_to_file() {

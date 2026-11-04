@@ -297,7 +297,8 @@ fn fill_pipe(pipe: &mut File, observer: &File) -> io::Result<u32> {
 }
 
 const CHILD_ENV: &str = "QUBIT_COMMAND_WINDOWS_PROBE_SCENARIO";
-const CHILD_TEST: &str = "command_runner::internal::output_collector::tests::windows_probe_tests::probe_child_entry";
+const CHILD_TEST: &str =
+    "command_runner::internal::output_collector::tests::windows_probe_tests::test_child_process_reports_probe_events";
 struct ChildGuard(Option<std::process::Child>);
 impl ChildGuard {
     fn child(&mut self) -> &mut std::process::Child {
@@ -362,7 +363,7 @@ fn supervise_child(scenario: &str, timeout: Duration) -> io::Result<ChildOutcome
     })
 }
 #[test]
-fn probe_child_entry() {
+fn test_child_process_reports_probe_events() {
     let Ok(scenario) = std::env::var(CHILD_ENV) else {
         return;
     };

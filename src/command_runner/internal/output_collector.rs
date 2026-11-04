@@ -39,6 +39,10 @@ type OutputFd = std::os::windows::io::RawHandle;
 
 /// Starts a cancellation-aware helper thread for one output stream.
 ///
+/// # Type Parameters
+///
+/// * `R` - Type used by this operation.
+///
 /// # Parameters
 ///
 /// * `reader` - Child stdout or stderr pipe.
@@ -73,6 +77,15 @@ pub(in crate::command_runner) fn read_output_stream<R: CancellableReader>(
 }
 
 /// Reads one output stream until EOF or cancellation is requested.
+/// # Parameters
+///
+/// * `reader` - Output pipe reader.
+/// * `options` - Capture limits and destinations for this output reader.
+/// * `cancellation` - Cancellation request whose failure may be retained.
+///
+/// # Type Parameters
+///
+/// * `R` - Result returned by the helper finalizer.
 fn read_output_until_cancelled<R: CancellableReader>(
     mut reader: R,
     options: OutputCaptureOptions,
@@ -148,15 +161,15 @@ pub(super) fn read_output_inner(
             && let (Some(cancellation), Some(fd)) = (cancellation, fd)
         {
             match wait_output_readiness(fd, cancellation) {
-                Ok(super::pollable_output::OutputReadiness::Readable(available)) => ready_capacity = available,
+                Ok(super::output_readiness::OutputReadiness::Readable(available)) => ready_capacity = available,
                 #[cfg(windows)]
-                Ok(super::pollable_output::OutputReadiness::Eof) => {
+                Ok(super::output_readiness::OutputReadiness::Eof) => {
                     if let Some(budget) = options.total_budget.as_ref() {
                         budget.mark_complete(options.total_budget_stream.expect("budget stream is configured"));
                     }
                     break Ok(true);
                 }
-                Ok(super::pollable_output::OutputReadiness::Cancelled) => break Ok(false),
+                Ok(super::output_readiness::OutputReadiness::Cancelled) => break Ok(false),
                 Err(source) => break Err(source),
             }
         }
@@ -266,26 +279,50 @@ pub(super) fn read_output_inner(
     }
 }
 
+/// Waits for Unix output-pipe readiness or cancellation.
+///
+/// # Parameters
+///
+/// * `fd` - Output descriptor to poll.
+/// * `cancellation` - Token that can stop the readiness wait.
 #[cfg(unix)]
 fn wait_output_readiness(
     fd: OutputFd,
     cancellation: &IoCancellationToken,
-) -> io::Result<super::pollable_output::OutputReadiness> {
+) -> io::Result<super::output_readiness::OutputReadiness> {
     if cancellation.wait_for_fd(fd, libc::POLLIN)? {
-        Ok(super::pollable_output::OutputReadiness::Readable(8 * 1024))
+        Ok(super::output_readiness::OutputReadiness::Readable(8 * 1024))
     } else {
-        Ok(super::pollable_output::OutputReadiness::Cancelled)
+        Ok(super::output_readiness::OutputReadiness::Cancelled)
     }
 }
 
+/// Waits for Windows output-pipe data or cancellation.
+///
+/// # Parameters
+///
+/// * `fd` - Output pipe handle to inspect.
+/// * `cancellation` - Token that can stop the readiness wait.
 #[cfg(windows)]
 fn wait_output_readiness(
     fd: OutputFd,
     cancellation: &IoCancellationToken,
-) -> io::Result<super::pollable_output::OutputReadiness> {
+) -> io::Result<super::output_readiness::OutputReadiness> {
     use std::ffi::c_void;
     use std::time::Duration;
     unsafe extern "system" {
+        /// Observes bytes available in the named pipe without consuming them.
+        ///
+        /// # Parameters
+        ///
+        /// * `handle` - Named-pipe handle to inspect.
+        /// * `buffer` - Optional destination for bytes; this probe passes null.
+        /// * `size` - Capacity of `buffer`; this probe passes zero.
+        /// * `read` - Optional pointer receiving the bytes copied.
+        /// * `available` - Pointer receiving the currently available byte
+        ///   count.
+        /// * `left` - Optional pointer receiving the remaining message byte
+        ///   count.
         fn PeekNamedPipe(
             handle: OutputFd,
             buffer: *mut c_void,
@@ -297,7 +334,7 @@ fn wait_output_readiness(
     }
     loop {
         if cancellation.is_cancelled() {
-            return Ok(super::pollable_output::OutputReadiness::Cancelled);
+            return Ok(super::output_readiness::OutputReadiness::Cancelled);
         }
         let mut available = 0u32;
         // SAFETY: the handle is owned by the output reader and outlives this wait.
@@ -314,12 +351,12 @@ fn wait_output_readiness(
         if result == 0 {
             let source = io::Error::last_os_error();
             if source.kind() == io::ErrorKind::BrokenPipe {
-                return Ok(super::pollable_output::OutputReadiness::Eof);
+                return Ok(super::output_readiness::OutputReadiness::Eof);
             }
             return Err(source);
         }
         if available > 0 {
-            return Ok(super::pollable_output::OutputReadiness::Readable(available as usize));
+            return Ok(super::output_readiness::OutputReadiness::Readable(available as usize));
         }
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -351,6 +388,9 @@ fn read_output(reader: &mut dyn Read, options: OutputCaptureOptions) -> Result<C
 ///
 /// Returns a time-handling failure after joining every helper, otherwise the
 /// first stdout, stderr, or stdin helper failure in that order.
+/// # Type Parameters
+///
+/// * `F` - Callback type used to sample command elapsed time.
 pub(in crate::command_runner) fn collect_output<F>(
     command: &str,
     status: ExitStatus,
@@ -554,6 +594,15 @@ pub(super) fn output_cleanup_failure(stream: OutputStream, failure: OutputCaptur
 /// Maps a reader result while retaining output from a failed tee write.
 /// Converts one output-stream failure into a command error while preserving
 /// captured bytes from both the failed stream and its peer.
+/// # Parameters
+///
+/// * `command` - Redacted command text used in diagnostics.
+/// * `status` - Direct-child exit status for the collected output.
+/// * `elapsed` - Callback that samples elapsed command time.
+/// * `stream` - Stream attributed to this reader.
+/// * `error` - I/O error returned by the cancellation API.
+/// * `failed_output` - Captured output from the failed stream.
+/// * `other_output` - Captured output from the peer stream, if available.
 fn map_output_reader_error(
     command: &str,
     status: ExitStatus,

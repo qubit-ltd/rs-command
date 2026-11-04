@@ -10,6 +10,11 @@
 use std::io;
 
 /// Returns stable I/O metadata without formatting an arbitrary source message.
+///
+/// # Parameters
+///
+/// * `source` — the I/O error whose kind and raw operating-system code are
+///   summarized.
 pub(crate) fn io_source_summary(source: &io::Error) -> String {
     format!("kind={:?}, raw_os_error={:?}", source.kind(), source.raw_os_error())
 }

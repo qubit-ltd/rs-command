@@ -129,6 +129,10 @@ impl<'a> ProcessTerminator<'a> {
     /// An observed status avoids waiting again. OS wait errors retain all
     /// earlier failures; successful termination requests do not imply a
     /// hard deadline.
+    /// # Parameters
+    ///
+    /// * `status` - Direct-child exit status for the collected output.
+    /// * `failures` - Cleanup failures accumulated before the wait.
     fn finish_wait(
         &mut self,
         status: Option<ExitStatus>,
@@ -150,6 +154,11 @@ impl<'a> ProcessTerminator<'a> {
     }
 
     /// Builds an outcome retaining every preceding termination failure.
+    ///
+    /// # Parameters
+    ///
+    /// * `status` - Final direct-child exit status.
+    /// * `cleanup_failures` - Cleanup failures to retain in the outcome.
     #[must_use]
     fn success(status: ExitStatus, cleanup_failures: Vec<CommandCleanupFailure>) -> ProcessTerminationOutcome {
         ProcessTerminationOutcome {
@@ -159,6 +168,10 @@ impl<'a> ProcessTerminator<'a> {
     }
 
     /// Reports whether the platform says the managed tree no longer exists.
+    ///
+    /// # Parameters
+    ///
+    /// * `source` - Error returned by the process-tree termination request.
     #[must_use]
     fn process_tree_already_exited(source: &io::Error) -> bool {
         #[cfg(unix)]

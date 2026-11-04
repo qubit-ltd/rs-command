@@ -20,6 +20,10 @@ use crate::internal::diagnostic_source::TIME_SOURCE_SUMMARY;
 use crate::internal::diagnostic_source::io_source_summary;
 
 /// Redacts one debug-only value before it crosses the diagnostic boundary.
+///
+/// # Parameters
+///
+/// * `value` - Debug value whose sensitive path content must be hidden.
 #[must_use]
 fn redacted_debug_text(value: &impl fmt::Debug) -> String {
     Redactor::strict()
@@ -170,6 +174,12 @@ pub enum CommandErrorReason {
 }
 
 impl fmt::Debug for CommandErrorReason {
+    /// Formats the failure reason without exposing sensitive paths or OS error
+    /// text.
+    ///
+    /// # Parameters
+    ///
+    /// * `formatter` - Formatter receiving the redacted reason summary.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::SpawnFailed { source } => formatter

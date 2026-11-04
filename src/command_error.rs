@@ -50,6 +50,11 @@ pub struct CommandError {
 const _: () = assert!(std::mem::size_of::<CommandError>() <= 96);
 
 impl fmt::Debug for CommandError {
+    /// Formats a diagnostic summary without exposing the command's raw sources.
+    ///
+    /// # Parameters
+    ///
+    /// * `formatter` - Formatter receiving the redacted error summary.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CommandError")
@@ -60,6 +65,12 @@ impl fmt::Debug for CommandError {
 
 impl CommandError {
     /// Creates an error from a primary reason and optional captured output.
+    ///
+    /// # Parameters
+    ///
+    /// * `command` - Redacted command text associated with the failure.
+    /// * `reason` - Primary failure reason.
+    /// * `output` - Optional output retained with a real process result.
     #[inline]
     pub(crate) fn from_reason(
         command: impl Into<String>,
@@ -79,6 +90,11 @@ impl CommandError {
     ///
     /// Failures are ordered by process tree, direct child, wait, time, stdout,
     /// stderr, and stdin. Relative order remains stable within each resource.
+    ///
+    /// # Parameters
+    ///
+    /// * `cleanup_failures` - Cleanup failures to append before canonical
+    ///   sorting.
     #[inline]
     pub(crate) fn with_cleanup_failures(
         mut self,
@@ -90,6 +106,10 @@ impl CommandError {
     }
 
     /// Attaches captured output without changing the primary reason or source.
+    ///
+    /// # Parameters
+    ///
+    /// * `output` - Output observed before the error was finalized.
     #[inline]
     pub(crate) fn with_output(mut self, output: CommandOutput) -> Self {
         self.output = Some(Box::new(output));
@@ -123,6 +143,10 @@ impl CommandError {
     /// Preserves this error's output first, then moves either output carrier
     /// from the finalization error when neither is present. Records helper/time
     /// failures as cleanup evidence. The input must be a finalization error.
+    ///
+    /// # Parameters
+    ///
+    /// * `error` - Error produced during finalization of this command.
     pub(crate) fn with_finalization_error(mut self, mut error: CommandError) -> Self {
         if self.output.is_none() && self.captured_output.is_none() {
             self.output = error.output.take();
@@ -203,6 +227,11 @@ impl CommandError {
             .or(self.captured_output.as_deref())
     }
 
+    /// Attaches captured bytes when no completed output carrier is available.
+    ///
+    /// # Parameters
+    ///
+    /// * `output` - Captured stream bytes and their completeness metadata.
     pub(crate) fn with_captured_output(mut self, output: CommandCapturedOutput) -> Self {
         self.captured_output = Some(Box::new(output));
         self
@@ -348,6 +377,14 @@ fn primary_cleanup_failure(reason: CommandErrorReason) -> Option<CommandCleanupF
 }
 
 /// Returns the canonical cleanup resource rank.
+///
+/// # Parameters
+///
+/// * `failure` - Cleanup failure to place in canonical order.
+///
+/// # Returns
+///
+/// The numeric rank for the failure's resource category.
 const fn cleanup_failure_rank(failure: &CommandCleanupFailure) -> u8 {
     match failure {
         CommandCleanupFailure::ProcessTreeTermination { .. } => 0,
@@ -365,6 +402,11 @@ const fn cleanup_failure_rank(failure: &CommandCleanupFailure) -> u8 {
 }
 
 impl fmt::Display for CommandError {
+    /// Formats the primary failure and the count of cleanup failures.
+    ///
+    /// # Parameters
+    ///
+    /// * `formatter` - Formatter receiving the user-facing error message.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let command = &self.command;
         match (self.reason.as_ref(), self.output.as_deref()) {
@@ -485,6 +527,11 @@ impl fmt::Display for CommandError {
 }
 
 impl Error for CommandError {
+    /// Returns the underlying operating-system or timer error, when present.
+    ///
+    /// # Parameters
+    ///
+    /// * `self` - Error whose primary reason may contain a source error.
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self.reason.as_ref() {
             CommandErrorReason::SpawnFailed { source }
@@ -504,6 +551,11 @@ impl Error for CommandError {
 }
 
 impl From<&CommandErrorReason> for CommandErrorKind {
+    /// Converts a detailed reason into its stable category.
+    ///
+    /// # Parameters
+    ///
+    /// * `reason` - Detailed failure reason to classify.
     fn from(reason: &CommandErrorReason) -> Self {
         match reason {
             CommandErrorReason::SpawnFailed { .. } => Self::SpawnFailed,
@@ -532,6 +584,16 @@ impl From<&CommandErrorReason> for CommandErrorKind {
 }
 
 /// Formats the observed termination detail for an unexpected command exit.
+///
+/// # Parameters
+///
+/// * `exit_code` - Numeric exit code, if the process reported one.
+/// * `output` - Completed output metadata used to inspect Unix termination
+///   signals.
+///
+/// # Returns
+///
+/// A short signal or exit-code description for the display message.
 fn unexpected_exit_detail(exit_code: &Option<i32>, output: Option<&CommandOutput>) -> String {
     #[cfg(unix)]
     if let Some(signal) = output.and_then(CommandOutput::termination_signal) {

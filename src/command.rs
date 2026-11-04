@@ -595,6 +595,11 @@ impl Command {
 
     /// Formats this command for diagnostics.
     ///
+    /// # Parameters
+    ///
+    /// * `policy` - Redaction rules applied to arguments and environment
+    ///   values.
+    ///
     /// # Returns
     ///
     /// A redacted command string suitable for logs and errors.

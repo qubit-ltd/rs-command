@@ -165,6 +165,7 @@ impl TotalOutputBudget {
     }
 
     /// Records that the selected stream reached EOF.
+    /// # Parameters
     pub(in crate::command_runner) fn mark_complete(&self, stream: OutputStream) {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match stream {
@@ -193,6 +194,7 @@ impl TotalOutputBudget {
     /// snapshot may be incomplete. Truncation describes bytes omitted by a
     /// per-stream retention cap; completeness describes reaching EOF, and
     /// neither is implied by the other.
+    /// # Parameters
     pub(in crate::command_runner) fn captured_output_with_joined(
         &self,
         joined: Option<&CommandCapturedOutput>,
@@ -237,6 +239,7 @@ impl TotalOutputBudget {
     /// held; a live reader may append more bytes or later reach EOF. A
     /// truncated snapshot may still be incomplete, and a snapshot is not a
     /// joined reader result.
+    /// # Parameters
     pub(in crate::command_runner) fn captured_stream(&self, stream: OutputStream) -> CapturedOutput {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match stream {
@@ -258,6 +261,7 @@ impl TotalOutputBudget {
     /// The transfer flag makes a second take explicit: it returns empty bytes
     /// with the original metadata and cannot present an empty buffer as the
     /// original complete output.
+    /// # Parameters
     pub(in crate::command_runner) fn take_captured_stream(&self, stream: OutputStream) -> CapturedOutput {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match stream {
@@ -299,6 +303,7 @@ impl TotalOutputBudget {
     }
 
     /// Returns stream flags without retaining or cloning its byte buffer.
+    /// # Parameters
     pub(in crate::command_runner) fn captured_stream_metadata(&self, stream: OutputStream) -> CapturedOutput {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (truncated, complete) = match stream {
@@ -314,6 +319,13 @@ impl TotalOutputBudget {
 }
 
 /// Retains only the configured prefix and records omitted bytes as truncation.
+/// # Parameters
+///
+/// * `state` - Mutable retained-byte and truncation state.
+/// * `stream` - Output stream whose state is updated or returned.
+/// * `max_stdout` - Optional maximum retained stdout bytes.
+/// * `max_stderr` - Optional maximum retained stderr bytes.
+/// * `chunk` - Bytes read from one output stream.
 fn retain(
     state: &mut TotalOutputBudgetState,
     stream: OutputStream,

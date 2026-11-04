@@ -12,7 +12,7 @@ const GUIDE_EN: &str = include_str!("../doc/user_guide.md");
 const GUIDE_ZH: &str = include_str!("../doc/user_guide.zh_CN.md");
 
 #[test]
-fn documentation_install_constraints_match_the_crate_compatibility_line() {
+fn test_documentation_install_constraints_match_the_crate_compatibility_line() {
     let version = CARGO_TOML
         .lines()
         .find_map(|line| line.strip_prefix("version = \""))

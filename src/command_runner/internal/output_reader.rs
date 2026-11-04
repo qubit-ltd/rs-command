@@ -51,6 +51,13 @@ impl OutputReader {
     }
 
     /// Creates a budgeted output reader that transfers its bytes after join.
+    ///
+    /// # Parameters
+    ///
+    /// * `join` - Output-reader worker thread.
+    /// * `cancellation` - Cancellation sender for that worker.
+    /// * `budget` - Shared output budget used to retain bytes.
+    /// * `stream` - Stream attributed to this reader.
     #[inline]
     pub(in crate::command_runner) fn new_with_budget(
         join: thread::JoinHandle<Result<CapturedOutput, OutputCaptureError>>,
@@ -106,6 +113,7 @@ impl OutputReader {
 
     /// Attaches a Windows-only probe observer to the next cancellation call.
     #[cfg(all(test, windows))]
+    /// # Parameters
     pub(in crate::command_runner) fn observe_cancellation_for_test(&mut self, observer: Sender<Option<i32>>) {
         self.cancellation.observe_test_cancellation(observer);
     }
@@ -157,6 +165,10 @@ impl OutputReader {
 /// The replacement carries the bytes retained by the shared budget after this
 /// reader joins; the original `Read`, `Write`, or `ReadAfterWrite` cause and
 /// its associated source/path information remain authoritative.
+/// # Parameters
+///
+/// * `error` - I/O error returned by the cancellation API.
+/// * `output` - Captured data produced by the reader.
 fn replace_error_output(error: OutputCaptureError, output: CapturedOutput) -> OutputCaptureError {
     match error {
         OutputCaptureError::Read { source, .. } => OutputCaptureError::Read { source, output },

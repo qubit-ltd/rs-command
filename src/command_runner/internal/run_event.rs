@@ -18,7 +18,10 @@ use super::stop_reason::StopReason;
 /// Terminal event produced by the command monitoring loop.
 pub(super) enum RunEvent {
     /// The direct child exited normally.
-    Exited(ExitStatus),
+    Exited(
+        /// Final status returned by the direct child.
+        ExitStatus,
+    ),
     /// The configured timeout elapsed.
     TimedOut {
         /// Timeout exceeded by the command.
@@ -33,12 +36,18 @@ pub(super) enum RunEvent {
     },
     /// Combined stdout/stderr output exceeded its hard budget.
     OutputLimitExceeded {
+        /// Configured maximum combined output size.
         limit: u64,
+        /// Combined output size observed when the limit was exceeded.
         observed: u128,
+        /// Direct-child status observed during the same poll, if any.
         status: Option<ExitStatus>,
     },
     /// Waiting for the direct child failed.
-    WaitFailed(io::Error),
+    WaitFailed(
+        /// Error returned while waiting for the direct child.
+        io::Error,
+    ),
     /// Monotonic time handling failed.
     TimeFailed {
         /// Timer or monotonic-clock failure.

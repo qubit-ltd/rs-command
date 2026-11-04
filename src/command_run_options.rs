@@ -42,6 +42,10 @@ pub struct CommandRunOptions {
 
 impl std::fmt::Debug for CommandRunOptions {
     /// Render redacted debug output.
+    ///
+    /// # Parameters
+    ///
+    /// * `formatter` - Formatter receiving the configuration summary.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CommandRunOptions")
@@ -98,6 +102,10 @@ impl CommandRunOptions {
     /// Clone this handle before passing it to multiple runs that should share a
     /// single cancellation request channel.
     ///
+    /// # Parameters
+    ///
+    /// * `cancellation` - Handle that can request cancellation of this run.
+    ///
     /// # Returns
     ///
     /// The updated options with this cancellation handle configured.
@@ -123,6 +131,10 @@ impl CommandRunOptions {
     /// distinct paths when both logs must be retained. Relative paths are
     /// resolved from the parent process current working directory,
     /// regardless of the child process working directory.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `P` - Path-like value converted into an owned path.
     ///
     /// # Parameters
     ///
@@ -156,6 +168,10 @@ impl CommandRunOptions {
     /// distinct paths when both logs must be retained. Relative paths are
     /// resolved from the parent process current working directory,
     /// regardless of the child process working directory.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `P` - Path-like value converted into an owned path.
     ///
     /// # Parameters
     ///

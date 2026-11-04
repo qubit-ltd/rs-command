@@ -56,6 +56,10 @@ pub(in crate::command_runner) fn open_input_candidate(path: &Path) -> io::Result
 }
 
 /// Opens a stdin candidate on platforms without Unix open flags.
+///
+/// # Parameters
+///
+/// * `path` - Candidate path to open for reading.
 #[cfg(not(unix))]
 pub(in crate::command_runner) fn open_input_candidate(path: &Path) -> io::Result<File> {
     File::open(path)
@@ -86,6 +90,10 @@ pub(in crate::command_runner) fn open_output_candidate(path: &Path) -> io::Resul
 }
 
 /// Opens an output candidate on platforms without Unix open flags.
+///
+/// # Parameters
+///
+/// * `path` - Candidate path to open for writing.
 #[cfg(not(unix))]
 pub(in crate::command_runner) fn open_output_candidate(path: &Path) -> io::Result<File> {
     OpenOptions::new().create(true).write(true).truncate(false).open(path)
@@ -126,6 +134,10 @@ fn clear_nonblocking(file: &File) -> io::Result<()> {
 }
 
 /// Leaves file blocking state unchanged on non-Unix platforms.
+///
+/// # Parameters
+///
+/// * `_file` - File whose blocking state is left unchanged.
 #[cfg(not(unix))]
 fn clear_nonblocking(_file: &File) -> io::Result<()> {
     Ok(())
@@ -192,6 +204,7 @@ impl IoFiles {
     }
 
     /// Commits output file creation, truncation, and stdin attachment.
+    /// # Parameters
     pub(in crate::command_runner) fn commit(
         &mut self,
         command: &str,
@@ -646,6 +659,13 @@ pub(in crate::command_runner) fn truncate_output(
 }
 
 /// Truncates one validated regular output file with the supplied operation.
+/// # Parameters
+///
+/// * `command` - Redacted command text used in any returned diagnostic.
+/// * `stream` - Output stream whose state is updated or returned.
+/// * `path` - Filesystem path involved in this operation.
+/// * `file` - Open file whose descriptor flags are updated.
+/// * `truncate` - Operation that truncates the open file.
 fn truncate_output_with(
     command: &str,
     stream: OutputStream,
@@ -668,6 +688,14 @@ fn truncate_output_with(
 }
 
 /// Truncates configured output files in commit order, stdout before stderr.
+/// # Parameters
+///
+/// * `command` - Redacted command text used in diagnostics.
+/// * `stdout_path` - Optional stdout destination path.
+/// * `stdout_file` - Optional open stdout destination.
+/// * `stderr_path` - Optional stderr destination path.
+/// * `stderr_file` - Optional open stderr destination.
+/// * `truncate` - Operation applied to each configured destination.
 fn truncate_outputs_with(
     command: &str,
     stdout_path: Option<&Path>,
@@ -757,6 +785,11 @@ fn inspect_error(command: &str, path: &Path, source: io::Error) -> CommandError 
 }
 
 /// Builds an input-opening failure.
+/// # Parameters
+///
+/// * `command` - Redacted command text used in diagnostics.
+/// * `path` - Filesystem path involved in this operation.
+/// * `source` - Underlying I/O error to inspect or preserve.
 fn open_input_error(command: &str, path: &Path, source: io::Error) -> CommandError {
     CommandError::from_reason(
         command,
@@ -769,6 +802,12 @@ fn open_input_error(command: &str, path: &Path, source: io::Error) -> CommandErr
 }
 
 /// Builds an output-opening failure.
+/// # Parameters
+///
+/// * `command` - Redacted command text used in diagnostics.
+/// * `stream` - Stream attributed to this reader.
+/// * `path` - Filesystem path involved in this operation.
+/// * `source` - Underlying I/O error to inspect or preserve.
 fn open_output_error(command: &str, stream: OutputStream, path: &Path, source: io::Error) -> CommandError {
     CommandError::from_reason(
         command,
@@ -782,6 +821,10 @@ fn open_output_error(command: &str, stream: OutputStream, path: &Path, source: i
 }
 
 /// Builds a non-regular input failure.
+/// # Parameters
+///
+/// * `command` - Redacted command text used in diagnostics.
+/// * `path` - Filesystem path involved in this operation.
 fn non_regular_input_error(command: &str, path: &Path) -> CommandError {
     CommandError::from_reason(
         command,
@@ -793,6 +836,11 @@ fn non_regular_input_error(command: &str, path: &Path) -> CommandError {
 }
 
 /// Builds a non-regular output failure.
+/// # Parameters
+///
+/// * `command` - Redacted command text used in diagnostics.
+/// * `stream` - Stream attributed to this reader.
+/// * `path` - Filesystem path involved in this operation.
 fn non_regular_output_error(command: &str, stream: OutputStream, path: &Path) -> CommandError {
     CommandError::from_reason(
         command,

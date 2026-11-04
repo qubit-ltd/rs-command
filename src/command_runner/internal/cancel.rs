@@ -15,6 +15,10 @@ use std::thread::JoinHandle;
 const ERROR_NOT_FOUND: i32 = 1168;
 
 /// Converts a `CancelSynchronousIo` return value into an I/O result.
+/// # Parameters
+///
+/// * `result` - Native return value from the cancellation API.
+/// * `error` - I/O error returned by the cancellation API.
 #[cfg(windows)]
 fn cancel_result(result: i32, error: io::Error) -> io::Result<()> {
     if result != 0 { Ok(()) } else { Err(error) }
@@ -24,12 +28,21 @@ fn cancel_result(result: i32, error: io::Error) -> io::Result<()> {
 ///
 /// This result is only benign after the caller confirms that the helper has
 /// observed cancellation and stopped within the bounded confirmation window.
+/// # Parameters
 #[must_use]
 pub(super) fn cancellation_found_no_pending_io(error: &io::Error) -> bool {
     error.raw_os_error() == Some(ERROR_NOT_FOUND)
 }
 
 /// Requests cancellation of one synchronous I/O operation on Windows.
+///
+/// # Type Parameters
+///
+/// * `T` - Type of helper thread result.
+///
+/// # Parameters
+///
+/// * `handle` - Helper thread whose synchronous I/O may be interrupted.
 pub(in crate::command_runner) fn cancel_synchronous_io<T>(handle: &JoinHandle<T>) -> io::Result<()> {
     #[cfg(windows)]
     {
@@ -37,6 +50,11 @@ pub(in crate::command_runner) fn cancel_synchronous_io<T>(handle: &JoinHandle<T>
 
         #[link(name = "kernel32")]
         unsafe extern "system" {
+            /// Interrupts the synchronous I/O operation running on `thread`.
+            ///
+            /// # Parameters
+            ///
+            /// * `thread` - Windows handle to the target helper thread.
             fn CancelSynchronousIo(thread: *mut std::ffi::c_void) -> i32;
         }
 

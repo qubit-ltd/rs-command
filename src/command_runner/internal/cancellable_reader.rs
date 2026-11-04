@@ -51,6 +51,7 @@ impl CancellableReader for ChildStdout {
     fn raw_fd(&self) -> RawFd {
         self.as_raw_fd()
     }
+    /// Returns the underlying Windows handle for readiness checks.
     #[cfg(windows)]
     fn raw_handle(&self) -> RawHandle {
         self.as_raw_handle()
@@ -68,6 +69,7 @@ impl CancellableReader for ChildStderr {
     fn raw_fd(&self) -> RawFd {
         self.as_raw_fd()
     }
+    /// Returns the underlying Windows handle for readiness checks.
     #[cfg(windows)]
     fn raw_handle(&self) -> RawHandle {
         self.as_raw_handle()
@@ -75,6 +77,13 @@ impl CancellableReader for ChildStderr {
 }
 
 /// Configures one Unix output pipe for non-blocking cancellation polling.
+/// # Type Parameters
+///
+/// * `T` - Type used by this operation.
+///
+/// # Parameters
+///
+/// * `pipe` - Pipe to configure for cancellation-aware I/O.
 #[cfg(unix)]
 fn prepare_pipe<T: AsRawFd>(pipe: &T) -> io::Result<()> {
     // SAFETY: fcntl operates on the valid descriptor owned by `pipe`.
@@ -91,6 +100,14 @@ fn prepare_pipe<T: AsRawFd>(pipe: &T) -> io::Result<()> {
 }
 
 /// Leaves Windows output pipes unchanged because cancellation uses thread APIs.
+///
+/// # Type Parameters
+///
+/// * `T` - Pipe type passed to this platform-specific implementation.
+///
+/// # Parameters
+///
+/// * `_pipe` - Pipe whose handle is managed by the Windows cancellation path.
 #[cfg(windows)]
 fn prepare_pipe<T>(_pipe: &T) -> io::Result<()> {
     Ok(())

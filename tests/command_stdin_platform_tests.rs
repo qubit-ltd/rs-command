@@ -26,7 +26,7 @@ const HELPER_DIR: &str = "QUBIT_COMMAND_STDIN_HELPER_DIR";
 const WATCHDOG: Duration = Duration::from_secs(10);
 
 #[test]
-fn stdin_platform_helper() {
+fn test_stdin_platform_helper() {
     let Ok(mode) = std::env::var(HELPER_MARKER) else {
         return;
     };
@@ -62,7 +62,7 @@ fn stdin_platform_helper() {
 }
 
 #[test]
-fn stdin_receive_transmits_non_constant_data_and_eof() {
+fn test_stdin_receive_transmits_non_constant_data_and_eof() {
     let directory = tempdir().expect("temporary directory should be created");
     let data = payload(256 * 1024 + 137);
     let result = run_helper("receive", directory.path(), data.clone(), Duration::from_secs(8), None);
@@ -76,7 +76,7 @@ fn stdin_receive_transmits_non_constant_data_and_eof() {
 }
 
 #[test]
-fn stdin_hold_is_cancelled_within_watchdog() {
+fn test_stdin_hold_is_cancelled_within_watchdog() {
     let directory = tempdir().expect("temporary directory should be created");
     let cancellation = CommandCancellation::new();
     let run_cancellation = cancellation.clone();
@@ -105,7 +105,7 @@ fn stdin_hold_is_cancelled_within_watchdog() {
 }
 
 #[test]
-fn stdin_hold_times_out_within_watchdog() {
+fn test_stdin_hold_times_out_within_watchdog() {
     let directory = tempdir().expect("temporary directory should be created");
     let (sender, receiver) = std::sync::mpsc::channel();
     let directory_path = directory.path().to_path_buf();
@@ -131,7 +131,7 @@ fn stdin_hold_times_out_within_watchdog() {
 }
 
 #[test]
-fn stdin_early_exit_does_not_mask_exit_status_with_broken_pipe() {
+fn test_stdin_early_exit_does_not_mask_exit_status_with_broken_pipe() {
     for (mode, expected_code) in [("early-0", 0), ("early-7", 7)] {
         let directory = tempdir().expect("temporary directory should be created");
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -177,7 +177,10 @@ fn run_helper(
     let executable = std::env::current_exe().expect("test executable path should be available");
     let executable = executable.to_str().expect("test executable path should be UTF-8");
     let mut command = Command::new(executable);
-    command = command.arg("--exact").arg("stdin_platform_helper").arg("--nocapture");
+    command = command
+        .arg("--exact")
+        .arg("test_stdin_platform_helper")
+        .arg("--nocapture");
     command = command
         .env(HELPER_MARKER, mode)
         .env(

@@ -120,6 +120,9 @@ impl RunningCommand {
     /// This phase monitors the child, cancellation token, timer, and total
     /// output budget. It does not terminate the process, finalize helpers, or
     /// construct a [`CommandError`].
+    /// # Parameters
+    ///
+    /// * `timeout` - Optional deadline measured from process start.
     fn wait_for_event(&mut self, timeout: Option<Duration>) -> RunEvent {
         if timeout.is_none() && self.cancellation_token.is_none() && self.total_budget.is_none() {
             return match self.child_process.wait() {
@@ -155,6 +158,10 @@ impl RunningCommand {
     ///
     /// The original timeout continues to be measured from `started_at`, so
     /// inherited pipes cannot restart the command deadline after child exit.
+    /// # Parameters
+    ///
+    /// * `status` - Direct-child exit status for the collected output.
+    /// * `timeout` - Optional deadline measured from process start.
     fn wait_for_io_event(&mut self, status: ExitStatus, timeout: Option<Duration>) -> RunEvent {
         if timeout.is_some() || self.cancellation_token.is_some() || self.total_budget.is_some() {
             let mut timeout_poll_count = 0;
@@ -188,6 +195,11 @@ impl RunningCommand {
     /// when cancellation, a time error, or the timeout ends the current phase.
     /// The optional exit status is retained in any terminal event produced
     /// here.
+    /// # Parameters
+    ///
+    /// * `status` - Direct-child exit status for the collected output.
+    /// * `timeout` - Optional deadline measured from process start.
+    /// * `timeout_poll_count` - Mutable count of timeout polls.
     fn check_cancellation_and_wait(
         &self,
         status: Option<ExitStatus>,
@@ -221,6 +233,10 @@ impl RunningCommand {
     }
 
     /// Resolves one monitoring event through the single finalization pipeline.
+    /// # Parameters
+    ///
+    /// * `event` - Terminal event from process monitoring.
+    /// * `timeout` - Optional deadline measured from process start.
     fn resolve_event(mut self, event: RunEvent, timeout: Option<Duration>) -> Result<FinishedCommand, CommandError> {
         let event = match event.into_exit_status() {
             Ok(status) => self.wait_for_io_event(status, timeout),
@@ -394,6 +410,9 @@ impl RunningCommand {
     ///
     /// This method always invokes helper cancellation and joining before
     /// returning `primary`, retaining every cleanup failure.
+    /// # Parameters
+    ///
+    /// * `primary` - Primary command error to preserve.
     fn finish_without_status(self, primary: CommandError) -> CommandError {
         let cleanup_failures = self.io.cancel_and_join(&self.command_text);
         primary.with_cleanup_failures(cleanup_failures)
@@ -1032,7 +1051,7 @@ mod tests {
     }
 
     #[test]
-    fn budget_only_timer_live_child_uses_timer() {
+    fn test_budget_only_timer_live_child_uses_timer() {
         let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(None)]);
         let (timer, at_calls) = failing_timer();
         let result = running_with_budget_and_timer(
@@ -1049,7 +1068,7 @@ mod tests {
     }
 
     #[test]
-    fn cancellation_while_waiting_for_io_retains_child_status() {
+    fn test_cancellation_while_waiting_for_io_retains_child_status() {
         let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(Some(status(0)))]);
         let mut command = running(
             ManagedChildProcess::new(Box::new(child), true),
@@ -1065,7 +1084,7 @@ mod tests {
     }
 
     #[test]
-    fn active_child_output_budget_precedes_ready_cancellation() {
+    fn test_active_child_output_budget_precedes_ready_cancellation() {
         let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(None)]);
         let mut command = running_with_budget(
             ManagedChildProcess::new(Box::new(child), true),
@@ -1087,7 +1106,7 @@ mod tests {
     }
 
     #[test]
-    fn exited_child_precedes_ready_cancellation() {
+    fn test_exited_child_precedes_ready_cancellation() {
         let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(Some(status(7)))]);
         let mut command = running(
             ManagedChildProcess::new(Box::new(child), true),
@@ -1101,7 +1120,7 @@ mod tests {
     }
 
     #[test]
-    fn post_exit_io_timeout_uses_original_started_at() {
+    fn test_post_exit_io_timeout_uses_original_started_at() {
         let clock = ManualMonotonicClock::new_shared();
         let started_at = clock.now();
         let timer = clock.new_timer();
@@ -1127,7 +1146,7 @@ mod tests {
     }
 
     #[test]
-    fn no_timeout_monitor_does_not_sample_elapsed_time() {
+    fn test_no_timeout_monitor_does_not_sample_elapsed_time() {
         let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(None), Ok(Some(status(0)))]);
         let clock = CountingClock {
             inner: ManualMonotonicClock::new_shared(),
@@ -1157,7 +1176,7 @@ mod tests {
     }
 
     #[test]
-    fn budget_only_timer_after_exit_uses_timer() {
+    fn test_budget_only_timer_after_exit_uses_timer() {
         let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(Some(status(0)))]);
         let budget = Arc::new(TotalOutputBudget::new(10, None, None));
         let (reader, _release) = blocked_budget_reader(Arc::clone(&budget));

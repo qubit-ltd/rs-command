@@ -40,6 +40,11 @@ pub(super) trait PollableStdin: Write {
 #[cfg(unix)]
 impl<T: Write + AsRawFd> PollableStdin for T {
     /// Waits for the Unix descriptor to become writable or cancellation.
+    ///
+    /// # Parameters
+    ///
+    /// * `cancellation` - Token used to stop waiting when the writer is
+    ///   cancelled.
     #[inline]
     fn wait_writable(&self, cancellation: &IoCancellationToken) -> io::Result<bool> {
         cancellation.wait_for_fd(self.as_raw_fd(), POLLOUT)
@@ -49,6 +54,10 @@ impl<T: Write + AsRawFd> PollableStdin for T {
 #[cfg(windows)]
 impl<T: Write> PollableStdin for T {
     /// Checks cancellation before allowing the next write on Windows.
+    ///
+    /// # Parameters
+    ///
+    /// * `cancellation` - Token used to prevent writes after cancellation.
     #[inline]
     fn wait_writable(&self, cancellation: &IoCancellationToken) -> io::Result<bool> {
         Ok(!cancellation.is_cancelled())

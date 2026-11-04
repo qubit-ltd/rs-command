@@ -22,7 +22,7 @@ use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
 use qubit_command::OutputStream;
 
-use crate::support::LocalTempDir;
+use crate::support::temp_dir::LocalTempDir;
 
 /// Creates a command that conflict tests must reject before spawning.
 ///
