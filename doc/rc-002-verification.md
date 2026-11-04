@@ -1,5 +1,77 @@
 # Current status / 当前状态 (2026-11-04)
 
+## T1 Windows production-path checkpoint (2026-11-04)
+
+The T1 worktree started at source SHA `062305a854471940b56430f7578907d910ffdbf0` on branch `codex/rc-001-rc-002-20261104`. The active host is Linux x86_64 (`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`), with `rustc 1.94.0 (4a4ef493e 2026-03-02)` and `cargo 1.94.0 (85eff7c80 2026-01-15)`. The focused command `cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1 --nocapture` exited 0 locally but selected **0 tests** (94 filtered out), because the probe module is Windows-only. This is not Windows runtime evidence; no probe trace or Windows selected-test count was produced for this SHA.
+
+The existing `workflow_dispatch` job targets `windows-2022`. It now records the checkout SHA, platform, command and Cargo's selected-test count in the uploaded artifact, and fails if the filter selects zero tests. The local host has no Windows runtime or `pwsh`; the coordinating agent triggered the committed and pushed probe workflow after confirming GitHub authentication. No source probe or production code was changed.
+
+| Scenario | T1 source inspection / available evidence | Classification at this checkpoint |
+| --- | --- | --- |
+| Blocked read through production `CommandIo` cleanup | The probe uses `read_output_stream`, a real Windows pipe read, an ordinary-file tee, and `CommandIo::cancel_and_collect`. It observes cancellation and the original read return, then the controller manually releases the source writer. It does not establish a subsequent blocked I/O or watchdog-rescued production join. No fresh Windows trace exists at this SHA. | Implemented observation path; runtime unverified, overall causal chain unresolved. |
+| Read-return-to-tee | Existing race probe calls `read_output_inner` directly and uses an anonymous-pipe tee; this is not the production tee/cleanup path. | Substitute-path only; production scenario unresolved. |
+| EOF-to-flush | Existing interleaving probe uses a pipe tee. The production tee is an unbuffered `File`; the current probe does not demonstrate a pending production flush. | Production behavior not witnessed; unresolved (pipe observations are not production evidence). |
+| Stdin check-to-write | The production Windows path checks cancellation before beginning the synchronous write, so there is no pending synchronous I/O in the gap for `CancelSynchronousIo` to cancel. The probe's in-kernel write cancellation is a different interval. | Gap lacks the stated pending-I/O precondition; the neighboring write interval is not evidence for it. |
+
+The committed Windows run [41816083533](https://github.com/qubit-ltd/rs-command/actions/runs/41816083533) passed on `windows-2022` at source SHA `7bbfc6c04df4dd63929de205eb65d7c446cbe5f5`. The focused command selected 6 tests (6 passed, 0 failed, 105 filtered), and uploaded [trace artifact 13314467975](https://github.com/qubit-ltd/rs-command/actions/runs/41816083533/artifacts/13314467975). The watchdog harness self-test reaped its helper without killing the child.
+
+The production `CommandIo` scenario observed one successful cancellation, the original blocked read returning Windows error 995, and an ordinary-file tee with zero writes. The cleanup worker was unfinished when sampled, but `production_join_pending_witness` was false; the same original read returned before cleanup joined, the source writer was manually released, and the watchdog did not release it. No subsequent blocked I/O or complete production-join causal chain was witnessed, so the scenario remains `unresolved` and does not justify a production fix. The separate 128-attempt read-to-tee probe had 14 successful first cancellations, 114 `ERROR_NOT_FOUND` (1168), zero tee-write entries, zero confirmed blocked writes, and zero valid hits; it directly calls `read_output_inner`, uses a pipe tee, and manually drains it. The readiness probe had 128/128 successful cancels, 128 tee entries, zero confirmed blocked writes and zero valid hits, but uses a pipe tee and does not establish a production join. EOF-to-flush used a pipe tee substitute (128 attempts, 60 successful cancels, 68 `ERROR_NOT_FOUND`, zero tee entries or blocked writes); the production ordinary-file tee has no buffered data to flush. The stdin probe observed one successful cancellation after the synchronous pipe write had entered the kernel (write returned 995); the check-to-write gap itself had zero attempts and no pending synchronous I/O to cancel. These scenarios remain `uncovered`/`unresolved` as described by the trace; zero-hit results do not prove absence of a defect.
+
+This Windows run supplies current-commit runtime evidence and an auditable classification, but does not establish that the suspected hang is absent. The final documentation-only commit still requires a Windows rerun and the full three-platform workflow. The workflow count guard prevents its named filter from passing silently with zero tests.
+
+## RC-002 / T4 local implementation verification (2026-11-04)
+
+The marked Markdown harness now requires the selected example IDs and their expected modes in both READMEs and both user guides. On Linux x86_64 with Rust/Cargo 1.94.0, the final `cargo test --manifest-path /data/working/qubit/.worktrees/rs-command/rc-001-rc-002-20261104/Cargo.toml --test documentation_examples_tests` passed (4 integration-crate tests, including two shared-support tests; 12 generated document examples, 6 Unix examples passed and 6 compile-only examples were ignored at runtime). The final harness supports a separate document root while resolving `qubit-command` from `CARGO_MANIFEST_DIR`, so external document copies exercise the real package.
+
+The mutation command was `DOCUMENTATION_EXAMPLES_ROOT=<external-fixture-root> CARGO_TARGET_DIR=<isolated-target> cargo test --manifest-path <project>/Cargo.toml --test documentation_examples_tests`, run once per fixture. Each final external-copy mutation exited 101 for the intended reason: changing `max_total_output_bytes` in the marked budget example to a nonexistent API produced `no method named`; removing the Chinese README quick-start marker produced `missing required marker quick-start`; adding a second well-formed quick-start marker and Rust fence produced `duplicate marker quick-start`; changing `windows-output` from mode `windows` to `compile` produced `marker windows-output must use mode windows, found compile`. All fixtures and their isolated Cargo target were removed. During diagnosis, an initial API mutation command exited 101 because the harness incorrectly treated a document-only fixture as the package root; this led to separating document-root and package-root paths. An initial duplicate mutation exited 101 at the adjacency guard because two markers were placed together; the final valid duplicate-fence mutation verified duplicate-ID rejection. The first two `align-ci.sh` runs exited 1 on the new Rust headers/import and then test-redirect rule; those issues were fixed before the final alignment passed.
+
+Other final local verification on this worktree:
+
+- `./.infra/bin/align-ci.sh`: exit 0. Two earlier runs identified and led to fixes for the required Rust headers, wildcard import, and test redirect rule; the final alignment and infrastructure check passed.
+- `./.infra/bin/ci-check.sh`: exit 0 after the final source/test changes. Style, build, tests, feature matrix, package verification, dependency checks and coverage passed; coverage was 97.90% functions, 97.06% lines, and 97.13% regions, meeting the unchanged thresholds.
+- `cargo test --doc`: exit 0, 17 passed. The final `ci-check.sh` also reran doctests after the last harness changes.
+- `./.infra/bin/coverage.sh`: exit 0; the unchanged thresholds passed (97.90% functions, 97.06% lines, 97.13% regions).
+- `cargo test --manifest-path /data/working/qubit/rust-common/rs-mime/Cargo.toml --lib command_execution`: exit 0, 3 passed, 8 filtered.
+- `cargo test --manifest-path /data/working/qubit/rust-common/rs-mime/Cargo.toml --lib command_backend`: exit 0, 4 passed, 7 filtered.
+
+The Windows examples were not run on Linux; a Windows runner and the three-platform workflow remain required. These local results do not replace that platform evidence.
+
+## T1 Windows 生产路径检查点（2026-11-04）
+
+T1 worktree 起始源码 SHA 为 `062305a854471940b56430f7578907d910ffdbf0`，分支 `codex/rc-001-rc-002-20261104`。执行主机为 Linux x86_64（`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`），工具链为 `rustc 1.94.0 (4a4ef493e 2026-03-02)` 和 `cargo 1.94.0 (85eff7c80 2026-01-15)`。本机执行筛选命令 `cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1 --nocapture` 退出 0，但命中 **0 项测试**（过滤 94 项），因为 probe module 仅在 Windows 编译。这不是 Windows runtime 证据；此 SHA 没有新 trace 或 Windows 实际筛选测试数。
+
+现有 `workflow_dispatch` job 运行于 `windows-2022`。现已让上传 artifact 记录 checkout SHA、平台、命令和 Cargo 实际筛选测试数，并在筛选数为零时失败。本机没有 Windows runtime 或 `pwsh`；协调主 Agent 确认 GitHub 已认证后，在代码提交并推送后触发了 Windows workflow。未修改源码 probe 或生产代码。
+
+| 场景 | T1 源码检查／现有证据 | 本检查点分类 |
+| --- | --- | --- |
+| 生产 `CommandIo` cleanup 中的阻塞 read | probe 使用 `read_output_stream`、真实 Windows pipe read、普通文件 tee 和 `CommandIo::cancel_and_collect`。它观察取消及原始 read 返回，随后由 controller 手动释放 source writer；没有证明后续阻塞 I/O 或 watchdog 救援生产 join。此 SHA 无新 Windows trace。 | 观察路径已实现；runtime 未验证，完整因果链仍未解决。 |
+| Read 返回到 tee | 现有竞态 probe 直接调用 `read_output_inner`，并使用匿名管道 tee；这不是生产 tee／清理路径。 | 仅替代路径证据；生产场景未解决。 |
+| EOF 到 flush | 现有交错 probe 使用管道 tee。生产 tee 是无缓冲 `File`；当前 probe 未证明生产 flush pending。 | 未见证生产行为；未解决（管道观察不算生产证据）。 |
+| Stdin check-to-write | Windows 生产路径在同步 write 开始前检查 cancellation，因此该间隙没有可供 `CancelSynchronousIo` 取消的 pending synchronous I/O。probe 中取消已进入内核的 write 属于不同时间窗口。 | 该间隙缺少所述 pending-I/O 前提；邻接 write 窗口不能作为它的证据。 |
+
+Windows run [41816083533](https://github.com/qubit-ltd/rs-command/actions/runs/41816083533) 在 `windows-2022` 和源码 SHA `7bbfc6c04df4dd63929de205eb65d7c446cbe5f5` 上通过。筛选命令命中 6 项测试（6 通过、0 失败、过滤 105 项），并上传了 [trace artifact 13314467975](https://github.com/qubit-ltd/rs-command/actions/runs/41816083533/artifacts/13314467975)。watchdog harness 自检成功回收 helper，未杀死子进程。
+
+生产 `CommandIo` 场景观察到一次成功取消，原始阻塞 read 返回 Windows error 995，普通文件 tee 写入 0 次。采样时 cleanup worker 尚未完成，但 `production_join_pending_witness` 为 false；同一个原始 read 在 cleanup join 前返回，source writer 由测试手动释放，watchdog 未释放它。没有观察到后续阻塞 I/O 或完整生产 join 因果链，因此该场景仍为 `unresolved`，不支持生产修复。独立 128 次 read-to-tee 探针中，首次取消成功 14 次、`ERROR_NOT_FOUND`（1168）114 次、tee-write 入口 0 次、确认阻塞写 0 次、有效命中 0 次；该探针直接调用 `read_output_inner`，使用 pipe tee 并手动排空。readiness 探针 128/128 次取消成功、128 次 tee 入口、确认阻塞写 0 次、有效命中 0 次，但 tee 是管道，且没有证明生产 join。EOF-to-flush 使用管道 tee 替代品（128 次尝试、60 次取消成功、68 次 `ERROR_NOT_FOUND`、tee 入口和阻塞写均为 0）；生产普通文件 tee 没有缓冲数据可供 flush。stdin 探针观察到一次同步 pipe write 进入内核后被成功取消（write 返回 995）；check-to-write 间隙本身尝试数为 0，也没有可取消的 pending synchronous I/O。trace 将这些场景分类为 `uncovered`／`unresolved`；零命中不能证明缺陷不存在。
+
+该 Windows run 提供当前提交的 runtime 证据和可审计分类，但不能证明疑似挂起不存在。最后一个仅修改验证文档的提交仍需重跑 Windows workflow 和完整三平台 workflow。workflow 测试数保护会阻止命名 filter 零测试时静默通过。
+
+## RC-002 / T4 本地实施验证（2026-11-04）
+
+实际 Markdown harness 现在要求双语 README 和双语用户指南中列出的示例 ID 及其预期模式均匹配。在 Linux x86_64、Rust/Cargo 1.94.0 上，最终执行 `cargo test --manifest-path /data/working/qubit/.worktrees/rs-command/rc-001-rc-002-20261104/Cargo.toml --test documentation_examples_tests` 通过（集成测试 crate 4 项通过，其中包括 2 项共享支持模块测试；生成 12 个文档示例，6 个 Unix 示例通过，6 个仅编译示例忽略运行）。最终 harness 将外部文档目录与 `CARGO_MANIFEST_DIR` 中实际的 `qubit-command` crate 分开，因此外部文档副本会真实编译项目依赖。
+
+变异命令为 `DOCUMENTATION_EXAMPLES_ROOT=<外部副本目录> CARGO_TARGET_DIR=<隔离 target> cargo test --manifest-path <项目>/Cargo.toml --test documentation_examples_tests`，每个副本各运行一次。最终四项外部副本变异均以预期原因退出 101：将预算示例中的 `max_total_output_bytes` 改为不存在的 API，报 `no method named`；删除中文 README 快速开始标记，报 `missing required marker quick-start`；增加第二个格式正确的快速开始标记及 Rust fence，报 `duplicate marker quick-start`；将 `windows-output` 的模式从 `windows` 改成 `compile`，报 `marker windows-output must use mode windows, found compile`。变异副本及独立 Cargo target 均已删除。诊断中，最初仅复制文档的 API 变异命令因 harness 把文档目录当成 package 根目录而退出 101，由此修正为分离文档路径和 package 路径。最初的重复标记变异命令也退出 101，但错误来自相邻性检查；最终使用有效的第二个 fence 验证了重复 ID 拒绝。前两次 `align-ci.sh` 均退出 1，分别发现新 Rust 文件头部／导入问题及测试重定向规则问题；修复后最终对齐通过。
+
+本 worktree 最终本地验证：
+
+- `./.infra/bin/align-ci.sh`：退出 0。此前两次运行分别发现并修正许可证头、通配导入及测试重定向规则问题；最终对齐与基础设施检查通过。
+- `./.infra/bin/ci-check.sh`：最终源码／测试修改后退出 0。Style、构建、测试、feature matrix、package 验证、依赖检查和覆盖率均通过；覆盖率为函数 97.90%、行 97.06%、区域 97.13%，原门槛未变。
+- `cargo test --doc`：退出 0，17 项通过。最终 `ci-check.sh` 也在最后一次 harness 修改后重跑了 doctest。
+- `./.infra/bin/coverage.sh`：退出 0；原覆盖率门槛通过（函数 97.90%、行 97.06%、区域 97.13%）。
+- `cargo test --manifest-path /data/working/qubit/rust-common/rs-mime/Cargo.toml --lib command_execution`：退出 0，3 项通过、8 项过滤。
+- `cargo test --manifest-path /data/working/qubit/rust-common/rs-mime/Cargo.toml --lib command_backend`：退出 0，4 项通过、7 项过滤。
+
+Windows 示例未在 Linux 主机执行；仍需 Windows runner 和三平台 workflow。以上本地结果不能替代平台证据。
+
 ## T3 implementation-checkout audit (2026-11-04)
 
 This audit was performed in the implementation worktree on branch `codex/outputs-files-windows-20261104`, HEAD `65ccacbf79a49a845af16c02fc0bd6cf59e3b752` (clean at audit start). The active host is Linux x86_64 (`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`), with `rustc 1.94.0 (4a4ef493e 2026-03-02)` and `cargo 1.94.0 (85eff7c80 2026-01-15)`. No Windows runtime is available in this environment. The focused Windows command, `cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1 --nocapture`, was therefore **not run** here; there is no fresh selected-test count for this implementation checkout. The previously recorded Windows Server 2022 run at SHA `e76e1700894717523c24c74fe95b94b3809eeaa7` is historical evidence for that SHA, not a fresh run at this checkout SHA.
