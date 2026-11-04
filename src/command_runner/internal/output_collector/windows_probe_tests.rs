@@ -517,7 +517,7 @@ fn run_real_probe(scenario: &str) {
             Box::new(TeeEntry(tee_writer, event_tx.clone())),
             PathBuf::from("pipe-tee.log"),
         );
-        let ready_fd = source_reader.as_raw_handle();
+        let ready_fd = source_reader.as_raw_handle() as usize;
         let worker = thread::spawn(move || {
             let mut options = OutputCaptureOptions::new(None, Some(tee));
             if use_readiness {
@@ -535,7 +535,11 @@ fn run_real_probe(scenario: &str) {
                 ),
                 options,
                 Some(&token),
-                if use_readiness { Some(ready_fd) } else { None },
+                if use_readiness {
+                    Some(ready_fd as RawHandle)
+                } else {
+                    None
+                },
             );
             *worker_result_slot
                 .lock()
