@@ -48,6 +48,12 @@ fn closes_fence(line: &str, marker: char, minimum: usize) -> bool {
     count >= minimum && rest[count..].trim().is_empty()
 }
 
+fn is_rust_fence(info: &str) -> bool {
+    info.split(|character: char| character.is_whitespace() || character == ',')
+        .next()
+        == Some("rust")
+}
+
 pub(crate) fn extract_examples(markdown: &str, label: &str) -> Result<Vec<Example>, String> {
     let mut examples = Vec::new();
     let mut marker = None;
@@ -73,10 +79,10 @@ pub(crate) fn extract_examples(markdown: &str, label: &str) -> Result<Vec<Exampl
             }
             marker = Some((id.to_owned(), mode.to_owned()));
         } else if let Some((fence_char, fence_len, info)) = opening_fence(line) {
-            if marker.is_none() && (info == "rust" || info.starts_with("rust,")) {
+            let rust_fence = is_rust_fence(info);
+            if marker.is_none() && rust_fence {
                 return Err(format!("{label}:{}: unclassified Rust fence", line_index + 1));
             }
-            let rust_fence = info == "rust" || info.starts_with("rust,");
             let classified = marker.take();
             if let Some((id, _)) = &classified
                 && (!rust_fence || !matches!(info, "rust" | "rust,no_run"))

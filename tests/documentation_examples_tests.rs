@@ -98,7 +98,7 @@ fn extractor_tracks_fragments_and_validates_fence_attributes() {
 
 #[test]
 fn extractor_recognizes_commonmark_rust_fences_and_skips_nested_looking_text() {
-    for source in ["  ```rust\n1;\n  ```", "~~~rust\n1;\n~~~"] {
+    for source in ["  ```rust\n1;\n  ```", "~~~rust\n1;\n~~~", "```rust extra\n1;\n```"] {
         let error = extract_examples(source, "sample.md").unwrap_err();
         assert!(error.contains("unclassified Rust fence"), "{error}");
         assert!(error.contains("sample.md:1"), "{error}");
