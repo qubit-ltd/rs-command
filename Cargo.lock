@@ -376,6 +376,7 @@ dependencies = [
  "qubit-clock",
  "qubit-redact",
  "same-file",
+ "serde_json",
  "tempfile",
  "thiserror",
 ]

@@ -91,6 +91,14 @@ cargo test --all-features
 ./.infra/bin/coverage.sh
 ```
 
+The nested documentation-example harness uses the root package's locked
+production dependency versions and sources. Prepare dependencies with the outer
+Cargo command first; when the required sources, index, and build artifacts are
+cached, the harness runs offline. If the locked baseline cannot be resolved
+from the cache, the check fails explicitly. Set `CARGO_BUILD_TARGET` or use
+Cargo configuration to keep metadata and test builds on the same target; an
+existing Cargo runner is required to execute tests for a different target.
+
 ## License
 
 Copyright (c) 2025 - 2026. Haixing Hu. All rights reserved.

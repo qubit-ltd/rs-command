@@ -91,6 +91,12 @@ cargo test --all-features
 ./.infra/bin/coverage.sh
 ```
 
+嵌套的文档示例 harness 使用根项目锁定的生产依赖版本和来源。请先通过外层
+Cargo 命令准备依赖；所需源码、索引和构建产物均已缓存时，harness 可离线运行。
+缓存无法满足锁定基线时，检查会明确失败。使用 `CARGO_BUILD_TARGET` 或 Cargo
+配置可使 metadata 与测试构建保持相同目标；执行不同目标的测试需要已有的 Cargo
+runner。
+
 ## 许可证
 
 Copyright (c) 2025 - 2026. Haixing Hu. All rights reserved.

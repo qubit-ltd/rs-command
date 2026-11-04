@@ -11,6 +11,7 @@
 
 #[cfg(not(windows))]
 mod captured_logger;
+pub(crate) mod documentation_dependency_baseline;
 pub(crate) mod documentation_examples;
 #[cfg(target_os = "linux")]
 mod escaped_process_guard;

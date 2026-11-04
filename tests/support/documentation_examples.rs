@@ -10,6 +10,13 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::support::documentation_dependency_baseline::compare_metadata;
+use crate::support::documentation_dependency_baseline::harness_metadata_command;
+use crate::support::documentation_dependency_baseline::harness_test_command;
+use crate::support::documentation_dependency_baseline::read_lock_seed;
+use crate::support::documentation_dependency_baseline::resolve_target_dir;
+use crate::support::documentation_dependency_baseline::root_metadata_command;
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Example {
     pub(crate) id: String,
@@ -216,9 +223,7 @@ pub(crate) fn check_documents(root: &Path) {
         }));
     }
     let package_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target = PathBuf::from(
-        std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| package_root.join("target").into_os_string()),
-    );
+    let target = resolve_target_dir(&package_root, std::env::var_os("CARGO_TARGET_DIR").as_deref());
     let parent = target.join("documentation-example-harness");
     fs::create_dir_all(&parent).expect("create harness parent");
     let harness = tempfile::tempdir_in(parent).expect("create temporary harness");
@@ -258,16 +263,87 @@ pub(crate) fn check_documents(root: &Path) {
         source.push_str("})();\nresult.expect(\"documented example failed\");\n}\n}\n\n");
     }
     fs::write(harness.path().join("tests/documentation_examples.rs"), source).expect("write harness source");
-    let status = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-        .arg("test")
-        .arg("--manifest-path")
-        .arg(harness.path().join("Cargo.toml"))
-        .arg("--target-dir")
-        .arg(target.join("documentation-example-target"))
-        .status()
-        .expect("run temporary Cargo doctest harness");
+    let root_lock = package_root.join("Cargo.lock");
+    let initial_lock = read_lock_seed(&root_lock)
+        .unwrap_or_else(|error| panic!("baseline lockfile unavailable at {}: {error}", root_lock.display()));
+    let harness_lock = harness.path().join("Cargo.lock");
+    fs::write(&harness_lock, &initial_lock).unwrap_or_else(|error| {
+        panic!(
+            "cannot seed {} from {}: {error}",
+            harness_lock.display(),
+            root_lock.display()
+        )
+    });
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let run = |stage: &str, manifest: &Path, command: &mut Command| -> Vec<u8> {
+        let output = command
+            .output()
+            .unwrap_or_else(|error| panic!("{stage} for {} could not start Cargo: {error}", manifest.display()));
+        if !output.status.success() {
+            let exit = output
+                .status
+                .code()
+                .map_or_else(|| "terminated by signal".to_owned(), |code| code.to_string());
+            panic!(
+                "{stage} for {} failed (exit {exit}): {}",
+                manifest.display(),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        output.stdout
+    };
+    let root_manifest = package_root.join("Cargo.toml");
+    let root_metadata = run(
+        "root metadata --locked --offline",
+        &root_manifest,
+        &mut root_metadata_command(&cargo, &package_root),
+    );
+    let root_metadata: serde_json::Value = serde_json::from_slice(&root_metadata).unwrap_or_else(|error| {
+        panic!(
+            "root metadata --locked --offline JSON for {} is invalid: {error}",
+            root_manifest.display()
+        )
+    });
+    let harness_manifest = harness.path().join("Cargo.toml");
+    let harness_metadata = run(
+        "harness metadata --offline",
+        &harness_manifest,
+        &mut harness_metadata_command(&cargo, &package_root, &harness_manifest),
+    );
+    let harness_metadata: serde_json::Value = serde_json::from_slice(&harness_metadata).unwrap_or_else(|error| {
+        panic!(
+            "harness metadata --offline JSON for {} is invalid: {error}",
+            harness_manifest.display()
+        )
+    });
+    compare_metadata(&root_metadata, &harness_metadata, &package_root).unwrap_or_else(|error| {
+        panic!(
+            "harness dependency comparison for {} failed: {error}",
+            harness_manifest.display()
+        )
+    });
+    let mut test_command = harness_test_command(
+        &cargo,
+        &package_root,
+        &harness_manifest,
+        &target.join("documentation-example-target"),
+    );
+    let test_output = test_command.output().unwrap_or_else(|error| {
+        panic!(
+            "harness test --locked --offline for {} could not start Cargo: {error}",
+            harness_manifest.display()
+        )
+    });
+    let final_lock = fs::read(&root_lock).unwrap_or_else(|error| panic!("cannot reread root Cargo.lock: {error}"));
+    assert_eq!(initial_lock, final_lock, "documentation test changed root Cargo.lock");
+    let test_exit = test_output
+        .status
+        .code()
+        .map_or_else(|| "terminated by signal".to_owned(), |code| code.to_string());
     assert!(
-        status.success(),
-        "actual Markdown examples failed Cargo compilation or execution"
+        test_output.status.success(),
+        "harness test --locked --offline for {} failed (exit {test_exit}): {}",
+        harness_manifest.display(),
+        String::from_utf8_lossy(&test_output.stderr)
     );
 }

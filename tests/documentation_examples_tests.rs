@@ -7,10 +7,226 @@
 // =============================================================================
 mod support;
 
+use serde_json::json;
+use support::documentation_dependency_baseline::compare_metadata;
+use support::documentation_dependency_baseline::harness_metadata_command;
+use support::documentation_dependency_baseline::harness_test_command;
+use support::documentation_dependency_baseline::read_lock_seed;
+use support::documentation_dependency_baseline::resolve_target_dir;
+use support::documentation_dependency_baseline::root_metadata_command;
 use support::documentation_examples::Example;
 use support::documentation_examples::check_documents;
 use support::documentation_examples::extract_examples;
 use support::documentation_examples::require_markers;
+
+fn metadata(
+    a_version: &str,
+    b_version: &str,
+    b_source: &str,
+    edge_target: &str,
+    dev_only: bool,
+    extra_baseline_feature: bool,
+) -> serde_json::Value {
+    let mut packages = vec![
+        json!({"id":"qubit-command 0.1.0 (path+file:///tmp/project)","name":"qubit-command","version":"0.1.0","source":null,"manifest_path":"/tmp/project/Cargo.toml"}),
+        json!({"id":"a 1.0.0 (registry+https://example.test/index)","name":"a","version":a_version,"source":"registry+https://example.test/index","manifest_path":"/cache/a/Cargo.toml"}),
+        json!({"id":format!("b {b_version} ({b_source})"),"name":"b","version":b_version,"source":b_source,"manifest_path":"/cache/b/Cargo.toml"}),
+    ];
+    if dev_only {
+        packages.push(json!({"id":"dev-only 1.0.0 (registry+https://example.test/index)","name":"dev-only","version":"1.0.0","source":"registry+https://example.test/index","manifest_path":"/cache/dev/Cargo.toml"}));
+    }
+    if extra_baseline_feature {
+        packages.push(json!({"id":"feature-extra 1.0.0 (registry+https://example.test/index)","name":"feature-extra","version":"1.0.0","source":"registry+https://example.test/index","manifest_path":"/cache/extra/Cargo.toml"}));
+    }
+    let b_id = format!("b {b_version} ({b_source})");
+    let mut nodes = vec![
+        json!({"id":"qubit-command 0.1.0 (path+file:///tmp/project)","deps":[{"name":"a","pkg":"a 1.0.0 (registry+https://example.test/index)","dep_kinds":[{"kind":null,"target":null}]}]}),
+        json!({"id":"a 1.0.0 (registry+https://example.test/index)","deps":[{"name":"b","pkg":edge_target,"dep_kinds":[{"kind":null,"target":null}]}]}),
+        json!({"id":b_id,"deps":[]}),
+    ];
+    if dev_only {
+        nodes[0]["deps"].as_array_mut().unwrap().push(json!({"name":"dev-only","pkg":"dev-only 1.0.0 (registry+https://example.test/index)","dep_kinds":[{"kind":"dev","target":null}]}));
+    }
+    if extra_baseline_feature {
+        nodes.push(json!({"id":"feature-extra 1.0.0 (registry+https://example.test/index)","deps":[]}));
+        nodes[0]["deps"].as_array_mut().unwrap().push(json!({"name":"feature-extra","pkg":"feature-extra 1.0.0 (registry+https://example.test/index)","dep_kinds":[{"kind":null,"target":null}]}));
+    }
+    json!({"packages":packages,"resolve":{"nodes":nodes}})
+}
+
+#[test]
+fn relative_target_directory_is_resolved_from_package_root() {
+    let root = std::path::Path::new("/workspace/project");
+    assert_eq!(
+        resolve_target_dir(root, Some(std::ffi::OsStr::new("build/cache"))),
+        root.join("build/cache")
+    );
+    assert_eq!(
+        resolve_target_dir(root, Some(std::ffi::OsStr::new("/tmp/cargo-target"))),
+        std::path::PathBuf::from("/tmp/cargo-target")
+    );
+    assert_eq!(resolve_target_dir(root, None), root.join("target"));
+}
+
+fn baseline_fixture(b_version: &str, b_source: &str) -> serde_json::Value {
+    metadata(
+        "1.0.0",
+        b_version,
+        b_source,
+        &format!("b {b_version} ({b_source})"),
+        false,
+        false,
+    )
+}
+
+#[test]
+fn production_dependency_baseline_compares_packages_sources_and_edges() {
+    let base = std::path::Path::new("/tmp/project");
+    let v1_source = "registry+https://example.test/index";
+    let baseline = baseline_fixture("1.0.0", v1_source);
+    let matching = metadata(
+        "1.0.0",
+        "1.0.0",
+        v1_source,
+        &format!("b 1.0.0 ({v1_source})"),
+        false,
+        false,
+    );
+    assert!(compare_metadata(&baseline, &matching, base).is_ok());
+
+    let newer = metadata(
+        "1.0.0",
+        "2.0.0",
+        v1_source,
+        &format!("b 2.0.0 ({v1_source})"),
+        false,
+        false,
+    );
+    assert!(
+        compare_metadata(&baseline, &newer, base)
+            .unwrap_err()
+            .contains("b@2.0.0")
+    );
+    let other_source = "git+https://example.test/repo#abc";
+    let source_changed = metadata(
+        "1.0.0",
+        "1.0.0",
+        other_source,
+        &format!("b 1.0.0 ({other_source})"),
+        false,
+        false,
+    );
+    assert!(
+        compare_metadata(&baseline, &source_changed, base)
+            .unwrap_err()
+            .contains("b@1.0.0")
+    );
+
+    let b2_id = format!("b 2.0.0 ({v1_source})");
+    let mut two_version_baseline = baseline.clone();
+    two_version_baseline["packages"].as_array_mut().unwrap().push(
+        json!({"id":&b2_id,"name":"b","version":"2.0.0","source":v1_source,"manifest_path":"/cache/b2/Cargo.toml"}),
+    );
+    two_version_baseline["resolve"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":&b2_id,"deps":[]}));
+    two_version_baseline["resolve"]["nodes"][0]["deps"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name":"b-alias","pkg":&b2_id,"dep_kinds":[{"kind":null,"target":null}]}));
+    let mut changed_edge = two_version_baseline.clone();
+    changed_edge["resolve"]["nodes"][1]["deps"][0]["pkg"] = json!(b2_id);
+    assert!(
+        compare_metadata(&two_version_baseline, &changed_edge, base)
+            .unwrap_err()
+            .contains("--b (normal:)-->")
+    );
+    let dev_extra = metadata(
+        "1.0.0",
+        "1.0.0",
+        v1_source,
+        &format!("b 1.0.0 ({v1_source})"),
+        true,
+        false,
+    );
+    assert!(compare_metadata(&baseline, &dev_extra, base).is_ok());
+    let feature_baseline = metadata(
+        "1.0.0",
+        "1.0.0",
+        v1_source,
+        &format!("b 1.0.0 ({v1_source})"),
+        false,
+        true,
+    );
+    assert!(compare_metadata(&feature_baseline, &matching, base).is_ok());
+}
+
+#[test]
+fn cargo_commands_use_fixed_root_manifest_and_required_lock_offline_flags() {
+    use std::ffi::OsStr;
+    use std::path::Path;
+
+    fn args(command: &std::process::Command) -> Vec<String> {
+        command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+    let root = Path::new("/workspace/project");
+    let harness_manifest = Path::new("/tmp/harness/Cargo.toml");
+    let target = Path::new("/tmp/target");
+    let cargo = OsStr::new("cargo");
+    let root_command = root_metadata_command(cargo, root);
+    assert_eq!(root_command.get_current_dir(), Some(root));
+    assert_eq!(
+        args(&root_command),
+        [
+            "metadata",
+            "--format-version",
+            "1",
+            "--locked",
+            "--offline",
+            "--manifest-path",
+            "/workspace/project/Cargo.toml"
+        ]
+    );
+    let metadata_command = harness_metadata_command(cargo, root, harness_manifest);
+    assert_eq!(metadata_command.get_current_dir(), Some(root));
+    assert_eq!(
+        args(&metadata_command),
+        [
+            "metadata",
+            "--format-version",
+            "1",
+            "--offline",
+            "--manifest-path",
+            "/tmp/harness/Cargo.toml"
+        ]
+    );
+    let test_command = harness_test_command(cargo, root, harness_manifest, target);
+    assert_eq!(test_command.get_current_dir(), Some(root));
+    assert_eq!(
+        args(&test_command),
+        [
+            "test",
+            "--manifest-path",
+            "/tmp/harness/Cargo.toml",
+            "--target-dir",
+            "/tmp/target",
+            "--locked",
+            "--offline"
+        ]
+    );
+}
+
+#[test]
+fn missing_root_lock_seed_is_reported_as_not_found() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("Cargo.lock");
+    let error = read_lock_seed(&missing).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+}
 
 #[test]
 fn extractor_preserves_hidden_lines_and_rejects_invalid_markers() {
