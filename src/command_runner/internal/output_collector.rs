@@ -61,7 +61,12 @@ pub(in crate::command_runner) fn read_output_stream<R: CancellableReader>(
     let (cancellation, token) = IoCancellation::pair()?;
     let budget = options
         .transfer_budget_after_join
-        .then(|| options.total_budget.clone().zip(options.total_budget_stream))
+        .then(|| {
+            options
+                .total_budget
+                .clone()
+                .zip(options.total_budget_stream)
+        })
         .flatten();
     let join = thread::Builder::new()
         .name("qubit-command-output-reader".to_owned())
@@ -143,11 +148,17 @@ fn read_output_inner(
             && let (Some(cancellation), Some(fd)) = (cancellation, fd)
         {
             match wait_output_readiness(fd, cancellation) {
-                Ok(super::pollable_output::OutputReadiness::Readable(available)) => ready_capacity = available,
+                Ok(super::pollable_output::OutputReadiness::Readable(available)) => {
+                    ready_capacity = available
+                }
                 #[cfg(windows)]
                 Ok(super::pollable_output::OutputReadiness::Eof) => {
                     if let Some(budget) = options.total_budget.as_ref() {
-                        budget.mark_complete(options.total_budget_stream.expect("budget stream is configured"));
+                        budget.mark_complete(
+                            options
+                                .total_budget_stream
+                                .expect("budget stream is configured"),
+                        );
                     }
                     break Ok(true);
                 }
@@ -160,7 +171,9 @@ fn read_output_inner(
                 reader,
                 &mut buffer,
                 ready_capacity,
-                options.total_budget_stream.expect("budget stream is configured"),
+                options
+                    .total_budget_stream
+                    .expect("budget stream is configured"),
             ),
             None => reader.read(&mut buffer),
         };
@@ -186,11 +199,19 @@ fn read_output_inner(
             }
         };
         if read == 0 {
-            if options.total_budget.as_ref().is_some_and(|budget| budget.is_halted()) {
+            if options
+                .total_budget
+                .as_ref()
+                .is_some_and(|budget| budget.is_halted())
+            {
                 break Ok(false);
             }
             if let Some(budget) = options.total_budget.as_ref() {
-                budget.mark_complete(options.total_budget_stream.expect("budget stream is configured"));
+                budget.mark_complete(
+                    options
+                        .total_budget_stream
+                        .expect("budget stream is configured"),
+                );
             }
             break Ok(true);
         }
@@ -240,7 +261,9 @@ fn read_output_inner(
         write_error = Some((tee.path.clone(), source));
     }
     let output = match (options.total_budget.as_ref(), options.total_budget_stream) {
-        (Some(budget), Some(stream)) if options.transfer_budget_after_join => budget.captured_stream_metadata(stream),
+        (Some(budget), Some(stream)) if options.transfer_budget_after_join => {
+            budget.captured_stream_metadata(stream)
+        }
         (Some(budget), Some(stream)) => budget.captured_stream(stream),
         _ => CapturedOutput {
             bytes,
@@ -255,7 +278,11 @@ fn read_output_inner(
             read_source,
             output,
         }),
-        (Some((path, source)), Ok(_)) => Err(OutputCaptureError::Write { path, source, output }),
+        (Some((path, source)), Ok(_)) => Err(OutputCaptureError::Write {
+            path,
+            source,
+            output,
+        }),
         (None, Err(source)) => Err(OutputCaptureError::Read { source, output }),
         (None, Ok(_)) => Ok(output),
     }
@@ -314,7 +341,9 @@ fn wait_output_readiness(
             return Err(source);
         }
         if available > 0 {
-            return Ok(super::pollable_output::OutputReadiness::Readable(available as usize));
+            return Ok(super::pollable_output::OutputReadiness::Readable(
+                available as usize,
+            ));
         }
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -322,7 +351,10 @@ fn wait_output_readiness(
 
 /// Reads one child output stream to completion for unit tests.
 #[cfg(test)]
-fn read_output(reader: &mut dyn Read, options: OutputCaptureOptions) -> Result<CapturedOutput, OutputCaptureError> {
+fn read_output(
+    reader: &mut dyn Read,
+    options: OutputCaptureOptions,
+) -> Result<CapturedOutput, OutputCaptureError> {
     read_output_inner(reader, options, None, None)
 }
 
@@ -408,10 +440,14 @@ pub(in crate::command_runner) fn collect_output_results(
     let elapsed = match elapsed_result {
         Err(source) => {
             let mut cleanup_failures = Vec::new();
-            cleanup_failures
-                .extend(stdout_failures.map(|failure| output_cleanup_failure(OutputStream::Stdout, failure)));
-            cleanup_failures
-                .extend(stderr_failures.map(|failure| output_cleanup_failure(OutputStream::Stderr, failure)));
+            cleanup_failures.extend(
+                stdout_failures
+                    .map(|failure| output_cleanup_failure(OutputStream::Stdout, failure)),
+            );
+            cleanup_failures.extend(
+                stderr_failures
+                    .map(|failure| output_cleanup_failure(OutputStream::Stderr, failure)),
+            );
             if let Some(error) = stdin_error
                 && let Some(failure) = error.into_cleanup_failure()
             {
@@ -421,19 +457,25 @@ pub(in crate::command_runner) fn collect_output_results(
                 (stdout.bytes, stdout.truncated, stdout.complete),
                 (stderr.bytes, stderr.truncated, stderr.complete),
             );
-            return Err(
-                CommandError::from_reason(command, CommandErrorReason::TimeFailed { source }, None)
-                    .with_captured_output(captured)
-                    .with_cleanup_failures(cleanup_failures),
-            );
+            return Err(CommandError::from_reason(
+                command,
+                CommandErrorReason::TimeFailed { source },
+                None,
+            )
+            .with_captured_output(captured)
+            .with_cleanup_failures(cleanup_failures));
         }
         Ok(elapsed) => elapsed,
     };
 
     if let Some(failure) = stdout_failures.next() {
         let mut cleanup_failures = Vec::new();
-        cleanup_failures.extend(stdout_failures.map(|failure| output_cleanup_failure(OutputStream::Stdout, failure)));
-        cleanup_failures.extend(stderr_failures.map(|failure| output_cleanup_failure(OutputStream::Stderr, failure)));
+        cleanup_failures.extend(
+            stdout_failures.map(|failure| output_cleanup_failure(OutputStream::Stdout, failure)),
+        );
+        cleanup_failures.extend(
+            stderr_failures.map(|failure| output_cleanup_failure(OutputStream::Stderr, failure)),
+        );
         if let Some(error) = stdin_error
             && let Some(failure) = error.into_cleanup_failure()
         {
@@ -453,7 +495,9 @@ pub(in crate::command_runner) fn collect_output_results(
 
     if let Some(failure) = stderr_failures.next() {
         let mut cleanup_failures = Vec::new();
-        cleanup_failures.extend(stderr_failures.map(|failure| output_cleanup_failure(OutputStream::Stderr, failure)));
+        cleanup_failures.extend(
+            stderr_failures.map(|failure| output_cleanup_failure(OutputStream::Stderr, failure)),
+        );
         if let Some(error) = stdin_error
             && let Some(failure) = error.into_cleanup_failure()
         {
@@ -501,10 +545,14 @@ pub(super) fn split_output_result(
 ) -> (CapturedOutput, Vec<OutputCaptureFailure>) {
     match result {
         Ok(output) => (output, Vec::new()),
-        Err(OutputCaptureError::Read { source, output }) => (output, vec![OutputCaptureFailure::Read { source }]),
-        Err(OutputCaptureError::Write { path, source, output }) => {
-            (output, vec![OutputCaptureFailure::Write { path, source }])
+        Err(OutputCaptureError::Read { source, output }) => {
+            (output, vec![OutputCaptureFailure::Read { source }])
         }
+        Err(OutputCaptureError::Write {
+            path,
+            source,
+            output,
+        }) => (output, vec![OutputCaptureFailure::Write { path, source }]),
         Err(OutputCaptureError::ReadAfterWrite {
             path,
             write_source,
@@ -517,7 +565,9 @@ pub(super) fn split_output_result(
                     path,
                     source: write_source,
                 },
-                OutputCaptureFailure::Read { source: read_source },
+                OutputCaptureFailure::Read {
+                    source: read_source,
+                },
             ],
         ),
     }
@@ -533,10 +583,17 @@ pub(super) fn split_output_result(
 /// # Returns
 ///
 /// A stream-specific cleanup failure with its original path and source.
-pub(super) fn output_cleanup_failure(stream: OutputStream, failure: OutputCaptureFailure) -> CommandCleanupFailure {
+pub(super) fn output_cleanup_failure(
+    stream: OutputStream,
+    failure: OutputCaptureFailure,
+) -> CommandCleanupFailure {
     match (stream, failure) {
-        (OutputStream::Stdout, OutputCaptureFailure::Read { source }) => CommandCleanupFailure::StdoutRead { source },
-        (OutputStream::Stderr, OutputCaptureFailure::Read { source }) => CommandCleanupFailure::StderrRead { source },
+        (OutputStream::Stdout, OutputCaptureFailure::Read { source }) => {
+            CommandCleanupFailure::StdoutRead { source }
+        }
+        (OutputStream::Stderr, OutputCaptureFailure::Read { source }) => {
+            CommandCleanupFailure::StderrRead { source }
+        }
         (OutputStream::Stdout, OutputCaptureFailure::Write { path, source }) => {
             CommandCleanupFailure::StdoutWrite { path, source }
         }
@@ -582,7 +639,11 @@ fn map_output_reader_error(
             };
             CommandError::from_reason(
                 command,
-                CommandErrorReason::WriteOutputFailed { stream, path, source },
+                CommandErrorReason::WriteOutputFailed {
+                    stream,
+                    path,
+                    source,
+                },
                 Some(Box::new(CommandOutput::new(
                     status,
                     (stdout.bytes, stdout.truncated, stdout.complete),
@@ -816,7 +877,9 @@ mod tests {
     }
 
     /// Captures a stream with a failed tee followed by one terminal event.
-    fn capture_after_tee_failure(outcome: AfterTeeFailure) -> Result<CapturedOutput, OutputCaptureError> {
+    fn capture_after_tee_failure(
+        outcome: AfterTeeFailure,
+    ) -> Result<CapturedOutput, OutputCaptureError> {
         let (_sender, token) = IoCancellation::pair().expect("cancellation pair must initialize");
         let mut reader = ReaderAfterTeeFailure {
             prefix_sent: false,
@@ -845,8 +908,14 @@ mod tests {
             AfterTeeFailure::CancelWouldBlock,
             AfterTeeFailure::CancelReadError,
         ] {
-            let error = capture_after_tee_failure(outcome).expect_err("pending tee error must survive cancellation");
-            let OutputCaptureError::Write { path, source, output } = error else {
+            let error = capture_after_tee_failure(outcome)
+                .expect_err("pending tee error must survive cancellation");
+            let OutputCaptureError::Write {
+                path,
+                source,
+                output,
+            } = error
+            else {
                 panic!("expected retained tee error for {outcome:?}");
             };
             assert_eq!(path, Path::new("failed-tee.log"));
@@ -870,9 +939,15 @@ mod tests {
                 OutputStream::Stdout => (failed, Ok(CapturedOutput::default())),
                 OutputStream::Stderr => (Ok(CapturedOutput::default()), failed),
             };
-            let error =
-                collect_output_results("command", status(0), Ok(Duration::from_secs(1)), stdout, stderr, Ok(()))
-                    .expect_err("both output failures must be reported");
+            let error = collect_output_results(
+                "command",
+                status(0),
+                Ok(Duration::from_secs(1)),
+                stdout,
+                stderr,
+                Ok(()),
+            )
+            .expect_err("both output failures must be reported");
             assert!(matches!(
                 error.reason(),
                 CommandErrorReason::WriteOutputFailed { stream: actual, source, .. }
@@ -957,7 +1032,9 @@ mod tests {
             let error = reason.into_error_after_finalize("command", error);
             assert_eq!(error.kind(), expected_kind);
             assert_both_stream_failures(error.cleanup_failures());
-            let output = error.output().expect("demotion must preserve both partial streams");
+            let output = error
+                .output()
+                .expect("demotion must preserve both partial streams");
             assert_eq!(output.stdout(), b"prefix");
             assert_eq!(output.stderr(), b"prefix");
             assert!(!output.stdout_complete());
@@ -1010,8 +1087,11 @@ mod tests {
     #[test]
     fn test_pending_tee_error_survives_pipe_wakeup_cancellation() {
         let (mut input, mut peer) = UnixStream::pair().expect("test pipe must initialize");
-        input.set_nonblocking(true).expect("test pipe must be nonblocking");
-        peer.write_all(b"prefix").expect("test prefix must be written");
+        input
+            .set_nonblocking(true)
+            .expect("test pipe must be nonblocking");
+        peer.write_all(b"prefix")
+            .expect("test prefix must be written");
         let (sender, token) = IoCancellation::pair().expect("cancellation pair must initialize");
         let (failed, observed) = mpsc::channel();
         let join = thread::spawn(move || {
@@ -1039,7 +1119,11 @@ mod tests {
         let result = join.join().expect("output helper must not panic");
         failure_observed.expect("tee failure must be stored before cancellation");
         cancellation.expect("pipe reader must be cancellable");
-        let OutputCaptureError::Write { path, source, output } = result.expect_err("pending tee failure must survive")
+        let OutputCaptureError::Write {
+            path,
+            source,
+            output,
+        } = result.expect_err("pending tee failure must survive")
         else {
             panic!("expected tee failure after pipe cancellation");
         };
@@ -1052,12 +1136,16 @@ mod tests {
 
     #[test]
     fn test_pending_tee_error_keeps_eof_complete() {
-        let error = capture_after_tee_failure(AfterTeeFailure::Eof).expect_err("tee failure must survive EOF");
+        let error = capture_after_tee_failure(AfterTeeFailure::Eof)
+            .expect_err("tee failure must survive EOF");
         let OutputCaptureError::Write { output, .. } = error else {
             panic!("expected tee failure at EOF");
         };
         assert_eq!(output.bytes, b"prefix");
-        assert!(output.complete, "tee failure does not undo observed pipe EOF");
+        assert!(
+            output.complete,
+            "tee failure does not undo observed pipe EOF"
+        );
     }
 
     /// Cancels exactly inside a failing write or flush operation.
@@ -1084,7 +1172,8 @@ mod tests {
     #[test]
     fn test_tee_cancellation_preserves_read_bytes_and_observed_eof() {
         for fail_on_flush in [false, true] {
-            let (_sender, token) = IoCancellation::pair().expect("cancellation pair must initialize");
+            let (_sender, token) =
+                IoCancellation::pair().expect("cancellation pair must initialize");
             let error = read_output_inner(
                 &mut Cursor::new(b"output"),
                 OutputCaptureOptions::new(
@@ -1101,7 +1190,12 @@ mod tests {
                 None,
             )
             .expect_err("tee failure must survive simultaneous cancellation");
-            let OutputCaptureError::Write { path, source, output } = error else {
+            let OutputCaptureError::Write {
+                path,
+                source,
+                output,
+            } = error
+            else {
                 panic!("expected tee write or flush failure");
             };
             assert_eq!(path, Path::new("cancelled-tee.log"));
@@ -1191,17 +1285,27 @@ mod tests {
             )),
         )
         .with_total_budget(budget.clone(), OutputStream::Stdout);
-        let (cancellation, token) = IoCancellation::pair().expect("cancellation pair should initialize");
+        let (cancellation, token) =
+            IoCancellation::pair().expect("cancellation pair should initialize");
         let (sender, receiver) = std::sync::mpsc::channel();
         let handle = thread::spawn(move || {
             let result = read_output_inner(&mut Cursor::new(b"abcd"), options, Some(&token), None);
-            let OutputCaptureError::Write { output, .. } = result.as_ref().expect_err("tee should fail") else {
+            let OutputCaptureError::Write { output, .. } =
+                result.as_ref().expect_err("tee should fail")
+            else {
                 panic!("expected tee write failure");
             };
-            sender.send(output.bytes.clone()).expect("test receiver remains open");
+            sender
+                .send(output.bytes.clone())
+                .expect("test receiver remains open");
             result
         });
-        assert!(receiver.recv().expect("collector reports pre-join metadata").is_empty());
+        assert!(
+            receiver
+                .recv()
+                .expect("collector reports pre-join metadata")
+                .is_empty()
+        );
         assert_eq!(budget.exceeded(), Some((3, 4)));
         let snapshot = budget.captured_output();
         assert_eq!(snapshot.stdout(), b"ab");
@@ -1226,7 +1330,8 @@ mod tests {
     #[test]
     fn test_budget_error_keeps_snapshot_without_deferred_transfer() {
         let budget = Arc::new(TotalOutputBudget::new(64, None, None));
-        let mut options = OutputCaptureOptions::new(None, None).with_total_budget(budget.clone(), OutputStream::Stdout);
+        let mut options = OutputCaptureOptions::new(None, None)
+            .with_total_budget(budget.clone(), OutputStream::Stdout);
         options.transfer_budget_after_join = false;
         let error = read_output(
             &mut FailingReader {
@@ -1249,13 +1354,15 @@ mod tests {
         expected_complete: bool,
     ) {
         let budget = Arc::new(TotalOutputBudget::new(64, None, None));
-        let (cancellation, token) = IoCancellation::pair().expect("cancellation pair should initialize");
+        let (cancellation, token) =
+            IoCancellation::pair().expect("cancellation pair should initialize");
         let (sender, receiver) = std::sync::mpsc::channel();
         let worker_budget = Arc::clone(&budget);
         let handle = thread::spawn(move || {
             let result = read_output_inner(
                 &mut { reader },
-                OutputCaptureOptions::new(None, tee).with_total_budget(worker_budget, OutputStream::Stdout),
+                OutputCaptureOptions::new(None, tee)
+                    .with_total_budget(worker_budget, OutputStream::Stdout),
                 Some(&token),
                 None,
             );
@@ -1265,7 +1372,9 @@ mod tests {
                 | Err(OutputCaptureError::ReadAfterWrite { output, .. }) => output,
                 Ok(_) => panic!("expected collector error"),
             };
-            sender.send(output.bytes.clone()).expect("test receiver remains open");
+            sender
+                .send(output.bytes.clone())
+                .expect("test receiver remains open");
             result
         });
         assert!(
@@ -1287,13 +1396,21 @@ mod tests {
         .expect_err("collector error must survive join");
         let (output, path, description) = match error {
             OutputCaptureError::Read { source, output } => (output, None, source.to_string()),
-            OutputCaptureError::Write { path, source, output } => (output, Some(path), source.to_string()),
+            OutputCaptureError::Write {
+                path,
+                source,
+                output,
+            } => (output, Some(path), source.to_string()),
             OutputCaptureError::ReadAfterWrite {
                 path,
                 write_source,
                 read_source,
                 output,
-            } => (output, Some(path), format!("{}; {}", write_source, read_source)),
+            } => (
+                output,
+                Some(path),
+                format!("{}; {}", write_source, read_source),
+            ),
         };
         assert_eq!(description, expected_kind);
         if let Some(path) = path {
@@ -1378,7 +1495,8 @@ mod tests {
 
     #[test]
     fn test_join_output_reader_maps_worker_panic() {
-        let (cancellation, token) = IoCancellation::pair().expect("cancellation pair should be created");
+        let (cancellation, token) =
+            IoCancellation::pair().expect("cancellation pair should be created");
         let reader = OutputReader::new(
             thread::spawn(move || -> Result<CapturedOutput, OutputCaptureError> {
                 let _token = token;
@@ -1409,7 +1527,8 @@ mod tests {
     #[test]
     fn test_join_output_reader_takes_budget_after_successful_join() {
         let budget = budget_with_stdout(b"payload");
-        let (cancellation, _token) = IoCancellation::pair().expect("cancellation pair should initialize");
+        let (cancellation, _token) =
+            IoCancellation::pair().expect("cancellation pair should initialize");
         let reader = OutputReader::new_with_budget(
             thread::spawn(|| Ok(CapturedOutput::default())),
             cancellation,
@@ -1428,7 +1547,8 @@ mod tests {
     #[test]
     fn test_join_output_reader_preserves_budget_bytes_on_reader_error() {
         let budget = budget_with_stdout(b"payload");
-        let (cancellation, _token) = IoCancellation::pair().expect("cancellation pair should initialize");
+        let (cancellation, _token) =
+            IoCancellation::pair().expect("cancellation pair should initialize");
         let reader = OutputReader::new_with_budget(
             thread::spawn(|| {
                 Err(OutputCaptureError::Read {
@@ -1454,15 +1574,19 @@ mod tests {
     #[test]
     fn test_join_output_reader_preserves_budget_bytes_after_worker_panic() {
         let budget = budget_with_stdout(b"payload");
-        let (cancellation, _token) = IoCancellation::pair().expect("cancellation pair should initialize");
+        let (cancellation, _token) =
+            IoCancellation::pair().expect("cancellation pair should initialize");
         let reader = OutputReader::new_with_budget(
-            thread::spawn(|| -> Result<CapturedOutput, OutputCaptureError> { panic!("injected worker panic") }),
+            thread::spawn(|| -> Result<CapturedOutput, OutputCaptureError> {
+                panic!("injected worker panic")
+            }),
             cancellation,
             budget,
             OutputStream::Stdout,
         );
 
-        let error = join_output_reader(reader).expect_err("worker panic should become a read error");
+        let error =
+            join_output_reader(reader).expect_err("worker panic should become a read error");
         let OutputCaptureError::Read { source, output } = error else {
             panic!("expected read error");
         };
@@ -1629,9 +1753,15 @@ mod tests {
                 OutputStream::Stderr => (Ok(CapturedOutput::default()), Err(failure)),
             };
 
-            let error =
-                collect_output_results("command", status(0), Ok(Duration::from_secs(1)), stdout, stderr, Ok(()))
-                    .expect_err("tee failure should be mapped");
+            let error = collect_output_results(
+                "command",
+                status(0),
+                Ok(Duration::from_secs(1)),
+                stdout,
+                stderr,
+                Ok(()),
+            )
+            .expect_err("tee failure should be mapped");
 
             assert!(matches!(
                 error.reason(),
@@ -1695,341 +1825,8 @@ mod tests {
         assert_eq!(output.stderr(), b"stderr");
         assert!(output.stdout_truncated());
     }
-}
 
-/// Repeats a real Windows synchronous read-to-tee cancellation interleaving.
-/// A hit requires successful first cancellation before tee WriteFile entry,
-/// followed by a successful real cancellation while that write is pending.
-#[cfg(all(test, windows))]
-mod windows_cancellation_interleaving_tests {
-    use std::ffi::c_void;
-    use std::fs::File;
-    use std::io;
-    use std::io::Read;
-    use std::io::Write;
-    use std::os::windows::io::AsRawHandle;
-    use std::os::windows::io::FromRawHandle;
-    use std::os::windows::io::RawHandle;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::sync::Barrier;
-    use std::sync::mpsc;
-    use std::thread;
-    use std::time::Duration;
-    use std::time::Instant;
-
-    use super::super::cancel::cancel_synchronous_io;
-    use super::super::captured_output::CapturedOutput;
-    use super::super::io_cancellation::IoCancellation;
-    use super::super::output_capture_error::OutputCaptureError;
-    use super::super::output_capture_options::OutputCaptureOptions;
-    use super::super::output_tee::OutputTee;
-    use super::read_output_inner;
-
-    const ATTEMPTS: usize = 128;
-    const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
-    const BLOCKED_WRITE_OBSERVATION: Duration = Duration::from_millis(10);
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn CreatePipe(
-            read_pipe: *mut RawHandle,
-            write_pipe: *mut RawHandle,
-            attributes: *const c_void,
-            size: u32,
-        ) -> i32;
-        fn GetNamedPipeInfo(
-            pipe: RawHandle,
-            flags: *mut u32,
-            outbound_buffer_size: *mut u32,
-            inbound_buffer_size: *mut u32,
-            max_instances: *mut u32,
-        ) -> i32;
-        fn PeekNamedPipe(
-            pipe: RawHandle,
-            buffer: *mut c_void,
-            size: u32,
-            read: *mut u32,
-            available: *mut u32,
-            left: *mut u32,
-        ) -> i32;
-    }
-
-    struct ReadEntry(File, mpsc::Sender<Instant>);
-
-    impl Read for ReadEntry {
-        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-            let _ = self.1.send(Instant::now());
-            self.0.read(buffer)
-        }
-    }
-
-    struct TeeEntry(File, mpsc::Sender<Instant>);
-
-    impl Write for TeeEntry {
-        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-            let _ = self.1.send(Instant::now());
-            self.0.write(buffer)
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            self.0.flush()
-        }
-    }
-
-    type WorkerResult = Result<CapturedOutput, OutputCaptureError>;
-
-    struct AttemptRecovery {
-        barrier: Arc<Barrier>,
-        barrier_released: bool,
-        source_writer: Option<thread::JoinHandle<io::Result<()>>>,
-        worker: Option<thread::JoinHandle<WorkerResult>>,
-        tee_reader: Option<File>,
-    }
-
-    impl AttemptRecovery {
-        fn release_barrier(&mut self) {
-            if !self.barrier_released {
-                self.barrier_released = true;
-                self.barrier.wait();
-            }
-        }
-
-        fn drain_tee(&mut self, drained: &mut Vec<u8>) -> io::Result<()> {
-            self.tee_reader
-                .as_mut()
-                .expect("tee reader should remain owned until reaping")
-                .read_to_end(drained)
-                .map(|_| ())
-        }
-
-        fn close_tee_reader(&mut self) {
-            drop(self.tee_reader.take());
-        }
-
-        fn join_source_writer(&mut self) -> thread::Result<io::Result<()>> {
-            self.source_writer
-                .take()
-                .expect("source writer should be joined once")
-                .join()
-        }
-
-        fn join_worker(&mut self) -> thread::Result<WorkerResult> {
-            self.worker.take().expect("reader worker should be joined once").join()
-        }
-    }
-
-    impl Drop for AttemptRecovery {
-        fn drop(&mut self) {
-            self.release_barrier();
-            self.close_tee_reader();
-            if let Some(source_writer) = self.source_writer.take() {
-                let _ = source_writer.join();
-            }
-            if let Some(worker) = self.worker.take() {
-                let _ = worker.join();
-            }
-        }
-    }
-
-    fn anonymous_pipe() -> io::Result<(File, File)> {
-        let mut reader: RawHandle = std::ptr::null_mut();
-        let mut writer: RawHandle = std::ptr::null_mut();
-        // SAFETY: both output pointers are valid; successful handles are
-        // immediately transferred to owning `File` values.
-        if unsafe { CreatePipe(&mut reader, &mut writer, std::ptr::null(), 4096) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: CreatePipe returned two distinct owned handles.
-        Ok(unsafe { (File::from_raw_handle(reader), File::from_raw_handle(writer)) })
-    }
-
-    fn fill_pipe(pipe: &mut File, observer: &File) -> io::Result<u32> {
-        let mut capacity = 0;
-        // SAFETY: the readable pipe handle is valid and only the outbound
-        // capacity is read.
-        if unsafe {
-            GetNamedPipeInfo(
-                observer.as_raw_handle(),
-                std::ptr::null_mut(),
-                &mut capacity,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        } == 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        if capacity == 0 {
-            return Err(io::Error::other("tee pipe reported an empty output buffer"));
-        }
-        let fill = [0x5a_u8; 1024];
-        let mut remaining = capacity;
-        while remaining > 0 {
-            let count = remaining.min(fill.len() as u32);
-            pipe.write_all(&fill[..count as usize])?;
-            remaining -= count;
-        }
-        let mut available = 0;
-        // SAFETY: only the queued byte count is requested.
-        if unsafe {
-            PeekNamedPipe(
-                observer.as_raw_handle(),
-                std::ptr::null_mut(),
-                0,
-                std::ptr::null_mut(),
-                &mut available,
-                std::ptr::null_mut(),
-            )
-        } == 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        if available != capacity {
-            return Err(io::Error::other(
-                "tee pipe did not retain its reported full output buffer",
-            ));
-        }
-        Ok(capacity)
-    }
-
-    #[test]
-    fn test_windows_real_cancel_read_to_blocked_tee_interleaving() {
-        let mut first_cancel_successes = 0;
-        let mut first_cancel_errors = Vec::new();
-        let mut tee_write_entries = 0;
-        let mut confirmed_blocked_writes = 0;
-        let mut source_writer_broken_pipes = 0;
-        let mut valid_hits = Vec::new();
-
-        for attempt in 0..ATTEMPTS {
-            let attempt_start = Instant::now();
-            let (source_reader, mut source_writer) = anonymous_pipe().expect("source pipe should be created");
-            let (tee_reader, mut tee_writer) = anonymous_pipe().expect("tee pipe should be created");
-            let tee_capacity = fill_pipe(&mut tee_writer, &tee_reader).expect("tee pipe should be filled and checked");
-            let (read_tx, read_rx) = mpsc::channel();
-            let (tee_tx, tee_rx) = mpsc::channel();
-            let (source_release_tx, source_release_rx) = mpsc::channel();
-            let (cancellation, token) = IoCancellation::pair().expect("Windows cancellation should initialize");
-            let barrier = Arc::new(Barrier::new(2));
-            let writer_barrier = Arc::clone(&barrier);
-            let source_writer_thread = thread::spawn(move || {
-                writer_barrier.wait();
-                let _ = source_release_tx.send(Instant::now());
-                source_writer.write_all(&[0x41])
-            });
-            let tee = OutputTee::new(Box::new(TeeEntry(tee_writer, tee_tx)), PathBuf::from("pipe-tee.log"));
-            let worker = thread::spawn(move || {
-                read_output_inner(
-                    &mut ReadEntry(source_reader, read_tx),
-                    OutputCaptureOptions::new(None, Some(tee)),
-                    Some(&token),
-                    None,
-                )
-            });
-            let mut recovery = AttemptRecovery {
-                barrier: Arc::clone(&barrier),
-                barrier_released: false,
-                source_writer: Some(source_writer_thread),
-                worker: Some(worker),
-                tee_reader: Some(tee_reader),
-            };
-
-            let read_entry = read_rx
-                .recv_timeout(EVENT_TIMEOUT)
-                .expect("worker should enter the real source-pipe read");
-            recovery.release_barrier();
-            let worker = recovery.worker.as_ref().expect("worker handle should be live");
-            let first_cancel_call = Instant::now();
-            let first_cancel = cancellation.cancel(worker);
-            let first_cancel_return = Instant::now();
-            let first_cancel_succeeded = first_cancel.is_ok();
-            if let Err(source) = first_cancel {
-                first_cancel_errors.push(source.raw_os_error());
-            } else {
-                first_cancel_successes += 1;
-            }
-            let source_release = source_release_rx
-                .recv_timeout(EVENT_TIMEOUT)
-                .expect("source writer should report its barrier release");
-
-            let tee_entry = tee_rx.recv_timeout(EVENT_TIMEOUT).ok();
-            if tee_entry.is_some() {
-                tee_write_entries += 1;
-            }
-            let mut confirmed_blocked = false;
-            if let Some(tee_entry_time) = tee_entry
-                && first_cancel_succeeded
-                && first_cancel_return < tee_entry_time
-            {
-                // Observe that the helper remains unfinished first. A
-                // successful second cancellation then establishes that the
-                // tee WriteFile itself was pending in the kernel.
-                thread::sleep(BLOCKED_WRITE_OBSERVATION);
-                let remained_unfinished = !worker.is_finished();
-                confirmed_blocked = remained_unfinished && cancel_synchronous_io(worker).is_ok();
-            }
-            confirmed_blocked_writes += usize::from(confirmed_blocked);
-            if let Some(tee_entry_time) = tee_entry
-                && first_cancel_succeeded
-                && first_cancel_return < tee_entry_time
-                && confirmed_blocked
-            {
-                valid_hits.push((
-                    attempt,
-                    attempt_start,
-                    read_entry,
-                    source_release,
-                    first_cancel_call,
-                    first_cancel_return,
-                    tee_entry_time,
-                ));
-            }
-
-            // Close/release every pipe path before unbounded thread joins.
-            match recovery.join_source_writer().expect("source writer should not panic") {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {
-                    // Cancellation can close the read handle before this
-                    // attempt's source writer gets scheduled.
-                    source_writer_broken_pipes += 1;
-                }
-                Err(error) => panic!("source writer should release the pipe: {error}"),
-            }
-            let mut drained = Vec::new();
-            recovery
-                .drain_tee(&mut drained)
-                .expect("tee pipe should drain after its writer is released");
-            assert!(drained.len() >= tee_capacity as usize);
-            recovery.close_tee_reader();
-            let _ = recovery.join_worker().expect("reader helper should be recoverable");
-            if !valid_hits.is_empty() {
-                break;
-            }
-        }
-
-        let error_not_found_count = first_cancel_errors.iter().filter(|error| **error == Some(1168)).count();
-        eprintln!(
-            "Windows RC-002 read-to-tee attempts={}, first_cancel_successes={first_cancel_successes}, error_not_found_1168={error_not_found_count}, first_cancel_error_os_codes={first_cancel_errors:?}, tee_write_entries={tee_write_entries}, confirmed_blocked_writes={confirmed_blocked_writes}, source_writer_broken_pipes={source_writer_broken_pipes}, valid_hits={}",
-            valid_hits.last().map_or(ATTEMPTS, |hit| hit.0 + 1),
-            valid_hits.len()
-        );
-        for (attempt, attempt_start, read_entry, source_release, cancel_call, cancel_return, tee_entry) in &valid_hits {
-            eprintln!(
-                "valid hit attempt={attempt} timeline_ns(attempt_start=0, read_entry={}, source_release={}, cancel_call={}, cancel_return={}, tee_write_entry={})",
-                read_entry.duration_since(*attempt_start).as_nanos(),
-                source_release.duration_since(*attempt_start).as_nanos(),
-                cancel_call.duration_since(*attempt_start).as_nanos(),
-                cancel_return.duration_since(*attempt_start).as_nanos(),
-                tee_entry.duration_since(*attempt_start).as_nanos(),
-            );
-        }
-        assert!(
-            valid_hits.is_empty(),
-            "confirmed RC-002 schedule reproduced; preserve this trace and repair the production path"
-        );
-        if valid_hits.is_empty() {
-            eprintln!("zero valid hits means this run remains unverified, not that the race is absent");
-        }
-    }
+    #[cfg(windows)]
+    #[path = "windows_probe_tests.rs"]
+    mod windows_probe_tests;
 }
