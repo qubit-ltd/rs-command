@@ -109,7 +109,7 @@ fn read_output_until_cancelled<R: CancellableReader>(
 /// Returns an output read or tee write error, or both when draining a failed
 /// tee subsequently encounters a pipe error. All variants retain captured
 /// bytes and stream metadata.
-fn read_output_inner(
+pub(super) fn read_output_inner(
     reader: &mut dyn Read,
     mut options: OutputCaptureOptions,
     cancellation: Option<&IoCancellationToken>,
