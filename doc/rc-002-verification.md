@@ -152,6 +152,24 @@ GitHub CI ran the Windows probe and full workflow successfully on the current
 task head in run 41755997380. Earlier post-fix run 41745608628 is historical
 evidence for the production fix and remains separate from this worktree result.
 
+## Integrated Windows verification
+
+After manually merging the task with the concurrent probe work, the full CI
+workflow passed on merge commit `7fe9176d96fd183dad5890f49a3a587804170301`:
+[Rust CI run 41761398112](https://github.com/qubit-ltd/rs-command/actions/runs/41761398112).
+The focused workflow initially failed on that commit because it did not prepare
+the repository's local `../rs-redact` path dependency (run 41762577178). The
+workflow now runs `.infra/bin/prepare-local-path-dependencies.sh` before Cargo.
+The rerun passed on `be0116cf12fc31602546d13226ff39f96a7251b7`:
+[Windows probe run 41763162125](https://github.com/qubit-ltd/rs-command/actions/runs/41763162125).
+All five tests selected by the focused filter passed. Logs show 128 attempts
+with no valid read-to-tee candidate; the separate readiness and EOF-to-flush
+probes also completed 128 attempts with no valid hit. The stdin scenario
+observed one successful cancellation after the real write had begun and no
+later write entry. These are bounded observations, not proof that every
+production schedule is safe. RC-002 remains `unresolved` because the probes do
+not establish that a production cleanup join requires watchdog release.
+
 ---
 
 # RC-002 Windows 取消交错验证
@@ -249,3 +267,18 @@ read-to-tee 循环作为旧探针保留，但它直接调用 `read_output_inner`
 按实施指示，本地没有运行 Windows runner。GitHub CI 在当前任务 head 上运行 Windows 探针，
 并在 run 41755997380 中通过完整 workflow。此前的 post-fix run 41745608628 是生产修复的
 历史证据，与本 worktree 的验证结果分开记录。
+
+## 合并后的 Windows 验证
+
+将本任务与并行 probe 工作手动合并后，完整 CI workflow 在合并提交
+`7fe9176d96fd183dad5890f49a3a587804170301` 上通过：
+[Rust CI run 41761398112](https://github.com/qubit-ltd/rs-command/actions/runs/41761398112)。
+专用 workflow 首次在该提交上失败，因为没有准备仓库要求的本地 `../rs-redact` 路径依赖
+（run 41762577178）。现已在 Cargo 前执行 `.infra/bin/prepare-local-path-dependencies.sh`。
+修复后的 run 在提交 `be0116cf12fc31602546d13226ff39f96a7251b7` 上通过：
+[Windows probe run 41763162125](https://github.com/qubit-ltd/rs-command/actions/runs/41763162125)。
+专用筛选命中的 5 项测试全部通过。日志显示 read-to-tee 探针完成 128 次尝试且没有有效候选；
+独立 readiness 和 EOF-to-flush 探针也各完成 128 次尝试且没有有效命中。stdin 场景观察到
+真实 write 开始后的一次成功取消，且没有后续 write 入口。这些是有界观察，不证明所有生产
+调度都安全。由于探针没有证明生产 cleanup join 需要 watchdog 释放，RC-002 仍为
+`unresolved`。
