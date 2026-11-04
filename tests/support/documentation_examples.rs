@@ -15,6 +15,7 @@ use crate::support::documentation_dependency_baseline::harness_metadata_command;
 use crate::support::documentation_dependency_baseline::harness_test_command;
 use crate::support::documentation_dependency_baseline::read_lock_seed;
 use crate::support::documentation_dependency_baseline::resolve_target_dir;
+use crate::support::documentation_dependency_baseline::root_fetch_command;
 use crate::support::documentation_dependency_baseline::root_metadata_command;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -293,6 +294,11 @@ pub(crate) fn check_documents(root: &Path) {
         output.stdout
     };
     let root_manifest = package_root.join("Cargo.toml");
+    run(
+        "root fetch --locked",
+        &root_manifest,
+        &mut root_fetch_command(&cargo, &package_root),
+    );
     let root_metadata = run(
         "root metadata --locked --offline",
         &root_manifest,

@@ -30,6 +30,17 @@ pub(crate) fn read_lock_seed(path: &Path) -> std::io::Result<Vec<u8>> {
     std::fs::read(path)
 }
 
+pub(crate) fn root_fetch_command(cargo: &OsStr, root: &Path) -> Command {
+    let mut command = Command::new(cargo);
+    command
+        .arg("fetch")
+        .arg("--locked")
+        .arg("--manifest-path")
+        .arg(root.join("Cargo.toml"))
+        .current_dir(root);
+    command
+}
+
 pub(crate) fn root_metadata_command(cargo: &OsStr, root: &Path) -> Command {
     let mut command = Command::new(cargo);
     command

@@ -13,6 +13,7 @@ use support::documentation_dependency_baseline::harness_metadata_command;
 use support::documentation_dependency_baseline::harness_test_command;
 use support::documentation_dependency_baseline::read_lock_seed;
 use support::documentation_dependency_baseline::resolve_target_dir;
+use support::documentation_dependency_baseline::root_fetch_command;
 use support::documentation_dependency_baseline::root_metadata_command;
 use support::documentation_examples::Example;
 use support::documentation_examples::check_documents;
@@ -177,8 +178,19 @@ fn cargo_commands_use_fixed_root_manifest_and_required_lock_offline_flags() {
     let harness_manifest = Path::new("/tmp/harness/Cargo.toml");
     let target = Path::new("/tmp/target");
     let cargo = OsStr::new("cargo");
-    let root_command = root_metadata_command(cargo, root);
+    let fetch_command = root_fetch_command(cargo, root);
     let root_manifest = root.join("Cargo.toml").to_string_lossy().into_owned();
+    assert_eq!(fetch_command.get_current_dir(), Some(root));
+    assert_eq!(
+        args(&fetch_command),
+        vec![
+            "fetch".to_owned(),
+            "--locked".to_owned(),
+            "--manifest-path".to_owned(),
+            root_manifest.clone(),
+        ]
+    );
+    let root_command = root_metadata_command(cargo, root);
     assert_eq!(root_command.get_current_dir(), Some(root));
     assert_eq!(
         args(&root_command),
