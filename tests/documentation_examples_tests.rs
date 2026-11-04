@@ -19,8 +19,7 @@ fn extractor_preserves_hidden_lines_and_rejects_invalid_markers() {
         "sample.md",
     )
     .expect("valid marked example should extract");
-    require_markers(&parsed, &[("sample", "compile")], "sample.md")
-        .expect("the example should have its expected mode");
+    require_markers(&parsed, &[("sample", "compile")], "sample.md").expect("the example should have its expected mode");
     assert_eq!(
         parsed,
         [Example {
@@ -38,11 +37,8 @@ fn extractor_preserves_hidden_lines_and_rejects_invalid_markers() {
             .unwrap_err()
             .contains("missing required marker")
     );
-    let wrong_mode = extract_examples(
-        "<!-- doc-example:sample:unix -->\n```rust\n1;\n```",
-        "sample.md",
-    )
-    .expect("valid mode syntax should extract");
+    let wrong_mode = extract_examples("<!-- doc-example:sample:unix -->\n```rust\n1;\n```", "sample.md")
+        .expect("valid mode syntax should extract");
     assert!(
         require_markers(&wrong_mode, &[("sample", "windows")], "sample.md")
             .unwrap_err()
@@ -67,33 +63,21 @@ fn extractor_preserves_hidden_lines_and_rejects_invalid_markers() {
             .contains("malformed marker")
     );
     assert!(
-        extract_examples(
-            "<!-- doc-example:sample:run-->\n```rust\n1;\n```",
-            "sample.md"
-        )
-        .unwrap_err()
-        .contains("malformed marker syntax")
+        extract_examples("<!-- doc-example:sample:run-->\n```rust\n1;\n```", "sample.md")
+            .unwrap_err()
+            .contains("malformed marker syntax")
     );
     assert!(
-        extract_examples(
-            "<!-- doc-example:a:run -->\ntext\n```rust\n1;\n```",
-            "sample.md",
-        )
-        .unwrap_err()
-        .contains("immediately followed")
+        extract_examples("<!-- doc-example:a:run -->\ntext\n```rust\n1;\n```", "sample.md",)
+            .unwrap_err()
+            .contains("immediately followed")
     );
     assert!(
         extract_examples("<!-- doc-example:a:run -->\n```rust\n1;", "sample.md")
             .unwrap_err()
             .contains("unclosed")
     );
-    assert!(
-        extract_examples(
-            "<!-- doc-example:a:run -->\n```rust,ignore\n1;\n```",
-            "sample.md"
-        )
-        .is_err()
-    );
+    assert!(extract_examples("<!-- doc-example:a:run -->\n```rust,ignore\n1;\n```", "sample.md").is_err());
 }
 
 #[test]
@@ -107,27 +91,9 @@ fn extractor_tracks_fragments_and_validates_fence_attributes() {
     assert_eq!(parsed[0].mode, "fragment");
     assert_eq!(parsed[1].id, "complete");
 
-    assert!(
-        extract_examples(
-            "<!-- doc-example:x:fragment -->\n```rust,no_run\n1;\n```",
-            "sample.md"
-        )
-        .is_err()
-    );
-    assert!(
-        extract_examples(
-            "<!-- doc-example:x:no_run -->\n```rust\n1;\n```",
-            "sample.md"
-        )
-        .is_err()
-    );
-    assert!(
-        extract_examples(
-            "<!-- doc-example:x:fragment -->\n```rust,no_run\n1;\n```",
-            "sample.md"
-        )
-        .is_err()
-    );
+    assert!(extract_examples("<!-- doc-example:x:fragment -->\n```rust,no_run\n1;\n```", "sample.md").is_err());
+    assert!(extract_examples("<!-- doc-example:x:no_run -->\n```rust\n1;\n```", "sample.md").is_err());
+    assert!(extract_examples("<!-- doc-example:x:fragment -->\n```rust,no_run\n1;\n```", "sample.md").is_err());
 }
 
 #[test]
@@ -159,10 +125,7 @@ fn bilingual_guide_examples_have_matching_ids_and_modes() {
     let mut zh_pairs: Vec<_> = zh.iter().map(|e| (&e.id, &e.mode)).collect();
     en_pairs.sort();
     zh_pairs.sort();
-    assert_eq!(
-        en_pairs, zh_pairs,
-        "bilingual guide example IDs/modes differ"
-    );
+    assert_eq!(en_pairs, zh_pairs, "bilingual guide example IDs/modes differ");
 }
 
 #[test]

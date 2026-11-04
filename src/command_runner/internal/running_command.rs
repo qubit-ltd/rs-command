@@ -835,9 +835,7 @@ mod tests {
         cancellation.cancel();
         command.cancellation_token = Some(cancellation);
 
-        assert!(
-            matches!(command.wait_for_event(None), RunEvent::Exited(value) if value.code() == Some(7))
-        );
+        assert!(matches!(command.wait_for_event(None), RunEvent::Exited(value) if value.code() == Some(7)));
     }
 
     #[test]
@@ -868,8 +866,7 @@ mod tests {
 
     #[test]
     fn no_timeout_monitor_does_not_sample_elapsed_time() {
-        let child =
-            ScriptedChild::new(raw_child()).try_wait_results([Ok(None), Ok(Some(status(0)))]);
+        let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(None), Ok(Some(status(0)))]);
         let clock = CountingClock {
             inner: ManualMonotonicClock::new_shared(),
             now_calls: Arc::new(AtomicUsize::new(0)),
