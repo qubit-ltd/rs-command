@@ -586,7 +586,11 @@ fn run_real_probe(scenario: &str) {
                 | event @ ProbeEvent::StdinWriteReturn(_, _, _, _)
                 | event @ ProbeEvent::WorkerDone(_) => {
                     let worker_completed = matches!(&event, ProbeEvent::WorkerDone(_));
+                    let readiness_returned = matches!(&event, ProbeEvent::ReadinessReturned(_));
                     log_event(attempt, attempt_start, event);
+                    if use_readiness && readiness_returned {
+                        continue;
+                    }
                     if use_eof_flush && worker_completed {
                         completed_before_cancel = true;
                         break Instant::now();
