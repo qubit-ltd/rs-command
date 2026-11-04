@@ -178,44 +178,47 @@ fn cargo_commands_use_fixed_root_manifest_and_required_lock_offline_flags() {
     let target = Path::new("/tmp/target");
     let cargo = OsStr::new("cargo");
     let root_command = root_metadata_command(cargo, root);
+    let root_manifest = root.join("Cargo.toml").to_string_lossy().into_owned();
     assert_eq!(root_command.get_current_dir(), Some(root));
     assert_eq!(
         args(&root_command),
-        [
-            "metadata",
-            "--format-version",
-            "1",
-            "--locked",
-            "--offline",
-            "--manifest-path",
-            "/workspace/project/Cargo.toml"
+        vec![
+            "metadata".to_owned(),
+            "--format-version".to_owned(),
+            "1".to_owned(),
+            "--locked".to_owned(),
+            "--offline".to_owned(),
+            "--manifest-path".to_owned(),
+            root_manifest,
         ]
     );
     let metadata_command = harness_metadata_command(cargo, root, harness_manifest);
+    let harness_manifest_arg = harness_manifest.to_string_lossy().into_owned();
     assert_eq!(metadata_command.get_current_dir(), Some(root));
     assert_eq!(
         args(&metadata_command),
-        [
-            "metadata",
-            "--format-version",
-            "1",
-            "--offline",
-            "--manifest-path",
-            "/tmp/harness/Cargo.toml"
+        vec![
+            "metadata".to_owned(),
+            "--format-version".to_owned(),
+            "1".to_owned(),
+            "--offline".to_owned(),
+            "--manifest-path".to_owned(),
+            harness_manifest_arg.clone(),
         ]
     );
     let test_command = harness_test_command(cargo, root, harness_manifest, target);
+    let target_arg = target.to_string_lossy().into_owned();
     assert_eq!(test_command.get_current_dir(), Some(root));
     assert_eq!(
         args(&test_command),
-        [
-            "test",
-            "--manifest-path",
-            "/tmp/harness/Cargo.toml",
-            "--target-dir",
-            "/tmp/target",
-            "--locked",
-            "--offline"
+        vec![
+            "test".to_owned(),
+            "--manifest-path".to_owned(),
+            harness_manifest_arg,
+            "--target-dir".to_owned(),
+            target_arg,
+            "--locked".to_owned(),
+            "--offline".to_owned(),
         ]
     );
 }
