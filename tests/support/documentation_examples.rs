@@ -17,16 +17,53 @@ pub(crate) struct Example {
     pub(crate) code: String,
 }
 
+fn opening_fence(line: &str) -> Option<(char, usize, &str)> {
+    let spaces = line.bytes().take_while(|byte| *byte == b' ').count();
+    if spaces > 3 {
+        return None;
+    }
+    let rest = &line[spaces..];
+    let marker = *rest.as_bytes().first()? as char;
+    if marker != '`' && marker != '~' {
+        return None;
+    }
+    let count = rest
+        .bytes()
+        .take_while(|byte| *byte == marker as u8)
+        .count();
+    if count < 3 {
+        return None;
+    }
+    let info = rest[count..].trim();
+    if marker == '`' && info.contains('`') {
+        return None;
+    }
+    Some((marker, count, info))
+}
+
+fn closes_fence(line: &str, marker: char, minimum: usize) -> bool {
+    let spaces = line.bytes().take_while(|byte| *byte == b' ').count();
+    if spaces > 3 {
+        return false;
+    }
+    let rest = &line[spaces..];
+    let count = rest
+        .bytes()
+        .take_while(|byte| *byte == marker as u8)
+        .count();
+    count >= minimum && rest[count..].trim().is_empty()
+}
+
 pub(crate) fn extract_examples(markdown: &str, label: &str) -> Result<Vec<Example>, String> {
     let mut examples = Vec::new();
     let mut marker = None;
     let mut lines = markdown.lines().enumerate().peekable();
     while let Some((line_index, line)) = lines.next() {
-        if marker.is_some() && !line.starts_with("```") {
-            return Err(format!("{label}: marker must be immediately followed by a Rust fence"));
-        }
         let trimmed = line.trim();
         if trimmed.contains("<!-- doc-example:") {
+            if marker.is_some() {
+                return Err(format!("{label}: marker has no following fence"));
+            }
             let value = trimmed
                 .strip_prefix("<!-- doc-example:")
                 .and_then(|value| value.strip_suffix(" -->"))
@@ -37,47 +74,72 @@ pub(crate) fn extract_examples(markdown: &str, label: &str) -> Result<Vec<Exampl
             let (id, mode) = value
                 .split_once(':')
                 .ok_or_else(|| format!("{label}: malformed marker {value}"))?;
-            if id.is_empty() || !matches!(mode, "compile" | "run" | "unix" | "windows" | "no_run" | "fragment") {
+            if id.is_empty()
+                || !matches!(
+                    mode,
+                    "compile" | "run" | "unix" | "windows" | "no_run" | "fragment"
+                )
+            {
                 return Err(format!("{label}: unsupported marker {value}"));
             }
             marker = Some((id.to_owned(), mode.to_owned()));
-        } else if line.starts_with("```") {
-            let fence = line.trim();
-            let rust_fence = fence == "```rust" || fence == "```rust,no_run" || fence.starts_with("```rust,");
-            if rust_fence && marker.is_none() {
-                return Err(format!("{label}:{}: unclassified Rust fence", line_index + 1));
+        } else if let Some((fence_char, fence_len, info)) = opening_fence(line) {
+            if marker.is_some() == false && (info == "rust" || info.starts_with("rust,")) {
+                return Err(format!(
+                    "{label}:{}: unclassified Rust fence",
+                    line_index + 1
+                ));
             }
-            let Some((id, mode)) = marker.take() else {
-                continue;
-            };
-            if !matches!(fence, "```rust" | "```rust,no_run") {
-                return Err(format!("{label}: {id} must precede a supported Rust fence"));
+            let rust_fence = info == "rust" || info.starts_with("rust,");
+            let classified = marker.take();
+            if classified.is_some() && (!rust_fence || !matches!(info, "rust" | "rust,no_run")) {
+                return Err(format!(
+                    "{label}: {} must precede a supported Rust fence",
+                    classified.as_ref().unwrap().0
+                ));
             }
-            let no_run = line.trim() == "```rust,no_run";
-            if no_run != (mode == "no_run") {
-                return Err(format!("{label}: {id} mode does not match fence attributes"));
-            }
-            let mut code = String::new();
+            let mut code = classified.as_ref().map(|_| String::new());
             let mut closed = false;
             for (_, code_line) in lines.by_ref() {
-                if code_line.starts_with("```") {
+                if closes_fence(code_line, fence_char, fence_len) {
                     closed = true;
                     break;
                 }
-                if let Some(hidden) = code_line.strip_prefix("# ") {
-                    code.push_str(hidden);
-                } else if let Some(visible_hash) = code_line.strip_prefix("##") {
-                    code.push('#');
-                    code.push_str(visible_hash);
-                } else {
-                    code.push_str(code_line);
+                if let Some(code) = code.as_mut() {
+                    if let Some(hidden) = code_line.strip_prefix("# ") {
+                        code.push_str(hidden);
+                    } else if let Some(visible_hash) = code_line.strip_prefix("##") {
+                        code.push('#');
+                        code.push_str(visible_hash);
+                    } else {
+                        code.push_str(code_line);
+                    }
+                    code.push('\n');
                 }
-                code.push('\n');
             }
             if !closed {
-                return Err(format!("{label}: {id} has an unclosed fence"));
+                if let Some((id, _)) = classified {
+                    return Err(format!("{label}: {id} has an unclosed fence"));
+                }
+                return Err(format!("{label}:{}: unclosed fenced block", line_index + 1));
             }
-            examples.push(Example { id, mode, code });
+            if let Some((id, mode)) = classified {
+                let no_run = info == "rust,no_run";
+                if no_run != (mode == "no_run") {
+                    return Err(format!(
+                        "{label}: {id} mode does not match fence attributes"
+                    ));
+                }
+                examples.push(Example {
+                    id,
+                    mode,
+                    code: code.unwrap(),
+                });
+            }
+        } else if marker.is_some() {
+            return Err(format!(
+                "{label}: marker must be immediately followed by a Rust fence"
+            ));
         }
     }
     if marker.is_some() {
@@ -92,7 +154,11 @@ pub(crate) fn extract_examples(markdown: &str, label: &str) -> Result<Vec<Exampl
     Ok(examples)
 }
 
-pub(crate) fn require_markers(examples: &[Example], expected: &[(&str, &str)], label: &str) -> Result<(), String> {
+pub(crate) fn require_markers(
+    examples: &[Example],
+    expected: &[(&str, &str)],
+    label: &str,
+) -> Result<(), String> {
     for (id, mode) in expected {
         match examples.iter().find(|example| example.id == *id) {
             None => return Err(format!("{label}: missing required marker {id}")),
@@ -158,7 +224,8 @@ pub(crate) fn check_documents(root: &Path) {
     let mut examples = Vec::new();
     for (relative, expected) in documents {
         let path = root.join(relative);
-        let source = fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
         let parsed = extract_examples(&source, relative).unwrap_or_else(|e| panic!("{e}"));
         require_markers(&parsed, expected, relative).unwrap_or_else(|e| panic!("{e}"));
         examples.extend(parsed.into_iter().map(|mut e| {
@@ -168,19 +235,23 @@ pub(crate) fn check_documents(root: &Path) {
     }
     let package_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let target = PathBuf::from(
-        std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| package_root.join("target").into_os_string()),
+        std::env::var_os("CARGO_TARGET_DIR")
+            .unwrap_or_else(|| package_root.join("target").into_os_string()),
     );
     let parent = target.join("documentation-example-harness");
     fs::create_dir_all(&parent).expect("create harness parent");
     let harness = tempfile::tempdir_in(parent).expect("create temporary harness");
     fs::create_dir(harness.path().join("tests")).expect("create harness tests directory");
-    let dependency_path = package_root.canonicalize().expect("canonicalize package root");
+    let dependency_path = package_root
+        .canonicalize()
+        .expect("canonicalize package root");
     let manifest = format!(
         "[workspace]\n\n[package]\nname = \"documentation-example-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nqubit-command = {{ path = {:?} }}\n",
         dependency_path.to_string_lossy()
     );
     fs::write(harness.path().join("Cargo.toml"), manifest).expect("write harness manifest");
-    let mut source = String::from("#![allow(unused_imports, unused_variables, dead_code, non_snake_case)]\n");
+    let mut source =
+        String::from("#![allow(unused_imports, unused_variables, dead_code, non_snake_case)]\n");
     for example in examples {
         let (cfg, ignored) = match example.mode.as_str() {
             "unix" => ("#[cfg(unix)]\n", false),
@@ -208,7 +279,11 @@ pub(crate) fn check_documents(root: &Path) {
         }
         source.push_str("})();\nresult.expect(\"documented example failed\");\n}\n}\n\n");
     }
-    fs::write(harness.path().join("tests/documentation_examples.rs"), source).expect("write harness source");
+    fs::write(
+        harness.path().join("tests/documentation_examples.rs"),
+        source,
+    )
+    .expect("write harness source");
     let status = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
         .arg("test")
         .arg("--manifest-path")

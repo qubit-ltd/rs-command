@@ -425,6 +425,7 @@ mod tests {
     use std::time::Instant;
 
     use process_wrap::std::ChildWrapper;
+    use qubit_clock::ClockDomain;
     use qubit_clock::ManualMonotonicClock;
     use qubit_clock::MonotonicClock;
     use qubit_clock::MonotonicInstant;
@@ -450,8 +451,45 @@ mod tests {
     use crate::CommandErrorReason;
 
     struct FailingTimer {
-        clock: ManualMonotonicClock,
+        clock: CountingClock,
         at_calls: Arc<AtomicUsize>,
+    }
+
+    #[derive(Clone)]
+    struct CountingClock {
+        inner: Arc<ManualMonotonicClock>,
+        now_calls: Arc<AtomicUsize>,
+    }
+
+    impl MonotonicClock for CountingClock {
+        fn domain(&self) -> ClockDomain {
+            self.inner.domain()
+        }
+
+        fn now(&self) -> MonotonicInstant {
+            self.now_calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.now()
+        }
+
+        fn new_timer(&self) -> Arc<dyn Timer> {
+            self.inner.new_timer()
+        }
+    }
+
+    struct ReadyCountingTimer {
+        clock: CountingClock,
+        at_calls: Arc<AtomicUsize>,
+    }
+
+    impl Timer for ReadyCountingTimer {
+        fn clock(&self) -> &dyn MonotonicClock {
+            &self.clock
+        }
+
+        fn at(&self, _deadline: MonotonicInstant) -> Result<TimerFuture, TimeError> {
+            self.at_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::pin(async { Ok(()) }))
+        }
     }
 
     impl Timer for FailingTimer {
@@ -467,9 +505,13 @@ mod tests {
 
     fn failing_timer() -> (Arc<FailingTimer>, Arc<AtomicUsize>) {
         let at_calls = Arc::new(AtomicUsize::new(0));
+        let now_calls = Arc::new(AtomicUsize::new(0));
         (
             Arc::new(FailingTimer {
-                clock: ManualMonotonicClock::new(),
+                clock: CountingClock {
+                    inner: ManualMonotonicClock::new_shared(),
+                    now_calls,
+                },
                 at_calls: Arc::clone(&at_calls),
             }),
             at_calls,
@@ -758,6 +800,101 @@ mod tests {
         let result = command.wait_for_io_event(status(0), None);
 
         assert!(matches!(result, RunEvent::Cancelled { status: Some(value) } if value.success()));
+    }
+
+    #[test]
+    fn active_child_output_budget_precedes_ready_cancellation() {
+        let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(None)]);
+        let mut command = running_with_budget(
+            ManagedChildProcess::new(Box::new(child), true),
+            CommandIo::new(successful_reader(), successful_reader(), None),
+            exceeded_total_budget(),
+        );
+        let cancellation = crate::CommandCancellation::new();
+        cancellation.cancel();
+        command.cancellation_token = Some(cancellation);
+
+        assert!(matches!(
+            command.wait_for_event(None),
+            RunEvent::OutputLimitExceeded {
+                limit: 1,
+                observed: 2,
+                status: None
+            }
+        ));
+    }
+
+    #[test]
+    fn exited_child_precedes_ready_cancellation() {
+        let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(Some(status(7)))]);
+        let mut command = running(
+            ManagedChildProcess::new(Box::new(child), true),
+            CommandIo::new(successful_reader(), successful_reader(), None),
+        );
+        let cancellation = crate::CommandCancellation::new();
+        cancellation.cancel();
+        command.cancellation_token = Some(cancellation);
+
+        assert!(
+            matches!(command.wait_for_event(None), RunEvent::Exited(value) if value.code() == Some(7))
+        );
+    }
+
+    #[test]
+    fn post_exit_io_timeout_uses_original_started_at() {
+        let clock = ManualMonotonicClock::new_shared();
+        let started_at = clock.now();
+        let timer = clock.new_timer();
+        clock
+            .advance(Duration::from_secs(2))
+            .expect("manual time should advance");
+        let child = ScriptedChild::new(raw_child());
+        let mut command = RunningCommand::new(
+            "test command".to_owned(),
+            ManagedChildProcess::new(Box::new(child), true),
+            CommandIo::new(successful_reader(), successful_reader(), None),
+            started_at,
+            timer,
+            None,
+            None,
+        );
+
+        assert!(matches!(
+            command.wait_for_io_event(status(0), Some(Duration::from_secs(1))),
+            RunEvent::TimedOut { timeout, status: Some(value) }
+                if timeout == Duration::from_secs(1) && value.success()
+        ));
+    }
+
+    #[test]
+    fn no_timeout_monitor_does_not_sample_elapsed_time() {
+        let child =
+            ScriptedChild::new(raw_child()).try_wait_results([Ok(None), Ok(Some(status(0)))]);
+        let clock = CountingClock {
+            inner: ManualMonotonicClock::new_shared(),
+            now_calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let now_calls = Arc::clone(&clock.now_calls);
+        let at_calls = Arc::new(AtomicUsize::new(0));
+        let timer: Arc<dyn Timer> = Arc::new(ReadyCountingTimer {
+            clock,
+            at_calls: Arc::clone(&at_calls),
+        });
+        let started_at = timer.clock().now();
+        let samples_before_wait = now_calls.load(Ordering::SeqCst);
+        let mut command = RunningCommand::new(
+            "test command".to_owned(),
+            ManagedChildProcess::new(Box::new(child), true),
+            CommandIo::new(successful_reader(), successful_reader(), None),
+            started_at,
+            timer,
+            Some(crate::CommandCancellation::new()),
+            None,
+        );
+
+        assert!(matches!(command.wait_for_event(None), RunEvent::Exited(value) if value.success()));
+        assert_eq!(at_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(now_calls.load(Ordering::SeqCst), samples_before_wait + 1);
     }
 
     #[test]
