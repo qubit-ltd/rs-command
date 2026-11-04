@@ -145,32 +145,8 @@ impl RunningCommand {
             if let Some(status) = maybe_status {
                 return RunEvent::Exited(status);
             }
-            if self
-                .cancellation_token
-                .as_ref()
-                .is_some_and(CommandCancellation::is_cancelled)
-            {
-                return RunEvent::Cancelled { status: None };
-            }
-            let sleep = match timeout {
-                Some(timeout) => {
-                    let elapsed = match self.elapsed() {
-                        Ok(elapsed) => elapsed,
-                        Err(source) => {
-                            return RunEvent::TimeFailed { source, status: None };
-                        }
-                    };
-                    if elapsed >= timeout {
-                        return RunEvent::TimedOut { timeout, status: None };
-                    }
-                    let sleep = next_sleep(timeout, elapsed, timeout_poll_count);
-                    timeout_poll_count = timeout_poll_count.saturating_add(1);
-                    sleep
-                }
-                None => CANCELLATION_POLL_INTERVAL,
-            };
-            if let Err(source) = BlockingSleeper::new(Arc::clone(&self.timer)).sleep_for(sleep) {
-                return RunEvent::TimeFailed { source, status: None };
+            if let Err(event) = self.check_cancellation_and_wait(None, timeout, &mut timeout_poll_count) {
+                return event;
             }
         }
     }
@@ -190,41 +166,8 @@ impl RunningCommand {
                         status: Some(status),
                     };
                 }
-                if self
-                    .cancellation_token
-                    .as_ref()
-                    .is_some_and(CommandCancellation::is_cancelled)
-                {
-                    return RunEvent::Cancelled { status: Some(status) };
-                }
-                let sleep = match timeout {
-                    Some(timeout) => {
-                        let elapsed = match self.elapsed() {
-                            Ok(elapsed) => elapsed,
-                            Err(source) => {
-                                return RunEvent::TimeFailed {
-                                    source,
-                                    status: Some(status),
-                                };
-                            }
-                        };
-                        if elapsed >= timeout {
-                            return RunEvent::TimedOut {
-                                timeout,
-                                status: Some(status),
-                            };
-                        }
-                        let sleep = next_sleep(timeout, elapsed, timeout_poll_count);
-                        timeout_poll_count = timeout_poll_count.saturating_add(1);
-                        sleep
-                    }
-                    None => CANCELLATION_POLL_INTERVAL,
-                };
-                if let Err(source) = BlockingSleeper::new(Arc::clone(&self.timer)).sleep_for(sleep) {
-                    return RunEvent::TimeFailed {
-                        source,
-                        status: Some(status),
-                    };
+                if let Err(event) = self.check_cancellation_and_wait(Some(status), timeout, &mut timeout_poll_count) {
+                    return event;
                 }
             }
         }
@@ -236,6 +179,45 @@ impl RunningCommand {
             };
         }
         RunEvent::Exited(status)
+    }
+
+    /// Checks cancellation and the original deadline, then waits for the next
+    /// poll.
+    ///
+    /// Returns `Ok(())` when monitoring should continue. Returns `Err(event)`
+    /// when cancellation, a time error, or the timeout ends the current phase.
+    /// The optional exit status is retained in any terminal event produced
+    /// here.
+    fn check_cancellation_and_wait(
+        &self,
+        status: Option<ExitStatus>,
+        timeout: Option<Duration>,
+        timeout_poll_count: &mut usize,
+    ) -> Result<(), RunEvent> {
+        if self
+            .cancellation_token
+            .as_ref()
+            .is_some_and(CommandCancellation::is_cancelled)
+        {
+            return Err(RunEvent::Cancelled { status });
+        }
+        let sleep = match timeout {
+            Some(timeout) => {
+                let elapsed = self
+                    .elapsed()
+                    .map_err(|source| RunEvent::TimeFailed { source, status })?;
+                if elapsed >= timeout {
+                    return Err(RunEvent::TimedOut { timeout, status });
+                }
+                let sleep = next_sleep(timeout, elapsed, *timeout_poll_count);
+                *timeout_poll_count = timeout_poll_count.saturating_add(1);
+                sleep
+            }
+            None => CANCELLATION_POLL_INTERVAL,
+        };
+        BlockingSleeper::new(Arc::clone(&self.timer))
+            .sleep_for(sleep)
+            .map_err(|source| RunEvent::TimeFailed { source, status })
     }
 
     /// Resolves one monitoring event through the single finalization pipeline.
@@ -760,6 +742,22 @@ mod tests {
         let error = expect_error(result, "budget-only monitoring should consult its timer");
         assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
         assert_eq!(at_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn cancellation_while_waiting_for_io_retains_child_status() {
+        let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(Some(status(0)))]);
+        let mut command = running(
+            ManagedChildProcess::new(Box::new(child), true),
+            CommandIo::new(successful_reader(), successful_reader(), None),
+        );
+        let cancellation = crate::CommandCancellation::new();
+        cancellation.cancel();
+        command.cancellation_token = Some(cancellation);
+
+        let result = command.wait_for_io_event(status(0), None);
+
+        assert!(matches!(result, RunEvent::Cancelled { status: Some(value) } if value.success()));
     }
 
     #[test]
