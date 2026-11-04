@@ -15,6 +15,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.94.0
+      - name: Prepare local path dependencies
+        shell: bash
+        run: ./.infra/bin/prepare-local-path-dependencies.sh
       - name: Run real-pipe cancellation probe
         shell: pwsh
         run: |
