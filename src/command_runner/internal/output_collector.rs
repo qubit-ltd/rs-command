@@ -1899,6 +1899,7 @@ mod windows_cancellation_interleaving_tests {
         let mut first_cancel_errors = Vec::new();
         let mut tee_write_entries = 0;
         let mut confirmed_blocked_writes = 0;
+        let mut source_writer_broken_pipes = 0;
         let mut valid_hits = Vec::new();
 
         for attempt in 0..ATTEMPTS {
@@ -1986,10 +1987,15 @@ mod windows_cancellation_interleaving_tests {
             }
 
             // Close/release every pipe path before unbounded thread joins.
-            recovery
-                .join_source_writer()
-                .expect("source writer should not panic")
-                .expect("source writer should release the pipe");
+            match recovery.join_source_writer().expect("source writer should not panic") {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {
+                    // Cancellation can close the read handle before this
+                    // attempt's source writer gets scheduled.
+                    source_writer_broken_pipes += 1;
+                }
+                Err(error) => panic!("source writer should release the pipe: {error}"),
+            }
             let mut drained = Vec::new();
             recovery
                 .drain_tee(&mut drained)
@@ -2004,7 +2010,7 @@ mod windows_cancellation_interleaving_tests {
 
         let error_not_found_count = first_cancel_errors.iter().filter(|error| **error == Some(1168)).count();
         eprintln!(
-            "Windows RC-002 read-to-tee attempts={}, first_cancel_successes={first_cancel_successes}, error_not_found_1168={error_not_found_count}, first_cancel_error_os_codes={first_cancel_errors:?}, tee_write_entries={tee_write_entries}, confirmed_blocked_writes={confirmed_blocked_writes}, valid_hits={}",
+            "Windows RC-002 read-to-tee attempts={}, first_cancel_successes={first_cancel_successes}, error_not_found_1168={error_not_found_count}, first_cancel_error_os_codes={first_cancel_errors:?}, tee_write_entries={tee_write_entries}, confirmed_blocked_writes={confirmed_blocked_writes}, source_writer_broken_pipes={source_writer_broken_pipes}, valid_hits={}",
             valid_hits.last().map_or(ATTEMPTS, |hit| hit.0 + 1),
             valid_hits.len()
         );
