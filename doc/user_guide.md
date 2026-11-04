@@ -208,8 +208,9 @@ An exit status outside the configured list returns a `CommandError` whose
 
 ### Timeout
 
-Each `CommandRunner` instance is constructed with an explicit timeout value.
-The examples below use ten seconds.
+`CommandRunner::new(timeout)` sets an explicit timeout duration;
+`CommandRunner::without_timeout()` disables the timeout. The examples below
+use ten seconds.
 The timeout starts after the child has been spawned, so preparation and
 spawning time are outside that duration.
 
@@ -304,9 +305,9 @@ if output.stdout_truncated() {
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-`bounded_output(max_bytes)` changes both per-stream memory limits while retaining the default failure policy. `max_stdout_bytes` and `max_stderr_bytes` configure streams independently. These limits control retained memory; they do not stop a command from emitting more bytes. Set `max_total_output_bytes(limit)` to impose an opt-in hard limit shared by stdout and stderr. Exceeding it terminates the managed process tree and returns `CommandErrorKind::OutputLimitExceeded`; inspect `CommandErrorReason::OutputLimitExceeded { limit, observed }` for the configured limit and observed sentinel byte. The partial bytes are available through `CommandError::captured_output()`, while `CommandError::output()` remains `None` because no natural process status is fabricated. `without_total_output_limit()` removes the hard limit. `unbounded_output()` removes only the memory retention limits and does not remove a configured total budget. The total budget limits observed bytes; it is not a hard wall-clock deadline and does not bound preparation, spawning, or arbitrary filesystem operations.
+`bounded_output(max_bytes)` sets both per-stream retention caps and enables failure on truncation, overriding an earlier failure-policy setting. `max_stdout_bytes` and `max_stderr_bytes` configure streams independently. These limits control retained memory; they do not stop a command from emitting more bytes. Set `max_total_output_bytes(limit)` to impose an opt-in hard limit shared by stdout and stderr. Exceeding it terminates the managed process tree and returns `CommandErrorKind::OutputLimitExceeded`; inspect `CommandErrorReason::OutputLimitExceeded { limit, observed }` for the configured limit and observed sentinel byte. The partial bytes are available through `CommandError::captured_output()`, while `CommandError::output()` remains `None` because no natural process status is fabricated. `without_total_output_limit()` removes the hard limit. `unbounded_output()` removes both per-stream retention caps and disables failure on truncation, but does not remove a configured total output budget. The total budget limits observed bytes; it is not a hard wall-clock deadline and does not bound preparation, spawning, or arbitrary filesystem operations.
 
-`bounded_output(max_bytes)` also enables failure when either stream is truncated, while `unbounded_output()` disables that failure policy. Both methods override an earlier `fail_on_output_truncation(...)` call, so call order matters. The `max_*_bytes` methods change retention limits only. For example, `unbounded_output().max_output_bytes(1024)` keeps truncation failures disabled; adding `.fail_on_output_truncation(true)` last enables them. Conversely, `fail_on_output_truncation(false).bounded_output(1024)` enables them again. These per-stream settings do not change the combined output budget.
+Both `bounded_output(max_bytes)` and `unbounded_output()` override an earlier `fail_on_output_truncation(...)` call, so call order matters. The `max_*_bytes` methods change retention limits only. For example, `unbounded_output().max_output_bytes(1024)` keeps truncation failures disabled; adding `.fail_on_output_truncation(true)` last enables them. Conversely, `fail_on_output_truncation(false).bounded_output(1024)` enables them again. These per-stream settings do not change the combined output budget.
 
 For example, inspect the limit error's classification and partial capture separately from ordinary command output:
 
