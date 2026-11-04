@@ -416,10 +416,13 @@ mod tests {
     use std::process::ExitStatus;
     use std::process::Stdio;
     use std::sync::Arc;
+    use std::sync::Condvar;
+    use std::sync::Mutex;
     use std::sync::Weak;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
+    use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
     use std::time::Instant;
@@ -661,6 +664,11 @@ mod tests {
         completed_reader(Ok(CapturedOutput::default()))
     }
 
+    fn immediate_successful_reader() -> OutputReader {
+        let (cancellation, _token) = IoCancellation::pair().expect("reader cancellation should create");
+        OutputReader::new(thread::spawn(|| Ok(CapturedOutput::default())), cancellation)
+    }
+
     fn failing_stdout() -> OutputReader {
         completed_reader(Err(OutputCaptureError::Read {
             source: io::Error::other("stdout read failed"),
@@ -767,6 +775,260 @@ mod tests {
             None,
             Some(budget),
         )
+    }
+
+    #[derive(Debug)]
+    struct AuditChildState {
+        status: Mutex<Option<ExitStatus>>,
+        changed: Condvar,
+        events: Mutex<Vec<&'static str>>,
+        wait_started: Mutex<Option<mpsc::Sender<()>>>,
+    }
+
+    #[derive(Debug)]
+    struct AuditChild {
+        state: Arc<AuditChildState>,
+    }
+
+    impl AuditChild {
+        fn new(events: Arc<AuditChildState>) -> Self {
+            Self { state: events }
+        }
+
+        fn release(&self, status: ExitStatus) {
+            *self.state.status.lock().expect("audit child state should lock") = Some(status);
+            self.state.changed.notify_all();
+        }
+    }
+
+    impl ChildWrapper for AuditChild {
+        fn inner(&self) -> &dyn ChildWrapper {
+            self
+        }
+        fn inner_mut(&mut self) -> &mut dyn ChildWrapper {
+            self
+        }
+        fn into_inner(self: Box<Self>) -> Box<dyn ChildWrapper> {
+            self
+        }
+
+        fn start_kill(&mut self) -> io::Result<()> {
+            self.state.events.lock().expect("events should lock").push("kill");
+            self.release(status(137));
+            Ok(())
+        }
+
+        fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+            Ok(*self.state.status.lock().expect("audit child state should lock"))
+        }
+
+        fn wait(&mut self) -> io::Result<ExitStatus> {
+            self.state.events.lock().expect("events should lock").push("wait");
+            if let Some(wait_started) = self
+                .state
+                .wait_started
+                .lock()
+                .expect("wait-started signal should lock")
+                .as_ref()
+            {
+                let _ = wait_started.send(());
+            }
+            let mut status = self.state.status.lock().expect("audit child state should lock");
+            while status.is_none() {
+                status = self.state.changed.wait(status).expect("audit child wait should wake");
+            }
+            Ok(status.expect("released child has an exit status"))
+        }
+    }
+
+    struct AuditTimer {
+        clock: CountingClock,
+        registered: mpsc::Sender<()>,
+    }
+
+    impl Timer for AuditTimer {
+        fn clock(&self) -> &dyn MonotonicClock {
+            &self.clock
+        }
+
+        fn at(&self, deadline: MonotonicInstant) -> Result<TimerFuture, TimeError> {
+            let _ = self.registered.send(());
+            self.clock.inner.new_timer().at(deadline)
+        }
+    }
+
+    fn audit_read_failure_reader(sender: mpsc::Sender<Instant>, events: Arc<AuditChildState>) -> OutputReader {
+        let (cancellation, _token) = IoCancellation::pair().expect("reader cancellation should create");
+        OutputReader::new(
+            thread::spawn(move || {
+                events.events.lock().expect("events should lock").push("reader-failed");
+                sender.send(Instant::now()).expect("test should receive reader failure");
+                Err(OutputCaptureError::Read {
+                    source: io::Error::other("audit stdout read failed"),
+                    output: CapturedOutput {
+                        bytes: b"partial stdout".to_vec(),
+                        truncated: false,
+                        complete: false,
+                    },
+                })
+            }),
+            cancellation,
+        )
+    }
+
+    fn audit_live_child(state: Arc<AuditChildState>) -> ManagedChildProcess {
+        ManagedChildProcess::new(Box::new(AuditChild::new(state)), false)
+    }
+
+    fn audit_state() -> Arc<AuditChildState> {
+        Arc::new(AuditChildState {
+            status: Mutex::new(None),
+            changed: Condvar::new(),
+            events: Mutex::new(Vec::new()),
+            wait_started: Mutex::new(None),
+        })
+    }
+
+    #[test]
+    fn test_audit_002_read_failure_while_child_alive_with_timeout() {
+        let events = audit_state();
+        let (failure_tx, failure_rx) = mpsc::channel();
+        let (timer_tx, timer_rx) = mpsc::channel();
+        let clock = ManualMonotonicClock::new_shared();
+        let timer: Arc<dyn Timer> = Arc::new(AuditTimer {
+            clock: CountingClock {
+                inner: Arc::clone(&clock),
+                now_calls: Arc::new(AtomicUsize::new(0)),
+            },
+            registered: timer_tx,
+        });
+        let started_at = timer.clock().now();
+        let watchdog_child = AuditChild::new(Arc::clone(&events));
+        let running = RunningCommand::new(
+            "audit 002 timeout".to_owned(),
+            audit_live_child(Arc::clone(&events)),
+            CommandIo::new(
+                audit_read_failure_reader(failure_tx, Arc::clone(&events)),
+                immediate_successful_reader(),
+                None,
+            ),
+            started_at,
+            timer,
+            None,
+            None,
+        );
+        let started = Instant::now();
+        let (return_tx, return_rx) = mpsc::channel();
+        let runner = thread::spawn(move || {
+            let result = running.wait_for_completion(Some(Duration::from_secs(5)));
+            return_tx
+                .send((Instant::now(), result))
+                .expect("runner result should be observed");
+        });
+
+        let failure_at = failure_rx.recv_timeout(Duration::from_secs(2));
+        let timer_registered = timer_rx.recv_timeout(Duration::from_secs(2));
+        let timer_advance = clock.advance(Duration::from_secs(5));
+        let first_result = return_rx.recv_timeout(Duration::from_secs(2));
+        let watchdog_used =
+            failure_at.is_err() || timer_registered.is_err() || timer_advance.is_err() || first_result.is_err();
+        if watchdog_used {
+            watchdog_child.release(status(0));
+            let _ = clock.advance(Duration::from_secs(5));
+        }
+        let runner_result = first_result
+            .ok()
+            .or_else(|| return_rx.recv_timeout(Duration::from_secs(2)).ok());
+        runner.join().expect("runner thread should join");
+        let (returned_at, result) = runner_result.expect("runner should finish after timer or watchdog release");
+        let failure_at = failure_at.expect("reader should fail");
+        assert!(timer_registered.is_ok(), "runner should register timeout timer");
+        assert!(timer_advance.is_ok(), "manual deadline should advance");
+        let error = expect_error(result, "timeout should terminate the still-live child");
+
+        events.events.lock().expect("events should lock").push("returned");
+        assert_eq!(error.kind(), CommandErrorKind::TimedOut);
+        let capture = error
+            .captured_output()
+            .expect("timeout should retain partial reader output");
+        assert_eq!(capture.stdout(), b"partial stdout");
+        assert!(!capture.stdout_complete());
+        assert!(returned_at >= failure_at);
+        assert!(returned_at.duration_since(started) < Duration::from_secs(2));
+        assert!(
+            !watchdog_used,
+            "controllable timeout timer should release runner without watchdog"
+        );
+        assert_eq!(
+            *events.events.lock().expect("events should lock"),
+            ["reader-failed", "kill", "wait", "returned"],
+        );
+        assert_eq!(error.cleanup_failures().len(), 1);
+    }
+
+    #[test]
+    fn test_audit_002_read_failure_while_child_alive_without_timeout() {
+        let events = audit_state();
+        let (failure_tx, failure_rx) = mpsc::channel();
+        let (wait_started_tx, wait_started_rx) = mpsc::channel();
+        let (return_tx, return_rx) = mpsc::channel();
+        *events.wait_started.lock().expect("wait-started signal should lock") = Some(wait_started_tx);
+        let watchdog_child = AuditChild::new(Arc::clone(&events));
+        let running = running(
+            audit_live_child(Arc::clone(&events)),
+            CommandIo::new(
+                audit_read_failure_reader(failure_tx, Arc::clone(&events)),
+                immediate_successful_reader(),
+                None,
+            ),
+        );
+        let failure_at = failure_rx.recv_timeout(Duration::from_secs(2));
+        let started = Instant::now();
+        let runner = thread::spawn(move || {
+            let result = running.wait_for_completion(None);
+            return_tx
+                .send((Instant::now(), result))
+                .expect("runner result should be observed");
+        });
+
+        let wait_started = wait_started_rx.recv_timeout(Duration::from_secs(2));
+        let early_result = if wait_started.is_ok() {
+            return_rx.recv_timeout(Duration::from_secs(2))
+        } else {
+            Err(mpsc::RecvTimeoutError::Timeout)
+        };
+        let runner_was_blocked = early_result.is_err();
+        events
+            .events
+            .lock()
+            .expect("events should lock")
+            .push("watchdog-release");
+        watchdog_child.release(status(0));
+        let runner_result = early_result
+            .ok()
+            .or_else(|| return_rx.recv_timeout(Duration::from_secs(2)).ok());
+        runner.join().expect("runner thread should join");
+        let (returned_at, result) = runner_result.expect("watchdog should release runner");
+        let failure_at = failure_at.expect("reader should fail");
+        assert!(wait_started.is_ok(), "runner should enter child wait");
+        let error = expect_error(result, "reader failure should be reported after child exits");
+
+        assert!(returned_at >= failure_at);
+        assert!(returned_at.duration_since(started) >= Duration::from_secs(2));
+        assert_eq!(error.kind(), CommandErrorKind::ReadOutputFailed);
+        assert!(
+            runner_was_blocked,
+            "watchdog must be the reason the no-timeout runner returned"
+        );
+        let capture = error
+            .captured_output()
+            .expect("read failure should retain partial capture");
+        assert_eq!(capture.stdout(), b"partial stdout");
+        assert!(!capture.stdout_complete());
+        assert_eq!(
+            *events.events.lock().expect("events should lock"),
+            ["reader-failed", "wait", "watchdog-release"],
+        );
     }
 
     #[test]
