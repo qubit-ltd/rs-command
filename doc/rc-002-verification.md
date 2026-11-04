@@ -17,7 +17,7 @@ The committed Windows run [41816083533](https://github.com/qubit-ltd/rs-command/
 
 The production `CommandIo` scenario observed one successful cancellation, the original blocked read returning Windows error 995, and an ordinary-file tee with zero writes. The cleanup worker was unfinished when sampled, but `production_join_pending_witness` was false; the same original read returned before cleanup joined, the source writer was manually released, and the watchdog did not release it. No subsequent blocked I/O or complete production-join causal chain was witnessed, so the scenario remains `unresolved` and does not justify a production fix. The separate 128-attempt read-to-tee probe had 14 successful first cancellations, 114 `ERROR_NOT_FOUND` (1168), zero tee-write entries, zero confirmed blocked writes, and zero valid hits; it directly calls `read_output_inner`, uses a pipe tee, and manually drains it. The readiness probe had 128/128 successful cancels, 128 tee entries, zero confirmed blocked writes and zero valid hits, but uses a pipe tee and does not establish a production join. EOF-to-flush used a pipe tee substitute (128 attempts, 60 successful cancels, 68 `ERROR_NOT_FOUND`, zero tee entries or blocked writes); the production ordinary-file tee has no buffered data to flush. The stdin probe observed one successful cancellation after the synchronous pipe write had entered the kernel (write returned 995); the check-to-write gap itself had zero attempts and no pending synchronous I/O to cancel. These scenarios remain `uncovered`/`unresolved` as described by the trace; zero-hit results do not prove absence of a defect.
 
-This Windows run supplies current-commit runtime evidence and an auditable classification, but does not establish that the suspected hang is absent. The final documentation-only commit still requires a Windows rerun and the full three-platform workflow. The workflow count guard prevents its named filter from passing silently with zero tests.
+The final code commit `44644d668f72c5f00e1266f3d6582acf4ab4e3c8` was also tested by Windows run [41816635646](https://github.com/qubit-ltd/rs-command/actions/runs/41816635646): 6 passed, 0 failed, 105 filtered; `selected_test_count=6`; [trace artifact 13314887584](https://github.com/qubit-ltd/rs-command/actions/runs/41816635646/artifacts/13314887584). Its production `CommandIo` trace again recorded successful cancellation, original read error 995, ordinary-file tee with zero writes, `production_join_pending_witness=false`, manual source-writer release, and no watchdog release. The legacy read-to-tee loop had 40 first-cancel successes and 88 `ERROR_NOT_FOUND` results, with zero tee entries, blocked writes, or valid hits. Readiness had 128 successful cancels and 128 tee entries, but zero blocked writes/hits. The EOF pipe-tee probe had 11 successful cancels, 117 `ERROR_NOT_FOUND` results, and one successful-cancel/flush ordering at attempt 109; that is still a substitute-pipe observation and does not classify the production ordinary-file tee. The stdin probe again observed one successful cancellation after an in-kernel write began, while the check-to-write gap had zero attempts. Overall RC-001 remains unresolved: these runs provide current-source runtime observations but do not establish the suspected production hang or its absence. The full three-platform workflow completed successfully on this source commit (run 41816634209). The workflow count guard prevents its named filter from passing silently with zero tests.
 
 ## RC-002 / T4 local implementation verification (2026-11-04)
 
@@ -53,7 +53,7 @@ Windows run [41816083533](https://github.com/qubit-ltd/rs-command/actions/runs/4
 
 生产 `CommandIo` 场景观察到一次成功取消，原始阻塞 read 返回 Windows error 995，普通文件 tee 写入 0 次。采样时 cleanup worker 尚未完成，但 `production_join_pending_witness` 为 false；同一个原始 read 在 cleanup join 前返回，source writer 由测试手动释放，watchdog 未释放它。没有观察到后续阻塞 I/O 或完整生产 join 因果链，因此该场景仍为 `unresolved`，不支持生产修复。独立 128 次 read-to-tee 探针中，首次取消成功 14 次、`ERROR_NOT_FOUND`（1168）114 次、tee-write 入口 0 次、确认阻塞写 0 次、有效命中 0 次；该探针直接调用 `read_output_inner`，使用 pipe tee 并手动排空。readiness 探针 128/128 次取消成功、128 次 tee 入口、确认阻塞写 0 次、有效命中 0 次，但 tee 是管道，且没有证明生产 join。EOF-to-flush 使用管道 tee 替代品（128 次尝试、60 次取消成功、68 次 `ERROR_NOT_FOUND`、tee 入口和阻塞写均为 0）；生产普通文件 tee 没有缓冲数据可供 flush。stdin 探针观察到一次同步 pipe write 进入内核后被成功取消（write 返回 995）；check-to-write 间隙本身尝试数为 0，也没有可取消的 pending synchronous I/O。trace 将这些场景分类为 `uncovered`／`unresolved`；零命中不能证明缺陷不存在。
 
-该 Windows run 提供当前提交的 runtime 证据和可审计分类，但不能证明疑似挂起不存在。最后一个仅修改验证文档的提交仍需重跑 Windows workflow 和完整三平台 workflow。workflow 测试数保护会阻止命名 filter 零测试时静默通过。
+最终代码提交 `44644d668f72c5f00e1266f3d6582acf4ab4e3c8` 也在 Windows run [41816635646](https://github.com/qubit-ltd/rs-command/actions/runs/41816635646) 上测试：6 通过、0 失败、过滤 105 项；`selected_test_count=6`；[trace artifact 13314887584](https://github.com/qubit-ltd/rs-command/actions/runs/41816635646/artifacts/13314887584)。生产 `CommandIo` trace 再次记录取消成功、原始 read error 995、普通文件 tee 写入 0 次、`production_join_pending_witness=false`、source writer 手动释放且 watchdog 未释放。旧 read-to-tee 循环中首次取消成功 40 次、`ERROR_NOT_FOUND` 88 次，tee 入口、阻塞写和有效命中均为 0。readiness 中 128 次取消成功、128 次 tee 入口，但阻塞写／有效命中均为 0。EOF 管道 tee 探针中取消成功 11 次、`ERROR_NOT_FOUND` 117 次，并在第 109 次观察到一次成功取消与 flush 顺序；这仍是替代管道观察，不能分类生产普通文件 tee。stdin 探针再次观察到同步 write 进入内核后的成功取消，而 check-to-write 间隙尝试数为 0。RC-001 整体仍未解决：这些运行提供当前源码的 runtime 观察，但既未建立疑似生产挂起，也未证明其不存在。完整三平台 workflow 已在该源码提交上成功完成（run 41816634209）。workflow 测试数保护会阻止命名 filter 零测试时静默通过。
 
 ## RC-002 / T4 本地实施验证（2026-11-04）
 
@@ -444,3 +444,29 @@ read-to-tee 循环作为旧探针保留，但它直接调用 `read_output_inner`
 真实 write 开始后的一次成功取消，且没有后续 write 入口。这些是有界观察，不证明所有生产
 调度都安全。由于探针没有证明生产 cleanup join 需要 watchdog 释放，RC-002 仍为
 `unresolved`。
+
+## Final RC-001 / RC-002 validation (2026-11-04)
+
+Final implementation source commit `44644d668f72c5f00e1266f3d6582acf4ab4e3c8` passed the full
+Rust CI workflow [run 41816634209](https://github.com/qubit-ltd/rs-command/actions/runs/41816634209):
+`ubuntu-latest`, `windows-2022`, and `macos-15` verification jobs succeeded, as did the configured
+feature matrix, coverage, dependency baseline, and infrastructure checks. The dedicated Windows
+cancellation workflow [run 41816635646](https://github.com/qubit-ltd/rs-command/actions/runs/41816635646)
+also passed and selected all 6 focused tests.
+
+The Markdown examples are now extracted from the maintained bilingual README and user-guide files
+and compiled in an isolated harness against the actual package. Locally,
+`cargo test --test documentation_examples_tests` passed (the harness ran 12 cases: 6 Linux examples
+passed and 6 Windows-only examples were compile-only on Linux). External-document mutation checks
+confirmed failures for an invalid API call, a missing marker, a duplicate marker, and a platform mode
+mismatch. The full local `.infra/bin/ci-check.sh` passed after the final change; coverage was 97.90%
+functions, 97.02% lines, and 97.11% regions.
+
+On the Windows runner, the production `CommandIo` cancellation path was exercised. The blocked
+`File::read` returned Windows error 995 after cancellation, and no later tee write was observed.
+However, the worker was not shown to remain blocked on the production cleanup join until watchdog
+release. Other targeted scenarios either used pipe substitutes or had no cancellable operation in the
+check-to-write gap. The observations therefore do not establish either the suspected production hang
+or its absence. RC-001's behavior question remains unresolved; no production behavior change was
+justified by this evidence. RC-002's documentation compilation and platform validation goal is
+complete.
