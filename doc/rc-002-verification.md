@@ -1,6 +1,66 @@
+<a id="current-summary"></a>
+
 # Current status / 当前状态 (2026-11-04)
 
+This is the current summary for the accepted scope CMD-REV-001 through CMD-REV-004. The evidence below is from the current review work, not a claim that every historical checkpoint was rerun. Older runs and checkpoints are retained in the [archived evidence](#archived-evidence-index) and remain historical.
+
+| Review item | Current status and evidence | Gap / historical context |
+| --- | --- | --- |
+| CMD-REV-001 — make marked examples self-contained | Verified on Linux x86_64 at implementation tree SHA `3d8461a` (based on checkout `7b2a0adfce45db127ea137ea84268b95d239d5c2`). `CARGO_TARGET_DIR=/tmp/rs-command-target-t1-focused cargo test --test documentation_examples_tests` passed: 4 harness tests; 12 generated/selected examples, 6 Unix examples passed and 6 `compile`/`no_run` examples were type-checked and ignored at runtime. Before the harness fix, removing the import from either external README exited 0 because the injected glob import masked the omission; after the fix, each removal failed to compile with E0433 for `CommandRunner` and `Command`. | Windows-specific examples are excluded by `cfg(windows)` on Linux, so they were not compiled or run here. See [current local implementation verification](#current-local-implementation-and-verification-2026-11-04). |
+| CMD-REV-002 — organize current status and historical evidence | This summary and the archive/context labels below are the current documentation change. | This item organizes evidence; it does not create new runtime evidence. Older labels CMD-R02, CMD-003, RC-001, and RC-002 came from different review stages and are not proven one-to-one equivalents. See [context and archive index](#archived-evidence-index). |
+| CMD-REV-003 — document readiness variants and fields | Completed in the current task worktree; current source rustdoc is summarized in [current implementation and verification](#current-local-implementation-and-verification-2026-11-04). | No platform behavior change is claimed. Historical RC-002 naming is contextual only. |
+| CMD-REV-004 — verify the Windows cancellation/join concern first | **Unresolved; no production policy change justified.** At audit source SHA `7b2a0adfce45db127ea137ea84268b95d239d5c2`, the current audit found no complete causal witness. Historical Windows runs are retained but are not a new run for this checkpoint. | No Windows runtime was available; the manual workflow was not dispatched. Existing trace records original read error 995, `production_join_pending_witness=false`, manual source-writer release, and no watchdog release; the complete chain is missing. See [current implementation and verification](#current-local-implementation-and-verification-2026-11-04) and [archived RC-002 results](#rc-002-windows-cancellation-interleaving-verification). |
+
+## 中文当前摘要
+
+以下为本轮已接受范围 CMD-REV-001 至 CMD-REV-004 的当前摘要。下表记录本轮当前工作证据，不表示所有历史检查点均已重跑。旧 run 和检查点保留在[归档证据索引](#archived-evidence-index)中，仍属于历史记录。
+
+| 评审项 | 当前状态与证据 | 缺口／历史上下文 |
+| --- | --- | --- |
+| CMD-REV-001 — 示例自包含 | Linux x86_64 在实施源码树 `3d8461a`（基于 checkout `7b2a0adfce45db127ea137ea84268b95d239d5c2`）上验证通过。`CARGO_TARGET_DIR=/tmp/rs-command-target-t1-focused cargo test --test documentation_examples_tests` 通过：harness 4 项测试；生成／选中 12 个示例，其中 6 个 Unix 示例通过，6 个 `compile`／`no_run` 示例完成类型检查但运行时忽略。修复 harness 前，从任一外部 README 删除导入时命令退出 0，因为隐式通配导入掩盖了缺项；修复后两份 README 变异均因 `CommandRunner` 和 `Command` 的 E0433 编译失败。 | Linux 上被 `cfg(windows)` 排除的 Windows 示例既未编译也未运行。详见[本轮本地实施与验证](#current-local-implementation-and-verification-2026-11-04)。 |
+| CMD-REV-002 — 整理当前状态与历史证据 | 本摘要及下文归档／上下文标注是当前文档变更。 | 此项整理证据，不产生新的运行时证据。旧编号 CMD-R02、CMD-003、RC-001、RC-002 来自不同评审阶段，未证明彼此一一对应。详见[上下文与归档索引](#archived-evidence-index)。 |
+| CMD-REV-003 — 说明 readiness 变体和字段 | 已在当前任务工作区完成，具体说明见[本轮本地实施与验证](#current-local-implementation-and-verification-2026-11-04)。 | 不声称改变平台行为。历史 RC-002 编号仅用于上下文说明。 |
+| CMD-REV-004 — 先核查 Windows cancellation/join 疑点 | **未解决；证据不支持修改生产策略。** 源码 SHA `7b2a0adfce45db127ea137ea84268b95d239d5c2` 的当前审查未发现完整因果见证链。保留的历史 Windows run 不是本检查点的新运行。 | 本机无 Windows runtime；Windows 专项验证状态见[本轮本地实施与验证](#current-local-implementation-and-verification-2026-11-04)。现有 trace 记录原始 read 错误 995、`production_join_pending_witness=false`、手动释放 source writer、watchdog 未释放；完整因果链缺失。详见[归档 RC-002 结果](#rc-002-windows-cancellation-interleaving-verification)。 |
+
+## Archived evidence index
+
+The checkpoint sections immediately below and the older `Result` / final validation sections later in this file are archived records. Their SHAs, workflow runs, artifacts, failures, and observations are preserved as recorded; they are not the current status. Return to the [current summary](#current-summary) for the present conclusion.
+
+| Historical label | Context in this file | Relationship to current scope |
+| --- | --- | --- |
+| CMD-R02 | Earlier implementation-plan identifier for Windows cancellation/join evidence collection. | Related context for CMD-REV-004; identity is not established solely by the reused label. |
+| CMD-003 | Earlier review/plan identifier used in legacy RC-002 verification text. | Its scope depends on the referenced plan stage; it is not assumed to equal current CMD-REV-003. |
+| RC-001 | Historical production behavior question and Windows cancellation probe record. | Related behavior evidence for CMD-REV-004, while preserving each checkpoint's scope and limits. |
+| RC-002 | Historical documentation verification and cancellation-interleaving report title, reused across stages. | May refer to documentation work or Windows probe history; it is not treated as a single current item. |
+
+## Current local implementation and verification (2026-11-04)
+
+The implementation source tree is now recorded by commit `3d8461a`, based on rs-command checkout SHA `7b2a0adfce45db127ea137ea84268b95d239d5c2`; code-affecting checks below ran against the same source content before it was committed, and this status-only document was added afterward. On Linux x86_64, `./.infra/bin/align-ci.sh`, `git diff --check`, `./.infra/bin/style-check.sh`, `cargo check --workspace --all-targets`, and `./.infra/bin/ci-check.sh` all exited 0. The CI script included workspace tests, feature-matrix tests, Rustdoc, Markdown examples, package verification, dependency checks, and coverage. Coverage passed the unchanged thresholds: functions 97.90% (514/525), lines 96.96% (4756/4905), regions 97.11% (6892/7097). Its documentation harness generated 12 examples: 6 passed and 6 compile/no_run cases were type-checked but ignored at runtime. `cargo test --doc` and a separate coverage run were not repeated because `ci-check.sh` ran both Rustdoc and the configured coverage suite successfully.
+
+The downstream command `cargo test --manifest-path /data/working/qubit/.worktrees/rs-command/rs-mime-validation/Cargo.toml --lib command_execution` exited 0 (3 passed, 8 filtered). Its first attempt exited 101 because the temporary rs-mime worktree lacked the transitive `../rs-value` sibling path; adding temporary links to the existing sibling repositories fixed the validation layout, and the rerun compiled `qubit-command` through `/data/working/qubit/.worktrees/rs-command/rs-command`, a symlink to the task implementation worktree. No production behavior changed, so the conditional `command_backend` downstream test was not applicable.
+
+T3 documents `Readable(usize)` as the observed next-read byte capacity, bounded further by destination capacity and remaining output budget; Unix reports the 8 KiB poll read cap, Windows reports the `PeekNamedPipe` observation, `Eof` describes the closed-pipe probe, and `Cancelled` does not imply EOF. The enum shape and read behavior did not change. Static branch comparison and the workspace checks above passed.
+
+For CMD-REV-004, no Windows runtime command or workflow was run in this checkpoint. The Linux host cannot produce Windows cancellation evidence, and the existing manual-dispatch workflow was not started. The historical trace at SHA `44644d668f72c5f00e1266f3d6582acf4ab4e3c8` has no subsequent blocked I/O, no pending production-join witness, and no watchdog release. Classification remains `unresolved`; the required restoration command on an authorized Windows runner is `cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1 --nocapture`. No production strategy change was made.
+
+## 本轮本地实施与验证（2026-11-04）
+
+本轮实施源码树记录为提交 `3d8461a`，基于 rs-command checkout SHA `7b2a0adfce45db127ea137ea84268b95d239d5c2`；以下代码检查在提交前对相同源码内容执行，状态报告文档随后补入。Linux x86_64 上，`./.infra/bin/align-ci.sh`、`git diff --check`、`./.infra/bin/style-check.sh`、`cargo check --workspace --all-targets` 和 `./.infra/bin/ci-check.sh` 均退出 0。CI 脚本包含 workspace 测试、feature matrix、Rustdoc、Markdown 示例、package 验证、依赖检查和覆盖率。原覆盖率门槛全部通过：函数 97.90%（514/525）、行 96.96%（4756/4905）、区域 97.11%（6892/7097）。其中文档 harness 生成 12 个示例：6 个通过，6 个 compile/no_run 示例完成类型检查但运行时忽略。因 `ci-check.sh` 已成功运行 Rustdoc 与覆盖率套件，没有重复执行 `cargo test --doc` 和独立覆盖率命令。
+
+下游命令 `cargo test --manifest-path /data/working/qubit/.worktrees/rs-command/rs-mime-validation/Cargo.toml --lib command_execution` 退出 0（3 项通过，8 项过滤）。首次执行退出 101，原因是临时 rs-mime worktree 缺少传递依赖 sibling path `../rs-value`；补齐指向现有 sibling 仓库的临时链接后重跑成功。编译日志确认 `qubit-command` 通过 `/data/working/qubit/.worktrees/rs-command/rs-command` 解析，该路径是指向本轮实现 worktree 的符号链接。本轮未改变生产行为，因此条件性下游 `command_backend` 测试不适用。
+
+T3 将 `Readable(usize)` 说明为下一次读取采用的字节容量，并受目标 buffer 和剩余总输出预算进一步限制；Unix 报告 8 KiB poll 读取块上限，Windows 报告 `PeekNamedPipe` 观察数量；`Eof` 表示探测到管道关闭，`Cancelled` 不表示 EOF。枚举形状和读取行为未变；静态分支对照及上面的 workspace 检查通过。
+
+CMD-REV-004 本检查点未运行 Windows runtime 命令或 workflow。Linux 主机不能提供 Windows cancellation 证据，现有手动触发 workflow 也未启动。SHA `44644d668f72c5f00e1266f3d6582acf4ab4e3c8` 的历史 trace 没有后续阻塞 I/O、生产 join pending 见证或 watchdog 解阻。结论仍为 `unresolved`；在获授权的 Windows runner 上可恢复执行 `cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1 --nocapture`。本轮未修改生产策略。
+
+## 归档证据索引
+
+紧随本索引的检查点章节以及文末较早的 `Result`／最终验证章节均为归档记录。原有 SHA、workflow run、artifact、失败及观察均按记录保留，不代表当前状态。请回到[当前摘要](#current-summary)查看本轮结论。CMD-R02、CMD-003、RC-001 和 RC-002 是不同计划／评审阶段的上下文编号；本文不推断没有证据支持的一一对应关系。
+
 ## T1 Windows production-path checkpoint (2026-11-04)
+
+> Archived historical evidence. See the [current summary](#current-summary).
+
 
 The T1 worktree started at source SHA `062305a854471940b56430f7578907d910ffdbf0` on branch `codex/rc-001-rc-002-20261104`. The active host is Linux x86_64 (`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`), with `rustc 1.94.0 (4a4ef493e 2026-03-02)` and `cargo 1.94.0 (85eff7c80 2026-01-15)`. The focused command `cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1 --nocapture` exited 0 locally but selected **0 tests** (94 filtered out), because the probe module is Windows-only. This is not Windows runtime evidence; no probe trace or Windows selected-test count was produced for this SHA.
 
@@ -21,7 +81,10 @@ The final code commit `44644d668f72c5f00e1266f3d6582acf4ab4e3c8` was also tested
 
 ## RC-002 / T4 local implementation verification (2026-11-04)
 
-The marked Markdown harness now requires the selected example IDs and their expected modes in both READMEs and both user guides. On Linux x86_64 with Rust/Cargo 1.94.0, the final `cargo test --manifest-path /data/working/qubit/.worktrees/rs-command/rc-001-rc-002-20261104/Cargo.toml --test documentation_examples_tests` passed (4 integration-crate tests, including two shared-support tests; 12 generated document examples, 6 Unix examples passed and 6 compile-only examples were ignored at runtime). The final harness supports a separate document root while resolving `qubit-command` from `CARGO_MANIFEST_DIR`, so external document copies exercise the real package.
+> Archived historical evidence. See the [current summary](#current-summary).
+
+
+The marked Markdown harness now requires the selected example IDs and their expected modes in both READMEs and both user guides. On Linux x86_64 with Rust/Cargo 1.94.0, the final `cargo test --manifest-path /data/working/qubit/.worktrees/rs-command/rc-001-rc-002-20261104/Cargo.toml --test documentation_examples_tests` passed (4 integration-crate tests, including two shared-support tests; 12 generated/selected document examples: 6 Unix examples passed and 6 `compile`/`no_run` examples were compiled and ignored at runtime). Windows examples guarded by `cfg(windows)` were excluded on Linux; they were not compiled or run. The final harness supports a separate document root while resolving `qubit-command` from `CARGO_MANIFEST_DIR`, so external document copies exercise the real package.
 
 The mutation command was `DOCUMENTATION_EXAMPLES_ROOT=<external-fixture-root> CARGO_TARGET_DIR=<isolated-target> cargo test --manifest-path <project>/Cargo.toml --test documentation_examples_tests`, run once per fixture. Each final external-copy mutation exited 101 for the intended reason: changing `max_total_output_bytes` in the marked budget example to a nonexistent API produced `no method named`; removing the Chinese README quick-start marker produced `missing required marker quick-start`; adding a second well-formed quick-start marker and Rust fence produced `duplicate marker quick-start`; changing `windows-output` from mode `windows` to `compile` produced `marker windows-output must use mode windows, found compile`. All fixtures and their isolated Cargo target were removed. During diagnosis, an initial API mutation command exited 101 because the harness incorrectly treated a document-only fixture as the package root; this led to separating document-root and package-root paths. An initial duplicate mutation exited 101 at the adjacency guard because two markers were placed together; the final valid duplicate-fence mutation verified duplicate-ID rejection. The first two `align-ci.sh` runs exited 1 on the new Rust headers/import and then test-redirect rule; those issues were fixed before the final alignment passed.
 
@@ -34,9 +97,12 @@ Other final local verification on this worktree:
 - `cargo test --manifest-path /data/working/qubit/rust-common/rs-mime/Cargo.toml --lib command_execution`: exit 0, 3 passed, 8 filtered.
 - `cargo test --manifest-path /data/working/qubit/rust-common/rs-mime/Cargo.toml --lib command_backend`: exit 0, 4 passed, 7 filtered.
 
-The Windows examples were not run on Linux; a Windows runner and the three-platform workflow remain required. These local results do not replace that platform evidence.
+Windows-specific examples were excluded on Linux, so this record provides no evidence that they compiled or ran; a Windows runner and the three-platform workflow remain required. These local results do not replace that platform evidence.
 
 ## T1 Windows 生产路径检查点（2026-11-04）
+
+> 历史归档证据。请参阅[当前摘要](#current-summary)。
+
 
 T1 worktree 起始源码 SHA 为 `062305a854471940b56430f7578907d910ffdbf0`，分支 `codex/rc-001-rc-002-20261104`。执行主机为 Linux x86_64（`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`），工具链为 `rustc 1.94.0 (4a4ef493e 2026-03-02)` 和 `cargo 1.94.0 (85eff7c80 2026-01-15)`。本机执行筛选命令 `cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1 --nocapture` 退出 0，但命中 **0 项测试**（过滤 94 项），因为 probe module 仅在 Windows 编译。这不是 Windows runtime 证据；此 SHA 没有新 trace 或 Windows 实际筛选测试数。
 
@@ -57,7 +123,10 @@ Windows run [41816083533](https://github.com/qubit-ltd/rs-command/actions/runs/4
 
 ## RC-002 / T4 本地实施验证（2026-11-04）
 
-实际 Markdown harness 现在要求双语 README 和双语用户指南中列出的示例 ID 及其预期模式均匹配。在 Linux x86_64、Rust/Cargo 1.94.0 上，最终执行 `cargo test --manifest-path /data/working/qubit/.worktrees/rs-command/rc-001-rc-002-20261104/Cargo.toml --test documentation_examples_tests` 通过（集成测试 crate 4 项通过，其中包括 2 项共享支持模块测试；生成 12 个文档示例，6 个 Unix 示例通过，6 个仅编译示例忽略运行）。最终 harness 将外部文档目录与 `CARGO_MANIFEST_DIR` 中实际的 `qubit-command` crate 分开，因此外部文档副本会真实编译项目依赖。
+> 历史归档证据。请参阅[当前摘要](#current-summary)。
+
+
+实际 Markdown harness 现在要求双语 README 和双语用户指南中列出的示例 ID 及其预期模式均匹配。在 Linux x86_64、Rust/Cargo 1.94.0 上，最终执行 `cargo test --manifest-path /data/working/qubit/.worktrees/rs-command/rc-001-rc-002-20261104/Cargo.toml --test documentation_examples_tests` 通过（集成测试 crate 4 项通过，其中包括 2 项共享支持模块测试；生成 12 个适用于本平台的文档示例，6 个 Unix 示例通过，另外 6 个 `compile`／`no_run` 示例完成类型检查但运行时忽略。`cfg(windows)` 示例在 Linux 上被平台条件排除，没有编译或运行）。最终 harness 将外部文档目录与 `CARGO_MANIFEST_DIR` 中实际的 `qubit-command` crate 分开，因此外部文档副本会真实编译项目依赖。
 
 变异命令为 `DOCUMENTATION_EXAMPLES_ROOT=<外部副本目录> CARGO_TARGET_DIR=<隔离 target> cargo test --manifest-path <项目>/Cargo.toml --test documentation_examples_tests`，每个副本各运行一次。最终四项外部副本变异均以预期原因退出 101：将预算示例中的 `max_total_output_bytes` 改为不存在的 API，报 `no method named`；删除中文 README 快速开始标记，报 `missing required marker quick-start`；增加第二个格式正确的快速开始标记及 Rust fence，报 `duplicate marker quick-start`；将 `windows-output` 的模式从 `windows` 改成 `compile`，报 `marker windows-output must use mode windows, found compile`。变异副本及独立 Cargo target 均已删除。诊断中，最初仅复制文档的 API 变异命令因 harness 把文档目录当成 package 根目录而退出 101，由此修正为分离文档路径和 package 路径。最初的重复标记变异命令也退出 101，但错误来自相邻性检查；最终使用有效的第二个 fence 验证了重复 ID 拒绝。前两次 `align-ci.sh` 均退出 1，分别发现新 Rust 文件头部／导入问题及测试重定向规则问题；修复后最终对齐通过。
 
@@ -74,6 +143,9 @@ Windows 示例未在 Linux 主机执行；仍需 Windows runner 和三平台 wor
 
 ## T3 implementation-checkout audit (2026-11-04)
 
+> Archived historical evidence. See the [current summary](#current-summary).
+
+
 This audit was performed in the implementation worktree on branch `codex/outputs-files-windows-20261104`, HEAD `65ccacbf79a49a845af16c02fc0bd6cf59e3b752` (clean at audit start). The active host is Linux x86_64 (`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`), with `rustc 1.94.0 (4a4ef493e 2026-03-02)` and `cargo 1.94.0 (85eff7c80 2026-01-15)`. No Windows runtime is available in this environment. The focused Windows command, `cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1 --nocapture`, was therefore **not run** here; there is no fresh selected-test count for this implementation checkout. The previously recorded Windows Server 2022 run at SHA `e76e1700894717523c24c74fe95b94b3809eeaa7` is historical evidence for that SHA, not a fresh run at this checkout SHA.
 
 The current workflow `.github/workflows/windows-cancellation-interleaving.yml` is a `workflow_dispatch` job on `windows-2022`, installs Rust 1.94.0, prepares local path dependencies, and invokes that focused command while retaining the log as an artifact. The production-path probe in `src/command_runner/internal/output_collector/tests/windows_probe_tests.rs` uses `read_output_stream`, an ordinary-file tee, and `CommandIo::cancel_and_collect`; it records a successful native cancellation and original read return when observed, but explicitly marks `original_io_return_is_subsequent_io:false` and `production_join_pending_witness:false`. Its controller releases the source writer manually. It therefore does not itself establish a post-cancel blocked I/O, watchdog rescue of a pending production join, or the complete failure chain. The separate legacy probe in `src/command_runner/internal/windows_cancel_interleaving.rs` uses the older direct collector path and likewise cannot upgrade substitute-path observations to production-path evidence.
@@ -81,6 +153,9 @@ The current workflow `.github/workflows/windows-cancellation-interleaving.yml` i
 For CMD-R03 in the current implementation plan, the evidence-based classification remains **incomplete / unresolved**. Blocked-read cancellation is distinguishable from read-return-to-tee; the latter still lacks a witnessed subsequent real blocked I/O and pending production cleanup join. EOF-to-flush still uses a pipe tee substitute; the production tee is an unbuffered `File`, so the recorded probe does not classify a blocking flush there. The stdin check-to-write gap has no pending synchronous I/O for `CancelSynchronousIo` to cancel; an observed cancellation of a later in-kernel write would belong to a different interval. No full causal chain is available for a production fix, and no production behavior is changed by this audit. Live Windows T3 execution and its test count remain outstanding.
 
 ## T3 实施工作区审查（2026-11-04）
+
+> 历史归档证据。请参阅[当前摘要](#current-summary)。
+
 
 本次审查在实施 worktree 中进行，分支为 `codex/outputs-files-windows-20261104`，HEAD 为 `65ccacbf79a49a845af16c02fc0bd6cf59e3b752`（审查开始时工作区干净）。当前主机为 Linux x86_64（`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`），工具链为 `rustc 1.94.0 (4a4ef493e 2026-03-02)` 和 `cargo 1.94.0 (85eff7c80 2026-01-15)`。当前环境没有 Windows runtime。因此本次**未运行** Windows 筛选命令 `cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1 --nocapture`；此实施 checkout 没有新的已选测试数。此前记录的 SHA `e76e1700894717523c24c74fe95b94b3809eeaa7` 上 Windows Server 2022 运行属于该 SHA 的历史证据，不是本 checkout 的新运行。
 
@@ -90,17 +165,26 @@ For CMD-R03 in the current implementation plan, the evidence-based classificatio
 
 ## Final Windows probe (2026-11-04)
 
+> Archived historical evidence. See the [current summary](#current-summary).
+
+
 The task checkout `e76e1700894717523c24c74fe95b94b3809eeaa7` passed the Windows Server 2022 focused workflow, [run 41799652557](https://github.com/qubit-ltd/rs-command/actions/runs/41799652557), and uploaded [artifact 13306199684](https://github.com/qubit-ltd/rs-command/actions/runs/41799652557/artifacts/13306199684). The production-path test passed (1 passed, 0 failed); the focused workflow's six selected tests passed. The production trace recorded a successful cancellation of the blocked read (`cancel_raw_os_error: 995`), read return, zero tee writes, and completed cleanup. Although the cleanup thread was sampled as unfinished at the cancellation observer, the trace correctly records `production_join_pending_witness:false`; the controller manually released the source writer and `watchdog_released:false`. No subsequent blocked I/O or watchdog-rescued production join was witnessed. The read-to-tee, EOF-to-flush, and stdin check-to-write cases remain uncovered under their recorded preconditions; overall CMD-R02 remains **unresolved**, so this evidence does not justify a production fix.
 
 The first Windows workflow attempt (run 41798634838) and the first full CI matrix (run 41798642860) failed to compile the probe because it referenced undeclared `serde_json`. The probe now formats the trace with the standard library and adds no dependency. The corrected Windows workflow above passed. The corrected full CI matrix passed on `e76e1700894717523c24c74fe95b94b3809eeaa7`: [Rust CI run 41799659323](https://github.com/qubit-ltd/rs-command/actions/runs/41799659323). Its Windows 2022, Ubuntu latest, and macOS 15 verification jobs, feature matrix, coverage, and configured infrastructure suites all passed.
 
 ## 最终 Windows 探针（2026-11-04）
 
+> 历史归档证据。请参阅[当前摘要](#current-summary)。
+
+
 任务 checkout `e76e1700894717523c24c74fe95b94b3809eeaa7` 已通过 Windows Server 2022 专项 workflow：[run 41799652557](https://github.com/qubit-ltd/rs-command/actions/runs/41799652557)，并上传了 [artifact 13306199684](https://github.com/qubit-ltd/rs-command/actions/runs/41799652557/artifacts/13306199684)。生产路径测试通过（1 项通过、0 项失败）；专项 workflow 筛选的 6 项测试全部通过。生产 trace 记录了对阻塞 read 的成功取消（`cancel_raw_os_error: 995`）、read 返回、tee 写入 0 次以及 cleanup 完成。尽管取消 observer 采样时 cleanup 线程尚未完成，trace 正确标记 `production_join_pending_witness:false`；controller 手动释放 source writer，且 `watchdog_released:false`。未观察到后续阻塞 I/O，也未观察到 watchdog 救援生产 join。根据已记录前提，read-to-tee、EOF-to-flush 和 stdin check-to-write 仍未覆盖；CMD-R02 整体仍为**未解决**，因此这份证据不支持修改生产代码。
 
 首次 Windows workflow（run 41798634838）和首次完整 CI 矩阵（run 41798642860）因探针引用未声明的 `serde_json` 而编译失败。探针现改用标准库格式化 trace，没有新增依赖。修正后的 Windows workflow 已通过。修正后的完整 CI 矩阵已在 `e76e1700894717523c24c74fe95b94b3809eeaa7` 上通过：[Rust CI run 41799659323](https://github.com/qubit-ltd/rs-command/actions/runs/41799659323)。Windows 2022、Ubuntu latest、macOS 15 验证任务、feature matrix、coverage 和已配置的 infrastructure suites 均通过。
 
 ## T2 production-path review (2026-11-04, worktree checkpoint)
+
+> Archived historical evidence. See the [current summary](#current-summary).
+
 
 The implementation checkpoint is based on worktree HEAD `65ec714f0224f07f80dd732a018021404b518105` on `codex/cmd-win-cancel-20261104`; the current source and verification-document changes are uncommitted, so this base SHA is not a SHA for the new probe. The production cleanup route is `CommandIo::cancel_and_join` / `cancel_and_collect` → `finish_helpers` (batch cancellation, then sequential bounded finishes) → `finish_output_reader` → `OutputReader::join` → `join_output_reader`. A new bounded Windows harness case uses `read_output_stream` to create the real reader helper, configures an ordinary temporary `File` tee, and invokes `CommandIo::cancel_and_collect` with a real Windows `ExitStatus`; a test-only observer records the native cancellation result, read return, tee write entries, and cleanup completion. It performs one coordinated blocked-read observation per run (below the 128-attempt cap), not a randomized race sweep. The older probes still call `read_output_inner` directly and their anonymous-pipe tee observations remain substitute-path evidence.
 
@@ -116,6 +200,9 @@ The new production-path probe distinguishes cancellation of the original blocked
 | EOF-to-flush | Existing probe uses a pipe tee; no ordinary-file tee trace records a blocked flush after EOF. | Production window not witnessed; unresolved. |
 
 ## T2 生产路径审查（2026-11-04，工作树检查点）
+
+> 历史归档证据。请参阅[当前摘要](#current-summary)。
+
 
 实施检查点基于工作树 HEAD `65ec714f0224f07f80dd732a018021404b518105`、分支 `codex/cmd-win-cancel-20261104`；当前源码和验证文档修改尚未提交，因此该基线 SHA 不是新探针的 SHA。生产 cleanup 调用链为 `CommandIo::cancel_and_join`／`cancel_and_collect` → `finish_helpers`（批量取消，再按顺序执行有界收尾）→ `finish_output_reader` → `OutputReader::join` → `join_output_reader`。新增有界 Windows harness 场景经 `read_output_stream` 创建真实 reader helper，配置普通临时 `File` tee，并以真实 Windows `ExitStatus` 调用 `CommandIo::cancel_and_collect`；test-only observer 记录原生取消结果、read 返回、tee write 进入次数和 cleanup 完成。每次运行仅进行一次同步的阻塞 read 观察（低于 128 次上限），不是随机竞态扫描。旧探针仍直接调用 `read_output_inner`，其匿名管道 tee 观察仍属于替代路径证据。
 
@@ -162,7 +249,13 @@ The overall classification is `rc002=unresolved`. This run does not establish th
 
 # REV-004 follow-up evidence (2026-11-04)
 
+> Archived historical evidence. See the [current summary](#current-summary).
+
+
 ## Current implementation checkpoint
+
+> Archived historical evidence. See the [current summary](#current-summary).
+
 
 This checkpoint was initially prepared on worktree HEAD `a3207ede5f349dcd7f4638b2c4ba176bf0ed08a3` (`codex/rc002-probe-hardening-20261104`) before T3 was committed. The local host is Linux x86_64 with `rustc 1.94.0 (4a4ef493e 2026-03-02)` and `cargo 1.94.0 (85eff7c80 2026-01-15)`. `rustfmt --edition 2024 --check src/command_runner/internal/output_collector/windows_probe_tests.rs` and `git diff --check` passed. The first post-commit Windows run, GitHub Actions run `41755992521` at commit `0432781fc0774c1b54268b6eca2c07e8d5428237`, reached the Windows test build but failed with E0277 because a raw `RawHandle` pointer was captured by a worker closure and is not `Send`; none of the probes executed. The fix converts the handle address to `usize` before spawning and casts it back inside the worker. On commit `c0834701ac30d9ee8188e480901376c5da48eb02`, Windows run `41757283286` compiled and passed the watchdog test, then the readiness scenario failed because its expected `ReadinessReturned` event was treated as a premature completion; the other scenarios did not run. The controller now records that event and continues waiting for the real read entry. On final candidate commit `2dcbd43313348ca2b50749457f9b33cd03f84aa7`, Windows run `41758531911` passed the complete test suite (107 unit tests, 15 doctests) including the watchdog and all four scenario tests. The overall Windows job then failed during additional-platform Clippy because the EOF evidence collector had a collapsible nested `if`; that conditional has been collapsed. Probe tests passed, but successful per-attempt diagnostic logs were not present in this run, so counts and observed schedules remain unrecorded pending a successful project-hook run.
 
@@ -179,7 +272,13 @@ No production behavior change is justified by this checkpoint. In particular, th
 
 ## 本轮 REV-004 补充证据（2026-11-04）
 
+> 历史归档证据。请参阅[当前摘要](#current-summary)。
+
+
 ### 当前实现检查点
+
+> 历史归档证据。请参阅[当前摘要](#current-summary)。
+
 
 本检查点最初在 worktree HEAD `a3207ede5f349dcd7f4638b2c4ba176bf0ed08a3`（分支 `codex/rc002-probe-hardening-20261104`）准备，当时 T3 尚未提交。运行环境为 Linux x86_64、`rustc 1.94.0 (4a4ef493e 2026-03-02)` 和 `cargo 1.94.0 (85eff7c80 2026-01-15)`。`rustfmt --edition 2024 --check src/command_runner/internal/output_collector/windows_probe_tests.rs` 和 `git diff --check` 均通过。首次提交后的 Windows run `41755992521`（commit `0432781fc0774c1b54268b6eca2c07e8d5428237`）进入 Windows 测试编译，但因 worker closure 捕获非 `Send` 的 `RawHandle` 指针而报 E0277；探针均未执行。修复是在 spawn 前把句柄地址转成 `usize`，并在 worker 内转回指针。提交 `c0834701ac30d9ee8188e480901376c5da48eb02` 的 Windows run `41757283286` 编译通过、watchdog 测试通过，但 readiness 场景把预期的 `ReadinessReturned` 事件错当成过早完成而失败，其余场景未执行。现已修正控制器：记录该事件后继续等待真实 read 进入。必须重跑 Windows workflow 才能记录场景证据。
 本检查点最初在 worktree HEAD `a3207ede5f349dcd7f4638b2c4ba176bf0ed08a3`（分支 `codex/rc002-probe-hardening-20261104`）准备，当时 T3 尚未提交。运行环境为 Linux x86_64、`rustc 1.94.0 (4a4ef493e 2026-03-02)` 和 `cargo 1.94.0 (85eff7c80 2026-01-15)`。`rustfmt --edition 2024 --check src/command_runner/internal/output_collector/windows_probe_tests.rs` 和 `git diff --check` 均通过。首次提交后的 Windows run `41755992521`（commit `0432781fc0774c1b54268b6eca2c07e8d5428237`）进入 Windows 测试编译，但因 worker closure 捕获非 `Send` 的 `RawHandle` 指针而报 E0277；探针均未执行。修复是在 spawn 前把句柄地址转成 `usize`，并在 worker 内转回指针。提交 `c0834701ac30d9ee8188e480901376c5da48eb02` 的 Windows run `41757283286` 编译通过、watchdog 测试通过，但 readiness 场景把预期的 `ReadinessReturned` 事件错当成过早完成而失败，其余场景未执行。现已修正控制器：记录该事件后继续等待真实 read 进入。最终候选提交 `2dcbd43313348ca2b50749457f9b33cd03f84aa7` 的 Windows run `41758531911` 完整测试套件通过（107 项单元测试、15 项 doctest），watchdog 和四个场景测试均通过；之后 Windows job 在额外平台 Clippy 阶段因 EOF 证据收集中的嵌套 `if` 可合并而失败。现已折叠该条件。探针测试通过，但该 run 未输出每次尝试的诊断日志，因此尝试数和观察到的交错仍待成功运行 project hook 后记录。
@@ -199,7 +298,13 @@ T1/T2 的 GitHub run `41752357431` 在 Ubuntu 和 Windows 验证 job 的 step 9 
 
 # RC-002 Windows Cancellation Interleaving Verification
 
+> Archived historical evidence. See the [current summary](#current-summary).
+
+
 ## Result
+
+> Archived historical evidence. See the [current summary](#current-summary).
+
 
 The Windows-only probe reproduced the reported interleaving before the fix.
 On a successful `CancelSynchronousIo` return from a blocking source read, the
@@ -218,6 +323,9 @@ observed no valid post-fix hit. As a race-driven probe, this is evidence about
 the tested schedule, not a proof that every production schedule is impossible.
 
 ## Current worktree probe result
+
+> Archived historical evidence. See the [current summary](#current-summary).
+
 
 The worktree adds `.github/workflows/windows-cancellation-interleaving.yml`. It runs
 the named test on `windows-2022`, prints the actual `GITHUB_SHA` into the job log,
@@ -266,6 +374,9 @@ CI as recorded above.
 
 ## What the probe establishes
 
+> Archived historical evidence. See the [current summary](#current-summary).
+
+
 `src/command_runner/internal/output_collector.rs` contains the Windows-only
 test `test_windows_real_cancel_read_to_blocked_tee_interleaving`. It uses real
 anonymous Windows pipes, owning `File` handles, a real blocking `File::read`,
@@ -300,6 +411,9 @@ thread panic. This does not relax the valid-hit conditions.
 
 ## Local verification and scope
 
+> Archived historical evidence. See the [current summary](#current-summary).
+
+
 On Linux x86_64 with `rustc 1.94.0 (4a4ef493e 2026-03-02)`:
 
 - `.infra/bin/align-ci.sh` completed successfully.
@@ -315,6 +429,9 @@ task head in run 41755997380. Earlier post-fix run 41745608628 is historical
 evidence for the production fix and remains separate from this worktree result.
 
 ## Integrated Windows verification
+
+> Archived historical evidence. See the [current summary](#current-summary).
+
 
 After manually merging the task with the concurrent probe work, the full CI
 workflow passed on merge commit `7fe9176d96fd183dad5890f49a3a587804170301`:
@@ -336,7 +453,13 @@ not establish that a production cleanup join requires watchdog release.
 
 # RC-002 Windows 取消交错验证
 
+> 历史归档证据。请参阅[当前摘要](#current-summary)。
+
+
 ## 结果
+
+> 历史归档证据。请参阅[当前摘要](#current-summary)。
+
 
 Windows 专用探针在修复前复现了待核实交错：对阻塞 source 读取调用
 `CancelSynchronousIo` 并成功返回后，worker 仍可能进入新的同步 tee 写入并阻塞。
@@ -352,6 +475,9 @@ matrix 和配置的 infrastructure suites 也通过。Windows 探针完成全部
 不能证明所有生产调度都不可能发生类似顺序。
 
 ## 当前 worktree 探针结果
+
+> 历史归档证据。请参阅[当前摘要](#current-summary)。
+
 
 worktree 新增 `.github/workflows/windows-cancellation-interleaving.yml`：在
 `windows-2022` 运行指定测试，把实际 `GITHUB_SHA` 写入 job 日志，并通过
@@ -392,6 +518,9 @@ read-to-tee 循环作为旧探针保留，但它直接调用 `read_output_inner`
 
 ## 探针验证范围
 
+> 历史归档证据。请参阅[当前摘要](#current-summary)。
+
+
 `src/command_runner/internal/output_collector.rs` 中的 Windows 专用测试名为
 `test_windows_real_cancel_read_to_blocked_tee_interleaving`。它使用真实 Windows 匿名管道、
 `File` 所有的真实句柄、真实阻塞 `File::read`，以及真实的
@@ -418,6 +547,9 @@ read-to-tee 循环作为旧探针保留，但它直接调用 `read_output_inner`
 
 ## 本地验证与范围
 
+> 历史归档证据。请参阅[当前摘要](#current-summary)。
+
+
 在 Linux x86_64、`rustc 1.94.0 (4a4ef493e 2026-03-02)` 环境中：
 
 - `.infra/bin/align-ci.sh` 成功。
@@ -431,6 +563,9 @@ read-to-tee 循环作为旧探针保留，但它直接调用 `read_output_inner`
 历史证据，与本 worktree 的验证结果分开记录。
 
 ## 合并后的 Windows 验证
+
+> 历史归档证据。请参阅[当前摘要](#current-summary)。
+
 
 将本任务与并行 probe 工作手动合并后，完整 CI workflow 在合并提交
 `7fe9176d96fd183dad5890f49a3a587804170301` 上通过：
@@ -447,6 +582,9 @@ read-to-tee 循环作为旧探针保留，但它直接调用 `read_output_inner`
 
 ## Final RC-001 / RC-002 validation (2026-11-04)
 
+> Archived historical evidence. See the [current summary](#current-summary).
+
+
 Final implementation source commit `44644d668f72c5f00e1266f3d6582acf4ab4e3c8` passed the full
 Rust CI workflow [run 41816634209](https://github.com/qubit-ltd/rs-command/actions/runs/41816634209):
 `ubuntu-latest`, `windows-2022`, and `macos-15` verification jobs succeeded, as did the configured
@@ -457,7 +595,7 @@ also passed and selected all 6 focused tests.
 The Markdown examples are now extracted from the maintained bilingual README and user-guide files
 and compiled in an isolated harness against the actual package. Locally,
 `cargo test --test documentation_examples_tests` passed (the harness ran 12 cases: 6 Linux examples
-passed and 6 Windows-only examples were compile-only on Linux). External-document mutation checks
+passed and 6 `compile`/`no_run` examples were type-checked but ignored at runtime; Windows-only examples were excluded by `cfg(windows)`). External-document mutation checks
 confirmed failures for an invalid API call, a missing marker, a duplicate marker, and a platform mode
 mismatch. The full local `.infra/bin/ci-check.sh` passed after the final change; coverage was 97.90%
 functions, 97.02% lines, and 97.11% regions.
