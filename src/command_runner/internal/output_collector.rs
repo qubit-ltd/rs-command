@@ -61,12 +61,7 @@ pub(in crate::command_runner) fn read_output_stream<R: CancellableReader>(
     let (cancellation, token) = IoCancellation::pair()?;
     let budget = options
         .transfer_budget_after_join
-        .then(|| {
-            options
-                .total_budget
-                .clone()
-                .zip(options.total_budget_stream)
-        })
+        .then(|| options.total_budget.clone().zip(options.total_budget_stream))
         .flatten();
     let join = thread::Builder::new()
         .name("qubit-command-output-reader".to_owned())
@@ -148,17 +143,11 @@ fn read_output_inner(
             && let (Some(cancellation), Some(fd)) = (cancellation, fd)
         {
             match wait_output_readiness(fd, cancellation) {
-                Ok(super::pollable_output::OutputReadiness::Readable(available)) => {
-                    ready_capacity = available
-                }
+                Ok(super::pollable_output::OutputReadiness::Readable(available)) => ready_capacity = available,
                 #[cfg(windows)]
                 Ok(super::pollable_output::OutputReadiness::Eof) => {
                     if let Some(budget) = options.total_budget.as_ref() {
-                        budget.mark_complete(
-                            options
-                                .total_budget_stream
-                                .expect("budget stream is configured"),
-                        );
+                        budget.mark_complete(options.total_budget_stream.expect("budget stream is configured"));
                     }
                     break Ok(true);
                 }
@@ -171,9 +160,7 @@ fn read_output_inner(
                 reader,
                 &mut buffer,
                 ready_capacity,
-                options
-                    .total_budget_stream
-                    .expect("budget stream is configured"),
+                options.total_budget_stream.expect("budget stream is configured"),
             ),
             None => reader.read(&mut buffer),
         };
@@ -199,19 +186,11 @@ fn read_output_inner(
             }
         };
         if read == 0 {
-            if options
-                .total_budget
-                .as_ref()
-                .is_some_and(|budget| budget.is_halted())
-            {
+            if options.total_budget.as_ref().is_some_and(|budget| budget.is_halted()) {
                 break Ok(false);
             }
             if let Some(budget) = options.total_budget.as_ref() {
-                budget.mark_complete(
-                    options
-                        .total_budget_stream
-                        .expect("budget stream is configured"),
-                );
+                budget.mark_complete(options.total_budget_stream.expect("budget stream is configured"));
             }
             break Ok(true);
         }
@@ -261,9 +240,7 @@ fn read_output_inner(
         write_error = Some((tee.path.clone(), source));
     }
     let output = match (options.total_budget.as_ref(), options.total_budget_stream) {
-        (Some(budget), Some(stream)) if options.transfer_budget_after_join => {
-            budget.captured_stream_metadata(stream)
-        }
+        (Some(budget), Some(stream)) if options.transfer_budget_after_join => budget.captured_stream_metadata(stream),
         (Some(budget), Some(stream)) => budget.captured_stream(stream),
         _ => CapturedOutput {
             bytes,
@@ -278,11 +255,7 @@ fn read_output_inner(
             read_source,
             output,
         }),
-        (Some((path, source)), Ok(_)) => Err(OutputCaptureError::Write {
-            path,
-            source,
-            output,
-        }),
+        (Some((path, source)), Ok(_)) => Err(OutputCaptureError::Write { path, source, output }),
         (None, Err(source)) => Err(OutputCaptureError::Read { source, output }),
         (None, Ok(_)) => Ok(output),
     }
@@ -341,9 +314,7 @@ fn wait_output_readiness(
             return Err(source);
         }
         if available > 0 {
-            return Ok(super::pollable_output::OutputReadiness::Readable(
-                available as usize,
-            ));
+            return Ok(super::pollable_output::OutputReadiness::Readable(available as usize));
         }
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -351,10 +322,7 @@ fn wait_output_readiness(
 
 /// Reads one child output stream to completion for unit tests.
 #[cfg(test)]
-fn read_output(
-    reader: &mut dyn Read,
-    options: OutputCaptureOptions,
-) -> Result<CapturedOutput, OutputCaptureError> {
+fn read_output(reader: &mut dyn Read, options: OutputCaptureOptions) -> Result<CapturedOutput, OutputCaptureError> {
     read_output_inner(reader, options, None, None)
 }
 
@@ -440,14 +408,10 @@ pub(in crate::command_runner) fn collect_output_results(
     let elapsed = match elapsed_result {
         Err(source) => {
             let mut cleanup_failures = Vec::new();
-            cleanup_failures.extend(
-                stdout_failures
-                    .map(|failure| output_cleanup_failure(OutputStream::Stdout, failure)),
-            );
-            cleanup_failures.extend(
-                stderr_failures
-                    .map(|failure| output_cleanup_failure(OutputStream::Stderr, failure)),
-            );
+            cleanup_failures
+                .extend(stdout_failures.map(|failure| output_cleanup_failure(OutputStream::Stdout, failure)));
+            cleanup_failures
+                .extend(stderr_failures.map(|failure| output_cleanup_failure(OutputStream::Stderr, failure)));
             if let Some(error) = stdin_error
                 && let Some(failure) = error.into_cleanup_failure()
             {
@@ -457,25 +421,19 @@ pub(in crate::command_runner) fn collect_output_results(
                 (stdout.bytes, stdout.truncated, stdout.complete),
                 (stderr.bytes, stderr.truncated, stderr.complete),
             );
-            return Err(CommandError::from_reason(
-                command,
-                CommandErrorReason::TimeFailed { source },
-                None,
-            )
-            .with_captured_output(captured)
-            .with_cleanup_failures(cleanup_failures));
+            return Err(
+                CommandError::from_reason(command, CommandErrorReason::TimeFailed { source }, None)
+                    .with_captured_output(captured)
+                    .with_cleanup_failures(cleanup_failures),
+            );
         }
         Ok(elapsed) => elapsed,
     };
 
     if let Some(failure) = stdout_failures.next() {
         let mut cleanup_failures = Vec::new();
-        cleanup_failures.extend(
-            stdout_failures.map(|failure| output_cleanup_failure(OutputStream::Stdout, failure)),
-        );
-        cleanup_failures.extend(
-            stderr_failures.map(|failure| output_cleanup_failure(OutputStream::Stderr, failure)),
-        );
+        cleanup_failures.extend(stdout_failures.map(|failure| output_cleanup_failure(OutputStream::Stdout, failure)));
+        cleanup_failures.extend(stderr_failures.map(|failure| output_cleanup_failure(OutputStream::Stderr, failure)));
         if let Some(error) = stdin_error
             && let Some(failure) = error.into_cleanup_failure()
         {
@@ -495,9 +453,7 @@ pub(in crate::command_runner) fn collect_output_results(
 
     if let Some(failure) = stderr_failures.next() {
         let mut cleanup_failures = Vec::new();
-        cleanup_failures.extend(
-            stderr_failures.map(|failure| output_cleanup_failure(OutputStream::Stderr, failure)),
-        );
+        cleanup_failures.extend(stderr_failures.map(|failure| output_cleanup_failure(OutputStream::Stderr, failure)));
         if let Some(error) = stdin_error
             && let Some(failure) = error.into_cleanup_failure()
         {
@@ -545,14 +501,10 @@ pub(super) fn split_output_result(
 ) -> (CapturedOutput, Vec<OutputCaptureFailure>) {
     match result {
         Ok(output) => (output, Vec::new()),
-        Err(OutputCaptureError::Read { source, output }) => {
-            (output, vec![OutputCaptureFailure::Read { source }])
+        Err(OutputCaptureError::Read { source, output }) => (output, vec![OutputCaptureFailure::Read { source }]),
+        Err(OutputCaptureError::Write { path, source, output }) => {
+            (output, vec![OutputCaptureFailure::Write { path, source }])
         }
-        Err(OutputCaptureError::Write {
-            path,
-            source,
-            output,
-        }) => (output, vec![OutputCaptureFailure::Write { path, source }]),
         Err(OutputCaptureError::ReadAfterWrite {
             path,
             write_source,
@@ -565,9 +517,7 @@ pub(super) fn split_output_result(
                     path,
                     source: write_source,
                 },
-                OutputCaptureFailure::Read {
-                    source: read_source,
-                },
+                OutputCaptureFailure::Read { source: read_source },
             ],
         ),
     }
@@ -583,17 +533,10 @@ pub(super) fn split_output_result(
 /// # Returns
 ///
 /// A stream-specific cleanup failure with its original path and source.
-pub(super) fn output_cleanup_failure(
-    stream: OutputStream,
-    failure: OutputCaptureFailure,
-) -> CommandCleanupFailure {
+pub(super) fn output_cleanup_failure(stream: OutputStream, failure: OutputCaptureFailure) -> CommandCleanupFailure {
     match (stream, failure) {
-        (OutputStream::Stdout, OutputCaptureFailure::Read { source }) => {
-            CommandCleanupFailure::StdoutRead { source }
-        }
-        (OutputStream::Stderr, OutputCaptureFailure::Read { source }) => {
-            CommandCleanupFailure::StderrRead { source }
-        }
+        (OutputStream::Stdout, OutputCaptureFailure::Read { source }) => CommandCleanupFailure::StdoutRead { source },
+        (OutputStream::Stderr, OutputCaptureFailure::Read { source }) => CommandCleanupFailure::StderrRead { source },
         (OutputStream::Stdout, OutputCaptureFailure::Write { path, source }) => {
             CommandCleanupFailure::StdoutWrite { path, source }
         }
@@ -639,11 +582,7 @@ fn map_output_reader_error(
             };
             CommandError::from_reason(
                 command,
-                CommandErrorReason::WriteOutputFailed {
-                    stream,
-                    path,
-                    source,
-                },
+                CommandErrorReason::WriteOutputFailed { stream, path, source },
                 Some(Box::new(CommandOutput::new(
                     status,
                     (stdout.bytes, stdout.truncated, stdout.complete),
@@ -877,9 +816,7 @@ mod tests {
     }
 
     /// Captures a stream with a failed tee followed by one terminal event.
-    fn capture_after_tee_failure(
-        outcome: AfterTeeFailure,
-    ) -> Result<CapturedOutput, OutputCaptureError> {
+    fn capture_after_tee_failure(outcome: AfterTeeFailure) -> Result<CapturedOutput, OutputCaptureError> {
         let (_sender, token) = IoCancellation::pair().expect("cancellation pair must initialize");
         let mut reader = ReaderAfterTeeFailure {
             prefix_sent: false,
@@ -908,14 +845,8 @@ mod tests {
             AfterTeeFailure::CancelWouldBlock,
             AfterTeeFailure::CancelReadError,
         ] {
-            let error = capture_after_tee_failure(outcome)
-                .expect_err("pending tee error must survive cancellation");
-            let OutputCaptureError::Write {
-                path,
-                source,
-                output,
-            } = error
-            else {
+            let error = capture_after_tee_failure(outcome).expect_err("pending tee error must survive cancellation");
+            let OutputCaptureError::Write { path, source, output } = error else {
                 panic!("expected retained tee error for {outcome:?}");
             };
             assert_eq!(path, Path::new("failed-tee.log"));
@@ -939,15 +870,9 @@ mod tests {
                 OutputStream::Stdout => (failed, Ok(CapturedOutput::default())),
                 OutputStream::Stderr => (Ok(CapturedOutput::default()), failed),
             };
-            let error = collect_output_results(
-                "command",
-                status(0),
-                Ok(Duration::from_secs(1)),
-                stdout,
-                stderr,
-                Ok(()),
-            )
-            .expect_err("both output failures must be reported");
+            let error =
+                collect_output_results("command", status(0), Ok(Duration::from_secs(1)), stdout, stderr, Ok(()))
+                    .expect_err("both output failures must be reported");
             assert!(matches!(
                 error.reason(),
                 CommandErrorReason::WriteOutputFailed { stream: actual, source, .. }
@@ -1032,9 +957,7 @@ mod tests {
             let error = reason.into_error_after_finalize("command", error);
             assert_eq!(error.kind(), expected_kind);
             assert_both_stream_failures(error.cleanup_failures());
-            let output = error
-                .output()
-                .expect("demotion must preserve both partial streams");
+            let output = error.output().expect("demotion must preserve both partial streams");
             assert_eq!(output.stdout(), b"prefix");
             assert_eq!(output.stderr(), b"prefix");
             assert!(!output.stdout_complete());
@@ -1087,11 +1010,8 @@ mod tests {
     #[test]
     fn test_pending_tee_error_survives_pipe_wakeup_cancellation() {
         let (mut input, mut peer) = UnixStream::pair().expect("test pipe must initialize");
-        input
-            .set_nonblocking(true)
-            .expect("test pipe must be nonblocking");
-        peer.write_all(b"prefix")
-            .expect("test prefix must be written");
+        input.set_nonblocking(true).expect("test pipe must be nonblocking");
+        peer.write_all(b"prefix").expect("test prefix must be written");
         let (sender, token) = IoCancellation::pair().expect("cancellation pair must initialize");
         let (failed, observed) = mpsc::channel();
         let join = thread::spawn(move || {
@@ -1119,11 +1039,7 @@ mod tests {
         let result = join.join().expect("output helper must not panic");
         failure_observed.expect("tee failure must be stored before cancellation");
         cancellation.expect("pipe reader must be cancellable");
-        let OutputCaptureError::Write {
-            path,
-            source,
-            output,
-        } = result.expect_err("pending tee failure must survive")
+        let OutputCaptureError::Write { path, source, output } = result.expect_err("pending tee failure must survive")
         else {
             panic!("expected tee failure after pipe cancellation");
         };
@@ -1136,16 +1052,12 @@ mod tests {
 
     #[test]
     fn test_pending_tee_error_keeps_eof_complete() {
-        let error = capture_after_tee_failure(AfterTeeFailure::Eof)
-            .expect_err("tee failure must survive EOF");
+        let error = capture_after_tee_failure(AfterTeeFailure::Eof).expect_err("tee failure must survive EOF");
         let OutputCaptureError::Write { output, .. } = error else {
             panic!("expected tee failure at EOF");
         };
         assert_eq!(output.bytes, b"prefix");
-        assert!(
-            output.complete,
-            "tee failure does not undo observed pipe EOF"
-        );
+        assert!(output.complete, "tee failure does not undo observed pipe EOF");
     }
 
     /// Cancels exactly inside a failing write or flush operation.
@@ -1172,8 +1084,7 @@ mod tests {
     #[test]
     fn test_tee_cancellation_preserves_read_bytes_and_observed_eof() {
         for fail_on_flush in [false, true] {
-            let (_sender, token) =
-                IoCancellation::pair().expect("cancellation pair must initialize");
+            let (_sender, token) = IoCancellation::pair().expect("cancellation pair must initialize");
             let error = read_output_inner(
                 &mut Cursor::new(b"output"),
                 OutputCaptureOptions::new(
@@ -1190,12 +1101,7 @@ mod tests {
                 None,
             )
             .expect_err("tee failure must survive simultaneous cancellation");
-            let OutputCaptureError::Write {
-                path,
-                source,
-                output,
-            } = error
-            else {
+            let OutputCaptureError::Write { path, source, output } = error else {
                 panic!("expected tee write or flush failure");
             };
             assert_eq!(path, Path::new("cancelled-tee.log"));
@@ -1285,27 +1191,17 @@ mod tests {
             )),
         )
         .with_total_budget(budget.clone(), OutputStream::Stdout);
-        let (cancellation, token) =
-            IoCancellation::pair().expect("cancellation pair should initialize");
+        let (cancellation, token) = IoCancellation::pair().expect("cancellation pair should initialize");
         let (sender, receiver) = std::sync::mpsc::channel();
         let handle = thread::spawn(move || {
             let result = read_output_inner(&mut Cursor::new(b"abcd"), options, Some(&token), None);
-            let OutputCaptureError::Write { output, .. } =
-                result.as_ref().expect_err("tee should fail")
-            else {
+            let OutputCaptureError::Write { output, .. } = result.as_ref().expect_err("tee should fail") else {
                 panic!("expected tee write failure");
             };
-            sender
-                .send(output.bytes.clone())
-                .expect("test receiver remains open");
+            sender.send(output.bytes.clone()).expect("test receiver remains open");
             result
         });
-        assert!(
-            receiver
-                .recv()
-                .expect("collector reports pre-join metadata")
-                .is_empty()
-        );
+        assert!(receiver.recv().expect("collector reports pre-join metadata").is_empty());
         assert_eq!(budget.exceeded(), Some((3, 4)));
         let snapshot = budget.captured_output();
         assert_eq!(snapshot.stdout(), b"ab");
@@ -1330,8 +1226,7 @@ mod tests {
     #[test]
     fn test_budget_error_keeps_snapshot_without_deferred_transfer() {
         let budget = Arc::new(TotalOutputBudget::new(64, None, None));
-        let mut options = OutputCaptureOptions::new(None, None)
-            .with_total_budget(budget.clone(), OutputStream::Stdout);
+        let mut options = OutputCaptureOptions::new(None, None).with_total_budget(budget.clone(), OutputStream::Stdout);
         options.transfer_budget_after_join = false;
         let error = read_output(
             &mut FailingReader {
@@ -1354,15 +1249,13 @@ mod tests {
         expected_complete: bool,
     ) {
         let budget = Arc::new(TotalOutputBudget::new(64, None, None));
-        let (cancellation, token) =
-            IoCancellation::pair().expect("cancellation pair should initialize");
+        let (cancellation, token) = IoCancellation::pair().expect("cancellation pair should initialize");
         let (sender, receiver) = std::sync::mpsc::channel();
         let worker_budget = Arc::clone(&budget);
         let handle = thread::spawn(move || {
             let result = read_output_inner(
                 &mut { reader },
-                OutputCaptureOptions::new(None, tee)
-                    .with_total_budget(worker_budget, OutputStream::Stdout),
+                OutputCaptureOptions::new(None, tee).with_total_budget(worker_budget, OutputStream::Stdout),
                 Some(&token),
                 None,
             );
@@ -1372,9 +1265,7 @@ mod tests {
                 | Err(OutputCaptureError::ReadAfterWrite { output, .. }) => output,
                 Ok(_) => panic!("expected collector error"),
             };
-            sender
-                .send(output.bytes.clone())
-                .expect("test receiver remains open");
+            sender.send(output.bytes.clone()).expect("test receiver remains open");
             result
         });
         assert!(
@@ -1396,21 +1287,13 @@ mod tests {
         .expect_err("collector error must survive join");
         let (output, path, description) = match error {
             OutputCaptureError::Read { source, output } => (output, None, source.to_string()),
-            OutputCaptureError::Write {
-                path,
-                source,
-                output,
-            } => (output, Some(path), source.to_string()),
+            OutputCaptureError::Write { path, source, output } => (output, Some(path), source.to_string()),
             OutputCaptureError::ReadAfterWrite {
                 path,
                 write_source,
                 read_source,
                 output,
-            } => (
-                output,
-                Some(path),
-                format!("{}; {}", write_source, read_source),
-            ),
+            } => (output, Some(path), format!("{}; {}", write_source, read_source)),
         };
         assert_eq!(description, expected_kind);
         if let Some(path) = path {
@@ -1495,8 +1378,7 @@ mod tests {
 
     #[test]
     fn test_join_output_reader_maps_worker_panic() {
-        let (cancellation, token) =
-            IoCancellation::pair().expect("cancellation pair should be created");
+        let (cancellation, token) = IoCancellation::pair().expect("cancellation pair should be created");
         let reader = OutputReader::new(
             thread::spawn(move || -> Result<CapturedOutput, OutputCaptureError> {
                 let _token = token;
@@ -1527,8 +1409,7 @@ mod tests {
     #[test]
     fn test_join_output_reader_takes_budget_after_successful_join() {
         let budget = budget_with_stdout(b"payload");
-        let (cancellation, _token) =
-            IoCancellation::pair().expect("cancellation pair should initialize");
+        let (cancellation, _token) = IoCancellation::pair().expect("cancellation pair should initialize");
         let reader = OutputReader::new_with_budget(
             thread::spawn(|| Ok(CapturedOutput::default())),
             cancellation,
@@ -1547,8 +1428,7 @@ mod tests {
     #[test]
     fn test_join_output_reader_preserves_budget_bytes_on_reader_error() {
         let budget = budget_with_stdout(b"payload");
-        let (cancellation, _token) =
-            IoCancellation::pair().expect("cancellation pair should initialize");
+        let (cancellation, _token) = IoCancellation::pair().expect("cancellation pair should initialize");
         let reader = OutputReader::new_with_budget(
             thread::spawn(|| {
                 Err(OutputCaptureError::Read {
@@ -1574,19 +1454,15 @@ mod tests {
     #[test]
     fn test_join_output_reader_preserves_budget_bytes_after_worker_panic() {
         let budget = budget_with_stdout(b"payload");
-        let (cancellation, _token) =
-            IoCancellation::pair().expect("cancellation pair should initialize");
+        let (cancellation, _token) = IoCancellation::pair().expect("cancellation pair should initialize");
         let reader = OutputReader::new_with_budget(
-            thread::spawn(|| -> Result<CapturedOutput, OutputCaptureError> {
-                panic!("injected worker panic")
-            }),
+            thread::spawn(|| -> Result<CapturedOutput, OutputCaptureError> { panic!("injected worker panic") }),
             cancellation,
             budget,
             OutputStream::Stdout,
         );
 
-        let error =
-            join_output_reader(reader).expect_err("worker panic should become a read error");
+        let error = join_output_reader(reader).expect_err("worker panic should become a read error");
         let OutputCaptureError::Read { source, output } = error else {
             panic!("expected read error");
         };
@@ -1753,15 +1629,9 @@ mod tests {
                 OutputStream::Stderr => (Ok(CapturedOutput::default()), Err(failure)),
             };
 
-            let error = collect_output_results(
-                "command",
-                status(0),
-                Ok(Duration::from_secs(1)),
-                stdout,
-                stderr,
-                Ok(()),
-            )
-            .expect_err("tee failure should be mapped");
+            let error =
+                collect_output_results("command", status(0), Ok(Duration::from_secs(1)), stdout, stderr, Ok(()))
+                    .expect_err("tee failure should be mapped");
 
             assert!(matches!(
                 error.reason(),

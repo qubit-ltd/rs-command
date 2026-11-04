@@ -207,7 +207,7 @@ pub(in crate::command_runner) fn join_stdin_writer(
 ///
 /// Returns a pipe I/O error when waiting or writing fails for a reason other
 /// than an interrupted or temporarily unavailable operation.
-fn write_stdin_until_cancelled<W: PollableStdin>(
+pub(super) fn write_stdin_until_cancelled<W: PollableStdin>(
     stdin: &mut W,
     bytes: &[u8],
     cancellation: IoCancellationToken,
