@@ -103,6 +103,8 @@ let command = Command::new("git")
 
 <!-- doc-example:unix-shell:unix -->
 ```rust
+use qubit_command::{Command, CommandRunner};
+
 let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::shell("printf hello | tr a-z A-Z"))?;
 assert_eq!(output.stdout_text()?, "HELLO");
@@ -113,6 +115,8 @@ Windows 上 `Command::shell` 使用 `cmd /C`，因此要传入 `cmd` 脚本，�
 
 <!-- doc-example:windows-shell:windows -->
 ```rust
+use qubit_command::{Command, CommandRunner};
+
 let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::shell("echo hello"))?;
 assert_eq!(output.stdout_text()?.trim(), "hello");

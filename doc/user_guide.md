@@ -103,6 +103,8 @@ The script below uses Unix shell syntax and requires a Unix-like environment wit
 
 <!-- doc-example:unix-shell:unix -->
 ```rust
+use qubit_command::{Command, CommandRunner};
+
 let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::shell("printf hello | tr a-z A-Z"))?;
 assert_eq!(output.stdout_text()?, "HELLO");
@@ -113,6 +115,8 @@ On Windows, `Command::shell` uses `cmd /C`; provide a `cmd` script, not a PowerS
 
 <!-- doc-example:windows-shell:windows -->
 ```rust
+use qubit_command::{Command, CommandRunner};
+
 let output = CommandRunner::new(std::time::Duration::from_secs(10))
     .run(Command::shell("echo hello"))?;
 assert_eq!(output.stdout_text()?.trim(), "hello");

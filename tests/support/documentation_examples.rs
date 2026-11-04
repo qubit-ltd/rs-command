@@ -169,10 +169,7 @@ pub(crate) fn check_documents(root: &Path) {
             other => panic!("unsupported mode {other}"),
         };
         source.push_str(cfg);
-        source.push_str(&format!(
-            "mod {} {{\nuse qubit_command::*;\n",
-            example.id.replace('-', "_")
-        ));
+        source.push_str(&format!("mod {} {{\n", example.id.replace('-', "_")));
         source.push_str("#[test]\n");
         if ignored {
             source.push_str("#[ignore]\n");
