@@ -48,6 +48,38 @@ The production `CommandIo` blocked-read case ran once. Cancellation succeeded; t
 
 生产 `CommandIo` 阻塞 read 场景执行一次。取消成功；原 read 返回 Windows 错误 995；reader helper 已 join，进程已回收。trace 记录 `production_join_pending_witness=false`、`original_io_return_is_subsequent_io=false`、`source_writer_manually_released=true`、`watchdog_released=false`，因此未建立生产 cleanup join 挂起／救援的完整链条。有限替代探针记录：read-to-tee 128 次（首次取消成功 45 次、`ERROR_NOT_FOUND`/1168 共 83 次、tee 写入及确认阻塞写均为零）；readiness 128 次（取消成功 128 次、tee 写进入 128 次、确认阻塞写为零）；EOF-to-flush 128 次（首次取消成功 8 次、错误 1168 共 120 次、写入及确认阻塞写为零）；stdin check-to-write 是一次实际内核 write 取消（该间隙本身尝试数为零）。由于这些 trace 未构成完整生产 join 见证，read-to-tee、EOF-to-flush 和 stdin gap 分类为未覆盖。watchdog 自测记录真实 pipe 阻塞、watchdog 释放、helper 回收且未 kill child。总分类仍为 `rc002=unresolved`：这既不证明缺陷，也不证明安全，因此没有依据修改生产代码。
 
+## RSC-003 当前源码核查（2026-11-05）
+
+本节记录本轮有界核查，不覆盖下方历史 run。核查的仓库提交为
+`783f96651c20f48fd2529574ffbe37aad09fb7fd`；本轮工作区为 Linux x86_64，
+`rustc 1.94.0`、`cargo 1.94.0`。没有在本机运行 Windows 专用测试，也没有把 Linux
+筛选结果当作 Windows 验证。
+
+### 当前生产路径与可达性矩阵
+
+| 事件 | 本轮结论 | 证据边界 |
+| --- | --- | --- |
+| 成功取消 | Windows `IoCancellation::cancel` 会设置取消 token 并调用 `CancelSynchronousIo`；历史真实 Windows trace 观察到它对原始阻塞 read 成功。 | 运行证据来自已记录的 Windows SHA `70c343d155c88852443ae327e37baded29f318d4`，不是本轮 Linux 运行。 |
+| 原始操作正常返回 | 未建立。上述真实 trace 中原始 `File::read` 返回 Windows 错误 995，而不是正常完成。 | [CMD-REASSESS-002 trace](#cmd-reassess-002-fresh-windows-evidence-2026-11-04) 记录原始 read 返回和事件顺序。 |
+| 后续真实生产 I/O | 源码路径存在取消检查与同步 I/O 入口之间的竞态窗口；本轮未发现新的可达路径假设。历史生产 trace 没有观察到后续 tee write。 | `read_output_inner` 在成功读取并捕获字节后会再次检查 token；普通文件 tee 写入位于该检查之后。源码可达性本身不证明调度实际发生。 |
+| 后续 I/O 实际阻塞 | 未建立。既有真实生产 trace 的 tee 写入数为 0；替代 pipe/缓冲 writer 探针不等同于普通文件生产 tee。 | 不将旧探针的部分事件拼接成一次生产见证。 |
+| 生产 join pending | 代码在取消成功后直接 join helper；共享 100 ms 确认期限只用于取消请求失败的路径，不限制成功取消后的 join。实际生产 join 因后续 I/O 而 pending 的见证未建立。 | `finish_helpers`、`finish_output_reader` 和 `join_output_reader` 的当前实现证明 join 没有该期限，不证明它在生产场景中挂起。 |
+| watchdog 释放 | 未在生产场景观察到。 | 独立 watchdog 自测证明 harness watchdog 可以释放刻意阻塞的真实 pipe；历史生产 trace 记录 `watchdog_released=false`。 |
+| helper 与 child 回收 | 历史生产 trace 最终观察到 helper join 和 child reap；独立 watchdog 自测也观察到 helper/child 回收。 | 这些清理事件没有伴随生产 join pending 或 watchdog 释放，不能补成所需因果链。 |
+
+### 结论
+
+本轮源码核对覆盖 `CommandIo::finish_helpers`、`finish_output_reader`、
+`OutputReader`、`read_output_inner`、取消 token、Windows 同步 I/O 入口及既有
+Windows trace。现有材料已经包含生产阻塞 read trace 和有界的 128 次探针；再运行相同
+调度样本不会新增缺失事件。用测试暂停、pipe tee 或 `BufWriter` 人为构造后续阻塞 I/O
+会改变待核查的生产路径，因此没有新增实验或行为修复。
+
+缺失的完整见证仍是：成功取消、原操作正常返回、随后进入真实且阻塞的生产 I/O、生产
+cleanup join 因此保持 pending，最后由 watchdog 释放并回收 helper/child。本轮分类为
+**`unresolved`**：没有证实缺陷，也没有证明生产路径安全。此项有界核查完成；未执行
+Windows 验证，因为没有新的生产路径假设需要针对性运行，且当前执行环境为 Linux。
+
 ## 中文当前摘要
 
 以下为 CMD-REV-001 至 CMD-REV-004 及当前任务项 CMD-REASSESS-002 的当前摘要。下表记录本轮当前工作证据，不表示所有历史检查点均已重跑。旧 run 和检查点保留在[归档证据索引](#archived-evidence-index)中，仍属于历史记录。
