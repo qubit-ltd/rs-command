@@ -14,13 +14,16 @@ use std::sync::atomic::Ordering;
 ///
 /// Clone this handle before passing it to
 /// [`CommandRunOptions::cancellation`](crate::CommandRunOptions::cancellation).
-/// Calling [`Self::cancel`] before a run starts makes the runner return
-/// a [`CommandError`](crate::CommandError) with kind
+/// Cancellation is a cooperative request, not a guarantee that the run returns
+/// [`CommandErrorKind::Cancelled`](crate::CommandErrorKind::Cancelled). A
+/// request observed before the final startup check makes the runner return a
+/// [`CommandError`](crate::CommandError) with kind
 /// [`CommandErrorKind::CancelledBeforeStart`](crate::CommandErrorKind::CancelledBeforeStart)
-/// without preparing or spawning the command. Otherwise it makes the run
-/// terminate its managed process tree and return an error with kind
-/// [`CommandErrorKind::Cancelled`](crate::CommandErrorKind::Cancelled). The
-/// handle is intentionally one-shot and cannot be reset.
+/// without creating or truncating tee files or spawning the command. After
+/// startup, the runner checks for the request while monitoring the child and
+/// I/O helpers. If they have already completed before the request is observed,
+/// the run may return its normal result. The handle is intentionally one-shot
+/// and cannot be reset.
 ///
 /// # Examples
 ///
@@ -57,8 +60,10 @@ impl CommandCancellation {
 
     /// Cancels all command runs configured with a clone of this handle.
     ///
-    /// Cancellation is idempotent. A runner observes the request between wait
-    /// polls, terminates its managed process tree, and returns a typed error.
+    /// Cancellation is an idempotent cooperative request. A runner observes
+    /// it between wait polls while monitoring the child and I/O helpers. If
+    /// they have already completed before the request is observed, the run may
+    /// return its normal result.
     #[inline]
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
