@@ -152,6 +152,12 @@ impl Command {
     /// this creates `cmd /C <command_line>`. Prefer [`Self::new`] with explicit
     /// arguments when shell parsing is not required.
     ///
+    /// The generated shell payload is treated as an opaque diagnostic secret.
+    /// Manually constructed interpreter invocations such as `bash -c` or
+    /// `powershell -Command` are not guaranteed to have their whole script
+    /// hidden automatically. Mark sensitive script arguments with
+    /// [`Self::sensitive_arg`] or [`Self::sensitive_arg_os`].
+    ///
     /// # Parameters
     ///
     /// * `command_line` - Shell command line to execute.
@@ -169,6 +175,12 @@ impl Command {
     ///
     /// On Windows this creates `cmd /C <command_line>`. Prefer [`Self::new`]
     /// with explicit arguments when shell parsing is not required.
+    ///
+    /// The generated shell payload is treated as an opaque diagnostic secret.
+    /// Manually constructed interpreter invocations such as `bash -c` or
+    /// `powershell -Command` are not guaranteed to have their whole script
+    /// hidden automatically. Mark sensitive script arguments with
+    /// [`Self::sensitive_arg`] or [`Self::sensitive_arg_os`].
     ///
     /// # Parameters
     ///

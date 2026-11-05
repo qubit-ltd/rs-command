@@ -20,6 +20,10 @@ helper、终止流程以及错误保留信息的维护者和调用方。可运�
   同步入口，`run_with` 接受取消句柄和 tee 文件等单次运行选项。
 - `CommandOutput` 携带退出状态、保留的 stdout/stderr 字节、耗时、截断标志和
   `stdout_complete()`/`stderr_complete()`。
+- 诊断会将 `Command::shell` 生成的脚本参数视为不透明 secret。自动整段脚本脱敏仅限该
+  生成形式及识别出的 shell 参数形式；手工构造的 `bash -c` 或 `powershell -Command` 等
+  解释器调用若脚本含敏感内容，必须使用 `sensitive_arg` 或 `sensitive_arg_os`。一般参数
+  启发式不保证隐藏整段脚本。
 - `CommandError` 通过稳定的 `kind()` 分类并可选地携带输出。`output()` 借用保留输出，
   `into_output()` 将其取出。`captured_output()` 借用捕获字节，
   `into_captured_output()` 独立移出字节并保留流标记；两个载体同时存在时优先选择

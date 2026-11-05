@@ -206,6 +206,36 @@ fn test_command_shell_payload_and_explicit_sensitive_argument_never_leak() {
 }
 
 #[test]
+fn test_command_explicitly_sensitive_interpreter_scripts_never_leak() {
+    for command in [
+        Command::new("/bin/sh")
+            .arg("-c")
+            .sensitive_arg("Write-Output 'RSC_FIXED_PAYLOAD_7F3A'"),
+        Command::new("bash")
+            .arg("-c")
+            .sensitive_arg("Write-Output 'RSC_FIXED_PAYLOAD_7F3A'"),
+        Command::new("powershell")
+            .arg("-Command")
+            .sensitive_arg("Write-Output 'RSC_FIXED_PAYLOAD_7F3A'"),
+    ] {
+        let debug = format!("{command:?}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        assert!(!debug.contains("RSC_FIXED_PAYLOAD_7F3A"), "{debug}");
+    }
+}
+
+#[test]
+fn test_command_unmarked_manual_interpreter_script_marker_remains_visible() {
+    let command = Command::new("/bin/sh")
+        .arg("-c")
+        .arg("printf RSC_FIXED_PAYLOAD_7F3A");
+
+    let debug = format!("{command:?}");
+
+    assert!(debug.contains("RSC_FIXED_PAYLOAD_7F3A"), "{debug}");
+}
+
+#[test]
 fn test_command_debug_marks_truncated_output() {
     let payload = "x".repeat(20_000);
     let command = Command::new("tool").arg(&payload);

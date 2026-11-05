@@ -128,7 +128,7 @@ assert_eq!(output.stdout_text()?.trim(), "hello");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-类 Unix 平台上的 `Command::shell` 执行 `sh -c`，Windows 上执行 `cmd /C`。shell 脚本体在诊断中视为不透明 secret。shell 的展开、重定向和管道由调用方负责，包括输入校验。
+类 Unix 平台上的 `Command::shell` 执行 `sh -c`，Windows 上执行 `cmd /C`。它生成的脚本参数在诊断中视为不透明 secret。自动整段脚本脱敏仅覆盖该生成形式及识别出的 shell 参数形式；手工构造的 `bash -c`、`powershell -Command` 等脚本不保证整段隐藏。对含敏感内容的脚本参数使用 `sensitive_arg` 或 `sensitive_arg_os`。shell 的展开、重定向和管道由调用方负责，包括输入校验。
 
 ### 配置输入与环境
 
@@ -331,7 +331,7 @@ tee 路径必须是普通文件。runner 会在截断任何 tee 文件前检查 
 
 ## 诊断与脱敏
 
-Runner 日志、`CommandError::command()` 和 `Command` 的 debug 输出会遮盖敏感结构化参数、显式环境变量覆盖、shell 内容和已配置路径。对于客户文件路径等位置参数，使用 `sensitive_arg` 或 `sensitive_arg_os`：
+Runner 日志、`CommandError::command()` 和 `Command` 的 debug 输出会遮盖显式标记的敏感结构化参数、显式环境变量覆盖、已配置路径，以及 `Command::shell` 生成的整段脚本。自动整段脚本脱敏对解释器的覆盖有限；一般参数启发式可能遮盖其他脚本的部分内容，但不保证隐藏完整脚本。对于客户文件路径等位置参数，以及手工构造的解释器脚本，使用 `sensitive_arg` 或 `sensitive_arg_os`：
 
 <!-- doc-example:sensitive-argument:compile -->
 ```rust
@@ -340,6 +340,10 @@ use qubit_command::Command;
 let command = Command::new("uploader")
     .arg("--file")
     .sensitive_arg("customer-report.csv");
+
+let powershell = Command::new("powershell")
+    .arg("-Command")
+    .sensitive_arg("Write-Output 'customer-script-marker'");
 ```
 
 原值会不变地传给子进程，诊断渲染时则显示掩码。`CommandRunner::new(std::time::Duration::from_secs(10))` 会取得进程级默认脱敏策略的快照。如果要构造 runner 专用策略，可以通过 `diagnostic_redaction_policy` 注入完整不可变策略；策略类型属于 `qubit-redact`，因此应用构造它时必须直接依赖该 crate。

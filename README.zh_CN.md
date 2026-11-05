@@ -55,12 +55,13 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 - 在 Windows 上，`CancelSynchronousIo` 成功只表示取消请求成功，并不能证明 helper 已停止。随后 runner 会 join 该 helper；这个 join 不受 100 ms 截止时间限制。runner 会在发出取消请求前统一设定一个共享的 100 ms helper 确认截止时间，只有请求失败时才会检查该时间，且不会为每个 helper 重置；它也不是整个调用的硬期限。若该截止时间耗尽，为保证返回有界，结果会保留 cancellation cleanup failure；受影响的 helper 可能一直存活到管道关闭。当前核查状态见[Windows 取消验证](doc/rc-002-verification.md)。
 - 默认每个输出流最多在内存中保留 1 MiB。单流内存保留上限本身不会停止排空或 tee 写入；总输出预算、超时、取消或管道读取失败可能中断收集。tee 写入失败可能在读取继续时使 tee 不完整；tee flush 失败则可能在流已排空后使 tee 不完整。
 - 可选的 stdout/stderr 总预算会停止超量输出的命令，与每流内存保留上限独立。发生 `OutputLimitExceeded` 时，通过 `CommandError::captured_output()` 检查部分字节；`output()` 为 `None`。详见[中文用户手册](doc/user_guide.zh_CN.md)。
-- 命令诊断和生命周期日志会遮盖敏感参数、环境变量、shell 内容和路径。捕获到的进程输出与 tee 文件仍是原始输出，需要由调用方自行处理。
+- 命令诊断和生命周期日志会遮盖显式标记的敏感参数、环境变量、已配置路径，以及通过 `Command::shell` 传入的整段脚本。整段脚本的自动隐藏范围仅限该生成形式和识别出的 shell 参数形式；手工构造的 `bash -c` 或 `powershell -Command` 等脚本若含敏感内容，需使用 `sensitive_arg` 或 `sensitive_arg_os`。捕获到的进程输出与 tee 文件仍是原始输出，需要由调用方自行处理。
 
 重要边界：
 
 - `Command::new` 避免了 shell 解析，但目标可执行文件仍会按自身规则解析选项。
 - `Command::shell` 在类 Unix 平台使用 `sh -c`，在 Windows 使用 `cmd /C`；它不承诺一种跨平台的 shell 语言。
+- 手工构造解释器命令时，应显式标记含敏感内容的脚本参数；自动整段脚本脱敏不覆盖所有解释器形式。
 - `unbounded_output()` 会移除内存捕获上限，只有在确认命令输出有限且可接受时才应使用。
 - 超时和取消结果可能只包含部分输出。在把保留字节当作完整流前，请检查 `stdout_complete()` 和 `stderr_complete()`。
 - `stdin_file`、`tee_stdout_to_file` 和 `tee_stderr_to_file` 只接受普通文件。输入文件与输出文件冲突时，会在截断 tee 文件前拒绝执行。
