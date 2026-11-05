@@ -25,8 +25,8 @@ jobs:
           $log = "windows-cancellation-interleaving.log"
           Set-Content -Path $log -Value "ci_checkout_sha=$env:GITHUB_SHA"
           Add-Content -Path $log -Value "platform=windows-2022"
-          Add-Content -Path $log -Value "command=cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1 --nocapture"
-          $output = & cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1 --nocapture 2>&1
+          Add-Content -Path $log -Value "command=cargo test --lib windows_ -- --nocapture"
+          $output = & cargo test --lib windows_ -- --nocapture 2>&1
           $cargoExitCode = $LASTEXITCODE
           $output | Tee-Object -FilePath $log -Append
           if ($cargoExitCode -ne 0) { exit $cargoExitCode }
