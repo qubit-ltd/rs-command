@@ -381,6 +381,7 @@ text; explicitly formatting a full error chain is the caller's responsibility.
 | Process control | `SpawnFailed`, `WaitFailed` | Check the executable, permissions, platform process-control support, and the source I/O error. |
 | Stream I/O | `ReadOutputFailed`, `WriteInputFailed`, `OpenOutputFailed`, `WriteOutputFailed` | Check the named stream, file access, and retained output attached to the error when present. |
 | Time | `TimeFailed` | Check that the timer and clock share a valid monotonic domain and can progress while the caller is blocked. |
+| Output budget | `OutputLimitExceeded` | Inspect `reason()` for `limit` and `observed` (including the sentinel byte), then read `captured_output()` and check stream completeness and truncation. `output()` is `None`, which does not mean no bytes were retained. See [Bounded and Large Output](#bounded-and-large-output). |
 | Policy result | `UnexpectedExit`, `OutputTruncated`, `TimedOut`, `Cancelled`, `CancelledBeforeStart` | Inspect status, configured policy, retained output, and stream-completion flags. |
 
 For a policy error with output:

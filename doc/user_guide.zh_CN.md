@@ -364,6 +364,7 @@ let command = Command::new("uploader")
 | 进程控制 | `SpawnFailed`、`WaitFailed` | 检查可执行文件、权限、平台进程控制能力和源 I/O 错误。 |
 | 流 I/O | `ReadOutputFailed`、`WriteInputFailed`、`OpenOutputFailed`、`WriteOutputFailed` | 检查对应流、文件访问权限以及错误附带的保留输出。 |
 | 时间 | `TimeFailed` | 检查 timer 与 clock 是否使用有效的单调时间域，并能在调用方阻塞时推进。 |
+| 输出预算 | `OutputLimitExceeded` | 先通过 `reason()` 检查 `limit` 和包含哨兵字节的 `observed`，再从 `captured_output()` 读取字节并检查完整性、截断标志。`output()` 为 `None` 不代表没有保留字节。参见[有界输出与大输出](#有界输出与大输出)。 |
 | 策略结果 | `UnexpectedExit`、`OutputTruncated`、`TimedOut`、`Cancelled`、`CancelledBeforeStart` | 检查状态、配置策略、保留输出和流完整性标志。 |
 
 处理带输出的策略错误时，可以这样检查：
