@@ -423,7 +423,6 @@ impl RunningCommand {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
     use std::io;
     use std::io::Cursor;
     #[cfg(unix)]
@@ -433,9 +432,7 @@ mod tests {
     #[cfg(windows)]
     use std::os::windows::process::ExitStatusExt;
     use std::path::PathBuf;
-    use std::process::Command as ProcessCommand;
     use std::process::ExitStatus;
-    use std::process::Stdio;
     use std::sync::Arc;
     use std::sync::Condvar;
     use std::sync::Mutex;
@@ -466,6 +463,8 @@ mod tests {
     use super::super::output_capture_error::OutputCaptureError;
     use super::super::output_reader::OutputReader;
     use super::super::run_event::RunEvent;
+    use super::super::scripted_child::raw_child;
+    use super::super::scripted_child::ScriptedChild;
     use super::super::stdin_writer::StdinWriter;
     use super::super::total_output_budget::TotalOutputBudget;
     use super::RunningCommand;
@@ -552,88 +551,19 @@ mod tests {
         ExitStatus::from_raw(code as u32)
     }
 
-    #[derive(Debug)]
-    struct ScriptedChild {
-        inner: Box<dyn ChildWrapper>,
-        kill_error: Option<io::Error>,
-        wait_result: Option<io::Result<ExitStatus>>,
-        try_wait_results: VecDeque<io::Result<Option<ExitStatus>>>,
-    }
-
-    impl ScriptedChild {
-        fn new(inner: Box<dyn ChildWrapper>) -> Self {
-            Self {
-                inner,
-                kill_error: None,
-                wait_result: None,
-                try_wait_results: VecDeque::new(),
-            }
-        }
-
-        fn kill_error(mut self, source: io::Error) -> Self {
-            self.kill_error = Some(source);
-            self
-        }
-
-        fn wait_status(mut self, exit_status: ExitStatus) -> Self {
-            self.wait_result = Some(Ok(exit_status));
-            self
-        }
-
-        fn try_wait_results(mut self, results: impl IntoIterator<Item = io::Result<Option<ExitStatus>>>) -> Self {
-            self.try_wait_results.extend(results);
-            self
-        }
-    }
-
-    impl ChildWrapper for ScriptedChild {
-        fn inner(&self) -> &dyn ChildWrapper {
-            self.inner.as_ref()
-        }
-
-        fn inner_mut(&mut self) -> &mut dyn ChildWrapper {
-            self.inner.as_mut()
-        }
-
-        fn into_inner(self: Box<Self>) -> Box<dyn ChildWrapper> {
-            self.inner
-        }
-
-        fn start_kill(&mut self) -> io::Result<()> {
-            match self.kill_error.take() {
-                Some(source) => Err(source),
-                None => Ok(()),
-            }
-        }
-
-        fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-            self.try_wait_results
-                .pop_front()
-                .unwrap_or_else(|| self.inner.try_wait())
-        }
-
-        fn wait(&mut self) -> io::Result<ExitStatus> {
-            self.wait_result.take().unwrap_or_else(|| self.inner.wait())
-        }
-    }
-
-    fn raw_child() -> Box<dyn ChildWrapper> {
-        let mut child = ProcessCommand::new("rustc")
-            .arg("--version")
-            .stdout(Stdio::null())
-            .spawn()
-            .expect("test child should spawn");
-        child.wait().expect("test child should be reaped");
-        Box::new(child)
-    }
-
     fn terminating_child(exit_status: ExitStatus) -> ManagedChildProcess {
-        ManagedChildProcess::new(Box::new(ScriptedChild::new(raw_child()).wait_status(exit_status)), true)
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        ManagedChildProcess::new(
+            Box::new(ScriptedChild::new("child", raw_child(), calls).wait_status(exit_status)),
+            true,
+        )
     }
 
     fn fallback_race_child(exit_status: ExitStatus) -> ManagedChildProcess {
-        let direct = ScriptedChild::new(raw_child()).kill_error(io::Error::other("child termination failed"));
-        let tree = ScriptedChild::new(Box::new(direct))
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let direct = ScriptedChild::new("child", raw_child(), Arc::clone(&calls))
+            .kill_error(io::Error::other("child termination failed"));
+        let tree = ScriptedChild::new("tree", Box::new(direct), calls)
             .kill_error(io::Error::other("tree termination failed"))
             .try_wait_results((0..8).map(|_| Ok(None)).chain(std::iter::once(Ok(Some(exit_status)))));
         ManagedChildProcess::new(Box::new(tree), true)
@@ -1054,7 +984,12 @@ mod tests {
 
     #[test]
     fn test_budget_only_timer_live_child_uses_timer() {
-        let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(None)]);
+        let child = ScriptedChild::new(
+            "child",
+            raw_child(),
+            Arc::new(Mutex::new(Vec::new())),
+        )
+        .try_wait_results([Ok(None)]);
         let (timer, at_calls) = failing_timer();
         let result = running_with_budget_and_timer(
             ManagedChildProcess::new(Box::new(child), true),
@@ -1071,7 +1006,12 @@ mod tests {
 
     #[test]
     fn test_cancellation_while_waiting_for_io_retains_child_status() {
-        let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(Some(status(0)))]);
+        let child = ScriptedChild::new(
+            "child",
+            raw_child(),
+            Arc::new(Mutex::new(Vec::new())),
+        )
+        .try_wait_results([Ok(Some(status(0)))]);
         let mut command = running(
             ManagedChildProcess::new(Box::new(child), true),
             CommandIo::new(successful_reader(), successful_reader(), None),
@@ -1087,7 +1027,12 @@ mod tests {
 
     #[test]
     fn test_active_child_output_budget_precedes_ready_cancellation() {
-        let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(None)]);
+        let child = ScriptedChild::new(
+            "child",
+            raw_child(),
+            Arc::new(Mutex::new(Vec::new())),
+        )
+        .try_wait_results([Ok(None)]);
         let mut command = running_with_budget(
             ManagedChildProcess::new(Box::new(child), true),
             CommandIo::new(successful_reader(), successful_reader(), None),
@@ -1109,7 +1054,12 @@ mod tests {
 
     #[test]
     fn test_exited_child_precedes_ready_cancellation() {
-        let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(Some(status(7)))]);
+        let child = ScriptedChild::new(
+            "child",
+            raw_child(),
+            Arc::new(Mutex::new(Vec::new())),
+        )
+        .try_wait_results([Ok(Some(status(7)))]);
         let mut command = running(
             ManagedChildProcess::new(Box::new(child), true),
             CommandIo::new(successful_reader(), successful_reader(), None),
@@ -1129,7 +1079,11 @@ mod tests {
         clock
             .advance(Duration::from_secs(2))
             .expect("manual time should advance");
-        let child = ScriptedChild::new(raw_child());
+        let child = ScriptedChild::new(
+            "child",
+            raw_child(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
         let mut command = RunningCommand::new(
             "test command".to_owned(),
             ManagedChildProcess::new(Box::new(child), true),
@@ -1149,7 +1103,12 @@ mod tests {
 
     #[test]
     fn test_no_timeout_monitor_does_not_sample_elapsed_time() {
-        let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(None), Ok(Some(status(0)))]);
+        let child = ScriptedChild::new(
+            "child",
+            raw_child(),
+            Arc::new(Mutex::new(Vec::new())),
+        )
+        .try_wait_results([Ok(None), Ok(Some(status(0)))]);
         let clock = CountingClock {
             inner: ManualMonotonicClock::new_shared(),
             now_calls: Arc::new(AtomicUsize::new(0)),
@@ -1179,7 +1138,12 @@ mod tests {
 
     #[test]
     fn test_budget_only_timer_after_exit_uses_timer() {
-        let child = ScriptedChild::new(raw_child()).try_wait_results([Ok(Some(status(0)))]);
+        let child = ScriptedChild::new(
+            "child",
+            raw_child(),
+            Arc::new(Mutex::new(Vec::new())),
+        )
+        .try_wait_results([Ok(Some(status(0)))]);
         let budget = Arc::new(TotalOutputBudget::new(10, None, None));
         let (reader, _release) = blocked_budget_reader(Arc::clone(&budget));
         let (timer, at_calls) = failing_timer();
@@ -1470,10 +1434,11 @@ mod tests {
     }
 
     fn termination_failure_child() -> ManagedChildProcess {
-        let direct = ScriptedChild::new(raw_child())
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let direct = ScriptedChild::new("child", raw_child(), Arc::clone(&calls))
             .kill_error(io::Error::other("child termination failed"))
             .try_wait_results((0..9).map(|_| Ok(None)));
-        let tree = ScriptedChild::new(Box::new(direct))
+        let tree = ScriptedChild::new("tree", Box::new(direct), calls)
             .kill_error(io::Error::other("tree termination failed"))
             .try_wait_results((0..8).map(|_| Ok(None)));
         ManagedChildProcess::new(Box::new(tree), true)
@@ -1715,22 +1680,18 @@ mod tests {
     }
     #[test]
     fn test_resolve_event_preserves_all_stop_reasons_across_cleanup_outcomes() {
-        use std::sync::Arc;
-        use std::sync::Mutex;
-
-        use super::super::scripted_child::ScriptedChild as RecordingChild;
         for event_kind in 0..7 {
             for termination_mode in 0..3 {
                 let calls = Arc::new(Mutex::new(Vec::new()));
                 let child = if termination_mode == 1 {
-                    let direct = RecordingChild::new("child", raw_child(), Arc::clone(&calls))
+                    let direct = ScriptedChild::new("child", raw_child(), Arc::clone(&calls))
                         .kill_error(io::Error::other("child denied"));
-                    let tree = RecordingChild::new("tree", Box::new(direct), calls)
+                    let tree = ScriptedChild::new("tree", Box::new(direct), calls)
                         .kill_error(io::Error::other("tree denied"))
                         .try_wait_results((0..9).map(|_| Ok(None)));
                     ManagedChildProcess::new(Box::new(tree), true)
                 } else if termination_mode == 2 {
-                    let tree = RecordingChild::new("tree", raw_child(), calls)
+                    let tree = ScriptedChild::new("tree", raw_child(), calls)
                         .wait_error(io::Error::other("final wait failed"));
                     ManagedChildProcess::new(Box::new(tree), true)
                 } else {
