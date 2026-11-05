@@ -3,14 +3,18 @@
 ## RSC-004 bounded harness adjustments (2026-11-05)
 
 This implementation pass reviewed the existing Windows probes and production path
-at source base `f9bc76fa98f1437647cc773cc6bce9e0fb1f2b45`. The latest recorded
-Windows evidence remains run [41851372381](https://github.com/qubit-ltd/rs-command/actions/runs/41851372381)
-on source SHA `70c343d155c88852443ae327e37baded29f318d4`; it is historical evidence,
-not a run of this implementation tree. Its production `CommandIo` attempt observed
-successful cancellation of the original blocked read, that read returning error
-995, and a completed cleanup join. It observed no subsequent I/O, no pending
-production join witness, and no watchdog release. Therefore the full causal witness
-is still absent and the cancellation policy remains unchanged and unresolved.
+at source base `f9bc76fa98f1437647cc773cc6bce9e0fb1f2b45`. The post-integration
+Windows run [42015431077](https://github.com/qubit-ltd/rs-command/actions/runs/42015431077)
+ran on `windows-2022` at source SHA `07c7d76a1ba16a81085a09f9cdd1b557c86ec579`.
+The exact command was `cargo test --lib windows_ -- --nocapture`; all 11 selected
+tests passed (0 failed, 109 filtered). Its [structured trace artifact](https://github.com/qubit-ltd/rs-command/actions/runs/42015431077/artifacts/13408423993)
+records one production `CommandIo` attempt: cancellation succeeded, the original
+blocked read returned Windows error 995, the cleanup thread was unfinished when the
+cancel observer fired, and the reader helper later joined. However,
+`production_join_pending_witness=false`, `original_io_return_is_subsequent_io=false`,
+`source_writer_manually_released=true`, and `watchdog_released=false`. Thus it still
+does not establish the complete causal witness; cancellation policy remains unchanged
+and unresolved.
 
 The existing probes were retained. Their scenario limit remains 128 attempts;
 independent probe subprocess watchdogs are now 10 seconds. The workflow gives the
@@ -18,12 +22,13 @@ probe step a 15-minute outer timeout and the Windows job a 20-minute timeout. Th
 ordinary-file production tee and EOF-with-no-pending-buffer classification remain
 unchanged; no synthetic writer or I/O was introduced.
 
-No Windows run was available in this Linux execution environment. The required
-post-integration Windows command is
-`cargo test --lib windows_ -- --nocapture`; CI must verify nonzero Windows test
-discovery, the actual source SHA, child watchdog status, and the resulting event
-trace before any platform verification claim. Do not interpret Linux zero-test
-discovery as Windows evidence.
+The run exercised the independent child watchdog and confirmed it released and
+reaped the deliberately blocked child. The readiness scenario recorded 128 attempts,
+128 successful cancellations, 128 tee-write entries, and zero confirmed blocked
+writes. The production scenario remains a single bounded attempt because the missing
+events are causal witnesses, not merely low sample counts. The RSC-004 conclusion is
+unresolved: this evidence neither confirms the suspected production hang nor proves
+that it cannot occur. Linux zero-test discovery is not treated as Windows evidence.
 
 # Current status / 当前状态 (2026-11-04)
 
