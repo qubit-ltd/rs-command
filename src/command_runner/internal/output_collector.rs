@@ -41,7 +41,8 @@ type OutputFd = std::os::windows::io::RawHandle;
 ///
 /// # Type Parameters
 ///
-/// * `R` - Type used by this operation.
+/// * `R` - Output pipe reader type that supports platform cancellation setup
+///   and native handle access.
 ///
 /// # Parameters
 ///
@@ -85,7 +86,8 @@ pub(in crate::command_runner) fn read_output_stream<R: CancellableReader>(
 ///
 /// # Type Parameters
 ///
-/// * `R` - Result returned by the helper finalizer.
+/// * `R` - Output pipe reader type that supports platform cancellation setup
+///   and native handle access.
 fn read_output_until_cancelled<R: CancellableReader>(
     mut reader: R,
     options: OutputCaptureOptions,

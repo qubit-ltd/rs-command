@@ -165,7 +165,10 @@ impl TotalOutputBudget {
     }
 
     /// Records that the selected stream reached EOF.
+    ///
     /// # Parameters
+    ///
+    /// * `stream` - Stdout or stderr whose EOF was observed.
     pub(in crate::command_runner) fn mark_complete(&self, stream: OutputStream) {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match stream {
@@ -194,7 +197,12 @@ impl TotalOutputBudget {
     /// snapshot may be incomplete. Truncation describes bytes omitted by a
     /// per-stream retention cap; completeness describes reaching EOF, and
     /// neither is implied by the other.
+    ///
     /// # Parameters
+    ///
+    /// * `joined` - Optional output from readers that have already been joined.
+    ///   Transferred streams use the matching joined stream result; without it,
+    ///   their bytes are empty and they are marked incomplete.
     pub(in crate::command_runner) fn captured_output_with_joined(
         &self,
         joined: Option<&CommandCapturedOutput>,
@@ -239,7 +247,10 @@ impl TotalOutputBudget {
     /// held; a live reader may append more bytes or later reach EOF. A
     /// truncated snapshot may still be incomplete, and a snapshot is not a
     /// joined reader result.
+    ///
     /// # Parameters
+    ///
+    /// * `stream` - Stdout or stderr whose current retained snapshot is cloned.
     pub(in crate::command_runner) fn captured_stream(&self, stream: OutputStream) -> CapturedOutput {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match stream {
@@ -261,7 +272,11 @@ impl TotalOutputBudget {
     /// The transfer flag makes a second take explicit: it returns empty bytes
     /// with the original metadata and cannot present an empty buffer as the
     /// original complete output.
+    ///
     /// # Parameters
+    ///
+    /// * `stream` - Stdout or stderr whose retained bytes are transferred. Its
+    ///   reader must have been joined so no more bytes can be appended.
     pub(in crate::command_runner) fn take_captured_stream(&self, stream: OutputStream) -> CapturedOutput {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match stream {
@@ -303,7 +318,11 @@ impl TotalOutputBudget {
     }
 
     /// Returns stream flags without retaining or cloning its byte buffer.
+    ///
     /// # Parameters
+    ///
+    /// * `stream` - Stdout or stderr whose truncation and completion flags are
+    ///   returned; the retained bytes are not copied.
     pub(in crate::command_runner) fn captured_stream_metadata(&self, stream: OutputStream) -> CapturedOutput {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (truncated, complete) = match stream {
