@@ -39,7 +39,7 @@ const ATTEMPTS: usize = 128;
 const CHILD_MODE: &str = "QUBIT_WINDOWS_CANCEL_INTERLEAVING_CHILD";
 const TEST_FILTER: &str =
     "command_runner::internal::windows_cancel_interleaving_tests::windows_successful_cancel_interleaving";
-const WATCHDOG_LIMIT: Duration = Duration::from_secs(30);
+const WATCHDOG_LIMIT: Duration = Duration::from_secs(10);
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 const BLOCKED_WRITE_OBSERVATION: Duration = Duration::from_millis(10);
 const WATCHDOG_PARENT_CHECK: &str = r#"{"event":"watchdog_parent_check","child_reaped":true,"child_kill_used":false}"#;

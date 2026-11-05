@@ -9,7 +9,7 @@ permissions:
 jobs:
   windows-interleaving:
     runs-on: windows-2022
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -19,6 +19,7 @@ jobs:
         shell: bash
         run: ./.infra/bin/prepare-local-path-dependencies.sh
       - name: Run real-pipe cancellation probe
+        timeout-minutes: 15
         shell: pwsh
         run: |
           $log = "windows-cancellation-interleaving.log"

@@ -1,5 +1,30 @@
 <a id="current-summary"></a>
 
+## RSC-004 bounded harness adjustments (2026-11-05)
+
+This implementation pass reviewed the existing Windows probes and production path
+at source base `f9bc76fa98f1437647cc773cc6bce9e0fb1f2b45`. The latest recorded
+Windows evidence remains run [41851372381](https://github.com/qubit-ltd/rs-command/actions/runs/41851372381)
+on source SHA `70c343d155c88852443ae327e37baded29f318d4`; it is historical evidence,
+not a run of this implementation tree. Its production `CommandIo` attempt observed
+successful cancellation of the original blocked read, that read returning error
+995, and a completed cleanup join. It observed no subsequent I/O, no pending
+production join witness, and no watchdog release. Therefore the full causal witness
+is still absent and the cancellation policy remains unchanged and unresolved.
+
+The existing probes were retained. Their scenario limit remains 128 attempts;
+independent probe subprocess watchdogs are now 10 seconds. The workflow gives the
+probe step a 15-minute outer timeout and the Windows job a 20-minute timeout. The
+ordinary-file production tee and EOF-with-no-pending-buffer classification remain
+unchanged; no synthetic writer or I/O was introduced.
+
+No Windows run was available in this Linux execution environment. The required
+post-integration Windows command is
+`cargo test --lib windows_ -- --nocapture`; CI must verify nonzero Windows test
+discovery, the actual source SHA, child watchdog status, and the resulting event
+trace before any platform verification claim. Do not interpret Linux zero-test
+discovery as Windows evidence.
+
 # Current status / 当前状态 (2026-11-04)
 
 This is the current summary for CMD-REV-001 through CMD-REV-004 and the current task item CMD-REASSESS-002. The evidence below is from the current review work, not a claim that every historical checkpoint was rerun. Older runs and checkpoints are retained in the [archived evidence](#archived-evidence-index) and remain historical.

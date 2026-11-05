@@ -38,6 +38,7 @@ use super::super::read_output_stream;
 use crate::OutputStream;
 
 const ATTEMPTS: usize = 128;
+const CHILD_WATCHDOG: Duration = Duration::from_secs(10);
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 const BLOCKED_WRITE_OBSERVATION: Duration = Duration::from_millis(10);
 
@@ -431,38 +432,38 @@ fn test_windows_probe_watchdog_reaps_blocked_child() {
 }
 #[test]
 fn test_windows_real_cancel_read_to_blocked_tee_interleaving() {
-    let outcome = supervise_child("probe", Duration::from_secs(30)).expect("child supervision should work");
+    let outcome = supervise_child("probe", CHILD_WATCHDOG).expect("child supervision should work");
     assert_completed(outcome, "probe");
 }
 
 #[test]
 fn test_windows_successful_cancel_interleaving_read_to_tee() {
-    let outcome = supervise_child("probe", Duration::from_secs(30)).expect("child supervision should work");
+    let outcome = supervise_child("probe", CHILD_WATCHDOG).expect("child supervision should work");
     assert_completed(outcome, "probe");
 }
 
 #[test]
 fn test_windows_successful_cancel_interleaving_readiness() {
-    let outcome = supervise_child("readiness", Duration::from_secs(30)).expect("child supervision should work");
+    let outcome = supervise_child("readiness", CHILD_WATCHDOG).expect("child supervision should work");
     assert_completed(outcome, "readiness");
 }
 
 #[test]
 fn test_windows_successful_cancel_interleaving_eof_to_flush() {
-    let outcome = supervise_child("eof-flush", Duration::from_secs(30)).expect("child supervision should work");
+    let outcome = supervise_child("eof-flush", CHILD_WATCHDOG).expect("child supervision should work");
     assert_completed(outcome, "eof-flush");
 }
 
 #[test]
 fn test_windows_successful_cancel_interleaving_stdin_check_to_write() {
-    let outcome = supervise_child("stdin-check-write", Duration::from_secs(30)).expect("child supervision should work");
+    let outcome = supervise_child("stdin-check-write", CHILD_WATCHDOG).expect("child supervision should work");
     assert_completed(outcome, "stdin-check-write");
 }
 
 #[test]
 fn test_windows_successful_cancel_interleaving_production_command_io() {
     let outcome =
-        supervise_child("production-command-io", Duration::from_secs(30)).expect("child supervision should work");
+        supervise_child("production-command-io", CHILD_WATCHDOG).expect("child supervision should work");
     eprintln!(
         "{{\"event\":\"probe_process_reaping\",\"scenario\":\"production_command_io_blocked_read\",\"probe_child_reaped\":{}}}",
         outcome.status.is_some(),
