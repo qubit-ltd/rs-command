@@ -205,34 +205,47 @@ impl TotalOutputBudget {
     ///   their bytes are empty and they are marked incomplete.
     pub(in crate::command_runner) fn captured_output_with_joined(
         &self,
-        joined: Option<&CommandCapturedOutput>,
+        joined: Option<CommandCapturedOutput>,
     ) -> CommandCapturedOutput {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (
+            joined_stdout,
+            joined_stderr,
+            joined_stdout_truncated,
+            joined_stderr_truncated,
+            joined_stdout_complete,
+            joined_stderr_complete,
+        ) = match joined {
+            Some(output) => {
+                let stdout_truncated = output.stdout_truncated();
+                let stderr_truncated = output.stderr_truncated();
+                let stdout_complete = output.stdout_complete();
+                let stderr_complete = output.stderr_complete();
+                let (stdout, stderr) = output.into_streams();
+                (
+                    Some(stdout),
+                    Some(stderr),
+                    stdout_truncated,
+                    stderr_truncated,
+                    stdout_complete,
+                    stderr_complete,
+                )
+            }
+            None => (None, None, false, false, false, false),
+        };
         let (stdout_bytes, stdout_truncated, stdout_complete) = if state.stdout_transferred {
-            joined.map_or_else(
-                || (Vec::new(), state.stdout_truncated, false),
-                |output| {
-                    (
-                        output.stdout().to_vec(),
-                        output.stdout_truncated(),
-                        output.stdout_complete(),
-                    )
-                },
-            )
+            match joined_stdout {
+                Some(bytes) => (bytes, joined_stdout_truncated, joined_stdout_complete),
+                None => (Vec::new(), state.stdout_truncated, false),
+            }
         } else {
             (state.stdout.clone(), state.stdout_truncated, state.stdout_complete)
         };
         let (stderr_bytes, stderr_truncated, stderr_complete) = if state.stderr_transferred {
-            joined.map_or_else(
-                || (Vec::new(), state.stderr_truncated, false),
-                |output| {
-                    (
-                        output.stderr().to_vec(),
-                        output.stderr_truncated(),
-                        output.stderr_complete(),
-                    )
-                },
-            )
+            match joined_stderr {
+                Some(bytes) => (bytes, joined_stderr_truncated, joined_stderr_complete),
+                None => (Vec::new(), state.stderr_truncated, false),
+            }
         } else {
             (state.stderr.clone(), state.stderr_truncated, state.stderr_complete)
         };
@@ -445,13 +458,77 @@ mod tests {
         assert!(budget.captured_output().stdout().is_empty());
 
         let joined = CommandCapturedOutput::new((b"joined".to_vec(), false, true), (b"err".to_vec(), false, true));
-        let merged = budget.captured_output_with_joined(Some(&joined));
+        let merged = budget.captured_output_with_joined(Some(joined));
         assert_eq!(merged.stdout(), b"joined");
         assert!(merged.stdout_complete());
         assert!(merged.stderr().is_empty());
         assert!(!merged.stderr_complete());
+        {
+            let mut state = budget.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.stdout_truncated = true;
+            state.stdout_complete = true;
+        }
         let missing_joined = budget.captured_output_with_joined(None);
+        assert!(missing_joined.stdout().is_empty());
+        assert!(missing_joined.stdout_truncated());
         assert!(!missing_joined.stdout_complete());
+    }
+
+    #[test]
+    fn test_total_output_joined_streams_move_allocations_and_metadata() {
+        let budget = TotalOutputBudget::new(32, None, None);
+        for (stream, bytes) in [
+            (OutputStream::Stdout, b"stdout retained".as_slice()),
+            (OutputStream::Stderr, b"stderr retained".as_slice()),
+        ] {
+            let mut reader = Cursor::new(bytes);
+            let mut buffer = [0; 32];
+            budget
+                .read_ready(&mut reader, &mut buffer, 32, stream)
+                .expect("read succeeds");
+            budget.mark_complete(stream);
+            let _ = budget.take_captured_stream(stream);
+        }
+        let joined = CommandCapturedOutput::new(
+            (b"joined stdout".to_vec(), true, false),
+            (b"joined stderr".to_vec(), false, true),
+        );
+        let stdout_ptr = joined.stdout().as_ptr();
+        let stderr_ptr = joined.stderr().as_ptr();
+        let merged = budget.captured_output_with_joined(Some(joined));
+        assert_eq!(merged.stdout().as_ptr(), stdout_ptr);
+        assert_eq!(merged.stderr().as_ptr(), stderr_ptr);
+        assert_eq!(merged.stdout(), b"joined stdout");
+        assert_eq!(merged.stderr(), b"joined stderr");
+        assert!(merged.stdout_truncated());
+        assert!(!merged.stdout_complete());
+        assert!(!merged.stderr_truncated());
+        assert!(merged.stderr_complete());
+    }
+
+    #[test]
+    fn test_total_output_joined_mixed_stream_uses_snapshot_for_untransferred() {
+        let budget = TotalOutputBudget::new(32, None, None);
+        let mut reader = Cursor::new(b"snapshot stderr");
+        let mut buffer = [0; 32];
+        budget
+            .read_ready(&mut reader, &mut buffer, 32, OutputStream::Stderr)
+            .expect("read succeeds");
+        budget.mark_complete(OutputStream::Stderr);
+        let _ = budget.take_captured_stream(OutputStream::Stdout);
+        let joined = CommandCapturedOutput::new(
+            (b"joined stdout".to_vec(), true, false),
+            (b"ignored stderr".to_vec(), true, false),
+        );
+        let joined_stderr_ptr = joined.stderr().as_ptr();
+        let merged = budget.captured_output_with_joined(Some(joined));
+        assert_eq!(merged.stdout(), b"joined stdout");
+        assert_eq!(merged.stderr(), b"snapshot stderr");
+        assert_ne!(merged.stderr().as_ptr(), joined_stderr_ptr);
+        assert!(merged.stdout_truncated());
+        assert!(!merged.stdout_complete());
+        assert!(!merged.stderr_truncated());
+        assert!(merged.stderr_complete());
     }
 
     #[test]

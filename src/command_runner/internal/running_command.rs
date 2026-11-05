@@ -288,12 +288,14 @@ impl RunningCommand {
         let (finished, io_cleanup_failures) = self.complete_after_termination(status);
         let finished = match finished {
             Ok(finished) => finished,
-            Err(error) => {
+            Err(mut error) => {
                 if let StopReason::OutputLimitExceeded { limit, observed, .. } = reason {
-                    let captured = total_budget.as_ref().map_or_else(
-                        || error.captured_output().cloned(),
-                        |budget| Some(budget.captured_output_with_joined(error.captured_output())),
-                    );
+                    let captured = match total_budget.as_ref() {
+                        Some(budget) => Some(
+                            budget.captured_output_with_joined(error.take_captured_output()),
+                        ),
+                        None => error.take_captured_output(),
+                    };
                     let mut primary = CommandError::from_reason(
                         command_text,
                         crate::CommandErrorReason::OutputLimitExceeded { limit, observed },

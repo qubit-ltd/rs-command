@@ -266,6 +266,81 @@ fn test_finalization_keeps_existing_primary_output() {
 }
 
 #[test]
+fn test_take_captured_output_preserves_diagnostics_and_moves_capture() {
+    let capture = CommandCapturedOutput::new(
+        (b"nonempty stdout allocation".to_vec(), true, false),
+        (b"stderr bytes".to_vec(), false, true),
+    );
+    let stdout_ptr = capture.stdout().as_ptr();
+    let stderr_ptr = capture.stderr().as_ptr();
+    let mut error = CommandError::from_reason("command", CommandErrorReason::Cancelled, None)
+        .with_captured_output(capture)
+        .with_cleanup_failures([
+            CommandCleanupFailure::Stdin {
+                source: io::Error::other("stdin"),
+            },
+            CommandCleanupFailure::StdoutRead {
+                source: io::Error::other("stdout"),
+            },
+        ]);
+    let kind = error.kind();
+    assert!(matches!(error.reason(), CommandErrorReason::Cancelled));
+    assert!(matches!(
+        error.cleanup_failures(),
+        [CommandCleanupFailure::StdoutRead { .. }, CommandCleanupFailure::Stdin { .. }]
+    ));
+
+    let taken = error.take_captured_output().expect("capture is retained");
+    assert_eq!(taken.stdout().as_ptr(), stdout_ptr);
+    assert_eq!(taken.stderr().as_ptr(), stderr_ptr);
+    assert_eq!(taken.stdout(), b"nonempty stdout allocation");
+    assert_eq!(taken.stderr(), b"stderr bytes");
+    assert!(taken.stdout_truncated());
+    assert!(!taken.stdout_complete());
+    assert!(!taken.stderr_truncated());
+    assert!(taken.stderr_complete());
+    assert!(error.output().is_none());
+    assert!(error.captured_output().is_none());
+    assert!(matches!(error.reason(), CommandErrorReason::Cancelled));
+    assert_eq!(error.kind(), kind);
+    assert!(matches!(
+        error.cleanup_failures(),
+        [CommandCleanupFailure::StdoutRead { .. }, CommandCleanupFailure::Stdin { .. }]
+    ));
+    assert!(error.take_captured_output().is_none());
+}
+
+#[test]
+fn test_take_captured_output_prefers_command_output_and_discards_fallback() {
+    let output = CommandOutput::new(
+        status(),
+        (b"preferred allocation".to_vec(), false, true),
+        (b"preferred stderr".to_vec(), true, false),
+        Duration::from_secs(1),
+    );
+    let expected_ptr = output.stdout().as_ptr();
+    let mut error = CommandError::from_reason(
+        "command",
+        CommandErrorReason::Cancelled,
+        Some(Box::new(output)),
+    )
+    .with_captured_output(CommandCapturedOutput::new(
+        (b"fallback".to_vec(), false, false),
+        (Vec::new(), false, false),
+    ));
+
+    let taken = error
+        .take_captured_output()
+        .expect("output carrier is retained");
+    assert_eq!(taken.stdout().as_ptr(), expected_ptr);
+    assert_eq!(taken.stdout(), b"preferred allocation");
+    assert_eq!(taken.stderr(), b"preferred stderr");
+    assert!(error.output().is_none());
+    assert!(error.captured_output().is_none());
+    assert!(error.take_captured_output().is_none());
+}
+
+#[test]
 fn test_command_error_formatting_omits_source_text_but_preserves_source() {
     #[derive(Debug)]
     struct SecretSource;

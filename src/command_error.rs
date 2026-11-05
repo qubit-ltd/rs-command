@@ -237,6 +237,27 @@ impl CommandError {
         self
     }
 
+    /// Takes the retained stream bytes without consuming this error.
+    ///
+    /// A retained [`CommandOutput`] takes precedence over the independent
+    /// captured-byte carrier, matching [`Self::into_captured_output`]. Any
+    /// unused carrier is discarded. The primary reason and cleanup failures
+    /// remain available for subsequent inspection or consumption.
+    ///
+    /// # Returns
+    ///
+    /// `Some(captured)` when either output carrier was retained, including an
+    /// empty capture. The stream buffers are moved without cloning. `None`
+    /// means neither carrier was retained.
+    pub(crate) fn take_captured_output(&mut self) -> Option<CommandCapturedOutput> {
+        let output = self.output.take();
+        let captured = self.captured_output.take();
+        match output {
+            Some(output) => Some((*output).into_captured_output()),
+            None => captured.map(|captured| *captured),
+        }
+    }
+
     /// Consumes the error and returns its retained `CommandOutput`.
     ///
     /// # Returns
@@ -280,10 +301,8 @@ impl CommandError {
     #[must_use]
     #[inline]
     pub fn into_captured_output(self) -> Option<CommandCapturedOutput> {
-        match self.output {
-            Some(output) => Some((*output).into_captured_output()),
-            None => self.captured_output.map(|captured| *captured),
-        }
+        let mut this = self;
+        this.take_captured_output()
     }
 
     /// Returns every cleanup failure observed after the primary failure.
