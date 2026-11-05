@@ -24,18 +24,31 @@ use std::fmt;
 /// # Examples
 ///
 /// ```
-/// use qubit_command::CommandError;
+/// use std::time::Duration;
+/// use qubit_command::{Command, CommandErrorKind, CommandErrorReason, CommandRunner};
 ///
-/// fn inspect(error: &CommandError) {
-///     if let Some(captured) = error.captured_output() {
-///         let _stdout = captured.stdout();
-///         let _stderr = captured.stderr();
-///         let _stdout_complete = captured.stdout_complete();
-///         let _stderr_complete = captured.stderr_complete();
-///         let _stdout_truncated = captured.stdout_truncated();
-///         let _stderr_truncated = captured.stderr_truncated();
-///     }
-/// }
+/// let output = CommandRunner::new(Duration::from_secs(10))
+///     .max_stdout_bytes(0)
+///     .fail_on_output_truncation(false)
+///     .run(Command::new("rustc").arg("--version"))
+///     .expect("rustc should run");
+/// assert!(output.stdout().is_empty());
+/// assert!(output.stdout_truncated());
+/// assert!(output.stdout_complete());
+///
+/// let error = CommandRunner::new(Duration::from_secs(10))
+///     .max_output_bytes(8)
+///     .max_total_output_bytes(0)
+///     .run(Command::new("rustc").arg("--version"))
+///     .expect_err("the first output byte should exceed the zero-byte budget");
+/// assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
+/// assert!(matches!(error.reason(),
+///     CommandErrorReason::OutputLimitExceeded { limit: 0, observed: 1 }));
+/// assert!(error.output().is_none());
+/// let captured = error.captured_output().expect("budget error should retain bytes");
+/// assert_eq!(captured.stdout().len(), 1);
+/// assert!(!captured.stdout_truncated());
+/// assert!(!captured.stdout_complete());
 /// ```
 #[derive(Clone, PartialEq, Eq)]
 #[must_use]
