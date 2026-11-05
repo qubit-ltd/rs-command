@@ -226,9 +226,7 @@ fn test_command_explicitly_sensitive_interpreter_scripts_never_leak() {
 
 #[test]
 fn test_command_unmarked_manual_interpreter_script_marker_remains_visible() {
-    let command = Command::new("/bin/sh")
-        .arg("-c")
-        .arg("printf RSC_FIXED_PAYLOAD_7F3A");
+    let command = Command::new("/bin/sh").arg("-c").arg("printf RSC_FIXED_PAYLOAD_7F3A");
 
     let debug = format!("{command:?}");
 

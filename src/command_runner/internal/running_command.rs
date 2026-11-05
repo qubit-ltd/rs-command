@@ -291,9 +291,7 @@ impl RunningCommand {
             Err(mut error) => {
                 if let StopReason::OutputLimitExceeded { limit, observed, .. } = reason {
                     let captured = match total_budget.as_ref() {
-                        Some(budget) => Some(
-                            budget.captured_output_with_joined(error.take_captured_output()),
-                        ),
+                        Some(budget) => Some(budget.captured_output_with_joined(error.take_captured_output())),
                         None => error.take_captured_output(),
                     };
                     let mut primary = CommandError::from_reason(
@@ -463,8 +461,8 @@ mod tests {
     use super::super::output_capture_error::OutputCaptureError;
     use super::super::output_reader::OutputReader;
     use super::super::run_event::RunEvent;
-    use super::super::scripted_child::raw_child;
     use super::super::scripted_child::ScriptedChild;
+    use super::super::scripted_child::raw_child;
     use super::super::stdin_writer::StdinWriter;
     use super::super::total_output_budget::TotalOutputBudget;
     use super::RunningCommand;
@@ -984,12 +982,8 @@ mod tests {
 
     #[test]
     fn test_budget_only_timer_live_child_uses_timer() {
-        let child = ScriptedChild::new(
-            "child",
-            raw_child(),
-            Arc::new(Mutex::new(Vec::new())),
-        )
-        .try_wait_results([Ok(None)]);
+        let child =
+            ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new()))).try_wait_results([Ok(None)]);
         let (timer, at_calls) = failing_timer();
         let result = running_with_budget_and_timer(
             ManagedChildProcess::new(Box::new(child), true),
@@ -1006,12 +1000,8 @@ mod tests {
 
     #[test]
     fn test_cancellation_while_waiting_for_io_retains_child_status() {
-        let child = ScriptedChild::new(
-            "child",
-            raw_child(),
-            Arc::new(Mutex::new(Vec::new())),
-        )
-        .try_wait_results([Ok(Some(status(0)))]);
+        let child = ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new())))
+            .try_wait_results([Ok(Some(status(0)))]);
         let mut command = running(
             ManagedChildProcess::new(Box::new(child), true),
             CommandIo::new(successful_reader(), successful_reader(), None),
@@ -1027,12 +1017,8 @@ mod tests {
 
     #[test]
     fn test_active_child_output_budget_precedes_ready_cancellation() {
-        let child = ScriptedChild::new(
-            "child",
-            raw_child(),
-            Arc::new(Mutex::new(Vec::new())),
-        )
-        .try_wait_results([Ok(None)]);
+        let child =
+            ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new()))).try_wait_results([Ok(None)]);
         let mut command = running_with_budget(
             ManagedChildProcess::new(Box::new(child), true),
             CommandIo::new(successful_reader(), successful_reader(), None),
@@ -1054,12 +1040,8 @@ mod tests {
 
     #[test]
     fn test_exited_child_precedes_ready_cancellation() {
-        let child = ScriptedChild::new(
-            "child",
-            raw_child(),
-            Arc::new(Mutex::new(Vec::new())),
-        )
-        .try_wait_results([Ok(Some(status(7)))]);
+        let child = ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new())))
+            .try_wait_results([Ok(Some(status(7)))]);
         let mut command = running(
             ManagedChildProcess::new(Box::new(child), true),
             CommandIo::new(successful_reader(), successful_reader(), None),
@@ -1079,11 +1061,7 @@ mod tests {
         clock
             .advance(Duration::from_secs(2))
             .expect("manual time should advance");
-        let child = ScriptedChild::new(
-            "child",
-            raw_child(),
-            Arc::new(Mutex::new(Vec::new())),
-        );
+        let child = ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new())));
         let mut command = RunningCommand::new(
             "test command".to_owned(),
             ManagedChildProcess::new(Box::new(child), true),
@@ -1103,12 +1081,8 @@ mod tests {
 
     #[test]
     fn test_no_timeout_monitor_does_not_sample_elapsed_time() {
-        let child = ScriptedChild::new(
-            "child",
-            raw_child(),
-            Arc::new(Mutex::new(Vec::new())),
-        )
-        .try_wait_results([Ok(None), Ok(Some(status(0)))]);
+        let child = ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new())))
+            .try_wait_results([Ok(None), Ok(Some(status(0)))]);
         let clock = CountingClock {
             inner: ManualMonotonicClock::new_shared(),
             now_calls: Arc::new(AtomicUsize::new(0)),
@@ -1138,12 +1112,8 @@ mod tests {
 
     #[test]
     fn test_budget_only_timer_after_exit_uses_timer() {
-        let child = ScriptedChild::new(
-            "child",
-            raw_child(),
-            Arc::new(Mutex::new(Vec::new())),
-        )
-        .try_wait_results([Ok(Some(status(0)))]);
+        let child = ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new())))
+            .try_wait_results([Ok(Some(status(0)))]);
         let budget = Arc::new(TotalOutputBudget::new(10, None, None));
         let (reader, _release) = blocked_budget_reader(Arc::clone(&budget));
         let (timer, at_calls) = failing_timer();

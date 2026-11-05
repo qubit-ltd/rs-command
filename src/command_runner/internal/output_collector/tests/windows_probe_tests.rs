@@ -462,8 +462,7 @@ fn test_windows_successful_cancel_interleaving_stdin_check_to_write() {
 
 #[test]
 fn test_windows_successful_cancel_interleaving_production_command_io() {
-    let outcome =
-        supervise_child("production-command-io", CHILD_WATCHDOG).expect("child supervision should work");
+    let outcome = supervise_child("production-command-io", CHILD_WATCHDOG).expect("child supervision should work");
     eprintln!(
         "{{\"event\":\"probe_process_reaping\",\"scenario\":\"production_command_io_blocked_read\",\"probe_child_reaped\":{}}}",
         outcome.status.is_some(),

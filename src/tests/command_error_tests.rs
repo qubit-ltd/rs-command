@@ -287,7 +287,10 @@ fn test_take_captured_output_preserves_diagnostics_and_moves_capture() {
     assert!(matches!(error.reason(), CommandErrorReason::Cancelled));
     assert!(matches!(
         error.cleanup_failures(),
-        [CommandCleanupFailure::StdoutRead { .. }, CommandCleanupFailure::Stdin { .. }]
+        [
+            CommandCleanupFailure::StdoutRead { .. },
+            CommandCleanupFailure::Stdin { .. }
+        ]
     ));
 
     let taken = error.take_captured_output().expect("capture is retained");
@@ -305,7 +308,10 @@ fn test_take_captured_output_preserves_diagnostics_and_moves_capture() {
     assert_eq!(error.kind(), kind);
     assert!(matches!(
         error.cleanup_failures(),
-        [CommandCleanupFailure::StdoutRead { .. }, CommandCleanupFailure::Stdin { .. }]
+        [
+            CommandCleanupFailure::StdoutRead { .. },
+            CommandCleanupFailure::Stdin { .. }
+        ]
     ));
     assert!(error.take_captured_output().is_none());
 }
@@ -319,19 +325,13 @@ fn test_take_captured_output_prefers_command_output_and_discards_fallback() {
         Duration::from_secs(1),
     );
     let expected_ptr = output.stdout().as_ptr();
-    let mut error = CommandError::from_reason(
-        "command",
-        CommandErrorReason::Cancelled,
-        Some(Box::new(output)),
-    )
-    .with_captured_output(CommandCapturedOutput::new(
-        (b"fallback".to_vec(), false, false),
-        (Vec::new(), false, false),
-    ));
+    let mut error = CommandError::from_reason("command", CommandErrorReason::Cancelled, Some(Box::new(output)))
+        .with_captured_output(CommandCapturedOutput::new(
+            (b"fallback".to_vec(), false, false),
+            (Vec::new(), false, false),
+        ));
 
-    let taken = error
-        .take_captured_output()
-        .expect("output carrier is retained");
+    let taken = error.take_captured_output().expect("output carrier is retained");
     assert_eq!(taken.stdout().as_ptr(), expected_ptr);
     assert_eq!(taken.stdout(), b"preferred allocation");
     assert_eq!(taken.stderr(), b"preferred stderr");
