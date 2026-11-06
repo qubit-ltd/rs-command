@@ -2,19 +2,50 @@
 
 ## Latest evidence summary / 最新证据摘要 (2026-11-06)
 
-This is the single current summary. The latest Windows runtime evidence remains the existing run below; this round added only a Linux source/history review and did not produce new Windows runtime evidence.
+This is the single current summary. This implementation round added a Windows run that verifies all required probe test identities are discovered and pass. It checks validation coverage and does not establish a new production cancellation/join causal witness.
 
 | Evidence / 证据 | Source SHA / 源码 SHA | Platform / 平台 | Command / 命令 | Selected tests / 选中测试 | Run and artifact / 运行与工件 | Witness fields / 见证字段 | Conclusion / 结论 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| Windows identity gate / Windows 身份门禁 (2026-11-06) | `dde6481b0f00e3abed66a3a7dc379f3d4c9229f9` | `windows-2022` | `cargo test --lib windows_ -- --list --color never`; `cargo test --lib command_io::tests::test_error_not_found_ -- --list --color never`; both corresponding `--show-output --test-threads=1 --color never` runs | 13 selected across two filters; 12 required identities discovered and passed | [run 42191457990](https://github.com/qubit-ltd/rs-command/actions/runs/42191457990); [artifact 13490440897](https://github.com/qubit-ltd/rs-command/actions/runs/42191457990/artifacts/13490440897) | PowerShell fixtures passed; both Cargo list/run exit codes were 0; required identity summary reports 12/12 discovered and passed | Identity coverage verified; this does not add a production causal witness or change `unresolved`. |
 | Latest Windows run / 最新 Windows 运行 (2026-11-05) | `07c7d76a1ba16a81085a09f9cdd1b557c86ec579` | `windows-2022` | `cargo test --lib windows_ -- --nocapture` | 11 passed, 0 failed, 109 filtered | [run 42015431077](https://github.com/qubit-ltd/rs-command/actions/runs/42015431077); [artifact 13408423993](https://github.com/qubit-ltd/rs-command/actions/runs/42015431077/artifacts/13408423993) | Original read returned Windows error 995; `production_join_pending_witness=false`; `original_io_return_is_subsequent_io=false`; `source_writer_manually_released=true`; `watchdog_released=false`; helper later joined | `unresolved`: the same production trace does not establish a subsequent blocked I/O, pending production join, or watchdog rescue. |
 | Current source/history review / 本轮源码与历史复核 (2026-11-06) | `49b1b58912dc551832f36edaa80f123b976b4707` | Linux x86_64 workspace | Read-only `git rev-parse HEAD`, `rg -n`, and targeted `sed -n` inspection | N/A (no tests run / 未运行测试) | No run or artifact / 无 run 或 artifact | Historical witness fields remain as listed above; no new trace was produced / 历史见证字段同上；本轮无新 trace | `unresolved`: no new production interleaving assumption was found; this review neither proves the defect nor proves safety. |
 
-这是唯一的当前摘要。最新 Windows 运行时证据仍是下表已有运行；本轮仅在 Linux 上复核源码与历史记录，没有产生新的 Windows 运行时证据。
+这是唯一的当前摘要。本轮新增了 Windows 运行，验证必需探针测试身份均被发现并通过。该运行验证覆盖范围，不建立新的生产取消/join 因果见证。
 
 | 证据 | 源码 SHA | 平台 | 命令 | 选中测试 | Run 与 artifact | 见证字段 | 结论 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| Windows 身份门禁（2026-11-06） | `dde6481b0f00e3abed66a3a7dc379f3d4c9229f9` | `windows-2022` | `cargo test --lib windows_ -- --list --color never`；`cargo test --lib command_io::tests::test_error_not_found_ -- --list --color never`；两条对应的 `--show-output --test-threads=1 --color never` 运行 | 两种过滤器共选中 13 项；12 个必需身份均已发现并通过 | [run 42191457990](https://github.com/qubit-ltd/rs-command/actions/runs/42191457990)；[artifact 13490440897](https://github.com/qubit-ltd/rs-command/actions/runs/42191457990/artifacts/13490440897) | PowerShell 夹具通过；两组 Cargo list/run 退出码均为 0；身份摘要显示 12/12 均发现并通过 | 身份覆盖已验证；本轮没有新增生产因果见证，分类仍为 `unresolved`。 |
 | 最新 Windows 运行（2026-11-05） | `07c7d76a1ba16a81085a09f9cdd1b557c86ec579` | `windows-2022` | `cargo test --lib windows_ -- --nocapture` | 11 项通过、0 项失败、过滤 109 项 | [run 42015431077](https://github.com/qubit-ltd/rs-command/actions/runs/42015431077)；[artifact 13408423993](https://github.com/qubit-ltd/rs-command/actions/runs/42015431077/artifacts/13408423993) | 原始 read 返回 Windows 错误 995；`production_join_pending_witness=false`；`original_io_return_is_subsequent_io=false`；`source_writer_manually_released=true`；`watchdog_released=false`；helper 后续 join | `unresolved`：同一生产轨迹没有证明后续 I/O 阻塞、生产 join pending 或 watchdog 救援。 |
 | 本轮源码与历史复核（2026-11-06） | `49b1b58912dc551832f36edaa80f123b976b4707` | Linux x86_64 workspace | 只读执行 `git rev-parse HEAD`、`rg -n` 和定点 `sed -n` 检查 | 不适用（未运行测试） | 无 run 或 artifact | 历史见证字段同上；本轮没有新 trace | `unresolved`：没有发现新的生产交错假设；本轮既不证明缺陷，也不证明安全。 |
+
+## RSC-002 Windows test identity gate verification (2026-11-06)
+
+The Windows workflow passed on `windows-2022` at source SHA
+`dde6481b0f00e3abed66a3a7dc379f3d4c9229f9`. It ran PowerShell gate fixtures, then
+discovered and executed the `windows_` filter and the separately selected
+`command_io::tests::test_error_not_found_` tests. Both list commands and both run
+commands exited 0; 13 tests were selected across the two run commands. The result
+gate reported all 12 required full test identities as discovered and passed.
+See [workflow run 42191457990](https://github.com/qubit-ltd/rs-command/actions/runs/42191457990)
+and [artifact 13490440897](https://github.com/qubit-ltd/rs-command/actions/runs/42191457990/artifacts/13490440897).
+
+This verifies that the required test identities are selected and successful. The
+probe trace remains bounded historical evidence and does not establish a new
+production cancellation/join causal witness; the existing `unresolved`
+classification is unchanged.
+
+## RSC-002 Windows 测试身份门禁验证（2026-11-06）
+
+Windows workflow 在 `windows-2022`、源码 SHA
+`dde6481b0f00e3abed66a3a7dc379f3d4c9229f9` 上通过。它先运行 PowerShell
+门禁夹具，再发现并执行 `windows_` 过滤器以及单独选择的
+`command_io::tests::test_error_not_found_` 测试。两个 list 命令和两个运行命令的
+退出码均为 0，两条运行命令共选择 13 项。结果门禁报告 12 个必需完整测试身份均已发现并通过。
+详见 [workflow run 42191457990](https://github.com/qubit-ltd/rs-command/actions/runs/42191457990)
+和 [artifact 13490440897](https://github.com/qubit-ltd/rs-command/actions/runs/42191457990/artifacts/13490440897)。
+
+该验证确认必需测试身份被选中并成功执行。探针 trace 仍是有界历史证据，没有建立新的生产取消/join
+因果见证；现有 `unresolved` 分类保持不变。
 
 ## WIN-CANCEL-JOIN 源码与历史证据复核（2026-11-06）
 
