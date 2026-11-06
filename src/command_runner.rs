@@ -276,7 +276,6 @@ impl CommandRunner {
     /// # Returns
     ///
     /// `Some(duration)` when timeout handling is enabled, otherwise `None`.
-    #[must_use]
     #[inline]
     pub const fn configured_timeout(&self) -> Option<Duration> {
         self.timeout
@@ -509,7 +508,6 @@ impl CommandRunner {
     ///
     /// `Some(path)` when a default working directory is configured, otherwise
     /// `None` to inherit the current process working directory.
-    #[must_use]
     #[inline]
     pub fn configured_working_directory(&self) -> Option<&Path> {
         self.working_directory.as_deref()
@@ -684,7 +682,6 @@ impl CommandRunner {
     /// # Returns
     ///
     /// `Some(max_bytes)` when stdout capture is limited, otherwise `None`.
-    #[must_use]
     #[inline]
     pub const fn configured_max_stdout_bytes(&self) -> Option<usize> {
         self.max_stdout_bytes
@@ -716,7 +713,6 @@ impl CommandRunner {
     /// # Returns
     ///
     /// `Some(max_bytes)` when stderr capture is limited, otherwise `None`.
-    #[must_use]
     #[inline]
     pub const fn configured_max_stderr_bytes(&self) -> Option<usize> {
         self.max_stderr_bytes
@@ -802,7 +798,6 @@ impl CommandRunner {
     }
 
     /// Returns the configured combined stdout/stderr hard byte limit.
-    #[must_use]
     #[inline]
     pub const fn configured_max_total_output_bytes(&self) -> Option<u64> {
         self.max_total_output_bytes
