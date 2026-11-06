@@ -739,12 +739,13 @@ mod unix {
         let worker_result = worker.join();
 
         let descendant_reclaimed = cleanup_result.expect("escaped descendant cleanup should succeed");
-        if matches!(fixture, "delayed-readiness" | "late-pid")
-            && (pid_handshake.is_err() || direct_exit.is_err())
-        {
+        if matches!(fixture, "delayed-readiness" | "late-pid") && (pid_handshake.is_err() || direct_exit.is_err()) {
             let (abort_written, pid_recorded, abort_acknowledged) =
                 abort_cleanup.expect("preflight failure should run abort cleanup");
-            assert!(abort_written, "abort marker should be written after a preflight failure");
+            assert!(
+                abort_written,
+                "abort marker should be written after a preflight failure"
+            );
             assert!(
                 pid_recorded || abort_acknowledged,
                 "abort should be acknowledged or escaped PID should be recorded"
@@ -767,14 +768,29 @@ mod unix {
                 Some((true, true)),
                 "release should make the fixture ready"
             );
-            assert!(descendant_reclaimed, "escaped descendant should be reclaimed after cancellation");
+            assert!(
+                descendant_reclaimed,
+                "escaped descendant should be reclaimed after cancellation"
+            );
         } else if fixture == "late-pid" {
-            assert!(pid_handshake.is_err(), "late PID fixture should miss its preflight deadline");
-            assert!(direct_exit.is_ok(), "direct command should exit during late PID publication");
+            assert!(
+                pid_handshake.is_err(),
+                "late PID fixture should miss its preflight deadline"
+            );
+            assert!(
+                direct_exit.is_ok(),
+                "direct command should exit during late PID publication"
+            );
             assert!(readiness.is_err(), "late PID should remain unavailable before abort");
             assert_eq!(post_release_ready, None, "preflight failure must not release readiness");
-            assert!(!release_path.exists(), "late PID preflight failure must not create release marker");
-            assert!(descendant_reclaimed, "late escaped descendant should be killed after cancellation");
+            assert!(
+                !release_path.exists(),
+                "late PID preflight failure must not create release marker"
+            );
+            assert!(
+                descendant_reclaimed,
+                "late escaped descendant should be killed after cancellation"
+            );
         } else {
             assert!(readiness.is_ok(), "fixture readiness failed: {readiness:?}");
         }
