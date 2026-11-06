@@ -166,6 +166,277 @@ mod unix {
     use super::support::escaped_process_guard::EscapedProcessGuard;
 
     #[cfg(target_os = "linux")]
+    fn linux_process_is_running(pid: u32) -> bool {
+        let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            return false;
+        };
+        let Some((_, fields)) = stat.rsplit_once(')') else {
+            return true;
+        };
+        !matches!(fields.split_whitespace().next(), Some("Z" | "X"))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_timeout_fixture_with_watchdog(pid_path: &std::path::Path, fixture: &str) {
+        const CHILD_ENV: &str = "QUBIT_COMMAND_TIMEOUT_FIXTURE";
+        const PID_ENV: &str = "QUBIT_COMMAND_TIMEOUT_FIXTURE_PID";
+        const WATCHDOG: Duration = Duration::from_secs(30);
+
+        if let Ok(child_fixture) = std::env::var(CHILD_ENV) {
+            let child_pid_path = std::env::var_os(PID_ENV)
+                .map(std::path::PathBuf::from)
+                .expect("watchdog parent should provide the PID handshake path");
+            run_timeout_fixture(&child_fixture, &child_pid_path);
+            return;
+        }
+
+        let current_thread = std::thread::current();
+        let test_name = current_thread.name().expect("test thread should be named");
+        let mut escaped = EscapedProcessGuard::new(pid_path.to_path_buf());
+        let watchdog = WATCHDOG;
+        let mut child = std::process::Command::new(
+            std::env::current_exe().expect("integration test executable should be available"),
+        )
+        .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+        .env(CHILD_ENV, fixture)
+        .env(PID_ENV, pid_path)
+        .spawn()
+        .expect("timeout fixture subprocess should start");
+        let deadline = Instant::now() + watchdog;
+        loop {
+            match child
+                .try_wait()
+                .expect("timeout fixture subprocess should be observable")
+            {
+                Some(status) => {
+                    let cleaned = escaped
+                        .terminate_if_recorded()
+                        .expect("escaped descendant should be cleaned up after fixture exit");
+                    if fixture == "watchdog-self-test" {
+                        assert!(!status.success(), "stalled fixture should be terminated by watchdog");
+                        assert!(cleaned, "watchdog should find and clean the escaped descendant");
+                    } else {
+                        assert!(status.success(), "timeout fixture failed: {status}");
+                    }
+                    return;
+                }
+                None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+                None => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let cleaned = escaped
+                        .terminate_if_recorded()
+                        .expect("watchdog should clean up escaped descendant");
+                    if fixture == "watchdog-self-test" {
+                        assert!(cleaned, "watchdog should find and clean the escaped descendant");
+                        return;
+                    }
+                    panic!("timeout fixture exceeded {watchdog:?} watchdog");
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_timeout_fixture(fixture: &str, pid_path: &std::path::Path) {
+        const READY_TIMEOUT: Duration = Duration::from_secs(5);
+        const RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+        const TIMEOUT: Duration = Duration::from_secs(30);
+
+        if fixture == "watchdog-self-test" {
+            let escaped = EscapedProcessGuard::new(pid_path.to_path_buf());
+            let mut stalled = std::process::Command::new("setsid")
+                .arg("sh")
+                .arg("-c")
+                .arg("echo \"$$\" > \"$1\"; exec sleep 60")
+                .arg("sh")
+                .arg(pid_path)
+                .spawn()
+                .expect("stalled watchdog fixture should start");
+            escaped.wait_until_recorded(READY_TIMEOUT);
+            let _ = stalled.wait();
+        }
+
+        let stderr = fixture == "stderr";
+        let stdin = fixture == "stdin";
+        let ready_path = pid_path.with_extension("ready");
+        let parent_pid_path = pid_path.with_extension("parent.pid");
+        let mut escaped = EscapedProcessGuard::new(pid_path.to_path_buf());
+        let script = if fixture == "ready-timeout" {
+            "echo \"$$\" > \"$3.tmp\"; mv \"$3.tmp\" \"$3\"; setsid sh -c 'echo \"$$\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; exec sleep 60' sh \"$1\" & printf started"
+        } else if stdin {
+            "echo \"$$\" > \"$3.tmp\"; mv \"$3.tmp\" \"$3\"; setsid sh -c 'echo \"$$\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; : > \"$2\"; exec sleep 60' sh \"$1\" \"$2\" >/dev/null 2>&1 & wait"
+        } else if stderr {
+            "echo \"$$\" > \"$3.tmp\"; mv \"$3.tmp\" \"$3\"; setsid sh -c 'echo \"$$\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; : > \"$2\"; exec sleep 60' sh \"$1\" \"$2\" >/dev/null & printf started >&2"
+        } else {
+            "echo \"$$\" > \"$3.tmp\"; mv \"$3.tmp\" \"$3\"; setsid sh -c 'echo \"$$\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; : > \"$2\"; exec sleep 60' sh \"$1\" \"$2\" & printf started"
+        };
+        let command = if stdin {
+            Command::shell(script)
+                .arg("sh")
+                .arg_os(pid_path)
+                .arg_os(&ready_path)
+                .arg_os(&parent_pid_path)
+                .stdin_bytes(vec![b'x'; 4 * 1024 * 1024])
+        } else {
+            Command::new("sh")
+                .arg("-c")
+                .arg(script)
+                .arg("sh")
+                .arg_os(pid_path)
+                .arg_os(&ready_path)
+                .arg_os(&parent_pid_path)
+        };
+        let clock = ManualMonotonicClock::new_shared();
+        let runner = CommandRunner::new(TIMEOUT).timer(clock.new_timer());
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let worker_fixture = fixture.to_owned();
+        let worker = std::thread::spawn(move || {
+            let result = runner.run(command);
+            if worker_fixture == "worker-panic" {
+                panic!("injected timeout result-worker panic: {result:?}");
+            }
+            sender.send(result)
+        });
+
+        let readiness = escaped.try_wait_until_recorded(READY_TIMEOUT);
+        if readiness.is_ok() {
+            let deadline = Instant::now() + READY_TIMEOUT;
+            while (fixture == "ready-timeout" || !ready_path.exists()) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        let ready = readiness.and_then(|()| {
+            if fixture == "ready-timeout" {
+                return Err("injected ready marker omission".to_owned());
+            }
+            if ready_path.exists() {
+                Ok(())
+            } else {
+                Err("ready marker missing".to_owned())
+            }
+        });
+        let direct_exit = if !stdin {
+            let deadline = Instant::now() + READY_TIMEOUT;
+            loop {
+                let exited = fs::read_to_string(&parent_pid_path)
+                    .ok()
+                    .and_then(|pid| pid.trim().parse::<u32>().ok())
+                    .is_some_and(|pid| !linux_process_is_running(pid));
+                if exited {
+                    break Ok(());
+                }
+                if Instant::now() >= deadline {
+                    break Err("direct command did not exit".to_owned());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        } else {
+            Ok(())
+        };
+
+        let waiting = direct_exit.is_ok() && clock.wait_for_waiters(1, READY_TIMEOUT);
+        let advanced = if waiting && fixture != "no-advance" && fixture != "ready-timeout" {
+            Some(clock.advance(TIMEOUT))
+        } else {
+            None
+        };
+        let observed = receiver.recv_timeout(RESPONSE_TIMEOUT);
+        let observed_before_release = observed.is_ok();
+        let cleanup = escaped.terminate_if_recorded();
+        if fixture == "ready-timeout" || fixture == "no-advance" {
+            clock
+                .advance(Duration::from_millis(100))
+                .expect("post-release poll tick should advance manual time");
+        }
+        let after_release = if observed_before_release {
+            None
+        } else {
+            receiver.recv_timeout(RESPONSE_TIMEOUT).ok()
+        };
+        assert!(
+            cleanup.expect("escaped descendant cleanup should succeed"),
+            "escaped descendant PID should be cleaned"
+        );
+        direct_exit.expect("direct command should exit before timeout");
+        if fixture == "ready-timeout" {
+            assert!(ready.is_err(), "injected readiness failure should be reported");
+            assert!(!observed_before_release, "readiness failure must not advance timeout");
+            let natural_result = after_release.expect("runner should finish after readiness-failure cleanup");
+            let output = natural_result.expect("releasing the fixture should complete naturally, not by timeout");
+            assert!(
+                output.stdout_complete(),
+                "readiness-failure output should complete after release"
+            );
+            worker
+                .join()
+                .expect("runner worker should join after readiness-failure cleanup")
+                .expect("result send should succeed");
+            return;
+        }
+        if fixture == "worker-panic" {
+            assert!(ready.is_ok(), "fixture readiness failed: {ready:?}");
+            assert!(observed.is_err(), "panicking worker should disconnect result channel");
+            assert!(worker.join().is_err(), "injected result worker panic should be joined");
+            return;
+        }
+        if fixture == "no-advance" {
+            assert!(ready.is_ok(), "fixture readiness failed: {ready:?}");
+            assert!(waiting, "runner did not register its manual timeout waiter");
+            assert!(
+                !observed_before_release,
+                "runner must not time out before manual time advances"
+            );
+            let natural_result = after_release.expect("natural completion after release should be observed");
+            let output = natural_result.expect("release should complete naturally, not as a timeout");
+            assert!(
+                output.stdout_complete(),
+                "no-advance output should complete after release"
+            );
+            worker
+                .join()
+                .expect("runner worker should join")
+                .expect("result send should succeed");
+            return;
+        }
+        assert!(ready.is_ok(), "fixture readiness failed: {ready:?}");
+        assert!(waiting, "runner did not register its manual timeout waiter");
+        advanced
+            .expect("manual clock should advance")
+            .expect("manual time advance should succeed");
+        assert!(
+            observed_before_release,
+            "timeout result must arrive before releasing descendant"
+        );
+        let result = observed.expect("timeout worker result channel disconnected");
+        worker
+            .join()
+            .expect("timeout result worker should join")
+            .expect("timeout result send should succeed");
+        let error = result.expect_err("escaped descendant should keep one stream incomplete");
+        assert_eq!(error.kind(), CommandErrorKind::TimedOut);
+        match error.reason() {
+            CommandErrorReason::TimedOut { timeout } => assert_eq!(*timeout, TIMEOUT),
+            other => panic!("expected timeout reason, got {other:?}"),
+        }
+        let output = error.output().expect("timeout should retain output");
+        if stderr {
+            assert!(!output.stderr_complete(), "stderr should remain incomplete");
+            assert!(
+                output.stderr().starts_with(b"started"),
+                "stderr prefix should survive timeout"
+            );
+        } else if !stdin {
+            assert!(!output.stdout_complete(), "stdout should remain incomplete");
+            assert!(
+                output.stdout().starts_with(b"started"),
+                "stdout prefix should survive timeout"
+            );
+        }
+        assert!(after_release.is_none(), "no second result should arrive after release");
+    }
+
+    #[cfg(target_os = "linux")]
     fn run_cancellation_fixture_with_watchdog(pid_path: &std::path::Path, fixture: &str) {
         const CHILD_ENV: &str = "QUBIT_COMMAND_CANCEL_FIXTURE";
         const PID_ENV: &str = "QUBIT_COMMAND_CANCEL_FIXTURE_PID";
@@ -1067,35 +1338,7 @@ mod unix {
         let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
             .expect("command test temporary directory should be created");
         let pid_path = temp_dir.path().join("escaped-child.pid");
-        let escaped_child = "setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" &";
-        let started = Instant::now();
-
-        let error = CommandRunner::new(Duration::from_millis(100))
-            .run(
-                Command::new("sh")
-                    .arg("-c")
-                    .arg(escaped_child)
-                    .arg("sh")
-                    .arg_os(&pid_path),
-            )
-            .expect_err("escaped descendant should keep the output pipe open");
-        let elapsed = started.elapsed();
-
-        let pid_deadline = Instant::now() + Duration::from_secs(1);
-        while !pid_path.exists() && Instant::now() < pid_deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        if let Ok(pid) = fs::read_to_string(&pid_path) {
-            let _ = std::process::Command::new("kill").arg("-KILL").arg(pid.trim()).status();
-        }
-
-        assert_eq!(error.kind(), CommandErrorKind::TimedOut);
-        let output = error.output().expect("timeout should retain captured output metadata");
-        assert!(!output.stdout_complete());
-        assert!(
-            elapsed < Duration::from_secs(1),
-            "timeout must not wait for an escaped descendant to close inherited output"
-        );
+        run_timeout_fixture_with_watchdog(&pid_path, "stdout");
     }
 
     #[cfg(target_os = "linux")]
@@ -1104,28 +1347,7 @@ mod unix {
         let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
             .expect("command test temporary directory should be created");
         let pid_path = temp_dir.path().join("escaped-child.pid");
-        let escaped_child = "setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" >/dev/null &";
-        let started = Instant::now();
-
-        let error = CommandRunner::new(Duration::from_millis(100))
-            .run(
-                Command::new("sh")
-                    .arg("-c")
-                    .arg(escaped_child)
-                    .arg("sh")
-                    .arg_os(&pid_path),
-            )
-            .expect_err("escaped stderr descendant should time out");
-
-        if let Ok(pid) = fs::read_to_string(&pid_path) {
-            let _ = std::process::Command::new("kill").arg("-KILL").arg(pid.trim()).status();
-        }
-
-        assert_eq!(error.kind(), CommandErrorKind::TimedOut);
-        assert!(
-            started.elapsed() < Duration::from_secs(1),
-            "timeout must not wait for an escaped stderr descendant"
-        );
+        run_timeout_fixture_with_watchdog(&pid_path, "stderr");
     }
 
     #[cfg(target_os = "linux")]
@@ -1134,26 +1356,35 @@ mod unix {
         let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
             .expect("command test temporary directory should be created");
         let pid_path = temp_dir.path().join("escaped-stdin-child.pid");
-        let mut escaped = EscapedProcessGuard::new(pid_path.clone());
-        let started = Instant::now();
-        let error = CommandRunner::new(Duration::from_secs(1))
-            .run(
-                Command::shell("setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" >/dev/null 2>&1 & wait")
-                    .arg("sh")
-                    .arg_os(&pid_path)
-                    .stdin_bytes(vec![b'x'; 4 * 1024 * 1024]),
-            )
-            .expect_err("escaped stdin descendant should make the command time out");
-        let elapsed = started.elapsed();
+        run_timeout_fixture_with_watchdog(&pid_path, "stdin");
+    }
 
-        escaped.wait_until_recorded(Duration::from_secs(1));
-        escaped.terminate_and_wait();
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_command_runner_timeout_ready_timeout_is_bounded_and_cleaned() {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-").expect("temporary directory should be created");
+        run_timeout_fixture_with_watchdog(&temp_dir.path().join("escaped.pid"), "ready-timeout");
+    }
 
-        assert_eq!(error.kind(), CommandErrorKind::TimedOut);
-        assert!(
-            elapsed < Duration::from_secs(3),
-            "timeout must cancel a blocked stdin writer"
-        );
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_command_runner_timeout_without_clock_advance_does_not_report_timeout() {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-").expect("temporary directory should be created");
+        run_timeout_fixture_with_watchdog(&temp_dir.path().join("escaped.pid"), "no-advance");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_command_runner_timeout_worker_panic_is_cleaned() {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-").expect("temporary directory should be created");
+        run_timeout_fixture_with_watchdog(&temp_dir.path().join("escaped.pid"), "worker-panic");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_command_runner_timeout_watchdog_cleans_stalled_fixture() {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-").expect("temporary directory should be created");
+        run_timeout_fixture_with_watchdog(&temp_dir.path().join("escaped.pid"), "watchdog-self-test");
     }
 
     #[test]
