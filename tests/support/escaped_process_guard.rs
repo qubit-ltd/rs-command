@@ -25,22 +25,38 @@ impl EscapedProcessGuard {
     }
 
     pub(crate) fn wait_until_recorded(&self, timeout: Duration) {
+        self.try_wait_until_recorded(timeout)
+            .expect("escaped descendant must record a non-zero PID");
+    }
+
+    pub(crate) fn try_wait_until_recorded(&self, timeout: Duration) -> Result<(), String> {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             if let Ok(contents) = fs::read_to_string(&self.pid_path)
                 && contents.trim().parse::<u32>().is_ok_and(|pid| pid != 0)
             {
-                return;
+                return Ok(());
             }
             thread::sleep(Duration::from_millis(10));
         }
-        panic!("escaped descendant must record a non-zero PID");
+        Err(format!(
+            "escaped descendant did not record a non-zero PID within {timeout:?}"
+        ))
     }
 
     pub(crate) fn terminate_and_wait(&mut self) {
         self.terminate_and_wait_inner()
             .expect("escaped descendant must be terminated");
         self.armed = false;
+    }
+
+    pub(crate) fn terminate_if_recorded(&mut self) -> Result<bool, String> {
+        if !self.pid_path.exists() {
+            return Ok(false);
+        }
+        self.terminate_and_wait_inner()?;
+        self.armed = false;
+        Ok(true)
     }
 
     fn terminate_and_wait_inner(&self) -> Result<(), String> {
@@ -56,6 +72,15 @@ impl EscapedProcessGuard {
             .status()
             .map_err(|error| format!("kill escaped descendant: {error}"))?;
         if !killed.success() {
+            let still_exists = Command::new("kill")
+                .args(["-0", &pid])
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|error| format!("probe escaped descendant after kill: {error}"))?
+                .success();
+            if !still_exists {
+                return Ok(());
+            }
             return Err(format!("kill -KILL {pid} exited with {killed}"));
         }
 

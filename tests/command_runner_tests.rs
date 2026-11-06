@@ -165,6 +165,244 @@ mod unix {
     #[cfg(target_os = "linux")]
     use super::support::escaped_process_guard::EscapedProcessGuard;
 
+    #[cfg(target_os = "linux")]
+    fn run_cancellation_fixture_with_watchdog(pid_path: &std::path::Path, fixture: &str) {
+        const CHILD_ENV: &str = "QUBIT_COMMAND_CANCEL_FIXTURE";
+        const PID_ENV: &str = "QUBIT_COMMAND_CANCEL_FIXTURE_PID";
+        const WATCHDOG: Duration = Duration::from_secs(30);
+
+        if std::env::var(CHILD_ENV).is_ok() {
+            let child_pid_path = std::env::var_os(PID_ENV)
+                .map(std::path::PathBuf::from)
+                .expect("watchdog parent should provide the PID handshake path");
+            run_cancellation_fixture(fixture, &child_pid_path);
+            return;
+        }
+
+        let current_thread = std::thread::current();
+        let test_name = current_thread.name().expect("test thread should be named");
+        let mut escaped = EscapedProcessGuard::new(pid_path.to_path_buf());
+        let mut child = std::process::Command::new(
+            std::env::current_exe().expect("integration test executable should be available"),
+        )
+        .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+        .env(CHILD_ENV, fixture)
+        .env(PID_ENV, pid_path)
+        .spawn()
+        .expect("cancellation fixture subprocess should start");
+        let deadline = Instant::now() + WATCHDOG;
+        loop {
+            match child.try_wait().expect("fixture subprocess should be observable") {
+                Some(status) => {
+                    escaped
+                        .terminate_if_recorded()
+                        .expect("escaped descendant should be cleaned up after fixture exit");
+                    assert!(status.success(), "cancellation fixture failed: {status}");
+                    return;
+                }
+                None if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                None => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    escaped
+                        .terminate_if_recorded()
+                        .expect("watchdog should clean up escaped descendant");
+                    panic!("cancellation fixture exceeded {WATCHDOG:?} watchdog");
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_cancellation_fixture(fixture: &str, pid_path: &std::path::Path) {
+        const READY_TIMEOUT: Duration = Duration::from_secs(5);
+        const CANCEL_TIMEOUT: Duration = Duration::from_secs(2);
+        const PRE_CANCEL_OBSERVATION: Duration = Duration::from_millis(100);
+
+        let fixture_kind = match fixture {
+            "delayed-readiness" | "missing-cancel" | "worker-panic" => "stdout",
+            other => other,
+        };
+        let parent_pid_path = pid_path.with_extension("parent.pid");
+        let ready_path = pid_path.with_extension("ready");
+        let mut escaped = EscapedProcessGuard::new(pid_path.to_path_buf());
+        let script = match fixture {
+            "stdout" | "missing-cancel" | "worker-panic" => {
+                "echo \"$$\" > \"$3.tmp\"; mv \"$3.tmp\" \"$3\"; setsid sh -c 'echo \"$$\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; : > \"$2\"; exec sleep 60' sh \"$1\" \"$2\" & printf started"
+            }
+            "delayed-readiness" => {
+                "echo \"$$\" > \"$3.tmp\"; mv \"$3.tmp\" \"$3\"; setsid sh -c 'echo \"$$\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; sleep 0.25; : > \"$2\"; exec sleep 60' sh \"$1\" \"$2\" & printf started"
+            }
+            "stdin" => {
+                "setsid sh -c 'echo \"$$\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; : > \"$2\"; exec sleep 60' sh \"$1\" \"$2\" >/dev/null 2>&1 & wait"
+            }
+            _ => panic!("unknown cancellation fixture: {fixture}"),
+        };
+        let cancellation = CommandCancellation::new();
+        let run_cancellation = cancellation.clone();
+        let run_pid_path = pid_path.to_path_buf();
+        let run_ready_path = ready_path.clone();
+        let run_parent_pid_path = parent_pid_path.clone();
+        let fixture_owned = fixture.to_owned();
+        let command_fixture = fixture_kind.to_owned();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let command = match command_fixture.as_str() {
+                "stdout" => Command::new("sh")
+                    .arg("-c")
+                    .arg(script)
+                    .arg("sh")
+                    .arg_os(&run_pid_path)
+                    .arg_os(&run_ready_path)
+                    .arg_os(&run_parent_pid_path),
+                "stdin" => Command::shell(script)
+                    .arg("sh")
+                    .arg_os(&run_pid_path)
+                    .arg_os(&run_ready_path)
+                    .stdin_bytes(vec![b'x'; 4 * 1024 * 1024]),
+                _ => unreachable!("fixture name was checked before worker start"),
+            };
+            let result = CommandRunner::without_timeout()
+                .run_with(command, CommandRunOptions::new().cancellation(run_cancellation));
+            if fixture_owned == "worker-panic" {
+                panic!("injected result-worker panic after runner cleanup: {result:?}");
+            }
+            sender
+                .send(result)
+                .expect("fixture result receiver should remain connected");
+        });
+
+        let ready_timeout = if fixture == "delayed-readiness" {
+            Duration::from_millis(100)
+        } else {
+            READY_TIMEOUT
+        };
+        let readiness = if fixture == "delayed-readiness" {
+            let deadline = Instant::now() + ready_timeout;
+            while Instant::now() < deadline && !ready_path.exists() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if ready_path.exists() {
+                Ok(())
+            } else {
+                Err(format!("fixture readiness marker missing after {ready_timeout:?}"))
+            }
+        } else {
+            escaped.try_wait_until_recorded(ready_timeout)
+        };
+        if readiness.is_ok() && fixture_kind == "stdout" {
+            let parent_pid =
+                fs::read_to_string(&parent_pid_path).expect("direct child should record its PID before exiting");
+            let parent_pid = parent_pid.trim();
+            let deadline = Instant::now() + READY_TIMEOUT;
+            let mut parent_exited = false;
+            while Instant::now() < deadline {
+                let running = std::process::Command::new("kill")
+                    .args(["-0", parent_pid])
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .expect("direct child exit should be observable")
+                    .success();
+                if !running {
+                    parent_exited = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(parent_exited, "direct command process should exit before cancellation");
+        }
+
+        let before_cancel = receiver.recv_timeout(PRE_CANCEL_OBSERVATION);
+        if fixture != "missing-cancel" {
+            cancellation.cancel();
+        }
+        let cancel_started = Instant::now();
+        let first_result = receiver.recv_timeout(CANCEL_TIMEOUT);
+        let cancel_elapsed = cancel_started.elapsed();
+        let observed_before_release = first_result.is_ok();
+
+        if fixture == "worker-panic" {
+            let cleanup_result = escaped.terminate_if_recorded();
+            let worker_result = worker.join();
+            cleanup_result.expect("escaped descendant cleanup should succeed after worker panic");
+            assert!(readiness.is_ok(), "fixture readiness failed: {readiness:?}");
+            assert!(matches!(before_cancel, Err(std::sync::mpsc::RecvTimeoutError::Timeout)));
+            assert!(matches!(
+                first_result,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+            ));
+            assert!(worker_result.is_err(), "injected result-worker panic should be joined");
+            return;
+        }
+
+        if fixture == "missing-cancel" {
+            let cleanup_result = escaped.terminate_if_recorded();
+            let natural_result = match first_result {
+                Ok(result) => Some(result),
+                Err(_) => receiver.recv_timeout(CANCEL_TIMEOUT).ok(),
+            };
+            let worker_result = natural_result.map(|result| (result, worker.join()));
+            cleanup_result.expect("fault-injected descendant cleanup should succeed");
+            assert!(matches!(before_cancel, Err(std::sync::mpsc::RecvTimeoutError::Timeout)));
+            assert!(
+                !observed_before_release,
+                "missing cancellation must not appear responsive"
+            );
+            let (result, joined) = worker_result.expect("runner should finish after the pipe is released");
+            let output = result.expect("natural EOF after release should complete the command");
+            assert!(output.stdout().starts_with(b"started"));
+            joined.expect("runner worker should return after natural EOF");
+            return;
+        }
+
+        if readiness.is_err() {
+            escaped
+                .try_wait_until_recorded(READY_TIMEOUT)
+                .expect("escaped PID should be available for failed-readiness cleanup");
+        }
+        let cleanup_result = escaped.terminate_if_recorded();
+        let result = match first_result {
+            Ok(result) => Some(result),
+            Err(_) => receiver.recv_timeout(CANCEL_TIMEOUT).ok(),
+        };
+        let worker_result = result.map(|result| (result, worker.join()));
+
+        cleanup_result.expect("escaped descendant cleanup should succeed");
+        if fixture == "delayed-readiness" {
+            assert!(readiness.is_err(), "delayed fixture should miss the readiness deadline");
+        } else {
+            assert!(readiness.is_ok(), "fixture readiness failed: {readiness:?}");
+        }
+        assert!(
+            matches!(before_cancel, Err(std::sync::mpsc::RecvTimeoutError::Timeout)),
+            "runner must remain active before cancellation"
+        );
+        assert!(
+            observed_before_release,
+            "runner should return within {CANCEL_TIMEOUT:?} before releasing the descendant"
+        );
+        assert!(
+            cancel_elapsed < CANCEL_TIMEOUT,
+            "cancellation exceeded its real-time bound"
+        );
+        let (result, joined) = worker_result.expect("runner result channel should remain connected");
+        let error = result.expect_err("inherited pipe should make cancellation observable");
+        joined.expect("runner worker should not panic");
+        assert_eq!(error.kind(), CommandErrorKind::Cancelled);
+        if fixture_kind == "stdout" {
+            assert!(
+                error
+                    .output()
+                    .expect("cancelled output should be retained")
+                    .stdout()
+                    .starts_with(b"started"),
+                "captured stdout prefix should survive cancellation"
+            );
+        }
+    }
+
     #[test]
     fn test_command_runner_default_configuration() {
         let runner = CommandRunner::new(Duration::from_secs(10));
@@ -413,28 +651,7 @@ mod unix {
         let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
             .expect("command test temporary directory should be created");
         let pid_path = temp_dir.path().join("escaped-child.pid");
-        let script = "setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" & printf started";
-        let cancellation = CommandCancellation::new();
-        let run_cancellation = cancellation.clone();
-        let run_pid_path = pid_path.clone();
-        let worker = std::thread::spawn(move || {
-            CommandRunner::without_timeout().run_with(
-                Command::new("sh").arg("-c").arg(script).arg("sh").arg_os(&run_pid_path),
-                CommandRunOptions::new().cancellation(run_cancellation),
-            )
-        });
-
-        std::thread::sleep(Duration::from_millis(100));
-        cancellation.cancel();
-        let error = worker
-            .join()
-            .expect("cancelled runner should not panic")
-            .expect_err("inherited output should make cancellation observable");
-
-        if let Ok(pid) = fs::read_to_string(&pid_path) {
-            let _ = std::process::Command::new("kill").arg("-KILL").arg(pid.trim()).status();
-        }
-        assert_eq!(error.kind(), CommandErrorKind::Cancelled);
+        run_cancellation_fixture_with_watchdog(&pid_path, "stdout");
     }
 
     #[cfg(target_os = "linux")]
@@ -443,31 +660,34 @@ mod unix {
         let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
             .expect("command test temporary directory should be created");
         let pid_path = temp_dir.path().join("escaped-stdin-child.pid");
-        let mut escaped = EscapedProcessGuard::new(pid_path.clone());
-        let script = "setsid sh -c 'echo \"$$\" > \"$1\"; sleep 10' sh \"$1\" >/dev/null 2>&1 & wait";
-        let cancellation = CommandCancellation::new();
-        let run_cancellation = cancellation.clone();
-        let run_pid_path = pid_path.clone();
-        let worker = std::thread::spawn(move || {
-            CommandRunner::without_timeout().run_with(
-                Command::shell(script)
-                    .arg("sh")
-                    .arg_os(&run_pid_path)
-                    .stdin_bytes(vec![b'x'; 4 * 1024 * 1024]),
-                CommandRunOptions::new().cancellation(run_cancellation),
-            )
-        });
+        run_cancellation_fixture_with_watchdog(&pid_path, "stdin");
+    }
 
-        std::thread::sleep(Duration::from_millis(100));
-        escaped.wait_until_recorded(Duration::from_secs(1));
-        cancellation.cancel();
-        let error = worker
-            .join()
-            .expect("cancelled runner should not panic")
-            .expect_err("blocked stdin should make cancellation observable");
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_runner_cancellation_reclaims_delayed_readiness_fixture() {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temporary directory should be created");
+        let pid_path = temp_dir.path().join("escaped-child.pid");
+        run_cancellation_fixture_with_watchdog(&pid_path, "delayed-readiness");
+    }
 
-        escaped.terminate_and_wait();
-        assert_eq!(error.kind(), CommandErrorKind::Cancelled);
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_runner_cancellation_rejects_natural_eof_after_missing_cancel() {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temporary directory should be created");
+        let pid_path = temp_dir.path().join("escaped-child.pid");
+        run_cancellation_fixture_with_watchdog(&pid_path, "missing-cancel");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_runner_cancellation_observes_worker_panic_and_disconnect() {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temporary directory should be created");
+        let pid_path = temp_dir.path().join("escaped-child.pid");
+        run_cancellation_fixture_with_watchdog(&pid_path, "worker-panic");
     }
 
     #[test]
