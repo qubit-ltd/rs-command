@@ -9,6 +9,8 @@
 
 Qubit Command is a Rust library for running external programs when an application needs more than a bare `std::process::Command`: bounded output capture, a defined timeout or cancellation policy, process-tree cleanup, and typed failures with redacted diagnostics. It is intended for build tools, service workers, and other applications that must turn an external process into a controlled application step.
 
+This README describes `qubit-command` 0.11.
+
 ## Installation
 
 The crate is published as `qubit-command` and requires Rust 1.94 or newer:
