@@ -296,7 +296,9 @@ pub(crate) fn permit_command_start() -> bool {
 
 /// Shell prelude that publishes the command group ID before checking abort.
 pub(crate) const fn shell_start_guard() -> &'static str {
-    "printf '%s\\n' \"$$\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; if [ -e \"$2\" ]; then exit 0; fi; "
+    // Keep the group alive briefly after observing abort so the watchdog can
+    // signal it before the process group ID can be recycled by the OS.
+    "printf '%s\\n' \"$$\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; if [ -e \"$2\" ]; then sleep 5; exit 0; fi; "
 }
 
 fn terminate_command_group(pid_path: &std::path::Path) -> Result<(), String> {
