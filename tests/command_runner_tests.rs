@@ -533,19 +533,19 @@ mod unix {
                     .arg_os(&run_release_path)
             } else {
                 match command_fixture.as_str() {
-                "stdout" => Command::new("sh")
-                    .arg("-c")
-                    .arg(script)
-                    .arg("sh")
-                    .arg_os(&run_pid_path)
-                    .arg_os(&run_ready_path)
-                    .arg_os(&run_parent_pid_path),
-                "stdin" => Command::shell(script)
-                    .arg("sh")
-                    .arg_os(&run_pid_path)
-                    .arg_os(&run_ready_path)
-                    .stdin_bytes(vec![b'x'; 4 * 1024 * 1024]),
-                _ => unreachable!("fixture name was checked before worker start"),
+                    "stdout" => Command::new("sh")
+                        .arg("-c")
+                        .arg(script)
+                        .arg("sh")
+                        .arg_os(&run_pid_path)
+                        .arg_os(&run_ready_path)
+                        .arg_os(&run_parent_pid_path),
+                    "stdin" => Command::shell(script)
+                        .arg("sh")
+                        .arg_os(&run_pid_path)
+                        .arg_os(&run_ready_path)
+                        .stdin_bytes(vec![b'x'; 4 * 1024 * 1024]),
+                    _ => unreachable!("fixture name was checked before worker start"),
                 }
             };
             let result = CommandRunner::without_timeout()
@@ -702,12 +702,19 @@ mod unix {
             assert!(pid_handshake.is_ok(), "escaped PID handshake failed: {pid_handshake:?}");
             assert!(direct_exit.is_ok(), "direct command did not exit: {direct_exit:?}");
             assert!(readiness.is_err(), "delayed fixture should miss the readiness deadline");
-            assert_eq!(post_release_ready, Some((true, true)), "release should make the fixture ready");
+            assert_eq!(
+                post_release_ready,
+                Some((true, true)),
+                "release should make the fixture ready"
+            );
         } else {
             assert!(readiness.is_ok(), "fixture readiness failed: {readiness:?}");
         }
         if let Some(readiness_pid) = readiness_pid {
-            assert!(readiness_pid.is_ok(), "escaped PID should be available for failed-readiness cleanup");
+            assert!(
+                readiness_pid.is_ok(),
+                "escaped PID should be available for failed-readiness cleanup"
+            );
         }
         assert!(
             matches!(before_cancel, Err(std::sync::mpsc::RecvTimeoutError::Timeout)),
