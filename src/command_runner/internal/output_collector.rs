@@ -593,16 +593,16 @@ pub(super) fn output_cleanup_failure(stream: OutputStream, failure: OutputCaptur
     }
 }
 
-/// Maps a reader result while retaining output from a failed tee write.
-/// Converts one output-stream failure into a command error while preserving
-/// captured bytes from both the failed stream and its peer.
+/// Maps a reader failure while retaining output from a failed tee write.
+/// Constructs a command error while preserving captured bytes from both the
+/// failed stream and its peer.
 /// # Parameters
 ///
 /// * `command` - Redacted command text used in diagnostics.
 /// * `status` - Direct-child exit status for the collected output.
-/// * `elapsed` - Callback that samples elapsed command time.
+/// * `elapsed` - Elapsed command duration already sampled for this result.
 /// * `stream` - Stream attributed to this reader.
-/// * `error` - I/O error returned by the cancellation API.
+/// * `error` - Output-stream read or tee-write failure to map.
 /// * `failed_output` - Captured output from the failed stream.
 /// * `other_output` - Captured output from the peer stream, if available.
 fn map_output_reader_error(
@@ -650,7 +650,7 @@ fn map_output_reader_error(
     }
 }
 
-/// Joins one output reader and maps failures to command errors.
+/// Joins one output reader and returns its internal capture result.
 ///
 /// # Parameters
 ///
@@ -658,12 +658,14 @@ fn map_output_reader_error(
 ///
 /// # Returns
 ///
-/// Captured bytes and truncation state from the reader.
+/// The captured output and truncation state returned by the reader.
 ///
 /// # Errors
 ///
-/// Returns a [`CommandError`] with kind `ReadOutputFailed` for read failures or
-/// thread panics, and kind `WriteOutputFailed` for tee failures.
+/// Returns the reader's [`OutputCaptureError`] for read, tee-write, or combined
+/// failures. A reader-thread panic is represented as a read failure; the later
+/// output-collection stage maps these internal failures to public
+/// [`CommandError`] kinds.
 pub(in crate::command_runner) fn join_output_reader(
     reader: OutputReader,
 ) -> Result<CapturedOutput, OutputCaptureError> {

@@ -242,9 +242,13 @@ pub(super) fn write_stdin_until_cancelled<W: PollableStdin>(
 
 /// Configures one Unix stdin pipe for non-blocking writes.
 ///
+/// # Type Parameters
+///
+/// * `T` - Pipe handle type exposing the file descriptor to configure.
+///
 /// # Parameters
 ///
-/// * `pipe` - File descriptor whose flags are updated in place.
+/// * `pipe` - Pipe handle whose file descriptor flags are updated in place.
 ///
 /// # Returns
 ///
@@ -254,9 +258,6 @@ pub(super) fn write_stdin_until_cancelled<W: PollableStdin>(
 ///
 /// Returns the operating-system error if reading or updating the descriptor
 /// flags fails.
-/// # Type Parameters
-///
-/// * `T` - Type of helper thread result.
 #[cfg(unix)]
 fn prepare_stdin_pipe<T: std::os::fd::AsRawFd>(pipe: &T) -> io::Result<()> {
     // SAFETY: fcntl operates on the valid descriptor owned by `pipe`.

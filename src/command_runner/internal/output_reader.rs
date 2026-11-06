@@ -167,7 +167,8 @@ impl OutputReader {
 /// its associated source/path information remain authoritative.
 /// # Parameters
 ///
-/// * `error` - I/O error returned by the cancellation API.
+/// * `error` - Existing capture error whose failure cause and source
+///   information are preserved.
 /// * `output` - Captured data produced by the reader.
 fn replace_error_output(error: OutputCaptureError, output: CapturedOutput) -> OutputCaptureError {
     match error {

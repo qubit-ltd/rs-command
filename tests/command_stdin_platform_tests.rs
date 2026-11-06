@@ -10,10 +10,13 @@
 use std::fs;
 use std::io::Read;
 use std::process::Command as ProcessCommand;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+use qubit_clock::ManualMonotonicClock;
+use qubit_clock::MonotonicClock;
 use qubit_command::Command;
 use qubit_command::CommandCancellation;
 use qubit_command::CommandErrorKind;
@@ -46,6 +49,19 @@ fn test_stdin_platform_helper() {
             fs::write(directory.join("ready"), b"ready").expect("ready marker should be written");
             loop {
                 thread::park_timeout(Duration::from_secs(60));
+            }
+        }
+        "gate-hold" => {
+            fs::write(directory.join("gate"), b"entered").expect("gate marker should be written");
+            let deadline = Instant::now() + WATCHDOG * 2;
+            while !directory.join("release").exists() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            if directory.join("release").exists() {
+                fs::write(directory.join("ready"), b"ready").expect("ready marker should be written");
+                loop {
+                    thread::park_timeout(Duration::from_secs(60));
+                }
             }
         }
         "early-0" | "early-7" => {
@@ -107,22 +123,90 @@ fn test_stdin_hold_is_cancelled_within_watchdog() {
 #[test]
 fn test_stdin_hold_times_out_within_watchdog() {
     let directory = tempdir().expect("temporary directory should be created");
+    let clock = ManualMonotonicClock::new_shared();
+    let timeout = Duration::from_millis(300);
+    let runner = CommandRunner::new(timeout).timer(clock.new_timer());
     let (sender, receiver) = std::sync::mpsc::channel();
     let directory_path = directory.path().to_path_buf();
+    let rescue_cancellation = CommandCancellation::new();
+    let run_cancellation = rescue_cancellation.clone();
+    let worker_clock = Arc::clone(&clock);
     let worker = thread::spawn(move || {
-        let result = run_helper(
+        let result = run_helper_with_runner(
             "hold",
             &directory_path,
             payload(4 * 1024 * 1024),
-            Duration::from_millis(300),
-            None,
+            runner,
+            Some(run_cancellation),
         );
         let _ = sender.send(result);
     });
-    wait_for_file(&directory.path().join("ready"), &directory.path().join("pid"), WATCHDOG);
-    let result = receive_with_watchdog(receiver, &directory.path().join("pid"));
+    let ready = wait_for_file_result(&directory.path().join("ready"), &directory.path().join("pid"), WATCHDOG);
+    let waiter_ready = ready && clock.wait_for_waiters(1, WATCHDOG);
+    if waiter_ready {
+        clock.advance(timeout).expect("manual time should advance");
+    }
+    let result = receive_with_rescue(
+        receiver,
+        &directory.path().join("pid"),
+        &rescue_cancellation,
+        &worker_clock,
+        timeout,
+    );
     worker.join().expect("runner thread should not panic");
+    assert!(ready, "hold helper did not become ready before watchdog");
+    assert!(waiter_ready, "timeout waiter did not register before watchdog");
     let error = result.expect_err("hold helper should time out");
+    assert_eq!(error.kind(), CommandErrorKind::TimedOut);
+    assert!(
+        error.cleanup_failures().is_empty(),
+        "normal timeout should not report cleanup failures"
+    );
+}
+
+#[test]
+fn test_stdin_delayed_ready_does_not_consume_timeout() {
+    let directory = tempdir().expect("temporary directory should be created");
+    let clock = ManualMonotonicClock::new_shared();
+    let timeout = Duration::from_millis(300);
+    let runner = CommandRunner::new(timeout).timer(clock.new_timer());
+    let cancellation = CommandCancellation::new();
+    let worker_cancellation = cancellation.clone();
+    let worker_clock = Arc::clone(&clock);
+    let directory_path = directory.path().to_path_buf();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let worker = thread::spawn(move || {
+        let result = run_helper_with_runner(
+            "gate-hold",
+            &directory_path,
+            payload(4 * 1024 * 1024),
+            runner,
+            Some(worker_cancellation),
+        );
+        let _ = sender.send(result);
+    });
+
+    let gate_seen = wait_for_file_result(&directory.path().join("gate"), &directory.path().join("pid"), WATCHDOG);
+    let remained_running = gate_seen && receiver.recv_timeout(Duration::from_millis(400)).is_err();
+    let _ = fs::write(directory.path().join("release"), b"release");
+    let ready = wait_for_file_result(&directory.path().join("ready"), &directory.path().join("pid"), WATCHDOG);
+    let waiter_ready = ready && clock.wait_for_waiters(1, WATCHDOG);
+    if waiter_ready {
+        clock.advance(timeout).expect("manual time should advance");
+    }
+    let result = receive_with_rescue(
+        receiver,
+        &directory.path().join("pid"),
+        &cancellation,
+        &worker_clock,
+        timeout,
+    );
+    worker.join().expect("runner thread should not panic");
+    assert!(gate_seen, "gate helper did not enter before watchdog");
+    assert!(remained_running, "runner returned during delayed helper startup");
+    assert!(ready, "gate helper did not become ready before watchdog");
+    assert!(waiter_ready, "timeout waiter did not register before watchdog");
+    let error = result.expect_err("gate helper should time out");
     assert_eq!(error.kind(), CommandErrorKind::TimedOut);
     assert!(
         error.cleanup_failures().is_empty(),
@@ -174,6 +258,17 @@ fn run_helper(
     timeout: Duration,
     cancellation: Option<CommandCancellation>,
 ) -> Result<qubit_command::CommandOutput, qubit_command::CommandError> {
+    let runner = CommandRunner::new(timeout);
+    run_helper_with_runner(mode, directory, bytes, runner, cancellation)
+}
+
+fn run_helper_with_runner(
+    mode: &str,
+    directory: &std::path::Path,
+    bytes: Vec<u8>,
+    runner: CommandRunner,
+    cancellation: Option<CommandCancellation>,
+) -> Result<qubit_command::CommandOutput, qubit_command::CommandError> {
     let executable = std::env::current_exe().expect("test executable path should be available");
     let executable = executable.to_str().expect("test executable path should be UTF-8");
     let mut command = Command::new(executable);
@@ -191,7 +286,7 @@ fn run_helper(
     let options = cancellation.map_or_else(CommandRunOptions::new, |token| {
         CommandRunOptions::new().cancellation(token)
     });
-    CommandRunner::new(timeout).run_with(command, options)
+    runner.run_with(command, options)
 }
 
 fn payload(length: usize) -> Vec<u8> {
@@ -207,10 +302,17 @@ fn checksum(bytes: &[u8]) -> u64 {
 }
 
 fn wait_for_file(path: &std::path::Path, pid_path: &std::path::Path, timeout: Duration) {
+    if !wait_for_file_result(path, pid_path, timeout) {
+        terminate_helper(pid_path);
+        panic!("helper did not create {} before watchdog", path.display());
+    }
+}
+
+fn wait_for_file_result(path: &std::path::Path, pid_path: &std::path::Path, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if path.exists() {
-            return;
+            return true;
         }
         if pid_path.exists() {
             thread::sleep(Duration::from_millis(10));
@@ -218,8 +320,27 @@ fn wait_for_file(path: &std::path::Path, pid_path: &std::path::Path, timeout: Du
             thread::yield_now();
         }
     }
-    terminate_helper(pid_path);
-    panic!("helper did not create {} before watchdog", path.display());
+    false
+}
+
+fn receive_with_rescue<T>(
+    receiver: std::sync::mpsc::Receiver<T>,
+    pid_path: &std::path::Path,
+    cancellation: &CommandCancellation,
+    clock: &ManualMonotonicClock,
+    timeout: Duration,
+) -> T {
+    match receiver.recv_timeout(WATCHDOG) {
+        Ok(result) => result,
+        Err(error) => {
+            cancellation.cancel();
+            let _ = clock.advance(timeout);
+            terminate_helper(pid_path);
+            receiver
+                .recv_timeout(WATCHDOG)
+                .unwrap_or_else(|_| panic!("runner did not finish after rescue; initial wait error: {error}"))
+        }
+    }
 }
 
 fn receive_with_watchdog<T>(receiver: std::sync::mpsc::Receiver<T>, pid_path: &std::path::Path) -> T {
