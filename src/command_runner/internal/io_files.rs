@@ -204,7 +204,38 @@ impl IoFiles {
     }
 
     /// Commits output file creation, truncation, and stdin attachment.
+    ///
     /// # Parameters
+    ///
+    /// * `command` - Redacted command text used in errors.
+    /// * `stdout_path` - Optional stdout tee path; `None` leaves stdout without
+    ///   a tee.
+    /// * `stderr_path` - Optional stderr tee path; `None` leaves stderr without
+    ///   a tee.
+    /// * `process_command` - Process command to receive the prepared stdin
+    ///   file, if any; the file handle is transferred on success.
+    ///
+    /// Output files are opened in stdout-then-stderr order, then their opened
+    /// handles are checked for file identity conflicts with each other and
+    /// stdin. Only after validation are the files truncated in stdout-then-
+    /// stderr order. This method does not spawn the process. If opening or
+    /// truncating a later file fails, earlier files may already have been
+    /// created or truncated; those filesystem changes are not rolled back.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` when configured output tees are open, validated, and truncated
+    /// and retained by this `IoFiles`, and any prepared stdin file has been
+    /// attached to `process_command`.
+    /// With no configured output paths, no output files are opened or
+    /// truncated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError`] if an output cannot be opened or inspected, is
+    /// not a regular file, conflicts with stdin or the other output file, or
+    /// cannot be truncated. A failure can occur after earlier file creation
+    /// or truncation side effects.
     pub(in crate::command_runner) fn commit(
         &mut self,
         command: &str,

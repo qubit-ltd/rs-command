@@ -225,8 +225,28 @@ impl CommandIo {
 ///
 /// Cancellation requests are issued as one batch. Failures are returned in
 /// stdout, stderr, stdin order, with a helper's read or write failure before
-/// its cancellation failure.
+/// its cancellation failure. A helper whose cancellation fails and whose
+/// completion is not observed before the shared confirmation deadline may be
+/// detached; its cancellation failure is still returned.
+///
 /// # Parameters
+///
+/// * `command` - Redacted command text used in diagnostics.
+/// * `stdout_reader` - Optional stdout reader helper; `None` means it was not
+///   started. Any supplied helper is consumed.
+/// * `stderr_reader` - Optional stderr reader helper; `None` means it was not
+///   started. Any supplied helper is consumed.
+/// * `stdin_writer` - Optional stdin writer helper; `None` means it was not
+///   started. Any supplied helper is consumed.
+///
+/// # Returns
+///
+/// The observed cleanup failures: stdout read or tee-write failures followed
+/// by stdout cancellation failure, then the corresponding stderr failures,
+/// then stdin write and cancellation failures. The vector is empty when no
+/// cleanup failures are observed. When cancellation fails and a helper is
+/// detached, its cancellation failure is reported; no later helper result is
+/// available for that detached helper.
 #[must_use = "handle helper cleanup failures"]
 pub(super) fn cancel_and_join_started_helpers(
     command: &str,

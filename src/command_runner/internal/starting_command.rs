@@ -141,9 +141,19 @@ impl<'a> StartingCommand<'a> {
     /// Explicitly cleans up a failed initialization and preserves its primary
     /// error.
     ///
-    /// Cancels all started helpers even when process termination fails. Any
-    /// additional failure is attached to the returned error instead of logged.
+    /// Consumes this startup state and cancels all started helpers even when
+    /// process termination fails. Any additional failure is attached to the
+    /// returned error instead of logged.
+    ///
     /// # Parameters
+    ///
+    /// * `primary` - The startup error to preserve as the primary failure.
+    ///
+    /// # Returns
+    ///
+    /// The primary error, retaining its reason and classification, with any
+    /// process-termination or helper-cleanup failures attached. Cleanup is
+    /// attempted but is not guaranteed to stop every process or helper.
     pub(in crate::command_runner) fn abort(mut self, primary: CommandError) -> CommandError {
         primary.with_cleanup_failures(self.cleanup())
     }
