@@ -13,12 +13,8 @@ const GUIDE_ZH: &str = include_str!("../doc/user_guide.zh_CN.md");
 
 fn compatibility_line(version: &str) -> String {
     let mut components = version.split('.');
-    let major = components
-        .next()
-        .expect("version should have a major component");
-    let minor = components
-        .next()
-        .expect("version should have a minor component");
+    let major = components.next().expect("version should have a major component");
+    let minor = components.next().expect("version should have a minor component");
     format!("{major}.{minor}")
 }
 
@@ -26,7 +22,6 @@ fn declares_version(contents: &str, expected: &str) -> bool {
     contents.lines().any(|line| {
         line.split_once("qubit-command` ")
             .and_then(|(_, rest)| rest.split_whitespace().next())
-            .map(|token| token.split(['，', '。']).next().unwrap_or(token))
             .map(|token| token.trim_end_matches(['.', ',', '，', '。']))
             == Some(expected)
     })
@@ -41,25 +36,26 @@ fn test_compatibility_line_uses_only_major_and_minor_components() {
 
 #[test]
 fn test_version_declaration_matches_a_complete_major_minor_token() {
+    assert!(declares_version("This guide describes `qubit-command` 0.11.", "0.11"));
     assert!(declares_version(
-        "This guide describes `qubit-command` 0.11.",
-        "0.11"
-    ));
-    assert!(declares_version(
-        "本手册针对 `qubit-command` 0.11，面向开发者。",
+        "本手册针对 `qubit-command` 0.11 版本，面向开发者。",
         "0.11"
     ));
 
-    for declaration in ["0.11.1", "0.110", "0.11beta", "0.11,unexpected"] {
+    for declaration in [
+        "0.11.1",
+        "0.110",
+        "0.11beta",
+        "0.11,unexpected",
+        "0.11，unexpected",
+        "0.11。unexpected",
+    ] {
         assert!(!declares_version(
             &format!("This guide describes `qubit-command` {declaration}."),
             "0.11"
         ));
     }
-    assert!(!declares_version(
-        "This guide describes qubit-command 0.11.",
-        "0.11"
-    ));
+    assert!(!declares_version("This guide describes qubit-command 0.11.", "0.11"));
 }
 
 #[test]
@@ -78,10 +74,7 @@ fn test_documentation_install_constraints_match_the_crate_compatibility_line() {
         ("doc/user_guide.md", GUIDE_EN),
         ("doc/user_guide.zh_CN.md", GUIDE_ZH),
     ] {
-        assert!(
-            contents.contains(&dependency),
-            "{name} should use {dependency}"
-        );
+        assert!(contents.contains(&dependency), "{name} should use {dependency}");
         assert!(
             declares_version(contents, &compatibility_line),
             "{name} should declare {compatibility_line}"
