@@ -26,10 +26,9 @@ fn declares_version(contents: &str, expected: &str) -> bool {
     contents.lines().any(|line| {
         line.split_once("qubit-command` ")
             .and_then(|(_, rest)| rest.split_whitespace().next())
-            .and_then(|token| token.strip_prefix(expected))
-            .is_some_and(|suffix| {
-                suffix.is_empty() || suffix.starts_with([',', '，', '。']) || suffix == "."
-            })
+            .map(|token| token.split(['，', '。']).next().unwrap_or(token))
+            .map(|token| token.trim_end_matches(['.', ',', '，', '。']))
+            == Some(expected)
     })
 }
 
@@ -51,7 +50,7 @@ fn test_version_declaration_matches_a_complete_major_minor_token() {
         "0.11"
     ));
 
-    for declaration in ["0.11.1", "0.110", "0.11beta"] {
+    for declaration in ["0.11.1", "0.110", "0.11beta", "0.11,unexpected"] {
         assert!(!declares_version(
             &format!("This guide describes `qubit-command` {declaration}."),
             "0.11"
