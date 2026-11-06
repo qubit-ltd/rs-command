@@ -1,6 +1,53 @@
 <a id="current-summary"></a>
 
+## Latest evidence summary / 最新证据摘要 (2026-11-06)
+
+This is the single current summary. The latest Windows runtime evidence remains the existing run below; this round added only a Linux source/history review and did not produce new Windows runtime evidence.
+
+| Evidence / 证据 | Source SHA / 源码 SHA | Platform / 平台 | Command / 命令 | Selected tests / 选中测试 | Run and artifact / 运行与工件 | Witness fields / 见证字段 | Conclusion / 结论 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Latest Windows run / 最新 Windows 运行 (2026-11-05) | `07c7d76a1ba16a81085a09f9cdd1b557c86ec579` | `windows-2022` | `cargo test --lib windows_ -- --nocapture` | 11 passed, 0 failed, 109 filtered | [run 42015431077](https://github.com/qubit-ltd/rs-command/actions/runs/42015431077); [artifact 13408423993](https://github.com/qubit-ltd/rs-command/actions/runs/42015431077/artifacts/13408423993) | Original read returned Windows error 995; `production_join_pending_witness=false`; `original_io_return_is_subsequent_io=false`; `source_writer_manually_released=true`; `watchdog_released=false`; helper later joined | `unresolved`: the same production trace does not establish a subsequent blocked I/O, pending production join, or watchdog rescue. |
+| Current source/history review / 本轮源码与历史复核 (2026-11-06) | `49b1b58912dc551832f36edaa80f123b976b4707` | Linux x86_64 workspace | Read-only `git rev-parse HEAD`, `rg -n`, and targeted `sed -n` inspection | N/A (no tests run / 未运行测试) | No run or artifact / 无 run 或 artifact | Historical witness fields remain as listed above; no new trace was produced / 历史见证字段同上；本轮无新 trace | `unresolved`: no new production interleaving assumption was found; this review neither proves the defect nor proves safety. |
+
+这是唯一的当前摘要。最新 Windows 运行时证据仍是下表已有运行；本轮仅在 Linux 上复核源码与历史记录，没有产生新的 Windows 运行时证据。
+
+| 证据 | 源码 SHA | 平台 | 命令 | 选中测试 | Run 与 artifact | 见证字段 | 结论 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 最新 Windows 运行（2026-11-05） | `07c7d76a1ba16a81085a09f9cdd1b557c86ec579` | `windows-2022` | `cargo test --lib windows_ -- --nocapture` | 11 项通过、0 项失败、过滤 109 项 | [run 42015431077](https://github.com/qubit-ltd/rs-command/actions/runs/42015431077)；[artifact 13408423993](https://github.com/qubit-ltd/rs-command/actions/runs/42015431077/artifacts/13408423993) | 原始 read 返回 Windows 错误 995；`production_join_pending_witness=false`；`original_io_return_is_subsequent_io=false`；`source_writer_manually_released=true`；`watchdog_released=false`；helper 后续 join | `unresolved`：同一生产轨迹没有证明后续 I/O 阻塞、生产 join pending 或 watchdog 救援。 |
+| 本轮源码与历史复核（2026-11-06） | `49b1b58912dc551832f36edaa80f123b976b4707` | Linux x86_64 workspace | 只读执行 `git rev-parse HEAD`、`rg -n` 和定点 `sed -n` 检查 | 不适用（未运行测试） | 无 run 或 artifact | 历史见证字段同上；本轮没有新 trace | `unresolved`：没有发现新的生产交错假设；本轮既不证明缺陷，也不证明安全。 |
+
+## WIN-CANCEL-JOIN 源码与历史证据复核（2026-11-06）
+
+本轮仅复核源码与本文件已有历史记录，未运行测试或 Windows 探针。检查的工作树源码 SHA 为
+`49b1b58912dc551832f36edaa80f123b976b4707`（Linux workspace；无本轮 Windows 运行命令或选中测试数）。
+核查范围包括 `command_io.rs`、`output_collector.rs`、`output_reader.rs`、`stdin_pipe.rs`、
+`pollable_stdin.rs`、`io_cancellation.rs`、`windows_cancel_interleaving_tests.rs`、
+`output_collector/tests/windows_probe_tests.rs`、`.github/workflows/windows-cancellation-interleaving.yml`
+以及本证据文件内的 RSC-003、CMD-REVIEW-003 和 CMD-REASSESS-002 记录。历史 run、artifact 与源码 SHA
+仅按本地记录核对，本轮未独立查询远端。
+
+### 因果轨迹核对
+
+| 事件 | 核查结论 | 证据边界 |
+| --- | --- | --- |
+| 成功取消 | Windows `IoCancellation::cancel` 先设置取消 token，再对 helper 调用 `CancelSynchronousIo`。既有生产 trace 记录其成功取消正在阻塞的原始 pipe read。 | 该运行属于其记录的历史 SHA，不是本轮源码 SHA。 |
+| 原操作返回 | 生产 trace 中被取消的原始 read 返回 Windows 错误 995（`ERROR_OPERATION_ABORTED`），不是原操作正常完成。 | 原始 read 的返回不能算作后续 I/O。 |
+| 后续真实阻塞 I/O | `read_output_inner` 捕获成功读取的字节后检查 token，再开始同步 tee 写；取消仍可能与检查和 tee 写入口竞态，但本轮没有发现超出已记录窗口的新可达路径假设。既有生产 trace 的 ordinary-file tee 写入数为 0。 | 源码上的竞态窗口不证明它在该轨迹中发生或阻塞。read-to-tee 的 128 次历史探针直接调用内层函数，不能替代完整生产 reader/join 轨迹。 |
+| 生产 join pending | `finish_helpers` 在取消所有 helper 后收尾；取消成功时 `finish_output_reader` 直接调用 `join_output_reader`。共享确认期限只用于取消失败且需确认 helper 完成的分支，不限制成功取消后的 join。 | 这证明成功取消后 join 没有此处的期限，不证明 join 因后续 I/O 实际挂起。生产 trace 的 `production_join_pending_witness=false`；observer 时刻的 cleanup 未完成仅是采样状态。 |
+| watchdog 解救 | 生产 trace 记录 `watchdog_released=false`，source writer 是手动释放的。 | 独立 watchdog 自测释放刻意阻塞的真实 pipe，只证明 harness watchdog 自身可用，不能并入生产轨迹。 |
+| helper/process 回收 | 既有生产 trace 最终记录 helper join 和 child reap。 | 回收发生在未观察到生产 join pending、且 watchdog 未释放的轨迹中，不能补足缺失因果链。 |
+
+read-to-tee、EOF-to-flush、stdin check-to-write 等历史探针结果仍按各自记录解释：pipe/缓冲 writer 替代路径不是生产 ordinary-file tee；stdin 的真实内核 write 取消不是 check-to-write 间隙内的取消；有限尝试未命中也不构成安全证明。不同 run 的成功取消、watchdog 自测和回收事件不能拼成一条生产见证。
+
+### 结论与本轮范围
+
+完整待证链仍为：成功取消某操作、该原操作正常返回、随后进入真实阻塞的生产同步 I/O、生产 cleanup join 因此 pending，最后由 watchdog 释放并回收 helper/process。现有记录没有建立该同轨迹链；也没有证明生产路径安全。本轮结论继续为 **`unresolved`**，没有新的生产路径假设支持修复，因此未改生产源码、Windows 探针或取消策略，也未重复运行既有 128 次探针。
+
+本轮可复核的操作是只读源码／文档检查（包括 `git -C <worktree> rev-parse HEAD`、针对上述符号和证据字段的 `rg -n`、以及定点 `sed -n` 查看）；没有运行 `cargo test`，没有 Windows 环境结果，也没有新增实验或新的 Windows 证据。后续摘要应把本节作为 2026-11-06 源码/历史证据复核，不应改写为本轮 Windows 验证。
+
 ## RSC-004 bounded harness adjustments (2026-11-05)
+
+> Archived Windows runtime evidence referenced by the [latest evidence summary](#current-summary); this is the latest existing Windows run, not a run from this implementation round.
 
 This implementation pass reviewed the existing Windows probes and production path
 at source base `f9bc76fa98f1437647cc773cc6bce9e0fb1f2b45`. The post-integration
@@ -30,19 +77,23 @@ events are causal witnesses, not merely low sample counts. The RSC-004 conclusio
 unresolved: this evidence neither confirms the suspected production hang nor proves
 that it cannot occur. Linux zero-test discovery is not treated as Windows evidence.
 
-# Current status / 当前状态 (2026-11-04)
+# Archived summary: Current status / 归档摘要：当前状态 (2026-11-04)
 
-This is the current summary for CMD-REV-001 through CMD-REV-004 and the current task item CMD-REASSESS-002. The evidence below is from the current review work, not a claim that every historical checkpoint was rerun. Older runs and checkpoints are retained in the [archived evidence](#archived-evidence-index) and remain historical.
+> Archived historical summary. See the [latest evidence summary](#current-summary); this table is retained for its historical item mapping.
+
+This is the archived 2026-11-04 summary for CMD-REV-001 through CMD-REV-004 and CMD-REASSESS-002. It preserves the item mapping and evidence as recorded then; see the [latest evidence summary](#current-summary) for the current status.
 
 | Review item | Current status and evidence | Gap / historical context |
 | --- | --- | --- |
 | CMD-REV-001 — make marked examples self-contained | Verified on Linux x86_64 at implementation tree SHA `3d8461a` (based on checkout `7b2a0adfce45db127ea137ea84268b95d239d5c2`). `CARGO_TARGET_DIR=/tmp/rs-command-target-t1-focused cargo test --test documentation_examples_tests` passed: 4 harness tests; 12 generated/selected examples, 6 Unix examples passed and 6 `compile`/`no_run` examples were type-checked and ignored at runtime. Before the harness fix, removing the import from either external README exited 0 because the injected glob import masked the omission; after the fix, each removal failed to compile with E0433 for `CommandRunner` and `Command`. | Windows-specific examples are excluded by `cfg(windows)` on Linux, so they were not compiled or run here. See [current local implementation verification](#current-local-implementation-and-verification-2026-11-04). |
-| CMD-REV-002 — organize current status and historical evidence | This summary and the archive/context labels below are the current documentation change. | This item organizes evidence; it does not create new runtime evidence. Older labels CMD-R02, CMD-003, RC-001, and RC-002 came from different review stages and are not proven one-to-one equivalents. See [context and archive index](#archived-evidence-index). |
-| CMD-REV-003 — document readiness variants and fields | Completed in the current task worktree; current source rustdoc is summarized in [current implementation and verification](#current-local-implementation-and-verification-2026-11-04). | No platform behavior change is claimed. Historical RC-002 naming is contextual only. |
+| CMD-REV-002 — organize current status and historical evidence | At that stage, the status table and archive/context labels documented the then-current evidence; they did not create new runtime evidence. | Older labels CMD-R02, CMD-003, RC-001, and RC-002 came from different review stages and are not proven one-to-one equivalents. See [context and archive index](#archived-evidence-index). |
+| CMD-REV-003 — document readiness variants and fields | Completed in the 2026-11-04 task worktree; its source rustdoc is summarized in [that implementation and verification record](#current-local-implementation-and-verification-2026-11-04). | No platform behavior change is claimed. Historical RC-002 naming is contextual only. |
 | CMD-REV-004 — verify the Windows cancellation/join concern first | **Bounded verification completed; behavior unresolved and no production policy change justified.** Windows run [41830652995](https://github.com/qubit-ltd/rs-command/actions/runs/41830652995) tested exact task SHA `4812685a10616c663ab207351c9812356da36b21` on `windows-2022`: 6 selected, 6 passed, 0 failed, 105 filtered; [trace artifact 13322432766](https://github.com/qubit-ltd/rs-command/actions/runs/41830652995/artifacts/13322432766). The production scenario did not establish the required causal witness. | Trace observed cancellation success and original read error 995, but `production_join_pending_witness=false`; the original read return was not subsequent I/O, source writer was manually released, and watchdog did not release it. The helper joined and child was reaped. See [current implementation and verification](#current-local-implementation-and-verification-2026-11-04) and [archived RC-002 results](#rc-002-windows-cancellation-interleaving-verification). |
 | CMD-REASSESS-002 — reassess Windows successful-cancel/production-join concern | **Fresh bounded Windows run completed; classification remains `unresolved`; no production change justified.** Run [41851372381](https://github.com/qubit-ltd/rs-command/actions/runs/41851372381), `windows-2022`, exact source SHA `70c343d155c88852443ae327e37baded29f318d4`: command selected 6 tests, all passed, 0 failed, 110 filtered; [artifact 13335311428](https://github.com/qubit-ltd/rs-command/actions/runs/41851372381/artifacts/13335311428). | The production attempt did not establish subsequent blocked I/O or a pending production join; see [fresh CMD-REASSESS-002 evidence](#cmd-reassess-002-fresh-windows-evidence-2026-11-04). This row is separate from the historical CMD-REV-004 row. |
 
 ## CMD-REVIEW-003 evidence review (2026-11-05)
+
+> Archived source review. See the [latest evidence summary](#current-summary) for the current source-review result.
 
 This is a source-path review only; no Windows experiment was run in this Linux session. The assigned worktree HEAD is `b098a4c6d1b383bc8a4d5302884913e465643be2`. At inspection, the worktree also had concurrent in-progress edits in `src/command_cancellation.rs`, `src/command_runner/internal/output_collector.rs`, and `src/command_runner/internal/total_output_budget.rs`; these were preserved. The inspected changes in those files are Rustdoc edits and do not alter the cancellation/read/join behavior described below. The pre-existing Windows trace evidence remains tied to its recorded SHAs and runs above, not to this worktree HEAD.
 
@@ -57,6 +108,8 @@ No new experiment was run. Existing evidence already includes the bounded 128-at
 The missing causal witness remains: successful cancellation associated with an operation, normal completion of that original operation, entry into a **subsequent** blocked synchronous operation, production cleanup demonstrably pending in its join, and watchdog release followed by helper/process reclamation. The prior traces do not establish all of those events, so CMD-REVIEW-003 remains **unresolved**—neither confirmed, disproven, nor fixed. No production or test changes were made for this review. No Windows-only test was executed on Linux, and no Linux zero-test result is represented as Windows evidence.
 
 ## CMD-REASSESS-002 fresh Windows evidence (2026-11-04)
+
+> Archived Windows run. See the [latest evidence summary](#current-summary) for the newest available Windows evidence.
 
 A fresh run of the existing Windows workflow tested source SHA `70c343d155c88852443ae327e37baded29f318d4` on `windows-2022`: [run 41851372381](https://github.com/qubit-ltd/rs-command/actions/runs/41851372381), [artifact 13335311428](https://github.com/qubit-ltd/rs-command/actions/runs/41851372381/artifacts/13335311428). Command: `cargo test --lib windows_successful_cancel_interleaving -- --test-threads=1 --nocapture`; 6 selected, 6 passed, 0 failed, 110 filtered. The artifact contains the complete trace; its SHA-256 is `66032f5773f2756d954f5e18dcfd17ae2eeae1284ad1af13e9400dbdcc8ff048`.
 
@@ -79,6 +132,8 @@ The production `CommandIo` blocked-read case ran once. Cancellation succeeded; t
 生产 `CommandIo` 阻塞 read 场景执行一次。取消成功；原 read 返回 Windows 错误 995；reader helper 已 join，进程已回收。trace 记录 `production_join_pending_witness=false`、`original_io_return_is_subsequent_io=false`、`source_writer_manually_released=true`、`watchdog_released=false`，因此未建立生产 cleanup join 挂起／救援的完整链条。有限替代探针记录：read-to-tee 128 次（首次取消成功 45 次、`ERROR_NOT_FOUND`/1168 共 83 次、tee 写入及确认阻塞写均为零）；readiness 128 次（取消成功 128 次、tee 写进入 128 次、确认阻塞写为零）；EOF-to-flush 128 次（首次取消成功 8 次、错误 1168 共 120 次、写入及确认阻塞写为零）；stdin check-to-write 是一次实际内核 write 取消（该间隙本身尝试数为零）。由于这些 trace 未构成完整生产 join 见证，read-to-tee、EOF-to-flush 和 stdin gap 分类为未覆盖。watchdog 自测记录真实 pipe 阻塞、watchdog 释放、helper 回收且未 kill child。总分类仍为 `rc002=unresolved`：这既不证明缺陷，也不证明安全，因此没有依据修改生产代码。
 
 ## RSC-003 当前源码核查（2026-11-05）
+
+> 历史源码核查记录。请参阅[最新证据摘要](#current-summary)了解当前源码复核结论。
 
 本节记录本轮有界核查，不覆盖下方历史 run。核查的仓库提交为
 `783f96651c20f48fd2529574ffbe37aad09fb7fd`；本轮工作区为 Linux x86_64，
@@ -110,15 +165,17 @@ cleanup join 因此保持 pending，最后由 watchdog 释放并回收 helper/ch
 **`unresolved`**：没有证实缺陷，也没有证明生产路径安全。此项有界核查完成；未执行
 Windows 验证，因为没有新的生产路径假设需要针对性运行，且当前执行环境为 Linux。
 
-## 中文当前摘要
+## 归档摘要：中文当前摘要（2026-11-04）
 
-以下为 CMD-REV-001 至 CMD-REV-004 及当前任务项 CMD-REASSESS-002 的当前摘要。下表记录本轮当前工作证据，不表示所有历史检查点均已重跑。旧 run 和检查点保留在[归档证据索引](#archived-evidence-index)中，仍属于历史记录。
+> 历史摘要归档。请参阅[最新证据摘要](#current-summary)；保留本表以追踪当时的评审项映射。
+
+本节归档 2026-11-04 的 CMD-REV-001 至 CMD-REV-004 和 CMD-REASSESS-002 摘要，保留当时记录的评审项映射与证据；当前状态请参阅[最新证据摘要](#current-summary)。
 
 | 评审项 | 当前状态与证据 | 缺口／历史上下文 |
 | --- | --- | --- |
 | CMD-REV-001 — 示例自包含 | Linux x86_64 在实施源码树 `3d8461a`（基于 checkout `7b2a0adfce45db127ea137ea84268b95d239d5c2`）上验证通过。`CARGO_TARGET_DIR=/tmp/rs-command-target-t1-focused cargo test --test documentation_examples_tests` 通过：harness 4 项测试；生成／选中 12 个示例，其中 6 个 Unix 示例通过，6 个 `compile`／`no_run` 示例完成类型检查但运行时忽略。修复 harness 前，从任一外部 README 删除导入时命令退出 0，因为隐式通配导入掩盖了缺项；修复后两份 README 变异均因 `CommandRunner` 和 `Command` 的 E0433 编译失败。 | Linux 上被 `cfg(windows)` 排除的 Windows 示例既未编译也未运行。详见[本轮本地实施与验证](#current-local-implementation-and-verification-2026-11-04)。 |
-| CMD-REV-002 — 整理当前状态与历史证据 | 本摘要及下文归档／上下文标注是当前文档变更。 | 此项整理证据，不产生新的运行时证据。旧编号 CMD-R02、CMD-003、RC-001、RC-002 来自不同评审阶段，未证明彼此一一对应。详见[上下文与归档索引](#archived-evidence-index)。 |
-| CMD-REV-003 — 说明 readiness 变体和字段 | 已在当前任务工作区完成，具体说明见[本轮本地实施与验证](#current-local-implementation-and-verification-2026-11-04)。 | 不声称改变平台行为。历史 RC-002 编号仅用于上下文说明。 |
+| CMD-REV-002 — 整理当前状态与历史证据 | 在当时，该摘要及归档／上下文标注记录了当时可用证据；该文档整理没有产生新的运行时证据。 | 旧编号 CMD-R02、CMD-003、RC-001、RC-002 来自不同评审阶段，未证明彼此一一对应。详见[上下文与归档索引](#archived-evidence-index)。 |
+| CMD-REV-003 — 说明 readiness 变体和字段 | 已在 2026-11-04 的任务工作区完成，具体说明见[当时的本地实施与验证记录](#current-local-implementation-and-verification-2026-11-04)。 | 不声称改变平台行为。历史 RC-002 编号仅用于上下文说明。 |
 | CMD-REV-004 — 先核查 Windows cancellation/join 疑点 | **有界核查完成；行为仍未解决，不支持修改生产策略。** Windows run [41830652995](https://github.com/qubit-ltd/rs-command/actions/runs/41830652995) 在 `windows-2022` 精确测试任务 SHA `4812685a10616c663ab207351c9812356da36b21`：筛选 6 项、6 项通过、0 失败、过滤 105 项；[trace artifact 13322432766](https://github.com/qubit-ltd/rs-command/actions/runs/41830652995/artifacts/13322432766)。生产场景没有建立所需的因果见证链。 | trace 观察到取消成功和原始 read 错误 995，但 `production_join_pending_witness=false`；原 read 返回并非后续 I/O，source writer 被手动释放，watchdog 未释放。helper 已 join，子进程已回收。详见[本轮本地实施与验证](#current-local-implementation-and-verification-2026-11-04)和[归档 RC-002 结果](#rc-002-windows-cancellation-interleaving-verification)。 |
 | CMD-REASSESS-002 — 重新核查 Windows 成功取消与生产 join 疑点 | **新鲜有界 Windows run 已完成；分类仍为 `unresolved`；无依据修改生产代码。** run [41851372381](https://github.com/qubit-ltd/rs-command/actions/runs/41851372381) 在 `windows-2022` 精确测试源码 SHA `70c343d155c88852443ae327e37baded29f318d4`：选中 6 项，6 项通过、0 失败、过滤 110 项；[artifact 13335311428](https://github.com/qubit-ltd/rs-command/actions/runs/41851372381/artifacts/13335311428)。 | 生产尝试没有建立后续阻塞 I/O 或生产 join pending；详见[CMD-REASSESS-002 新鲜 Windows 证据](#cmd-reassess-002-fresh-windows-evidence-2026-11-04)。此行独立于历史 CMD-REV-004。 |
 
@@ -134,7 +191,7 @@ Windows 验证，因为没有新的生产路径假设需要针对性运行，且
 
 ## Archived evidence index
 
-The checkpoint sections immediately below and the older `Result` / final validation sections later in this file are archived records. Their SHAs, workflow runs, artifacts, failures, and observations are preserved as recorded; they are not the current status. Return to the [current summary](#current-summary) for the present conclusion.
+All earlier evidence sections in this file, including dated source reviews, checkpoint sections, and the older `Result` / final validation sections, are archived records. Their SHAs, workflow runs, artifacts, failures, and observations are preserved as recorded; they are not the current status. Return to the [current summary](#current-summary) for the present conclusion.
 
 | Historical label | Context in this file | Relationship to current scope |
 | --- | --- | --- |
@@ -142,6 +199,7 @@ The checkpoint sections immediately below and the older `Result` / final validat
 | CMD-003 | Earlier review/plan identifier used in legacy RC-002 verification text. | Its scope depends on the referenced plan stage; it is not assumed to equal current CMD-REV-003. |
 | RC-001 | Historical production behavior question and Windows cancellation probe record. | Related behavior evidence for CMD-REV-004, while preserving each checkpoint's scope and limits. |
 | RC-002 | Historical documentation verification and cancellation-interleaving report title, reused across stages. | May refer to documentation work or Windows probe history; it is not treated as a single current item. |
+| CMD-REV-001–004 summary (2026-11-04) | The preceding English and Chinese status tables preserve an earlier item mapping and evidence snapshot. | Archived context only; the latest evidence summary above is authoritative for current status. |
 
 ## Current local implementation and verification (2026-11-04)
 
