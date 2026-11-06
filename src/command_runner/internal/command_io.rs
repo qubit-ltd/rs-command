@@ -276,6 +276,54 @@ fn finish_helpers<R>(
         Option<io::Error>,
     ) -> R,
 ) -> R {
+    finish_helpers_with_wait(
+        command,
+        stdout_reader,
+        stderr_reader,
+        stdin_writer,
+        |is_finished, confirmation_deadline| wait_until_finished(is_finished, confirmation_deadline),
+        finish,
+    )
+}
+
+/// Cancels every supplied helper and passes bounded join results to one
+/// finalizer using the supplied confirmation wait.
+///
+/// The deadline is created once before cancellation requests are issued and
+/// passed unchanged to every helper whose cancellation failed. The wait
+/// callback returns whether completion was observed before that deadline.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used in diagnostics.
+/// * `stdout_reader` - Helper draining stdout.
+/// * `stderr_reader` - Helper draining stderr.
+/// * `stdin_writer` - Optional helper writing stdin.
+/// * `wait` - Callback that checks completion against the shared deadline.
+/// * `finish` - Finalizer applied to the helper outcomes.
+///
+/// # Type Parameters
+///
+/// * `R` - Result returned by the helper finalizer.
+/// * `W` - Confirmation wait callback.
+fn finish_helpers_with_wait<R, W>(
+    command: &str,
+    stdout_reader: Option<OutputReader>,
+    stderr_reader: Option<OutputReader>,
+    stdin_writer: OptionalStdinWriter,
+    mut wait: W,
+    finish: impl FnOnce(
+        Option<OutputReaderFinish>,
+        Option<OutputReaderFinish>,
+        Option<Result<(), CommandError>>,
+        Option<io::Error>,
+        Option<io::Error>,
+        Option<io::Error>,
+    ) -> R,
+) -> R
+where
+    W: FnMut(&dyn Fn() -> bool, Instant) -> bool,
+{
     // Issue every request before waiting for any helper so one failure cannot
     // prevent the remaining helpers from being interrupted.
     let confirmation_deadline = Instant::now() + HELPER_CANCELLATION_CONFIRMATION_TIMEOUT;
@@ -283,15 +331,18 @@ fn finish_helpers<R>(
     let stderr_cancellation = stderr_reader.as_ref().and_then(|reader| reader.cancel().err());
     let stdin_cancellation = stdin_writer.as_ref().and_then(|writer| writer.cancel().err());
 
-    let stdout_result = stdout_reader
-        .and_then(|reader| finish_output_reader(reader, stdout_cancellation.is_some(), confirmation_deadline));
-    let stderr_result = stderr_reader
-        .and_then(|reader| finish_output_reader(reader, stderr_cancellation.is_some(), confirmation_deadline));
+    let stdout_result = stdout_reader.and_then(|reader| {
+        finish_output_reader(reader, stdout_cancellation.is_some(), confirmation_deadline, &mut wait)
+    });
+    let stderr_result = stderr_reader.and_then(|reader| {
+        finish_output_reader(reader, stderr_cancellation.is_some(), confirmation_deadline, &mut wait)
+    });
     let stdin_result = finish_optional_stdin_writer(
         command,
         stdin_writer,
         stdin_cancellation.is_some(),
         confirmation_deadline,
+        &mut wait,
     );
 
     let stdout_cancellation = retain_cancellation_failure(
@@ -340,8 +391,9 @@ fn finish_output_reader(
     reader: OutputReader,
     cancellation_failed: bool,
     confirmation_deadline: Instant,
+    wait: &mut impl FnMut(&dyn Fn() -> bool, Instant) -> bool,
 ) -> Option<OutputReaderFinish> {
-    if cancellation_failed && !wait_until_finished(|| reader.is_finished(), confirmation_deadline) {
+    if cancellation_failed && !wait(&|| reader.is_finished(), confirmation_deadline) {
         return Some(OutputReaderFinish::Detached(reader.detached_output()));
     }
     Some(OutputReaderFinish::Joined(join_output_reader(reader)))
@@ -360,10 +412,11 @@ fn finish_optional_stdin_writer(
     writer: OptionalStdinWriter,
     cancellation_failed: bool,
     confirmation_deadline: Instant,
+    wait: &mut impl FnMut(&dyn Fn() -> bool, Instant) -> bool,
 ) -> Option<Result<(), CommandError>> {
     if cancellation_failed
         && let Some(writer) = writer.as_ref()
-        && !wait_until_finished(|| writer.is_finished(), confirmation_deadline)
+        && !wait(&|| writer.is_finished(), confirmation_deadline)
     {
         return None;
     }
@@ -507,8 +560,18 @@ mod tests {
     use super::super::stdin_writer::StdinWriter;
     use super::CommandIo;
     use super::HELPER_CANCELLATION_CONFIRMATION_TIMEOUT;
+    #[cfg(windows)]
     use super::cancel_and_join_started_helpers;
+    use super::finish_helpers_with_wait;
     use crate::CommandCleanupFailure;
+
+    struct ReleaseOnDrop(Arc<AtomicBool>);
+
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
 
     fn completed_reader(cancellation: IoCancellation) -> OutputReader {
         OutputReader::new(thread::spawn(|| Ok(CapturedOutput::default())), cancellation)
@@ -594,6 +657,32 @@ mod tests {
     }
 
     #[test]
+    fn test_finish_helpers_joins_after_confirmation_wait_returns_true() {
+        let reader = completed_reader(IoCancellation::failing("stdout cancellation failed"));
+        wait_for_completion(|| reader.is_finished());
+        let mut confirm = |is_finished: &dyn Fn() -> bool, _deadline: Instant| {
+            assert!(is_finished());
+            true
+        };
+
+        let joined = finish_helpers_with_wait(
+            "test command",
+            Some(reader),
+            None,
+            None,
+            &mut confirm,
+            |stdout_result, _, _, _, _, _| {
+                matches!(
+                    stdout_result,
+                    Some(super::super::output_reader_finish::OutputReaderFinish::Joined(_))
+                )
+            },
+        );
+
+        assert!(joined);
+    }
+
+    #[test]
     fn test_finish_helpers_detaches_after_confirmation_timeout() {
         let release = Arc::new(AtomicBool::new(false));
         let blocked = blocked_reader(&release, "stdout cancellation failed");
@@ -669,18 +758,44 @@ mod tests {
     #[test]
     fn test_started_helpers_share_one_confirmation_deadline() {
         let release = Arc::new(AtomicBool::new(false));
+        let _release_on_drop = ReleaseOnDrop(Arc::clone(&release));
         let stdout = blocked_reader(&release, "stdout cancellation failed");
         let stderr = blocked_reader(&release, "stderr cancellation failed");
         let stdin = blocked_writer(&release, "stdin cancellation failed");
-        let started = Instant::now();
 
-        let failures = cancel_and_join_started_helpers("test command", Some(stdout), Some(stderr), Some(stdin));
-        let elapsed = started.elapsed();
-        release.store(true, Ordering::Release);
+        let mut deadlines = Vec::new();
+        let mut confirm = |is_finished: &dyn Fn() -> bool, deadline: Instant| {
+            assert!(!is_finished());
+            deadlines.push(deadline);
+            false
+        };
+        let failures = finish_helpers_with_wait(
+            "test command",
+            Some(stdout),
+            Some(stderr),
+            Some(stdin),
+            &mut confirm,
+            |stdout_result,
+             stderr_result,
+             stdin_result,
+             stdout_cancellation,
+             stderr_cancellation,
+             stdin_cancellation| {
+                let mut failures = Vec::new();
+                super::push_stdout_failures(&mut failures, stdout_result, stdout_cancellation);
+                super::push_stderr_failures(&mut failures, stderr_result, stderr_cancellation);
+                super::push_stdin_failures(&mut failures, stdin_result, stdin_cancellation);
+                failures
+            },
+        );
 
-        assert!(elapsed >= HELPER_CANCELLATION_CONFIRMATION_TIMEOUT);
-        assert!(elapsed < HELPER_CANCELLATION_CONFIRMATION_TIMEOUT * 2);
+        assert_eq!(deadlines.len(), 3);
+        assert_eq!(deadlines[0], deadlines[1]);
+        assert_eq!(deadlines[1], deadlines[2]);
         assert_eq!(failures.len(), 3);
+        assert!(matches!(failures[0], CommandCleanupFailure::StdoutCancellation { .. }));
+        assert!(matches!(failures[1], CommandCleanupFailure::StderrCancellation { .. }));
+        assert!(matches!(failures[2], CommandCleanupFailure::StdinCancellation { .. }));
     }
 
     #[cfg(windows)]
