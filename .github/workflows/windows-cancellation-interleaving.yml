@@ -18,30 +18,71 @@ jobs:
       - name: Prepare local path dependencies
         shell: bash
         run: ./.infra/bin/prepare-local-path-dependencies.sh
-      - name: Run real-pipe cancellation probe
+      - name: Run identity gate fixtures
+        shell: pwsh
+        run: ./.github/scripts/assert-windows-probe-results.tests.ps1
+      - name: Run and verify real-pipe cancellation probes
         timeout-minutes: 15
         shell: pwsh
         run: |
-          $log = "windows-cancellation-interleaving.log"
-          Set-Content -Path $log -Value "ci_checkout_sha=$env:GITHUB_SHA"
-          Add-Content -Path $log -Value "platform=windows-2022"
-          Add-Content -Path $log -Value "command=cargo test --lib windows_ -- --nocapture"
-          $output = & cargo test --lib windows_ -- --nocapture 2>&1
+          $listLog = "windows-cancellation-interleaving-list.log"
+          $runLog = "windows-cancellation-interleaving.log"
+          $checkLog = "windows-cancellation-interleaving-check.log"
+          Set-Content -Path $checkLog -Value "ci_checkout_sha=$env:GITHUB_SHA"
+          Add-Content -Path $checkLog -Value "platform=windows-2022"
+          Set-Content -Path $runLog -Value "ci_checkout_sha=$env:GITHUB_SHA"
+          Add-Content -Path $runLog -Value "platform=windows-2022"
+          Add-Content -Path $runLog -Value "list_command=cargo test --lib windows_ -- --list --color never"
+          $listOutput = & cargo test --lib windows_ -- --list --color never 2>&1
+          $listExitCode = $LASTEXITCODE
+          $listOutput | Tee-Object -FilePath $listLog
+          Add-Content -Path $runLog -Value "list_exit_code=$listExitCode"
+          if ($listExitCode -ne 0) {
+            Add-Content -Path $checkLog -Value "list_command_exit_code=$listExitCode"
+            Add-Content -Path $checkLog -Value "list_command_failed=cargo test --lib windows_ -- --list --color never"
+            throw "Cargo test listing failed with exit code $listExitCode"
+          }
+
+          $command = "cargo test --lib windows_ -- --show-output --test-threads=1 --color never"
+          Add-Content -Path $runLog -Value "command=$command"
+          $output = & cargo test --lib windows_ -- --show-output --test-threads=1 --color never 2>&1
           $cargoExitCode = $LASTEXITCODE
-          $output | Tee-Object -FilePath $log -Append
-          if ($cargoExitCode -ne 0) { exit $cargoExitCode }
+          $output | Tee-Object -FilePath $runLog -Append
+          Add-Content -Path $runLog -Value "cargo_exit_code=$cargoExitCode"
+          if ($cargoExitCode -ne 0) {
+            Add-Content -Path $checkLog -Value "run_command_exit_code=$cargoExitCode"
+            Add-Content -Path $checkLog -Value "run_command_failed=$command"
+            throw "Cargo test run failed with exit code $cargoExitCode"
+          }
           $summary = $output | Select-String -Pattern '^running ([0-9]+) tests?$' | Select-Object -First 1
           if ($null -eq $summary) {
-            Add-Content -Path $log -Value "selected_test_count=unavailable"
+            Add-Content -Path $runLog -Value "selected_test_count=unavailable"
+            Add-Content -Path $checkLog -Value "selected_test_count=unavailable"
             throw "Cargo test output did not contain a test-count summary"
           }
           $selectedTests = [int]$summary.Matches[0].Groups[1].Value
-          Add-Content -Path $log -Value "selected_test_count=$selectedTests"
-          if ($selectedTests -eq 0) { throw "Windows probe filter selected zero tests" }
-      - name: Upload probe trace
+          Add-Content -Path $runLog -Value "selected_test_count=$selectedTests"
+          if ($selectedTests -eq 0) {
+            Add-Content -Path $checkLog -Value "selected_test_count=0"
+            throw "Windows probe filter selected zero tests"
+          }
+          Add-Content -Path $checkLog -Value "selected_test_count=$selectedTests"
+
+          Add-Content -Path $checkLog -Value "check_command=.github/scripts/assert-windows-probe-results.ps1 -ListPath $listLog -RunPath $runLog"
+          try {
+            & ./.github/scripts/assert-windows-probe-results.ps1 -ListPath $listLog -RunPath $runLog *>&1 | Tee-Object -FilePath $checkLog -Append
+          }
+          catch {
+            Add-Content -Path $checkLog -Value ("check_failed=" + $_.ToString())
+            throw
+          }
+      - name: Upload probe evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: windows-cancellation-interleaving-trace
-          path: windows-cancellation-interleaving.log
+          path: |
+            windows-cancellation-interleaving-list.log
+            windows-cancellation-interleaving.log
+            windows-cancellation-interleaving-check.log
           if-no-files-found: warn
