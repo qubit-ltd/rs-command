@@ -465,6 +465,9 @@ mod unix {
         loop {
             match child.try_wait().expect("fixture subprocess should be observable") {
                 Some(status) => {
+                    if fixture == "late-pid" && !status.success() {
+                        let _ = escaped.try_wait_until_recorded(Duration::from_secs(2));
+                    }
                     escaped
                         .terminate_if_recorded()
                         .expect("escaped descendant should be cleaned up after fixture exit");
@@ -493,19 +496,24 @@ mod unix {
         const PRE_CANCEL_OBSERVATION: Duration = Duration::from_millis(100);
 
         let fixture_kind = match fixture {
-            "delayed-readiness" | "missing-cancel" | "worker-panic" => "stdout",
+            "delayed-readiness" | "late-pid" | "missing-cancel" | "worker-panic" => "stdout",
             other => other,
         };
         let parent_pid_path = pid_path.with_extension("parent.pid");
         let ready_path = pid_path.with_extension("ready");
         let release_path = pid_path.with_extension("release");
+        let abort_path = pid_path.with_extension("abort");
+        let abort_ack_path = pid_path.with_extension("abort-ack");
         let mut escaped = EscapedProcessGuard::new(pid_path.to_path_buf());
         let script = match fixture {
             "stdout" | "missing-cancel" | "worker-panic" => {
                 "echo \"$$\" > \"$3.tmp\"; mv \"$3.tmp\" \"$3\"; setsid sh -c 'echo \"$$\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; : > \"$2\"; exec sleep 60' sh \"$1\" \"$2\" & printf started"
             }
             "delayed-readiness" => {
-                "echo \"$$\" > \"$3.tmp\"; mv \"$3.tmp\" \"$3\"; setsid sh -c 'echo \"$$\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; while [ ! -f \"$3\" ]; do sleep 0.01; done; : > \"$2\"; exec sleep 60' sh \"$1\" \"$2\" \"$4\" & printf started"
+                "echo \"$$\" > \"$3.tmp\"; mv \"$3.tmp\" \"$3\"; setsid sh -c 'echo \"$$\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\" || { : > \"$5\"; exit 0; }; while [ ! -f \"$3\" ] && [ ! -f \"$4\" ]; do sleep 0.01; done; if [ -f \"$4\" ]; then : > \"$5\"; exec sleep 60; fi; : > \"$2\"; exec sleep 60' sh \"$1\" \"$2\" \"$4\" \"$5\" \"$6\" & printf started"
+            }
+            "late-pid" => {
+                "echo \"$$\" > \"$3.tmp\"; mv \"$3.tmp\" \"$3\"; setsid sh -c 'sleep 0.5; echo \"$$\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\" || { : > \"$5\"; exit 0; }; while [ ! -f \"$3\" ] && [ ! -f \"$4\" ]; do sleep 0.01; done; if [ -f \"$4\" ]; then : > \"$5\"; exec sleep 60; fi; : > \"$2\"; exec sleep 60' sh \"$1\" \"$2\" \"$4\" \"$5\" \"$6\" & printf started"
             }
             "stdin" => {
                 "setsid sh -c 'echo \"$$\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; : > \"$2\"; exec sleep 60' sh \"$1\" \"$2\" >/dev/null 2>&1 & wait"
@@ -517,12 +525,14 @@ mod unix {
         let run_pid_path = pid_path.to_path_buf();
         let run_ready_path = ready_path.clone();
         let run_release_path = release_path.clone();
+        let run_abort_path = abort_path.clone();
+        let run_abort_ack_path = abort_ack_path.clone();
         let run_parent_pid_path = parent_pid_path.clone();
         let fixture_owned = fixture.to_owned();
         let command_fixture = fixture_kind.to_owned();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let worker = std::thread::spawn(move || {
-            let command = if fixture_owned == "delayed-readiness" {
+            let command = if matches!(fixture_owned.as_str(), "delayed-readiness" | "late-pid") {
                 Command::new("sh")
                     .arg("-c")
                     .arg(script)
@@ -531,6 +541,8 @@ mod unix {
                     .arg_os(&run_ready_path)
                     .arg_os(&run_parent_pid_path)
                     .arg_os(&run_release_path)
+                    .arg_os(&run_abort_path)
+                    .arg_os(&run_abort_ack_path)
             } else {
                 match command_fixture.as_str() {
                     "stdout" => Command::new("sh")
@@ -558,17 +570,21 @@ mod unix {
                 .expect("fixture result receiver should remain connected");
         });
 
-        let ready_timeout = if fixture == "delayed-readiness" {
+        let ready_timeout = if matches!(fixture, "delayed-readiness" | "late-pid") {
             Duration::from_millis(100)
         } else {
             READY_TIMEOUT
         };
-        let pid_handshake = if fixture == "delayed-readiness" {
-            escaped.try_wait_until_recorded(READY_TIMEOUT)
+        let pid_handshake = if matches!(fixture, "delayed-readiness" | "late-pid") {
+            escaped.try_wait_until_recorded(if fixture == "late-pid" {
+                ready_timeout
+            } else {
+                READY_TIMEOUT
+            })
         } else {
             Ok(())
         };
-        let direct_exit = if fixture == "delayed-readiness" && pid_handshake.is_ok() {
+        let direct_exit = if matches!(fixture, "delayed-readiness" | "late-pid") {
             let deadline = Instant::now() + READY_TIMEOUT;
             loop {
                 let exited = fs::read_to_string(&parent_pid_path)
@@ -602,10 +618,12 @@ mod unix {
                     Err(format!("fixture readiness marker missing after {ready_timeout:?}"))
                 }
             }
+        } else if fixture == "late-pid" {
+            Err(format!("escaped PID handshake failed: {pid_handshake:?}"))
         } else {
             escaped.try_wait_until_recorded(ready_timeout)
         };
-        let post_release_ready = if fixture == "delayed-readiness" {
+        let post_release_ready = if fixture == "delayed-readiness" && pid_handshake.is_ok() && direct_exit.is_ok() {
             let release = fs::write(&release_path, b"release");
             let released_ready = if release.is_ok() {
                 let deadline = Instant::now() + READY_TIMEOUT;
@@ -617,6 +635,29 @@ mod unix {
                 false
             };
             Some((release.is_ok(), released_ready))
+        } else {
+            None
+        };
+        let abort_cleanup = if matches!(fixture, "delayed-readiness" | "late-pid")
+            && (pid_handshake.is_err() || direct_exit.is_err())
+        {
+            let abort_written = fs::write(&abort_path, b"abort").is_ok();
+            let deadline = Instant::now() + READY_TIMEOUT;
+            let mut pid_recorded = false;
+            while Instant::now() < deadline && !pid_recorded && !abort_ack_path.exists() {
+                pid_recorded = fs::read_to_string(pid_path)
+                    .ok()
+                    .and_then(|contents| contents.trim().parse::<u32>().ok())
+                    .is_some_and(|pid| pid != 0);
+                if pid_recorded || abort_ack_path.exists() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            while pid_recorded && Instant::now() < deadline && !abort_ack_path.exists() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Some((abort_written, pid_recorded, abort_ack_path.exists()))
         } else {
             None
         };
@@ -685,7 +726,7 @@ mod unix {
             return;
         }
 
-        let readiness_pid = if readiness.is_err() && fixture != "delayed-readiness" {
+        let readiness_pid = if readiness.is_err() && !matches!(fixture, "delayed-readiness" | "late-pid") {
             Some(escaped.try_wait_until_recorded(READY_TIMEOUT))
         } else {
             None
@@ -697,7 +738,26 @@ mod unix {
         };
         let worker_result = worker.join();
 
-        cleanup_result.expect("escaped descendant cleanup should succeed");
+        let descendant_reclaimed = cleanup_result.expect("escaped descendant cleanup should succeed");
+        if matches!(fixture, "delayed-readiness" | "late-pid")
+            && (pid_handshake.is_err() || direct_exit.is_err())
+        {
+            let (abort_written, pid_recorded, abort_acknowledged) =
+                abort_cleanup.expect("preflight failure should run abort cleanup");
+            assert!(abort_written, "abort marker should be written after a preflight failure");
+            assert!(
+                pid_recorded || abort_acknowledged,
+                "abort should be acknowledged or escaped PID should be recorded"
+            );
+            assert!(
+                abort_acknowledged,
+                "escaped child should acknowledge the abort path before cleanup"
+            );
+            assert!(
+                descendant_reclaimed || (!pid_recorded && abort_acknowledged),
+                "escaped descendant should be killed or confirm its natural abort exit"
+            );
+        }
         if fixture == "delayed-readiness" {
             assert!(pid_handshake.is_ok(), "escaped PID handshake failed: {pid_handshake:?}");
             assert!(direct_exit.is_ok(), "direct command did not exit: {direct_exit:?}");
@@ -707,6 +767,14 @@ mod unix {
                 Some((true, true)),
                 "release should make the fixture ready"
             );
+            assert!(descendant_reclaimed, "escaped descendant should be reclaimed after cancellation");
+        } else if fixture == "late-pid" {
+            assert!(pid_handshake.is_err(), "late PID fixture should miss its preflight deadline");
+            assert!(direct_exit.is_ok(), "direct command should exit during late PID publication");
+            assert!(readiness.is_err(), "late PID should remain unavailable before abort");
+            assert_eq!(post_release_ready, None, "preflight failure must not release readiness");
+            assert!(!release_path.exists(), "late PID preflight failure must not create release marker");
+            assert!(descendant_reclaimed, "late escaped descendant should be killed after cancellation");
         } else {
             assert!(readiness.is_ok(), "fixture readiness failed: {readiness:?}");
         }
@@ -1011,6 +1079,15 @@ mod unix {
             .expect("command test temporary directory should be created");
         let pid_path = temp_dir.path().join("escaped-child.pid");
         run_cancellation_fixture_with_watchdog(&pid_path, "delayed-readiness");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_runner_cancellation_aborts_late_pid_fixture_before_release() {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+            .expect("command test temporary directory should be created");
+        let pid_path = temp_dir.path().join("escaped-child.pid");
+        run_cancellation_fixture_with_watchdog(&pid_path, "late-pid");
     }
 
     #[cfg(target_os = "linux")]
