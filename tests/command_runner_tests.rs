@@ -1025,49 +1025,67 @@ mod unix {
     #[test]
     fn test_runner_cancellation_without_timeout_terminates_running_command() {
         let temp_dir =
-            LocalTempDir::with_prefix("qubit-command-test-").expect("command test temp directory should be created");
-        let started_path = temp_dir.path().join("started");
-        let captured_path = temp_dir.path().join("captured");
-        let tee_path = captured_path.clone();
-        let script = format!(
-            "printf started; : > '{}'; while :; do sleep 1; done",
-            started_path.display(),
-        );
-        let cancellation = CommandCancellation::new();
-        let runner = CommandRunner::without_timeout();
-        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-        let run_cancellation = cancellation.clone();
-        let worker = std::thread::spawn(move || {
-            let result = runner.run_with(
-                Command::shell(&script),
-                CommandRunOptions::new()
-                    .cancellation(run_cancellation)
-                    .tee_stdout_to_file(tee_path),
+            LocalTempDir::with_prefix("qubit-command-managed-test-").expect("test temp directory should be created");
+        let pid_path = temp_dir.path().join("command.pid");
+        let test_name = std::thread::current()
+            .name()
+            .expect("test thread should be named")
+            .to_owned();
+        super::support::managed_test_process::run(&test_name, &pid_path, || {
+            let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+                .expect("command test temp directory should be created");
+            let started_path = temp_dir.path().join("started");
+            let captured_path = temp_dir.path().join("captured");
+            let tee_path = captured_path.clone();
+            let pid_path = super::support::managed_test_process::command_pid_path();
+            let abort_path = super::support::managed_test_process::command_abort_path();
+            let abort_ack_path = super::support::managed_test_process::command_abort_ack_path();
+            let script = format!(
+                "{}printf started; : > '{}'; while :; do sleep 1; done",
+                super::support::managed_test_process::shell_start_guard(),
+                started_path.display(),
             );
-            sender.send(result).expect("test receiver should remain connected");
+            let cancellation = CommandCancellation::new();
+            let runner = CommandRunner::without_timeout();
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            let run_cancellation = cancellation.clone();
+            let worker = std::thread::spawn(move || {
+                if !super::support::managed_test_process::permit_command_start() {
+                    return;
+                }
+                let result = runner.run_with(
+                    Command::new("sh")
+                        .arg("-c")
+                        .arg(&script)
+                        .arg("sh")
+                        .arg_os(&pid_path)
+                        .arg_os(&abort_path)
+                        .arg_os(&abort_ack_path),
+                    CommandRunOptions::new()
+                        .cancellation(run_cancellation)
+                        .tee_stdout_to_file(tee_path),
+                );
+                sender.send(result).expect("test receiver should remain connected");
+            });
+
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while fs::read(&captured_path).ok().as_deref() != Some(b"started".as_slice()) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let ready =
+                started_path.exists() && fs::read(&captured_path).ok().as_deref() == Some(b"started".as_slice());
+            cancellation.cancel();
+            let result = receiver.recv_timeout(Duration::from_secs(2));
+            let join = worker.join();
+            assert!(ready, "command output should be observed in tee before cancellation");
+            let error = result
+                .expect("cancelled runner should return promptly")
+                .expect_err("cancelled command should return an error");
+            join.expect("runner thread should not panic");
+
+            assert_eq!(error.kind(), CommandErrorKind::Cancelled);
+            assert_eq!(error.output().expect("cancelled output").stdout(), b"started");
         });
-
-        let deadline = Instant::now() + Duration::from_secs(1);
-        // A child-side marker does not prove the reader has captured stdout.
-        // The tee write precedes retaining the same chunk in the reader.
-        while fs::read(&captured_path).ok().as_deref() != Some(b"started".as_slice()) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(started_path.exists(), "command should start before cancellation");
-        assert_eq!(
-            fs::read(&captured_path).expect("reader should tee before cancellation"),
-            b"started"
-        );
-
-        cancellation.cancel();
-        let error = receiver
-            .recv_timeout(Duration::from_secs(2))
-            .expect("cancelled runner should return promptly")
-            .expect_err("cancelled command should return an error");
-        worker.join().expect("runner thread should not panic");
-
-        assert_eq!(error.kind(), CommandErrorKind::Cancelled);
-        assert_eq!(error.output().expect("cancelled output").stdout(), b"started");
     }
 
     #[cfg(target_os = "linux")]
@@ -1552,72 +1570,294 @@ mod unix {
 
     #[test]
     fn test_runner_timeout_uses_injected_manual_timer() {
-        let clock = ManualMonotonicClock::new_shared();
-        let runner = CommandRunner::new(Duration::from_secs(30)).timer(clock.new_timer());
-        let worker = std::thread::spawn(move || runner.run(Command::shell("sleep 60")));
+        let temp_dir =
+            LocalTempDir::with_prefix("qubit-command-managed-test-").expect("test temp directory should be created");
+        let pid_path = temp_dir.path().join("command.pid");
+        let test_name = std::thread::current()
+            .name()
+            .expect("test thread should be named")
+            .to_owned();
+        super::support::managed_test_process::run(&test_name, &pid_path, || {
+            let pid_path = super::support::managed_test_process::command_pid_path();
+            let abort_path = super::support::managed_test_process::command_abort_path();
+            let abort_ack_path = super::support::managed_test_process::command_abort_ack_path();
+            let clock = ManualMonotonicClock::new_shared();
+            let runner = CommandRunner::new(Duration::from_secs(30)).timer(clock.new_timer());
+            let cancellation = CommandCancellation::new();
+            let worker_cancellation = cancellation.clone();
+            let worker_pid_path = pid_path.clone();
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            let worker = std::thread::spawn(move || {
+                if !super::support::managed_test_process::permit_command_start() {
+                    return;
+                }
+                let command = Command::new("sh")
+                    .arg("-c")
+                    .arg(&format!(
+                        "{}exec sleep 60",
+                        super::support::managed_test_process::shell_start_guard()
+                    ))
+                    .arg("sh")
+                    .arg_os(&worker_pid_path)
+                    .arg_os(&abort_path)
+                    .arg_os(&abort_ack_path);
+                let result = runner.run_with(command, CommandRunOptions::new().cancellation(worker_cancellation));
+                let _ = sender.send(result);
+            });
 
-        assert!(clock.wait_for_waiters(1, Duration::from_secs(2)));
-        clock
-            .advance(Duration::from_secs(30))
-            .expect("manual time should advance");
-        let error = worker
-            .join()
-            .expect("runner thread should not panic")
-            .expect_err("command should time out");
-        assert_eq!(error.kind(), CommandErrorKind::TimedOut);
+            let waiting = clock.wait_for_waiters(1, Duration::from_secs(5));
+            let pid_deadline = Instant::now() + Duration::from_secs(5);
+            while !pid_path.exists() && Instant::now() < pid_deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let pid_ready = pid_path.exists();
+            if waiting && pid_ready {
+                clock
+                    .advance(Duration::from_secs(30))
+                    .expect("manual time should advance");
+            } else {
+                cancellation.cancel();
+            }
+            let result = receiver.recv_timeout(Duration::from_secs(5));
+            if result.is_err() {
+                cancellation.cancel();
+            }
+            let join = worker.join();
+            assert!(waiting, "runner should register its manual timeout waiter");
+            assert!(pid_ready, "command should publish its PID before manual time advances");
+            let error = result
+                .expect("runner should return within the real-time watchdog")
+                .expect_err("command should fail");
+            join.expect("runner thread should not panic");
+            assert_eq!(error.kind(), CommandErrorKind::TimedOut);
+        });
     }
 
     #[test]
     fn test_runner_timeout_accepts_child_that_exits_before_deadline() {
         let temp_dir =
-            LocalTempDir::with_prefix("qubit-command-test-").expect("command test temp directory should be created");
-        let signal_path = temp_dir.path().join("deadline-signal");
-        let completion_path = temp_dir.path().join("deadline-completion");
-        let script = "while [ ! -e \"$1\" ]; do sleep 0.01; done; : > \"$2\"";
-        let clock = ManualMonotonicClock::new_shared();
-        let timeout = Duration::from_secs(30);
-        let runner = CommandRunner::new(timeout).timer(clock.new_timer());
-        let child_signal_path = signal_path.clone();
-        let child_completion_path = completion_path.clone();
-        let worker = std::thread::spawn(move || {
-            runner.run(
-                Command::new("sh")
-                    .arg("-c")
-                    .arg(script)
-                    .arg("sh")
-                    .arg_os(&child_signal_path)
-                    .arg_os(&child_completion_path),
-            )
+            LocalTempDir::with_prefix("qubit-command-managed-test-").expect("test temp directory should be created");
+        let pid_path = temp_dir.path().join("command.pid");
+        let test_name = std::thread::current()
+            .name()
+            .expect("test thread should be named")
+            .to_owned();
+        super::support::managed_test_process::run(&test_name, &pid_path, || {
+            let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
+                .expect("command test temp directory should be created");
+            let signal_path = temp_dir.path().join("deadline-signal");
+            let completion_path = temp_dir.path().join("deadline-completion");
+            let clock = ManualMonotonicClock::new_shared();
+            let timeout = Duration::from_secs(30);
+            let runner = CommandRunner::new(timeout).timer(clock.new_timer());
+            let cancellation = CommandCancellation::new();
+            let worker_cancellation = cancellation.clone();
+            let pid_path = super::support::managed_test_process::command_pid_path();
+            let abort_path = super::support::managed_test_process::command_abort_path();
+            let abort_ack_path = super::support::managed_test_process::command_abort_ack_path();
+            let worker_pid_path = pid_path.clone();
+            let child_signal_path = signal_path.clone();
+            let child_completion_path = completion_path.clone();
+            let worker = std::thread::spawn(move || {
+                if !super::support::managed_test_process::permit_command_start() {
+                    loop {
+                        std::thread::sleep(Duration::from_secs(60));
+                    }
+                }
+                let script = format!(
+                    "{}while [ ! -e \"$4\" ]; do sleep 0.01; done; : > \"$5\"",
+                    super::support::managed_test_process::shell_start_guard()
+                );
+                runner.run_with(
+                    Command::new("sh")
+                        .arg("-c")
+                        .arg(&script)
+                        .arg("sh")
+                        .arg_os(&worker_pid_path)
+                        .arg_os(&abort_path)
+                        .arg_os(&abort_ack_path)
+                        .arg_os(&child_signal_path)
+                        .arg_os(&child_completion_path),
+                    CommandRunOptions::new().cancellation(worker_cancellation),
+                )
+            });
+
+            let waiting = clock.wait_for_waiters(1, Duration::from_secs(5));
+            let pid_deadline = Instant::now() + Duration::from_secs(5);
+            while !pid_path.exists() && Instant::now() < pid_deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let pid_ready = pid_path.exists();
+            if waiting && pid_ready {
+                fs::write(&signal_path, b"release").expect("signal file should release child command");
+            } else {
+                cancellation.cancel();
+            }
+            let completed_before_deadline = Instant::now() + Duration::from_secs(2);
+            let mut completed = completion_path.exists();
+            while waiting && pid_ready && !completed && Instant::now() < completed_before_deadline {
+                std::thread::sleep(Duration::from_millis(10));
+                completed = completion_path.exists();
+            }
+            // The completion marker is written immediately before the shell exits,
+            // so keep advancing manual time in small steps until the runner has
+            // observed the exit. Advancing the full timeout here can race with the
+            // child process scheduler and turn a successful command into a timeout.
+            let observed_exit_before_deadline = Instant::now() + Duration::from_secs(2);
+            while waiting
+                && pid_ready
+                && completed
+                && !worker.is_finished()
+                && Instant::now() < observed_exit_before_deadline
+            {
+                clock
+                    .advance(Duration::from_millis(1))
+                    .expect("manual time should advance");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+
+            let successful_result = worker.is_finished();
+            if !successful_result {
+                cancellation.cancel();
+            }
+            let result = worker.join();
+            assert!(waiting, "runner should register its manual timeout waiter");
+            assert!(pid_ready, "command should publish its PID before release");
+            assert!(
+                completed,
+                "child command should complete before the manual deadline advances"
+            );
+            assert!(
+                successful_result,
+                "runner should observe the completed child before timeout"
+            );
+            let _ = result
+                .expect("runner thread should not panic")
+                .expect("a child that exits before the deadline should complete normally");
         });
+    }
 
-        assert!(clock.wait_for_waiters(1, Duration::from_secs(2)));
-        fs::write(&signal_path, b"release").expect("signal file should release child command");
-        let completed_before_deadline = Instant::now() + Duration::from_secs(2);
-        while !completion_path.exists() {
-            assert!(
-                Instant::now() < completed_before_deadline,
-                "child command should exit before the manual deadline advances",
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        // The completion marker is written immediately before the shell exits,
-        // so keep advancing manual time in small steps until the runner has
-        // observed the exit. Advancing the full timeout here can race with the
-        // child process scheduler and turn a successful command into a timeout.
-        let observed_exit_before_deadline = Instant::now() + Duration::from_secs(2);
-        while !worker.is_finished() {
-            assert!(
-                Instant::now() < observed_exit_before_deadline,
-                "runner should observe the completed child before the manual deadline advances",
-            );
-            clock
-                .advance(Duration::from_millis(1))
-                .expect("manual time should advance");
-            std::thread::sleep(Duration::from_millis(1));
-        }
+    #[cfg(unix)]
+    #[test]
+    fn test_managed_test_process_watchdog_self_test() {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-watchdog-self-test-")
+            .expect("self-test temp directory should be created");
+        let pid_path = temp_dir.path().join("command.pid");
+        let test_name = std::thread::current()
+            .name()
+            .expect("test thread should be named")
+            .to_owned();
+        let result =
+            super::support::managed_test_process::run_for(&test_name, Some(&pid_path), Duration::from_secs(1), || {
+                let command_pid_path = super::support::managed_test_process::command_pid_path();
+                let abort_path = super::support::managed_test_process::command_abort_path();
+                let abort_ack_path = super::support::managed_test_process::command_abort_ack_path();
+                let worker = std::thread::spawn(move || {
+                    if !super::support::managed_test_process::permit_command_start() {
+                        loop {
+                            std::thread::sleep(Duration::from_secs(60));
+                        }
+                    }
+                    let script = format!(
+                        "sleep 2; {}exec sleep 60",
+                        super::support::managed_test_process::shell_start_guard()
+                    );
+                    CommandRunner::new(Duration::from_secs(60)).run(
+                        Command::new("sh")
+                            .arg("-c")
+                            .arg(&script)
+                            .arg("sh")
+                            .arg_os(&command_pid_path)
+                            .arg_os(&abort_path)
+                            .arg_os(&abort_ack_path),
+                    )
+                });
+                let command_pid_path = super::support::managed_test_process::command_pid_path();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !command_pid_path.exists() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                // This fixture intentionally delays PID publication until after
+                // the short watchdog requests abort.
+                let _worker_is_intentionally_live = worker;
+                loop {
+                    std::thread::sleep(Duration::from_secs(60));
+                }
+            });
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| error.contains("exceeded 1s watchdog")),
+            "watchdog should wait for late PID publication, abort, kill, and reap: {result:?}",
+        );
+        drop(temp_dir);
+    }
 
-        let result = worker.join().expect("runner thread should not panic");
-        let _ = result.expect("a child that exits before the deadline should complete normally");
+    #[cfg(unix)]
+    #[test]
+    fn test_managed_test_process_readiness_failure_cleans_runner() {
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-readiness-failure-")
+            .expect("test temp directory should be created");
+        let pid_path = temp_dir.path().join("command.pid");
+        let test_name = std::thread::current()
+            .name()
+            .expect("test thread should be named")
+            .to_owned();
+        super::support::managed_test_process::run(&test_name, &pid_path, || {
+            let command_pid_path = super::support::managed_test_process::command_pid_path();
+            let abort_path = super::support::managed_test_process::command_abort_path();
+            let abort_ack_path = super::support::managed_test_process::command_abort_ack_path();
+            let cancellation = CommandCancellation::new();
+            let worker_cancellation = cancellation.clone();
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            let worker = std::thread::spawn(move || {
+                if !super::support::managed_test_process::permit_command_start() {
+                    return;
+                }
+                let result = CommandRunner::without_timeout().run_with(
+                    Command::new("sh")
+                        .arg("-c")
+                        .arg(&format!(
+                            "{}exec sleep 60",
+                            super::support::managed_test_process::shell_start_guard()
+                        ))
+                        .arg("sh")
+                        .arg_os(&command_pid_path)
+                        .arg_os(&abort_path)
+                        .arg_os(&abort_ack_path),
+                    CommandRunOptions::new().cancellation(worker_cancellation),
+                );
+                let _ = sender.send(result);
+            });
+            let publish_deadline = Instant::now() + Duration::from_secs(5);
+            while !super::support::managed_test_process::command_pid_path().exists()
+                && Instant::now() < publish_deadline
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(
+                super::support::managed_test_process::command_pid_path().exists(),
+                "stalled command should publish PID before readiness is observed",
+            );
+            let readiness_deadline = Instant::now() + Duration::from_millis(150);
+            let ready_marker = temp_dir.path().join("never-ready");
+            while !ready_marker.exists() && Instant::now() < readiness_deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let ready = ready_marker.exists();
+            cancellation.cancel();
+            let result = receiver
+                .recv_timeout(Duration::from_secs(2))
+                .expect("cancelled runner should return after failed readiness");
+            worker
+                .join()
+                .expect("runner worker should be joined after failed readiness");
+            assert!(!ready, "fixture intentionally withholds its readiness marker");
+            assert_eq!(
+                result.expect_err("failed readiness path should cancel runner").kind(),
+                CommandErrorKind::Cancelled
+            );
+        });
     }
 
     #[test]

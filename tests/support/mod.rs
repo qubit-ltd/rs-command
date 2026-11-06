@@ -15,6 +15,8 @@ pub(crate) mod documentation_dependency_baseline;
 pub(crate) mod documentation_examples;
 #[cfg(target_os = "linux")]
 pub(crate) mod escaped_process_guard;
+#[cfg(unix)]
+pub(crate) mod managed_test_process;
 #[allow(dead_code)]
 pub(crate) mod output_command;
 #[cfg(not(windows))]
