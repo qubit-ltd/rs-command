@@ -498,13 +498,14 @@ mod unix {
         };
         let parent_pid_path = pid_path.with_extension("parent.pid");
         let ready_path = pid_path.with_extension("ready");
+        let release_path = pid_path.with_extension("release");
         let mut escaped = EscapedProcessGuard::new(pid_path.to_path_buf());
         let script = match fixture {
             "stdout" | "missing-cancel" | "worker-panic" => {
                 "echo \"$$\" > \"$3.tmp\"; mv \"$3.tmp\" \"$3\"; setsid sh -c 'echo \"$$\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; : > \"$2\"; exec sleep 60' sh \"$1\" \"$2\" & printf started"
             }
             "delayed-readiness" => {
-                "echo \"$$\" > \"$3.tmp\"; mv \"$3.tmp\" \"$3\"; setsid sh -c 'echo \"$$\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; sleep 0.25; : > \"$2\"; exec sleep 60' sh \"$1\" \"$2\" & printf started"
+                "echo \"$$\" > \"$3.tmp\"; mv \"$3.tmp\" \"$3\"; setsid sh -c 'echo \"$$\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; while [ ! -f \"$3\" ]; do sleep 0.01; done; : > \"$2\"; exec sleep 60' sh \"$1\" \"$2\" \"$4\" & printf started"
             }
             "stdin" => {
                 "setsid sh -c 'echo \"$$\" > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; : > \"$2\"; exec sleep 60' sh \"$1\" \"$2\" >/dev/null 2>&1 & wait"
@@ -515,12 +516,23 @@ mod unix {
         let run_cancellation = cancellation.clone();
         let run_pid_path = pid_path.to_path_buf();
         let run_ready_path = ready_path.clone();
+        let run_release_path = release_path.clone();
         let run_parent_pid_path = parent_pid_path.clone();
         let fixture_owned = fixture.to_owned();
         let command_fixture = fixture_kind.to_owned();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let worker = std::thread::spawn(move || {
-            let command = match command_fixture.as_str() {
+            let command = if fixture_owned == "delayed-readiness" {
+                Command::new("sh")
+                    .arg("-c")
+                    .arg(script)
+                    .arg("sh")
+                    .arg_os(&run_pid_path)
+                    .arg_os(&run_ready_path)
+                    .arg_os(&run_parent_pid_path)
+                    .arg_os(&run_release_path)
+            } else {
+                match command_fixture.as_str() {
                 "stdout" => Command::new("sh")
                     .arg("-c")
                     .arg(script)
@@ -534,6 +546,7 @@ mod unix {
                     .arg_os(&run_ready_path)
                     .stdin_bytes(vec![b'x'; 4 * 1024 * 1024]),
                 _ => unreachable!("fixture name was checked before worker start"),
+                }
             };
             let result = CommandRunner::without_timeout()
                 .run_with(command, CommandRunOptions::new().cancellation(run_cancellation));
@@ -550,18 +563,62 @@ mod unix {
         } else {
             READY_TIMEOUT
         };
-        let readiness = if fixture == "delayed-readiness" {
-            let deadline = Instant::now() + ready_timeout;
-            while Instant::now() < deadline && !ready_path.exists() {
+        let pid_handshake = if fixture == "delayed-readiness" {
+            escaped.try_wait_until_recorded(READY_TIMEOUT)
+        } else {
+            Ok(())
+        };
+        let direct_exit = if fixture == "delayed-readiness" && pid_handshake.is_ok() {
+            let deadline = Instant::now() + READY_TIMEOUT;
+            loop {
+                let exited = fs::read_to_string(&parent_pid_path)
+                    .ok()
+                    .and_then(|pid| pid.trim().parse::<u32>().ok())
+                    .is_some_and(|pid| !linux_process_is_running(pid));
+                if exited {
+                    break Ok(());
+                }
+                if Instant::now() >= deadline {
+                    break Err("direct command did not exit".to_owned());
+                }
                 std::thread::sleep(Duration::from_millis(10));
             }
-            if ready_path.exists() {
-                Ok(())
+        } else {
+            Ok(())
+        };
+        let readiness = if fixture == "delayed-readiness" {
+            if let Err(error) = &pid_handshake {
+                Err(format!("escaped PID handshake failed: {error}"))
+            } else if let Err(error) = &direct_exit {
+                Err(error.clone())
             } else {
-                Err(format!("fixture readiness marker missing after {ready_timeout:?}"))
+                let deadline = Instant::now() + ready_timeout;
+                while Instant::now() < deadline && !ready_path.exists() {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                if ready_path.exists() {
+                    Ok(())
+                } else {
+                    Err(format!("fixture readiness marker missing after {ready_timeout:?}"))
+                }
             }
         } else {
             escaped.try_wait_until_recorded(ready_timeout)
+        };
+        let post_release_ready = if fixture == "delayed-readiness" {
+            let release = fs::write(&release_path, b"release");
+            let released_ready = if release.is_ok() {
+                let deadline = Instant::now() + READY_TIMEOUT;
+                while Instant::now() < deadline && !ready_path.exists() {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                ready_path.exists()
+            } else {
+                false
+            };
+            Some((release.is_ok(), released_ready))
+        } else {
+            None
         };
         if readiness.is_ok() && fixture_kind == "stdout" {
             let parent_pid =
@@ -628,23 +685,29 @@ mod unix {
             return;
         }
 
-        if readiness.is_err() {
-            escaped
-                .try_wait_until_recorded(READY_TIMEOUT)
-                .expect("escaped PID should be available for failed-readiness cleanup");
-        }
+        let readiness_pid = if readiness.is_err() && fixture != "delayed-readiness" {
+            Some(escaped.try_wait_until_recorded(READY_TIMEOUT))
+        } else {
+            None
+        };
         let cleanup_result = escaped.terminate_if_recorded();
         let result = match first_result {
             Ok(result) => Some(result),
             Err(_) => receiver.recv_timeout(CANCEL_TIMEOUT).ok(),
         };
-        let worker_result = result.map(|result| (result, worker.join()));
+        let worker_result = worker.join();
 
         cleanup_result.expect("escaped descendant cleanup should succeed");
         if fixture == "delayed-readiness" {
+            assert!(pid_handshake.is_ok(), "escaped PID handshake failed: {pid_handshake:?}");
+            assert!(direct_exit.is_ok(), "direct command did not exit: {direct_exit:?}");
             assert!(readiness.is_err(), "delayed fixture should miss the readiness deadline");
+            assert_eq!(post_release_ready, Some((true, true)), "release should make the fixture ready");
         } else {
             assert!(readiness.is_ok(), "fixture readiness failed: {readiness:?}");
+        }
+        if let Some(readiness_pid) = readiness_pid {
+            assert!(readiness_pid.is_ok(), "escaped PID should be available for failed-readiness cleanup");
         }
         assert!(
             matches!(before_cancel, Err(std::sync::mpsc::RecvTimeoutError::Timeout)),
@@ -658,9 +721,9 @@ mod unix {
             cancel_elapsed < CANCEL_TIMEOUT,
             "cancellation exceeded its real-time bound"
         );
-        let (result, joined) = worker_result.expect("runner result channel should remain connected");
+        let result = result.expect("runner result channel should remain connected");
         let error = result.expect_err("inherited pipe should make cancellation observable");
-        joined.expect("runner worker should not panic");
+        worker_result.expect("runner worker should not panic");
         assert_eq!(error.kind(), CommandErrorKind::Cancelled);
         if fixture_kind == "stdout" {
             assert!(
