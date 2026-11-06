@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "qubit-command"
-version = "0.11.1"
+version = "0.11.0"
 dependencies = [
  "criterion",
  "libc",
@@ -384,6 +384,8 @@ dependencies = [
 [[package]]
 name = "qubit-redact"
 version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed3fa4e8064f159e9facdad5e0c12eb35ed8b4d7ccca59a8446f28e2aeff1de0"
 dependencies = [
  "qubit-budget",
 ]
