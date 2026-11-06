@@ -4,7 +4,7 @@ param(
     [string] $ListPath,
 
     [Parameter(Mandatory = $true)]
-    [string] $RunPath
+    [string[]] $RunPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -28,7 +28,7 @@ $errors = [System.Collections.Generic.List[string]]::new()
 $discovered = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $results = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
 
-foreach ($path in @($ListPath, $RunPath)) {
+foreach ($path in (@($ListPath) + @($RunPath))) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         $errors.Add("Required input file is missing: $path")
     }
@@ -45,9 +45,10 @@ if (Test-Path -LiteralPath $ListPath -PathType Leaf) {
     }
 }
 
-if (Test-Path -LiteralPath $RunPath -PathType Leaf) {
+foreach ($runPath in $RunPath) {
+    if (-not (Test-Path -LiteralPath $runPath -PathType Leaf)) { continue }
     $topLevelResults = $true
-    foreach ($line in [System.IO.File]::ReadAllLines((Resolve-Path -LiteralPath $RunPath))) {
+    foreach ($line in [System.IO.File]::ReadAllLines((Resolve-Path -LiteralPath $runPath))) {
         if ($line.Trim() -ceq 'successes:' -or $line.Trim() -ceq 'failures:' -or $line -cmatch '^test result:') {
             $topLevelResults = $false
             continue

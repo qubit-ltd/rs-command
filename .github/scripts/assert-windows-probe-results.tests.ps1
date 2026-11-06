@@ -42,6 +42,27 @@ function Assert-Case([string] $name, [string[]] $listEntries, [string[]] $runEnt
     Write-Output ("fixture={0} passed={1}" -f $name, $expected)
 }
 
+function Assert-Multi-RunCase([string] $name, [string[]] $listEntries, [string[]] $firstRunEntries, [string[]] $secondRunEntries, [bool] $expected, [string] $requiredMessage = '') {
+    $list = Join-Path $temp "$name.list"
+    $firstRun = Join-Path $temp "$name.first.run"
+    $secondRun = Join-Path $temp "$name.second.run"
+    [System.IO.File]::WriteAllLines($list, $listEntries)
+    [System.IO.File]::WriteAllLines($firstRun, $firstRunEntries)
+    [System.IO.File]::WriteAllLines($secondRun, $secondRunEntries)
+    $succeeded = $false
+    $failure = ''
+    try {
+        & $gate -ListPath $list -RunPath @($firstRun, $secondRun) *> $null
+        $succeeded = $true
+    }
+    catch { $failure = $_.ToString() }
+    if ($succeeded -ne $expected) { throw "Fixture '$name' expected success=$expected, got success=$succeeded. $failure" }
+    if ($requiredMessage -and $failure -notmatch [regex]::Escape($requiredMessage)) {
+        throw "Fixture '$name' did not report '$requiredMessage'. Actual error: $failure"
+    }
+    Write-Output ("fixture={0} passed={1}" -f $name, $expected)
+}
+
 try {
     $list = @($required | ForEach-Object { "${_}: test" })
     $run = @($required | ForEach-Object { "test $_ ... ok" })
@@ -59,6 +80,11 @@ try {
     Assert-Case -name 'case-mutated-name-rejected' -listEntries $list -runEntries $caseMutatedRun -expected $false -requiredMessage $required[5]
     $shownBlock = @($run | Where-Object { $_ -ne "test $($required[4]) ... ok" }) + @('successes:', "    $($required[4])", 'test result: ok. 1 passed; 0 failed; 0 ignored', "test $($required[4]) ... ok")
     Assert-Case -name 'display-block-cannot-fill-top-level' -listEntries $list -runEntries $shownBlock -expected $false -requiredMessage $required[4]
+    $firstRun = @($run | Where-Object { $_ -ne "test $($required[1]) ... ok" -and $_ -ne "test $($required[2]) ... ok" }) + @('successes:', 'test result: ok. 10 passed; 0 failed; 0 ignored')
+    $secondRun = @("test $($required[1]) ... ok", "test $($required[2]) ... ok", 'successes:', 'test result: ok. 2 passed; 0 failed; 0 ignored')
+    Assert-Multi-RunCase -name 'separate-filter-run-files' -listEntries $list -firstRunEntries $firstRun -secondRunEntries $secondRun -expected $true
+    $spoofedFirstRun = @($firstRun + 'windows_probe_run_section=command_io' + "test $($required[1]) ... ok" + "test $($required[2]) ... ok")
+    Assert-Multi-RunCase -name 'displayed-child-cannot-reopen-run-section' -listEntries $list -firstRunEntries $spoofedFirstRun -secondRunEntries @('test unrelated::test ... ok', 'successes:', 'test result: ok. 1 passed; 0 failed; 0 ignored') -expected $false -requiredMessage $required[1]
 
     $missingList = Join-Path $temp 'missing.list'
     $existingRun = Join-Path $temp 'missing.run'

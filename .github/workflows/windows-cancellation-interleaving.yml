@@ -27,6 +27,8 @@ jobs:
         run: |
           $listLog = "windows-cancellation-interleaving-list.log"
           $runLog = "windows-cancellation-interleaving.log"
+          $windowsRunLog = "windows-cancellation-interleaving-windows-run.log"
+          $commandIoRunLog = "windows-cancellation-interleaving-command-io-run.log"
           $checkLog = "windows-cancellation-interleaving-check.log"
           Set-Content -Path $checkLog -Value "ci_checkout_sha=$env:GITHUB_SHA"
           Add-Content -Path $checkLog -Value "platform=windows-2022"
@@ -43,11 +45,24 @@ jobs:
             throw "Cargo test listing failed with exit code $listExitCode"
           }
 
+          $commandIoFilter = "command_io::tests::test_error_not_found_"
+          $commandIoListCommand = "cargo test --lib $commandIoFilter -- --list --color never"
+          Add-Content -Path $runLog -Value "list_command=$commandIoListCommand"
+          $commandIoListOutput = & cargo test --lib $commandIoFilter -- --list --color never 2>&1
+          $commandIoListExitCode = $LASTEXITCODE
+          $commandIoListOutput | Tee-Object -FilePath $listLog -Append
+          Add-Content -Path $runLog -Value "command_io_list_exit_code=$commandIoListExitCode"
+          if ($commandIoListExitCode -ne 0) {
+            Add-Content -Path $checkLog -Value "command_io_list_command_exit_code=$commandIoListExitCode"
+            Add-Content -Path $checkLog -Value "command_io_list_command_failed=$commandIoListCommand"
+            throw "Cargo command I/O test listing failed with exit code $commandIoListExitCode"
+          }
+
           $command = "cargo test --lib windows_ -- --show-output --test-threads=1 --color never"
           Add-Content -Path $runLog -Value "command=$command"
           $output = & cargo test --lib windows_ -- --show-output --test-threads=1 --color never 2>&1
           $cargoExitCode = $LASTEXITCODE
-          $output | Tee-Object -FilePath $runLog -Append
+          $output | Tee-Object -FilePath $windowsRunLog | Tee-Object -FilePath $runLog -Append
           Add-Content -Path $runLog -Value "cargo_exit_code=$cargoExitCode"
           if ($cargoExitCode -ne 0) {
             Add-Content -Path $checkLog -Value "run_command_exit_code=$cargoExitCode"
@@ -61,16 +76,43 @@ jobs:
             throw "Cargo test output did not contain a test-count summary"
           }
           $selectedTests = [int]$summary.Matches[0].Groups[1].Value
-          Add-Content -Path $runLog -Value "selected_test_count=$selectedTests"
           if ($selectedTests -eq 0) {
-            Add-Content -Path $checkLog -Value "selected_test_count=0"
+            Add-Content -Path $runLog -Value "windows_selected_test_count=0"
+            Add-Content -Path $checkLog -Value "windows_selected_test_count=0"
             throw "Windows probe filter selected zero tests"
           }
-          Add-Content -Path $checkLog -Value "selected_test_count=$selectedTests"
+          Add-Content -Path $runLog -Value "windows_selected_test_count=$selectedTests"
 
-          Add-Content -Path $checkLog -Value "check_command=.github/scripts/assert-windows-probe-results.ps1 -ListPath $listLog -RunPath $runLog"
+          $commandIoRunCommand = "cargo test --lib $commandIoFilter -- --show-output --test-threads=1 --color never"
+          Add-Content -Path $runLog -Value "command=$commandIoRunCommand"
+          $commandIoOutput = & cargo test --lib $commandIoFilter -- --show-output --test-threads=1 --color never 2>&1
+          $commandIoExitCode = $LASTEXITCODE
+          $commandIoOutput | Tee-Object -FilePath $commandIoRunLog | Tee-Object -FilePath $runLog -Append
+          Add-Content -Path $runLog -Value "command_io_cargo_exit_code=$commandIoExitCode"
+          if ($commandIoExitCode -ne 0) {
+            Add-Content -Path $checkLog -Value "command_io_run_exit_code=$commandIoExitCode"
+            Add-Content -Path $checkLog -Value "command_io_run_failed=$commandIoRunCommand"
+            throw "Cargo command I/O test run failed with exit code $commandIoExitCode"
+          }
+          $commandIoSummary = $commandIoOutput | Select-String -Pattern '^running ([0-9]+) tests?$' | Select-Object -First 1
+          if ($null -eq $commandIoSummary) {
+            Add-Content -Path $runLog -Value "command_io_selected_test_count=unavailable"
+            Add-Content -Path $checkLog -Value "command_io_selected_test_count=unavailable"
+            throw "Cargo command I/O test output did not contain a test-count summary"
+          }
+          $commandIoSelectedTests = [int]$commandIoSummary.Matches[0].Groups[1].Value
+          Add-Content -Path $runLog -Value "command_io_selected_test_count=$commandIoSelectedTests"
+          if ($commandIoSelectedTests -eq 0) {
+            Add-Content -Path $checkLog -Value "command_io_selected_test_count=0"
+            throw "Command I/O filter selected zero tests"
+          }
+          $totalSelectedTests = $selectedTests + $commandIoSelectedTests
+          Add-Content -Path $runLog -Value "selected_test_count=$totalSelectedTests"
+          Add-Content -Path $checkLog -Value "selected_test_count=$totalSelectedTests"
+
+          Add-Content -Path $checkLog -Value "check_command=.github/scripts/assert-windows-probe-results.ps1 -ListPath $listLog -RunPath @($windowsRunLog, $commandIoRunLog)"
           try {
-            & ./.github/scripts/assert-windows-probe-results.ps1 -ListPath $listLog -RunPath $runLog *>&1 | Tee-Object -FilePath $checkLog -Append
+            & ./.github/scripts/assert-windows-probe-results.ps1 -ListPath $listLog -RunPath @($windowsRunLog, $commandIoRunLog) *>&1 | Tee-Object -FilePath $checkLog -Append
           }
           catch {
             Add-Content -Path $checkLog -Value ("check_failed=" + $_.ToString())
@@ -84,5 +126,7 @@ jobs:
           path: |
             windows-cancellation-interleaving-list.log
             windows-cancellation-interleaving.log
+            windows-cancellation-interleaving-windows-run.log
+            windows-cancellation-interleaving-command-io-run.log
             windows-cancellation-interleaving-check.log
           if-no-files-found: warn

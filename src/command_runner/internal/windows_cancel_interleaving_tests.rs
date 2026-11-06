@@ -20,6 +20,7 @@ use std::os::windows::io::RawHandle;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::ExitStatus;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Barrier;
 use std::sync::mpsc;
@@ -269,12 +270,30 @@ fn run_child(mode: &str, timeout: Duration) -> ChildOutcome {
     let mut child = Command::new(executable)
         .args(["--exact", TEST_FILTER, "--nocapture"])
         .env(CHILD_MODE, mode)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("watchdog child should start");
+    let stdout = child.stdout.take().expect("child stdout should be piped");
+    let stderr = child.stderr.take().expect("child stderr should be piped");
+    let stdout_reader = thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut stdout = stdout;
+        stdout.read_to_end(&mut output).expect("child stdout should be drained");
+        output
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut stderr = stderr;
+        stderr.read_to_end(&mut output).expect("child stderr should be drained");
+        output
+    });
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait().expect("watchdog should inspect child status") {
             Some(status) => {
+                log_child_output(mode, "stdout", stdout_reader);
+                log_child_output(mode, "stderr", stderr_reader);
                 return ChildOutcome {
                     timed_out: false,
                     reaped: true,
@@ -285,6 +304,8 @@ fn run_child(mode: &str, timeout: Duration) -> ChildOutcome {
             None => {
                 child.kill().expect("watchdog should terminate overdue child");
                 let status = child.wait().expect("watchdog should reap terminated child");
+                log_child_output(mode, "stdout", stdout_reader);
+                log_child_output(mode, "stderr", stderr_reader);
                 return ChildOutcome {
                     timed_out: true,
                     reaped: true,
@@ -292,6 +313,15 @@ fn run_child(mode: &str, timeout: Duration) -> ChildOutcome {
                 };
             }
         }
+    }
+}
+
+fn log_child_output(mode: &str, stream: &str, reader: thread::JoinHandle<Vec<u8>>) {
+    let output = reader.join().expect("child output reader should be joined");
+    if !output.is_empty() {
+        eprintln!("WINDOWS_PROBE_CHILD_OUTPUT mode={mode} stream={stream}");
+        eprint!("{}", String::from_utf8_lossy(&output));
+        eprintln!("WINDOWS_PROBE_CHILD_OUTPUT_END mode={mode} stream={stream}");
     }
 }
 
