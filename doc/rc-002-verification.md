@@ -30,6 +30,43 @@ At checkout SHA `1b6da900e7a5f25384116efae4b26d22f9944325`, a read-only review c
 | 本轮源码与历史复核（2026-11-06） | `49b1b58912dc551832f36edaa80f123b976b4707` | Linux x86_64 workspace | 只读执行 `git rev-parse HEAD`、`rg -n` 和定点 `sed -n` 检查 | 不适用（未运行测试） | 无 run 或 artifact | 历史见证字段同上；本轮没有新 trace | `unresolved`：没有发现新的生产交错假设；本轮既不证明缺陷，也不证明安全。 |
 | 实施阶段 Windows 运行（2026-11-06） | `146503392975780fa490afd5f7d3d46248a73cee` | `windows-2022` | `cargo test --lib windows_ -- --list --color never`；`cargo test --lib command_io::tests::test_error_not_found_ -- --list --color never`；随后对两个 filter 执行 `--show-output --test-threads=1 --color never` | `windows_` 11 项、command I/O 2 项通过；12 个必需身份全部发现并通过 | [run 42225665684](https://github.com/qubit-ltd/rs-command/actions/runs/42225665684)；[artifact 13506405239](https://github.com/qubit-ltd/rs-command/actions/runs/42225665684/artifacts/13506405239) | 一次生产 trace：取消成功；原始 read 返回 OS 错误 995；`original_io_return_is_subsequent_io=false`；`production_join_pending_witness=false`；`source_writer_manually_released=true`；`watchdog_released=false`；helper 已 join、进程已回收 | `unresolved`：Windows 身份和探针已运行，但 trace 仍缺少后续阻塞生产 I/O、production join pending 和 watchdog 释放。 |
 
+## Automatic Windows identity gate and RC-002 evidence (2026-11-06)
+
+The `push` event automatically ran the Windows cancellation workflow on source SHA
+`5024c338355cbea04e98ae5cffd5e3e7b2435fe6` on `windows-2022`. The PowerShell
+identity-gate fixtures passed. The workflow listed and ran both `windows_` and
+`command_io::tests::test_error_not_found_` filters; 11 Windows tests and 2
+command-I/O tests passed. All 12 required full test identities were discovered
+and passed. The workflow completed successfully: [run 42251303125](https://github.com/qubit-ltd/rs-command/actions/runs/42251303125),
+[diagnostic artifact 13521056393](https://github.com/qubit-ltd/rs-command/actions/runs/42251303125/artifacts/13521056393).
+
+The production `CommandIo` trace at that SHA observed successful cancellation,
+but the original read returned Windows error 995. It recorded zero ordinary-file
+tee writes, `original_io_return_is_subsequent_io=false`,
+`production_join_pending_witness=false`, `source_writer_manually_released=true`,
+and `watchdog_released=false`; the helper joined and child was reaped. This
+automatic run verifies the identity gate and exercises the existing probe, but
+does not establish the suspected subsequent-blocked-I/O/pending-join causal
+chain. RC-002 remains **`unresolved`**; no production behavior change is
+supported by this trace.
+
+## 自动 Windows 身份门禁与 RC-002 证据（2026-11-06）
+
+Windows cancellation workflow 由 `push` 事件自动触发，在 `windows-2022` 对源码 SHA
+`5024c338355cbea04e98ae5cffd5e3e7b2435fe6` 运行。PowerShell 身份门禁夹具通过。
+workflow 分别发现并运行 `windows_` 与
+`command_io::tests::test_error_not_found_` 两种 filter；11 项 Windows 测试和 2 项
+command-I/O 测试通过。12 个必需完整测试身份全部发现并通过。workflow 成功完成：
+[run 42251303125](https://github.com/qubit-ltd/rs-command/actions/runs/42251303125)，
+[诊断 artifact 13521056393](https://github.com/qubit-ltd/rs-command/actions/runs/42251303125/artifacts/13521056393)。
+
+该 SHA 的生产 `CommandIo` trace 观察到取消成功，但原 read 返回 Windows 错误 995。
+trace 记录 ordinary-file tee 写入为 0，`original_io_return_is_subsequent_io=false`、
+`production_join_pending_witness=false`、`source_writer_manually_released=true`、
+`watchdog_released=false`；helper 已 join，child 已回收。本次自动运行验证了身份门禁并执行了
+现有探针，但没有建立疑似的“后续阻塞 I/O／pending join”因果链。RC-002 仍为
+**`unresolved`**；该 trace 不支持修改生产行为。
+
 ## RSC-002 Windows test identity gate verification (2026-11-06)
 
 The Windows workflow passed on `windows-2022` at source SHA
