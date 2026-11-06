@@ -250,7 +250,10 @@ fn wait_for_group_gone(pgid: i32, timeout: Duration) -> Result<(), String> {
         let result = unsafe { libc::kill(-pgid, 0) };
         if result != 0 {
             let error = std::io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::ESRCH) {
+            // macOS can recycle a just-reaped PGID before this probe; EPERM
+            // then means the new group is inaccessible and is not the group
+            // this watchdog created.
+            if matches!(error.raw_os_error(), Some(libc::ESRCH | libc::EPERM)) {
                 return Ok(());
             }
             return Err(format!("check process group {pgid} after termination: {error}"));
