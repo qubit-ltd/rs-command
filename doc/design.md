@@ -133,13 +133,16 @@ partial output.
 
 The normal event order is:
 
-1. Validate command, file kinds, path conflicts, and cancellation state.
-2. Spawn the child and configure process-tree management.
-3. Record the post-spawn monotonic start instant.
-4. Start the optional stdin writer and stdout/stderr readers, then poll child
-   status, timeout, application cancellation, and total-output-budget state.
-5. On ordinary exit, join helpers and assemble output.
-6. On timeout or cancellation, terminate the managed process tree, request
+1. Validate the command, file kinds, path conflicts, and cancellation state,
+   producing a prepared command.
+2. Perform the final pre-start cancellation check, the documented linearization point.
+3. Commit the prepared command: open and validate tee handles, truncate stdout before stderr, and attach stdin before spawning the child. A failed commit may have the file side effects described above.
+4. Spawn the child with the required process-tree management enabled.
+5. Record the post-spawn monotonic start instant, start the optional stdin writer
+   and stdout/stderr readers, then poll child status, timeout, application
+   cancellation, and total-output-budget state.
+6. On ordinary exit, join helpers and assemble output.
+7. On timeout or cancellation, terminate the managed process tree, request
    helper cancellation, collect available bytes, and classify the primary
    policy result.
 
