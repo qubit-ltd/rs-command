@@ -141,6 +141,10 @@ fn test_command_runner_rejects_directory_as_stderr_tee() {
 
 #[cfg(not(windows))]
 mod unix {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::ffi::OsStringExt;
+
     use super::ArgvItem;
     use super::Command;
     use super::CommandCancellation;
@@ -1735,6 +1739,136 @@ mod unix {
                 .expect("runner thread should not panic")
                 .expect("a child that exits before the deadline should complete normally");
         });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_managed_gate_fixture_a() {
+        let Some(fixture) = std::env::var_os("QUBIT_COMMAND_GATE_ISOLATION_FIXTURE") else {
+            return;
+        };
+        let fixture = std::path::PathBuf::from(fixture);
+        let ready = fixture.join("a.ready");
+        let release = fixture.join("release");
+        let test_name = std::thread::current()
+            .name()
+            .expect("test thread should be named")
+            .to_owned();
+        super::support::managed_test_process::run_for(&test_name, None, Duration::from_secs(15), || {
+            let gate = std::env::var_os("QUBIT_COMMAND_MANAGED_TEST_GATE")
+                .expect("managed child should receive its gate path");
+            fs::write(&ready, gate.as_os_str().as_bytes()).expect("A should publish its gate path");
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !release.exists() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(release.exists(), "parent should release fixture A");
+            let gate = std::path::PathBuf::from(OsString::from_vec(
+                fs::read(&ready).expect("A gate path should remain readable"),
+            ));
+            assert!(gate.exists(), "A's start gate should survive B cleanup");
+        })
+        .expect("fixture A should complete");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_managed_gate_fixture_b() {
+        let Some(fixture) = std::env::var_os("QUBIT_COMMAND_GATE_ISOLATION_FIXTURE") else {
+            return;
+        };
+        let fixture = std::path::PathBuf::from(fixture);
+        let test_name = std::thread::current()
+            .name()
+            .expect("test thread should be named")
+            .to_owned();
+        super::support::managed_test_process::run_for(&test_name, None, Duration::from_secs(5), || {
+            let gate = std::env::var_os("QUBIT_COMMAND_MANAGED_TEST_GATE")
+                .expect("managed child should receive its gate path");
+            fs::write(fixture.join("b.gate"), gate.as_os_str().as_bytes()).expect("B should publish its gate path");
+        })
+        .expect("fixture B should complete");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_managed_test_process_parallel_gate_isolation() {
+        use std::sync::mpsc;
+
+        let fixture = LocalTempDir::with_prefix("qubit-command-gate-isolation-")
+            .expect("gate isolation fixture directory should be created");
+        let current_name = std::thread::current()
+            .name()
+            .expect("test thread should be named")
+            .to_owned();
+        let module = current_name.rsplit_once("::").map_or("", |(module, _)| module);
+        let a_name = format!("{module}::test_managed_gate_fixture_a");
+        let b_name = format!("{module}::test_managed_gate_fixture_b");
+        let (a_tx, a_rx) = mpsc::sync_channel(1);
+        let a_fixture = fixture.path().to_owned();
+        let a = std::thread::spawn(move || {
+            let result = super::support::managed_test_process::run_for_with_env(
+                &a_name,
+                None,
+                Duration::from_secs(15),
+                &[(
+                    OsStr::new("QUBIT_COMMAND_GATE_ISOLATION_FIXTURE"),
+                    a_fixture.as_os_str(),
+                )],
+                || {},
+            );
+            let _ = a_tx.send(result);
+        });
+
+        let ready_deadline = Instant::now() + Duration::from_secs(5);
+        while !fixture.path().join("a.ready").exists() && Instant::now() < ready_deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let a_ready = fixture.path().join("a.ready").exists();
+        let (b_tx, b_rx) = mpsc::sync_channel(1);
+        let b_fixture = fixture.path().to_owned();
+        let b = std::thread::spawn(move || {
+            let result = super::support::managed_test_process::run_for_with_env(
+                &b_name,
+                None,
+                Duration::from_secs(5),
+                &[(
+                    OsStr::new("QUBIT_COMMAND_GATE_ISOLATION_FIXTURE"),
+                    b_fixture.as_os_str(),
+                )],
+                || {},
+            );
+            let _ = b_tx.send(result);
+        });
+
+        let b_result = b_rx.recv_timeout(Duration::from_secs(8));
+        let b_gate = fs::read(fixture.path().join("b.gate"))
+            .ok()
+            .map(|path| std::path::PathBuf::from(OsString::from_vec(path)));
+        fs::write(fixture.path().join("release"), b"release").expect("A should be released");
+        let a_result = a_rx.recv_timeout(Duration::from_secs(20));
+        a.join().expect("A worker should be joined");
+        b.join().expect("B worker should be joined");
+
+        assert!(a_ready, "fixture A should publish readiness before B starts");
+        let a_gate = fs::read(fixture.path().join("a.ready"))
+            .ok()
+            .map(|path| std::path::PathBuf::from(OsString::from_vec(path)));
+        assert!(
+            b_result.is_ok(),
+            "fixture B should finish within eight seconds: {b_result:?}"
+        );
+        assert!(a_result.is_ok(), "fixture A should finish after release: {a_result:?}");
+        assert!(b_gate.is_some(), "fixture B should publish its gate path");
+        assert_ne!(a_gate, b_gate, "A and B should receive distinct start gates");
+        assert!(
+            a_gate.is_some_and(|path| !path.exists()),
+            "A's gate directory should be removed on return"
+        );
+        assert!(
+            b_gate.is_some_and(|path| !path.exists()),
+            "B's gate directory should be removed on return"
+        );
     }
 
     #[cfg(unix)]

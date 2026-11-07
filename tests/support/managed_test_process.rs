@@ -7,12 +7,15 @@
 // =============================================================================
 //! Unix subprocess watchdogs for tests that exercise real commands.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+
+use super::temp_dir::LocalTempDir;
 
 const CHILD_ENV: &str = "QUBIT_COMMAND_MANAGED_TEST_CHILD";
 const PID_ENV: &str = "QUBIT_COMMAND_MANAGED_TEST_PID";
@@ -40,6 +43,18 @@ pub(crate) fn run_for(
     watchdog: Duration,
     body: impl FnOnce(),
 ) -> Result<(), String> {
+    run_for_with_env(test_name, pid_path, watchdog, &[], body)
+}
+
+/// Runs a managed test with additional environment variables set only on its
+/// child.
+pub(crate) fn run_for_with_env(
+    test_name: &str,
+    pid_path: Option<&std::path::Path>,
+    watchdog: Duration,
+    extra_env: &[(&OsStr, &OsStr)],
+    body: impl FnOnce(),
+) -> Result<(), String> {
     if std::env::var_os(CHILD_ENV).is_some() {
         let gate = std::env::var_os(GATE_ENV).expect("managed test parent should provide a start gate");
         let gate = std::path::PathBuf::from(gate);
@@ -52,10 +67,11 @@ pub(crate) fn run_for(
         return Ok(());
     }
 
-    let gate_path = std::env::temp_dir().join(format!("qubit-command-managed-gate-{}", std::process::id()));
+    let gate_directory = LocalTempDir::with_prefix("qubit-command-managed-gate-")
+        .expect("managed test start gate directory should be created");
+    let gate_path = gate_directory.path().join("start");
     let abort_path = pid_path.map(|path| path.with_extension("abort"));
     let ack_path = pid_path.map(|path| path.with_extension("ack"));
-    let _ = fs::remove_file(&gate_path);
     if let Some(path) = &abort_path {
         let _ = fs::remove_file(path);
     }
@@ -67,6 +83,7 @@ pub(crate) fn run_for(
         .env(CHILD_ENV, "1")
         .env(PID_ENV, pid_path.unwrap_or_else(|| std::path::Path::new("")))
         .env(GATE_ENV, &gate_path)
+        .envs(extra_env.iter().copied())
         .env(ABORT_ENV, abort_path.as_deref().unwrap_or(std::path::Path::new("")))
         .env(ACK_ENV, ack_path.as_deref().unwrap_or(std::path::Path::new("")))
         .process_group(0)
@@ -80,7 +97,6 @@ pub(crate) fn run_for(
                 let pgid = i32::try_from(child.id()).map_err(|error| format!("test PID overflow: {error}"))?;
                 let test_group_cleanup = cleanup_unexpected_test_group(pgid);
                 let command_group_cleanup = pid_path.map(cleanup_unexpected_command_group).transpose();
-                let _ = fs::remove_file(&gate_path);
                 test_group_cleanup?;
                 command_group_cleanup?;
                 if status.success() {
@@ -144,7 +160,6 @@ pub(crate) fn run_for(
                 } else {
                     command_group_clean = true;
                 }
-                let _ = fs::remove_file(&gate_path);
                 match resolution {
                     Some(Ok(SpawnResolution::Published)) if pid_path.is_some_and(|p| p.exists()) => {}
                     Some(Ok(SpawnResolution::NotStarted)) if pid_path.is_some_and(|p| !p.exists()) => {}
