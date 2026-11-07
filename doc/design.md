@@ -120,9 +120,11 @@ The runner moves through these ownership states:
    diagnostics. On Windows, one shared confirmation deadline is established
    before cancellation requests are issued and is consulted only after a
    failed helper-cancellation request; it is not reset for each helper. If
-   completion is confirmed before that deadline, the subsequent join is not
-   bounded by it; an unconfirmed helper may be detached and finish when its
-   pipe closes.
+   cancellation succeeds, the helper is joined directly; success does not
+   confirm completion, and that join is not bounded by the deadline. Only a
+   failed cancellation request triggers completion checks against the shared
+   deadline. A helper whose failed cancellation remains unconfirmed may be
+   detached and finish when its pipe closes.
 
 The final startup cancellation check is the linearization point. Cancellation
 before it produces `CancelledBeforeStart` without creating or truncating tee
