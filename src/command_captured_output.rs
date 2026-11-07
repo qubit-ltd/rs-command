@@ -102,6 +102,8 @@ impl CommandCapturedOutput {
     /// # Returns
     ///
     /// A borrowed slice of retained raw bytes.
+    #[must_use]
+    #[inline]
     pub fn stdout(&self) -> &[u8] {
         &self.stdout
     }
@@ -113,6 +115,8 @@ impl CommandCapturedOutput {
     /// # Returns
     ///
     /// A borrowed slice of retained raw bytes.
+    #[must_use]
+    #[inline]
     pub fn stderr(&self) -> &[u8] {
         &self.stderr
     }
@@ -123,6 +127,8 @@ impl CommandCapturedOutput {
     /// # Returns
     ///
     /// `true` when bytes were omitted due to the retention cap.
+    #[must_use]
+    #[inline]
     pub const fn stdout_truncated(&self) -> bool {
         self.stdout_truncated
     }
@@ -133,6 +139,8 @@ impl CommandCapturedOutput {
     /// # Returns
     ///
     /// `true` when bytes were omitted due to the retention cap.
+    #[must_use]
+    #[inline]
     pub const fn stderr_truncated(&self) -> bool {
         self.stderr_truncated
     }
@@ -144,6 +152,8 @@ impl CommandCapturedOutput {
     /// # Returns
     ///
     /// `true` when EOF was observed.
+    #[must_use]
+    #[inline]
     pub const fn stdout_complete(&self) -> bool {
         self.stdout_complete
     }
@@ -155,6 +165,8 @@ impl CommandCapturedOutput {
     /// # Returns
     ///
     /// `true` when EOF was observed.
+    #[must_use]
+    #[inline]
     pub const fn stderr_complete(&self) -> bool {
         self.stderr_complete
     }
