@@ -8,6 +8,9 @@
 //! Benchmarks short-lived command execution with and without timeout handling.
 
 use std::hint::black_box;
+use std::io::Write;
+use std::sync::Arc;
+use std::sync::Barrier;
 use std::time::Duration;
 
 use criterion::Criterion;
@@ -20,6 +23,13 @@ use qubit_command::CommandRunner;
 
 const SILENT_FIXTURE_ARG: &str = "--qubit-command-silent-fixture";
 const SILENT_FIXTURE_DELAY: Duration = Duration::from_millis(10);
+const IDLE_OUTPUT_FIXTURE_ARG: &str = "--qubit-command-idle-output-fixture";
+const IDLE_OUTPUT_FIXTURE_DELAY: Duration = Duration::from_secs(2);
+const INTERMITTENT_OUTPUT_FIXTURE_ARG: &str = "--qubit-command-intermittent-output-fixture";
+const INTERMITTENT_OUTPUT_ITERATIONS: usize = 20;
+const INTERMITTENT_OUTPUT_INTERVAL: Duration = Duration::from_millis(100);
+const IDLE_OUTPUT_RETAINED_BYTES: usize = 1024;
+const IDLE_OUTPUT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Builds a shell command that exits successfully without producing output.
 ///
@@ -33,6 +43,31 @@ fn short_lived_command() -> Command {
 /// Builds a command that runs this benchmark executable's silent fixture.
 fn silent_command() -> Command {
     Command::new_os(std::env::current_exe().expect("benchmark executable should resolve")).arg(SILENT_FIXTURE_ARG)
+}
+
+/// Builds a command that runs the selected quiet-output fixture.
+fn idle_output_command(fixture: &str) -> Command {
+    Command::new_os(std::env::current_exe().expect("benchmark executable should resolve")).arg(fixture)
+}
+
+/// Runs one quiet-output fixture and writes its expected bytes to both streams.
+fn run_idle_output_fixture(intermittent: bool) {
+    if !intermittent {
+        std::thread::sleep(IDLE_OUTPUT_FIXTURE_DELAY);
+        return;
+    }
+
+    let stdout = std::io::stdout();
+    let stderr = std::io::stderr();
+    let mut stdout = stdout.lock();
+    let mut stderr = stderr.lock();
+    for _ in 0..INTERMITTENT_OUTPUT_ITERATIONS {
+        std::thread::sleep(INTERMITTENT_OUTPUT_INTERVAL);
+        stdout.write_all(b"o").expect("fixture stdout write should succeed");
+        stdout.flush().expect("fixture stdout flush should succeed");
+        stderr.write_all(b"e").expect("fixture stderr write should succeed");
+        stderr.flush().expect("fixture stderr flush should succeed");
+    }
 }
 
 /// Builds a deterministic command that writes a fixed number of zero bytes.
@@ -195,6 +230,84 @@ fn benchmark_total_output_budget(criterion: &mut Criterion) {
     group.finish();
 }
 
+/// Checks the exact expected output and completion state for an idle fixture.
+fn verify_idle_output_result(result: &Result<CommandOutput, CommandError>, intermittent: bool) {
+    let output = result.as_ref().expect("idle-output fixture should succeed");
+    let (stdout_byte, stderr_byte, expected_len) = if intermittent {
+        (b'o', b'e', INTERMITTENT_OUTPUT_ITERATIONS)
+    } else {
+        (0, 0, 0)
+    };
+    assert_eq!(output.exit_status().code(), Some(0), "fixture should exit successfully");
+    assert_eq!(
+        output.stdout().len(),
+        expected_len,
+        "stdout should have expected length"
+    );
+    assert_eq!(
+        output.stderr().len(),
+        expected_len,
+        "stderr should have expected length"
+    );
+    assert!(output.stdout().iter().all(|byte| *byte == stdout_byte));
+    assert!(output.stderr().iter().all(|byte| *byte == stderr_byte));
+    assert!(output.stdout_complete() && output.stderr_complete());
+    assert!(!output.stdout_truncated() && !output.stderr_truncated());
+}
+
+/// Runs the same idle-output fixture in a synchronized group of runner threads.
+fn run_idle_output_group(runner: &CommandRunner, fixture: &str, concurrency: usize) {
+    let barrier = Arc::new(Barrier::new(concurrency));
+    let handles: Vec<_> = (0..concurrency)
+        .map(|_| {
+            let barrier = Arc::clone(&barrier);
+            let runner = runner.clone();
+            let command = idle_output_command(fixture);
+            std::thread::spawn(move || {
+                barrier.wait();
+                runner.run(command)
+            })
+        })
+        .collect();
+    for handle in handles {
+        verify_idle_output_result(
+            &handle.join().expect("benchmark worker should not panic"),
+            fixture == INTERMITTENT_OUTPUT_FIXTURE_ARG,
+        );
+    }
+}
+
+/// Compares idle and intermittent output with and without a total-output
+/// budget.
+fn benchmark_idle_output_budget(criterion: &mut Criterion) {
+    let mut group = criterion.benchmark_group("idle_output_budget");
+    for (scenario, fixture) in [
+        ("silent", IDLE_OUTPUT_FIXTURE_ARG),
+        ("intermittent", INTERMITTENT_OUTPUT_FIXTURE_ARG),
+    ] {
+        for concurrency in [1, 8] {
+            for (budget_name, runner) in [
+                (
+                    "no_total_budget",
+                    CommandRunner::new(IDLE_OUTPUT_TIMEOUT).max_output_bytes(IDLE_OUTPUT_RETAINED_BYTES),
+                ),
+                (
+                    "total_budget_1024",
+                    CommandRunner::new(IDLE_OUTPUT_TIMEOUT)
+                        .max_output_bytes(IDLE_OUTPUT_RETAINED_BYTES)
+                        .max_total_output_bytes(IDLE_OUTPUT_RETAINED_BYTES as u64),
+                ),
+            ] {
+                run_idle_output_group(&runner, fixture, concurrency);
+                group.bench_function(format!("{scenario}_{concurrency}_{budget_name}"), |bencher| {
+                    bencher.iter(|| run_idle_output_group(black_box(&runner), fixture, concurrency));
+                });
+            }
+        }
+    }
+    group.finish();
+}
+
 /// Classifies one benchmark result without scanning captured stream contents.
 fn classifies_budget_result(result: &Result<CommandOutput, CommandError>, over_limit: bool, limit: u64) -> bool {
     if over_limit {
@@ -221,12 +334,21 @@ criterion_group!(
     benchmark_short_lived_command_runner,
     benchmark_silent_command_runner,
     benchmark_total_output_budget,
+    benchmark_idle_output_budget,
 );
 
 fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() == 1 && args[0] == SILENT_FIXTURE_ARG {
         std::thread::sleep(SILENT_FIXTURE_DELAY);
+        return;
+    }
+    if args.len() == 1 && args[0] == IDLE_OUTPUT_FIXTURE_ARG {
+        run_idle_output_fixture(false);
+        return;
+    }
+    if args.len() == 1 && args[0] == INTERMITTENT_OUTPUT_FIXTURE_ARG {
+        run_idle_output_fixture(true);
         return;
     }
     benches();
