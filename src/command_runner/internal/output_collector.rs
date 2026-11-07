@@ -311,7 +311,6 @@ fn wait_output_readiness(
     cancellation: &IoCancellationToken,
 ) -> io::Result<super::output_readiness::OutputReadiness> {
     use std::ffi::c_void;
-    use std::time::Duration;
     unsafe extern "system" {
         /// Observes bytes available in the named pipe without consuming them.
         ///
@@ -334,6 +333,7 @@ fn wait_output_readiness(
             left: *mut u32,
         ) -> i32;
     }
+    let mut poll_count = 0usize;
     loop {
         if cancellation.is_cancelled() {
             return Ok(super::output_readiness::OutputReadiness::Cancelled);
@@ -360,7 +360,8 @@ fn wait_output_readiness(
         if available > 0 {
             return Ok(super::output_readiness::OutputReadiness::Readable(available as usize));
         }
-        std::thread::sleep(Duration::from_millis(1));
+        std::thread::sleep(super::wait_policy::next_poll_interval(poll_count));
+        poll_count = poll_count.saturating_add(1);
     }
 }
 
