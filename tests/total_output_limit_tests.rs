@@ -5,10 +5,14 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+mod support;
+
 use qubit_command::Command;
 use qubit_command::CommandErrorKind;
 use qubit_command::CommandErrorReason;
 use qubit_command::CommandRunner;
+use support::total_output_process;
+use support::total_output_process::Stream;
 
 fn command(script: &str) -> Command {
     #[cfg(unix)]
@@ -182,4 +186,24 @@ fn test_total_output_limit_does_not_change_nonzero_exit_classification() {
         .expect_err("nonzero exit remains a process status error");
     assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
     assert_eq!(error.exit_code(), Some(7));
+}
+#[test]
+fn test_total_output_limit_terminates_live_tree_for_stdout_budget_alone() {
+    total_output_process::run(
+        "test_total_output_limit_terminates_live_tree_for_stdout_budget_alone",
+        Stream::Stdout,
+    );
+}
+
+#[test]
+fn test_total_output_supervisor_failure_cleanup() {
+    total_output_process::test_supervisor_failures("test_total_output_supervisor_failure_cleanup");
+}
+
+#[test]
+fn test_total_output_limit_terminates_live_tree_for_stderr_budget_alone() {
+    total_output_process::run(
+        "test_total_output_limit_terminates_live_tree_for_stderr_budget_alone",
+        Stream::Stderr,
+    );
 }

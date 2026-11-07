@@ -22,3 +22,4 @@ pub(crate) mod output_command;
 #[cfg(not(windows))]
 pub(crate) mod switching_timer;
 pub(crate) mod temp_dir;
+pub(crate) mod total_output_process;
