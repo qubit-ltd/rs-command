@@ -773,6 +773,24 @@ impl WindowsSupervisorJob {
             priority_class: u32,
             scheduling_class: u32,
         }
+        #[repr(C)]
+        struct IoCounters {
+            read_operation_count: u64,
+            write_operation_count: u64,
+            other_operation_count: u64,
+            read_transfer_count: u64,
+            write_transfer_count: u64,
+            other_transfer_count: u64,
+        }
+        #[repr(C)]
+        struct ExtendedLimitInformation {
+            basic_limit_information: BasicLimitInformation,
+            io_info: IoCounters,
+            process_memory_limit: usize,
+            job_memory_limit: usize,
+            peak_process_memory_used: usize,
+            peak_job_memory_used: usize,
+        }
         #[link(name = "kernel32")]
         unsafe extern "system" {
             fn CreateJobObjectW(attributes: *const std::ffi::c_void, name: *const u16) -> RawHandle;
@@ -785,7 +803,7 @@ impl WindowsSupervisorJob {
             fn AssignProcessToJobObject(job: RawHandle, process: RawHandle) -> i32;
             fn GetLastError() -> u32;
         }
-        const JOB_OBJECT_BASIC_LIMIT_INFORMATION: i32 = 2;
+        const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: i32 = 9;
         const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
 
         let raw = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
@@ -795,23 +813,37 @@ impl WindowsSupervisorJob {
             unsafe { GetLastError() }
         );
         let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
-        let limits = BasicLimitInformation {
-            per_process_user_time_limit: 0,
-            per_job_user_time_limit: 0,
-            limit_flags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-            minimum_working_set_size: 0,
-            maximum_working_set_size: 0,
-            active_process_limit: 0,
-            affinity: 0,
-            priority_class: 0,
-            scheduling_class: 0,
+        let limits = ExtendedLimitInformation {
+            basic_limit_information: BasicLimitInformation {
+                per_process_user_time_limit: 0,
+                per_job_user_time_limit: 0,
+                limit_flags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                minimum_working_set_size: 0,
+                maximum_working_set_size: 0,
+                active_process_limit: 0,
+                affinity: 0,
+                priority_class: 0,
+                scheduling_class: 0,
+            },
+            io_info: IoCounters {
+                read_operation_count: 0,
+                write_operation_count: 0,
+                other_operation_count: 0,
+                read_transfer_count: 0,
+                write_transfer_count: 0,
+                other_transfer_count: 0,
+            },
+            process_memory_limit: 0,
+            job_memory_limit: 0,
+            peak_process_memory_used: 0,
+            peak_job_memory_used: 0,
         };
         let set = unsafe {
             SetInformationJobObject(
                 raw,
-                JOB_OBJECT_BASIC_LIMIT_INFORMATION,
-                (&limits as *const BasicLimitInformation).cast(),
-                std::mem::size_of::<BasicLimitInformation>() as u32,
+                JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                (&limits as *const ExtendedLimitInformation).cast(),
+                std::mem::size_of::<ExtendedLimitInformation>() as u32,
             )
         };
         assert_ne!(set, 0, "configure supervisor Job Object: Windows error {}", unsafe {
