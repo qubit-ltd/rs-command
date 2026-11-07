@@ -863,21 +863,55 @@ impl WindowsSupervisorJob {
         use std::os::windows::io::AsRawHandle;
         use std::os::windows::io::RawHandle;
 
-        const WAIT_OBJECT_0: u32 = 0;
-        const WAIT_TIMEOUT: u32 = 258;
+        #[repr(C)]
+        struct BasicAccountingInformation {
+            total_user_time: i64,
+            total_kernel_time: i64,
+            this_period_total_user_time: i64,
+            this_period_total_kernel_time: i64,
+            total_page_fault_count: u32,
+            total_processes: u32,
+            active_processes: u32,
+            total_terminated_processes: u32,
+        }
+        const JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION: i32 = 1;
         #[link(name = "kernel32")]
         unsafe extern "system" {
-            fn WaitForSingleObject(handle: RawHandle, milliseconds: u32) -> u32;
+            fn QueryInformationJobObject(
+                job: RawHandle,
+                class: i32,
+                information: *mut std::ffi::c_void,
+                length: u32,
+                return_length: *mut u32,
+            ) -> i32;
             fn GetLastError() -> u32;
         }
         let handle = self.0.as_ref().expect("supervisor Job Object should be open");
-        match unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) } {
-            WAIT_OBJECT_0 => Ok(true),
-            WAIT_TIMEOUT => Ok(false),
-            _ => Err(format!("WaitForSingleObject(Job Object): Windows error {}", unsafe {
+        let mut accounting = BasicAccountingInformation {
+            total_user_time: 0,
+            total_kernel_time: 0,
+            this_period_total_user_time: 0,
+            this_period_total_kernel_time: 0,
+            total_page_fault_count: 0,
+            total_processes: 0,
+            active_processes: 0,
+            total_terminated_processes: 0,
+        };
+        let queried = unsafe {
+            QueryInformationJobObject(
+                handle.as_raw_handle(),
+                JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION,
+                (&mut accounting as *mut BasicAccountingInformation).cast(),
+                std::mem::size_of::<BasicAccountingInformation>() as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        if queried == 0 {
+            return Err(format!("query supervisor Job Object: Windows error {}", unsafe {
                 GetLastError()
-            })),
+            }));
         }
+        Ok(accounting.active_processes == 0)
     }
 
     fn terminate(&mut self) {
