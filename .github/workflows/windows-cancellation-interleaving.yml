@@ -265,14 +265,14 @@ jobs:
             "xperf_status=unavailable" | Add-Content performance-results/etw-probe.log
           } else {
             $cswitchOutput = "performance-results/context-switches.txt"
-            "xperf_command=xperf -i $etl -a cswitch -o $cswitchOutput" | Add-Content performance-results/etw-probe.log
-            & $xperf.Source -i $etl -a cswitch -o $cswitchOutput 2>&1 | Tee-Object -FilePath "performance-results/xperf-cswitch.log"
+            "xperf_command=xperf -i $etl -o $cswitchOutput -a cswitch" | Add-Content performance-results/etw-probe.log
+            & $xperf.Source -i $etl -o $cswitchOutput -a cswitch 2>&1 | Tee-Object -FilePath "performance-results/xperf-cswitch.log"
             $cswitchExit = $LASTEXITCODE
             "xperf_cswitch_exit_code=$cswitchExit" | Add-Content performance-results/etw-probe.log
 
             $profileOutput = "performance-results/sampled-cpu.txt"
-            "xperf_command=xperf -i $etl -a profile -o $profileOutput" | Add-Content performance-results/etw-probe.log
-            & $xperf.Source -i $etl -a profile -o $profileOutput 2>&1 | Tee-Object -FilePath "performance-results/xperf-profile.log"
+            "xperf_command=xperf -i $etl -o $profileOutput -a profile" | Add-Content performance-results/etw-probe.log
+            & $xperf.Source -i $etl -o $profileOutput -a profile 2>&1 | Tee-Object -FilePath "performance-results/xperf-profile.log"
             $profileExit = $LASTEXITCODE
             "xperf_profile_exit_code=$profileExit" | Add-Content performance-results/etw-probe.log
           }
@@ -282,6 +282,6 @@ jobs:
         with:
           name: windows-output-budget-performance-${{ github.run_id }}
           path: |
-            performance-results/
-            target/criterion/
+            performance-results/**
+            !performance-results/output-budget.etl
           if-no-files-found: warn
