@@ -189,15 +189,15 @@ jobs:
             $profileExit = $LASTEXITCODE
             $profiles | Add-Content $log
             "wpr_profiles_exit_code=$profileExit" | Add-Content $log
-            if ($profileExit -eq 0 -and (($profiles | Out-String) -match '(?m)^\s*CPU\s')) {
-              "wpr_start_command=wpr -start CPU -filemode" | Add-Content $log
-              $start = & $wpr.Source -start CPU -filemode 2>&1
+            if ($profileExit -eq 0 -and (($profiles | Out-String) -match '(?m)^\s*GeneralProfile\s')) {
+              "wpr_start_command=wpr -start GeneralProfile -filemode" | Add-Content $log
+              $start = & $wpr.Source -start GeneralProfile -filemode 2>&1
               $startExit = $LASTEXITCODE
               $start | Add-Content $log
               "wpr_start_exit_code=$startExit" | Add-Content $log
               if ($startExit -eq 0) { $script:WprStarted = $true; $script:WprAvailable = $true }
             } else {
-              "wpr_status=unavailable: CPU profile not listed or profile query failed" | Add-Content $log
+              "wpr_status=unavailable: GeneralProfile not listed or profile query failed" | Add-Content $log
             }
           } else {
             "wpr_status=unavailable: wpr.exe not found" | Add-Content $log
