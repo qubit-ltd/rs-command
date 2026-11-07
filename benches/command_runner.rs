@@ -298,7 +298,6 @@ fn benchmark_idle_output_budget(criterion: &mut Criterion) {
                         .max_total_output_bytes(IDLE_OUTPUT_RETAINED_BYTES as u64),
                 ),
             ] {
-                run_idle_output_group(&runner, fixture, concurrency);
                 group.bench_function(format!("{scenario}_{concurrency}_{budget_name}"), |bencher| {
                     bencher.iter(|| run_idle_output_group(black_box(&runner), fixture, concurrency));
                 });
