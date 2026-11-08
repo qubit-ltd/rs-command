@@ -2,6 +2,34 @@
 
 ## Latest evidence summary / 最新证据摘要 (2026-11-08)
 
+### CMD-REV-001 bounded source audit at SHA `c79ed163959125d4ecf193b424952c76623c2ca7` (2026-11-08)
+
+This T1 review was performed in the assigned implementation worktree on Linux x86_64. `git rev-parse HEAD` and `git status --short` exited 0; the worktree was clean before this record was edited. `uname -a` exited 0 and identified Linux x86_64. `rustc --version` exited 0 with `rustc 1.94.0 (4a4ef493e 2026-03-02)`. `command -v pwsh` and `command -v powershell` each exited 1; neither PowerShell executable is available. Read-only `rg -n` checks over the production paths, Windows probes, workflow, and identity scripts exited 0. `git diff --exit-code HEAD --` over the production source, probe, workflow, and identity-gate files exited 0. No tests were run, and no Windows runtime or PowerShell gate was available.
+
+| Event | Source observation | Causal limit |
+| --- | --- | --- |
+| Cancellation request | `IoCancellation::cancel` publishes the token with `Release` before the Windows `CancelSynchronousIo` request; the helper token reads with `Acquire`. | This ordering does not establish which operation the native call interrupted. |
+| Output read and tee | `read_output_inner` reads the child pipe, retains returned bytes, checks cancellation, then may synchronously call `tee.writer.write_all`; flush follows observed EOF. Production tee is an ordinary `File`. | There is a check-to-write scheduling window, but no evidence here that successful cancellation was followed by a blocked production file write. Pipe-backed probe writers do not establish ordinary-file behavior. |
+| Stdin | `write_stdin_until_cancelled` checks cancellation before each readiness/write cycle; the production helper owns the child stdin pipe. | The inspected path provides no new schedule showing a successful cancellation followed by a blocking write and a cleanup join waiting on it. |
+| Cleanup and join | `finish_helpers_with_wait` requests cancellation for stdout, stderr, and stdin before finishing helpers. Successful cancellation goes directly to `join_output_reader` or `join_stdin_writer`; the shared confirmation deadline applies only when cancellation failed. | The successful-cancel join is unbounded, confirming the control-flow concern, but no inspected event proves that the join is actually pending due to subsequent production I/O. |
+| Probe, watchdog, and identity gate | The existing production probe schema fixes `production_join_pending_witness=false`, `original_io_return_is_subsequent_io=false`, and `watchdog_released=false`; it manually releases the source writer. The standalone real-pipe watchdog self-test is separate. The workflow runs both required filters and the PowerShell result identity gate; the gate lists 12 required identities. | Existing probes do not supply the missing same-trace production causal chain. The standalone watchdog check and identity gate cannot be combined with the production trace as a release witness. |
+
+No new production-reachable interleaving assumption was found, so T1 did not trigger probe expansion or a production change. The result remains **`unresolved`**: the concern is not confirmed, excluded, fixed, or proven safe. The latest historical Windows runtime entry remains separately attributed to its recorded SHA; this SHA has no Windows run, trace, or runtime result. This conclusion applies only to the inspected source paths and schedules.
+
+### CMD-REV-001 本次有界源码核查（源码 SHA `c79ed163959125d4ecf193b424952c76623c2ca7`，2026-11-08）
+
+本次 T1 在指定实施 worktree 的 Linux x86_64 环境完成。`git rev-parse HEAD` 和 `git status --short` 均退出码为 0；编辑本记录前工作树干净。`uname -a` 退出码为 0，显示 Linux x86_64。`rustc --version` 退出码为 0，版本为 `rustc 1.94.0 (4a4ef493e 2026-03-02)`。`command -v pwsh` 和 `command -v powershell` 均退出码为 1，系统没有这两个 PowerShell 可执行文件。针对生产路径、Windows 探针、workflow 和身份脚本的只读 `rg -n` 检查退出码为 0。对生产源码、探针、workflow 和身份门禁文件执行 `git diff --exit-code HEAD --` 退出码为 0。本次未运行测试，也没有 Windows 运行环境或 PowerShell 门禁。
+
+| 事件 | 源码观察 | 因果边界 |
+| --- | --- | --- |
+| 发布取消请求 | `IoCancellation::cancel` 先以 `Release` 发布取消 token，再调用 Windows `CancelSynchronousIo`；helper token 以 `Acquire` 读取。 | 该顺序不能证明本机取消调用实际中断了哪个操作。 |
+| 输出读取与 tee | `read_output_inner` 读取子进程管道、保留返回字节、检查取消状态，之后才可能同步调用 `tee.writer.write_all`；观察到 EOF 后才 flush。生产 tee 是普通 `File`。 | 源码存在检查到写入之间的调度窗口，但没有证据表明成功取消后接着发生了阻塞的生产文件写入。管道替代型探针不能证明普通文件行为。 |
+| Stdin | `write_stdin_until_cancelled` 在每轮 readiness/write 前检查取消状态；生产 helper 持有子进程 stdin 管道。 | 检查路径没有提供新的时序，证明成功取消后发生阻塞写入且 cleanup join 等待该写入。 |
+| 收尾与 join | `finish_helpers_with_wait` 先对 stdout、stderr、stdin 请求取消，再收尾各 helper。取消成功后直接调用 `join_output_reader` 或 `join_stdin_writer`；共享确认期限仅用于取消失败的分支。 | 成功取消后的 join 确实没有期限，确认了控制流上的疑点；但检查到的事件不能证明 join 因后续生产 I/O 实际挂起。 |
+| 探针、watchdog 与身份门禁 | 现有生产探针 schema 将 `production_join_pending_witness=false`、`original_io_return_is_subsequent_io=false`、`watchdog_released=false` 固定为 false，并手动释放 source writer。独立真实管道 watchdog 自测是另一条轨迹。workflow 运行两种必需过滤器及 PowerShell 结果身份门禁；门禁列出 12 个必需身份。 | 现有探针没有提供同一条轨迹上的生产因果链。独立 watchdog 检查与身份门禁不能拼接成生产 trace 的释放见证。 |
+
+没有发现新的生产可达交错假设，因此 T1 不触发探针扩展或生产代码修改。结论仍为 **`unresolved`**：疑点既未证实、排除、修复，也未证明安全。最近的历史 Windows 运行仍只归属于其记录的源码 SHA；本 SHA 没有 Windows 运行、trace 或运行时结果。本结论仅适用于本次检查的源码路径与时序。
+
 The latest Windows runtime verification is at SHA `5b046b0b11ea3413403c2df060638d3cb2b2fbb7` on `windows-2022` (workflow run `42439229542`): 11 `windows_` tests, 2 command-I/O tests, and all 12 required identities passed. Its production `CommandIo` trace still lacks the required subsequent-I/O, pending-production-join, and watchdog-release causal witness, so RC-002 remains `unresolved`; the run does not establish safety. This implementation's source-only review at SHA `be469d5fa9a36b2c46f790a59e9150bd2dce1466` on Linux found no new production-reachable interleaving hypothesis. Historical Windows runs below retain their own source SHAs.
 
 ### Current implementation source audit at SHA `be469d5fa9a36b2c46f790a59e9150bd2dce1466` (2026-11-08)
