@@ -53,7 +53,7 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 - `CommandOutput` 提供退出状态、原始 stdout/stderr 字节、严格或有损 UTF-8 视图、耗时、截断标志和流完整性标志。
 - `CommandError` 区分准备、启动、等待、输出、超时、取消、截断和非预期退出错误。当进程状态和流状态可以可靠组装时，超时、取消、截断、非预期退出、tee 写入、输出读取以及最终 stdin 写入错误会保留 `CommandOutput`；准备、线程启动、时钟和进程控制错误可能不携带输出。
 - `CommandCancellation` 是供应用自己的关闭或终端信号策略使用的一次性句柄。本 crate 不安装信号处理器。
-- 启用超时或取消管理时，runner 会通过 Unix process group 或 Windows Job Object 尝试终止进程树。
+- 配置超时、取消或总输出预算时，runner 会通过 Unix process group 或 Windows Job Object 尝试终止进程树。
 - 在 Windows 上，`CancelSynchronousIo` 成功只表示取消请求成功，并不能证明 helper 已停止。随后 runner 会 join 该 helper；这个 join 不受 100 ms 截止时间限制。runner 会在发出取消请求前统一设定一个共享的 100 ms helper 确认截止时间，只有请求失败时才会检查该时间，且不会为每个 helper 重置；它也不是整个调用的硬期限。若该截止时间耗尽，为保证返回有界，结果会保留 cancellation cleanup failure；受影响的 helper 可能一直存活到管道关闭。当前核查状态见[Windows 取消验证](doc/rc-002-verification.md)。
 - 默认每个输出流最多在内存中保留 1 MiB。单流内存保留上限本身不会停止排空或 tee 写入；总输出预算、超时、取消或管道读取失败可能中断收集。tee 写入失败可能在读取继续时使 tee 不完整；tee flush 失败则可能在流已排空后使 tee 不完整。
 - 可选的 stdout/stderr 总预算会停止超量输出的命令，与每流内存保留上限独立。发生 `OutputLimitExceeded` 时，通过 `CommandError::captured_output()` 检查部分字节；`output()` 为 `None`。详见[中文用户手册](doc/user_guide.zh_CN.md)。
