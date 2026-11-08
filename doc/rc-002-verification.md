@@ -1,3 +1,7 @@
+> Current summary: [English Windows cancellation status](windows-cancellation-status.md) | [中文 Windows 取消状态](windows-cancellation-status.zh_CN.md).
+>
+> This page preserves historical audits. Each result applies only to its recorded source revision and environment; it is not evidence for later revisions.
+
 <a id="current-summary"></a>
 
 ## Latest evidence summary / 最新证据摘要 (2026-11-08)

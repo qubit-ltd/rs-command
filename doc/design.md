@@ -198,8 +198,10 @@ Windows cancellation request fails; it is not reset for each helper or a hard
 deadline for the whole call. After that deadline expires it returns a bounded result with a
 `StdoutCancellation`, `StderrCancellation`, or `StdinCancellation` cleanup
 failure as applicable; the helper may remain alive until its pipe closes.
-The successful-cancellation interleaving investigation and its current evidence
-are recorded in [RC-002 Windows cancellation verification](rc-002-verification.md).
+The successful-cancellation interleaving investigation is summarized in the
+[current Windows cancellation status](windows-cancellation-status.md); the
+[RC-002 verification history](rc-002-verification.md#current-summary) retains
+the detailed evidence.
 
 Output truncation is independent of stream completeness. A complete stream can
 be truncated in memory, and an incomplete stream can contain fewer bytes than
@@ -266,8 +268,10 @@ normal helper interruption mechanism. Its failure is observable through the
 typed cancellation cleanup failure and the shared 100 ms confirmation
 deadline above, which is consulted only after a failed request. That rule does
 not bound the subsequent join or the whole call, and does not imply that the
-operating system closes a pipe immediately. The current investigation status is recorded in [RC-002 Windows
-cancellation verification](rc-002-verification.md).
+operating system closes a pipe immediately. The current investigation status is
+summarized in the [Windows cancellation status](windows-cancellation-status.md);
+the [RC-002 verification history](rc-002-verification.md#current-summary)
+retains the detailed evidence.
 
 Other platforms perform handle-authoritative ordinary-file checks but cannot
 portably guarantee that every device-namespace open returns promptly. Broken

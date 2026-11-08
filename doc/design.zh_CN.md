@@ -135,7 +135,7 @@ runner 会在发出取消请求前统一设定一个共享的 100 ms helper 确�
 检查该时间，且不会为每个 helper 重置；它也不是整个调用的硬期限。超过该截止时间后，runner 返回有界结果，并按需
 保留 `StdoutCancellation`、`StderrCancellation` 或 `StdinCancellation` 清理失败；对应
 helper 可能一直存活到管道关闭。
-成功取消后的交错核查及当前证据记录在 [RC-002 Windows 取消验证](rc-002-verification.md) 中。
+成功取消后的交错核查摘要与当前证据见[Windows 取消状态](windows-cancellation-status.zh_CN.md)；详细审计记录保留在[RC-002 Windows 取消验证历史](rc-002-verification.md#current-summary)中。
 
 输出截断与流完整性相互独立。完整流仍可能在内存中被截断，不完整流也可能只包含少量
 字节。将保留字节当成完整 transcript 前，调用方必须同时检查这两类元数据。
@@ -179,8 +179,7 @@ Unix 使用 process group 和非阻塞管道轮询。文件型 stdin 与 tee 文
 Windows 在配置可用时使用 Job Object 管理进程树，管道句柄保持同步 I/O 语义，并通过
 `CancelSynchronousIo` 作为正常 helper 中断机制。该调用失败会通过类型化 cancellation
 cleanup failure 和上述共享的 100 ms 确认截止时间暴露出来；该时间只有请求失败时才会检查，且
-不会为每个 helper 重置。它不限制后续 join 或整个调用，也不保证操作系统立即关闭管道。当前核查状态记录在 [RC-002
-Windows 取消验证](rc-002-verification.md) 中。
+不会为每个 helper 重置。它不限制后续 join 或整个调用，也不保证操作系统立即关闭管道。当前核查状态见[Windows 取消状态](windows-cancellation-status.zh_CN.md)；详细证据保留在[RC-002 验证历史](rc-002-verification.md#current-summary)中。
 
 其他平台仍会依据活动句柄检查普通文件，但没有可移植的方法保证所有设备命名空间的打开
 都能及时返回。损坏的远程或 FUSE 文件系统仍可能让操作系统调用停滞，这不属于命令超时

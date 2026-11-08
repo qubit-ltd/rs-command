@@ -272,8 +272,9 @@ cancellation requests and consults it only when a request fails; it is not
 reset for each helper or a hard deadline for the whole call. If that deadline expires,
 the returned error retains a cancellation cleanup failure so the result stays
 bounded; the affected helper may remain alive until its pipe closes. The
-current investigation status is recorded in [RC-002 Windows cancellation
-verification](rc-002-verification.md).
+current investigation status and evidence are summarized in the [Windows
+cancellation status](windows-cancellation-status.md); the [RC-002 verification
+history](rc-002-verification.md#current-summary) retains the detailed audit trail.
 
 ## Bounded and Large Output
 
