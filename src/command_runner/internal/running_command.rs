@@ -1027,14 +1027,25 @@ mod tests {
         });
         let started_at = timer.clock().now();
         let watchdog_child = AuditChild::new(Arc::clone(&events));
+        let io = CommandIo::new(
+            audit_read_failure_reader(failure_tx, Arc::clone(&events)),
+            immediate_successful_reader(),
+            None,
+        );
+        let failure_at = failure_rx.recv_timeout(Duration::from_secs(2));
+        let reader_deadline = Instant::now() + Duration::from_secs(2);
+        while !io.is_finished() && Instant::now() < reader_deadline {
+            thread::yield_now();
+        }
+        assert!(
+            io.is_finished(),
+            "reader failure should finish before monitoring starts"
+        );
+        let failure_at = failure_at.expect("reader should fail");
         let running = RunningCommand::new(
             "audit 002 timeout".to_owned(),
             audit_live_child(Arc::clone(&events)),
-            CommandIo::new(
-                audit_read_failure_reader(failure_tx, Arc::clone(&events)),
-                immediate_successful_reader(),
-                None,
-            ),
+            io,
             started_at,
             timer,
             None,
@@ -1049,7 +1060,6 @@ mod tests {
                 .expect("runner result should be observed");
         });
 
-        let failure_at = failure_rx.recv_timeout(Duration::from_secs(2));
         let runner_result = return_rx.recv_timeout(Duration::from_secs(2)).ok();
         let watchdog_used = runner_result.is_none();
         if watchdog_used {
@@ -1059,7 +1069,6 @@ mod tests {
         let runner_result = runner_result.or_else(|| return_rx.recv_timeout(Duration::from_secs(2)).ok());
         runner.join().expect("runner thread should join");
         let (returned_at, result) = runner_result.expect("runner should finish after timer or watchdog release");
-        let failure_at = failure_at.expect("reader should fail");
         assert!(
             timer_rx.try_recv().is_err(),
             "reader failure should precede timeout polling"
