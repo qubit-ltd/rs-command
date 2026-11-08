@@ -42,10 +42,7 @@ pub(super) type OutputFd = std::os::windows::io::RawHandle;
 /// * `fd` - Output descriptor to poll.
 /// * `cancellation` - Token that can stop the readiness wait.
 #[cfg(unix)]
-pub(super) fn wait_output_readiness(
-    fd: OutputFd,
-    cancellation: &IoCancellationToken,
-) -> io::Result<OutputReadiness> {
+pub(super) fn wait_output_readiness(fd: OutputFd, cancellation: &IoCancellationToken) -> io::Result<OutputReadiness> {
     if cancellation.wait_for_fd(fd, libc::POLLIN)? {
         Ok(OutputReadiness::Readable(8 * 1024))
     } else {
@@ -60,10 +57,7 @@ pub(super) fn wait_output_readiness(
 /// * `fd` - Output pipe handle to inspect.
 /// * `cancellation` - Token that can stop the readiness wait.
 #[cfg(windows)]
-pub(super) fn wait_output_readiness(
-    fd: OutputFd,
-    cancellation: &IoCancellationToken,
-) -> io::Result<OutputReadiness> {
+pub(super) fn wait_output_readiness(fd: OutputFd, cancellation: &IoCancellationToken) -> io::Result<OutputReadiness> {
     use std::ffi::c_void;
     unsafe extern "system" {
         /// Observes bytes available in the named pipe without consuming them.
