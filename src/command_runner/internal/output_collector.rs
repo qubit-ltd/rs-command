@@ -21,6 +21,8 @@ use super::io_cancellation_token::IoCancellationToken;
 use super::output_capture_error::OutputCaptureError;
 use super::output_capture_failure::OutputCaptureFailure;
 use super::output_capture_options::OutputCaptureOptions;
+use super::output_readiness::OutputFd;
+use super::output_readiness::wait_output_readiness;
 use super::output_reader::OutputReader;
 use super::stdin_pipe::join_stdin_writer;
 use super::stdin_writer::OptionalStdinWriter;
@@ -29,13 +31,6 @@ use crate::CommandError;
 use crate::CommandErrorReason;
 use crate::CommandOutput;
 use crate::OutputStream;
-
-/// Native descriptor used to poll a Unix output pipe.
-#[cfg(unix)]
-type OutputFd = std::os::fd::RawFd;
-/// Native handle used to inspect Windows pipe availability.
-#[cfg(windows)]
-type OutputFd = std::os::windows::io::RawHandle;
 
 /// Starts a cancellation-aware helper thread for one output stream.
 ///
@@ -278,90 +273,6 @@ pub(super) fn read_output_inner(
         (Some((path, source)), Ok(_)) => Err(OutputCaptureError::Write { path, source, output }),
         (None, Err(source)) => Err(OutputCaptureError::Read { source, output }),
         (None, Ok(_)) => Ok(output),
-    }
-}
-
-/// Waits for Unix output-pipe readiness or cancellation.
-///
-/// # Parameters
-///
-/// * `fd` - Output descriptor to poll.
-/// * `cancellation` - Token that can stop the readiness wait.
-#[cfg(unix)]
-fn wait_output_readiness(
-    fd: OutputFd,
-    cancellation: &IoCancellationToken,
-) -> io::Result<super::output_readiness::OutputReadiness> {
-    if cancellation.wait_for_fd(fd, libc::POLLIN)? {
-        Ok(super::output_readiness::OutputReadiness::Readable(8 * 1024))
-    } else {
-        Ok(super::output_readiness::OutputReadiness::Cancelled)
-    }
-}
-
-/// Waits for Windows output-pipe data or cancellation.
-///
-/// # Parameters
-///
-/// * `fd` - Output pipe handle to inspect.
-/// * `cancellation` - Token that can stop the readiness wait.
-#[cfg(windows)]
-fn wait_output_readiness(
-    fd: OutputFd,
-    cancellation: &IoCancellationToken,
-) -> io::Result<super::output_readiness::OutputReadiness> {
-    use std::ffi::c_void;
-    unsafe extern "system" {
-        /// Observes bytes available in the named pipe without consuming them.
-        ///
-        /// # Parameters
-        ///
-        /// * `handle` - Named-pipe handle to inspect.
-        /// * `buffer` - Optional destination for bytes; this probe passes null.
-        /// * `size` - Capacity of `buffer`; this probe passes zero.
-        /// * `read` - Optional pointer receiving the bytes copied.
-        /// * `available` - Pointer receiving the currently available byte
-        ///   count.
-        /// * `left` - Optional pointer receiving the remaining message byte
-        ///   count.
-        fn PeekNamedPipe(
-            handle: OutputFd,
-            buffer: *mut c_void,
-            size: u32,
-            read: *mut u32,
-            available: *mut u32,
-            left: *mut u32,
-        ) -> i32;
-    }
-    let mut poll_count = 0usize;
-    loop {
-        if cancellation.is_cancelled() {
-            return Ok(super::output_readiness::OutputReadiness::Cancelled);
-        }
-        let mut available = 0u32;
-        // SAFETY: the handle is owned by the output reader and outlives this wait.
-        let result = unsafe {
-            PeekNamedPipe(
-                fd,
-                std::ptr::null_mut(),
-                0,
-                std::ptr::null_mut(),
-                &mut available,
-                std::ptr::null_mut(),
-            )
-        };
-        if result == 0 {
-            let source = io::Error::last_os_error();
-            if source.kind() == io::ErrorKind::BrokenPipe {
-                return Ok(super::output_readiness::OutputReadiness::Eof);
-            }
-            return Err(source);
-        }
-        if available > 0 {
-            return Ok(super::output_readiness::OutputReadiness::Readable(available as usize));
-        }
-        std::thread::sleep(super::wait_policy::next_poll_interval(poll_count));
-        poll_count = poll_count.saturating_add(1);
     }
 }
 
