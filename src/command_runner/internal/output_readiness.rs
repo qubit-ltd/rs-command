@@ -72,9 +72,9 @@ pub(super) fn wait_output_readiness(fd: OutputFd, cancellation: &IoCancellationT
 /// # Returns
 ///
 /// Returns `Readable(n)` with the byte count observed by `PeekNamedPipe`,
-/// `Eof` when the probe reports a broken pipe, or `Cancelled` when the token
-/// is set. The observed count is not reserved and may change before the next
-/// read.
+/// `Eof` when the probe reports a broken pipe, or `Cancelled` when cancellation
+/// is observed before the pipe probe. The observed count is not reserved and
+/// may change before the next read.
 ///
 /// # Errors
 ///
