@@ -215,7 +215,15 @@ The order is process tree, direct child, wait, clock, stdout, stderr, stdin.
 `Time` retains clock failures observed during finalization. Demoting a helper
 error also moves its retained output into the primary error. `KillFailed` and
 `CancelFailed` are removed; timeout and cancellation never change primary kind
-because cleanup failed.
+because cleanup failed. An output-reader failure stops reading that stream but
+does not independently wake or terminate the child wait. The runner continues
+waiting for child exit or a configured timeout, cancellation, or total-output-budget
+policy; without a monitoring policy, reader failure alone does not wake the wait.
+If timeout is selected first, it remains primary and the reader failure is retained
+in `cleanup_failures()`. After normal child exit, `ReadOutputFailed` can be returned
+if output collection completes without another monitoring decision. Callers using
+partial output should inspect the primary
+error, cleanup failures, and stream-completeness flags.
 
 A tee failure remains observable if draining later ends through cancellation
 or a pipe read failure. Within that stream the earlier tee failure precedes

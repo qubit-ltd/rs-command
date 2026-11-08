@@ -157,6 +157,16 @@ pub const DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM: usize = 1024 * 1024;
 /// Timeout, cancellation, and total-output-budget monitoring use timer-based
 /// polling. Even when only a total output budget is configured, the timer
 /// backend must keep progressing independently while this thread is parked.
+/// An output-reader failure stops reading that stream but does not
+/// independently wake or terminate the child-process wait. The runner continues
+/// waiting for child exit or a configured timeout, cancellation, or
+/// total-output-budget policy. Without a monitoring policy, reader failure
+/// alone does not wake the child wait. If a timeout is selected first, it
+/// remains the primary error and the reader failure is retained in
+/// `cleanup_failures()`; after normal child exit, `ReadOutputFailed` can be
+/// returned if output collection completes without another monitoring decision.
+/// Check the primary error, cleanup failures,
+/// and stream-completeness flags when using partial output.
 ///
 /// # Examples
 ///

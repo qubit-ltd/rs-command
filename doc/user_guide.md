@@ -388,6 +388,16 @@ text; explicitly formatting a full error chain is the caller's responsibility.
 | Output budget | `OutputLimitExceeded` | Inspect `reason()` for `limit` and `observed` (including the sentinel byte), then read `captured_output()` and check stream completeness and truncation. `output()` is `None`, which does not mean no bytes were retained. See [Bounded and Large Output](#bounded-and-large-output). |
 | Policy result | `UnexpectedExit`, `OutputTruncated`, `TimedOut`, `Cancelled`, `CancelledBeforeStart` | Inspect status, configured policy, retained output, and stream-completion flags. |
 
+An output-reader failure stops reading that stream but does not independently
+wake or terminate the child wait. The runner continues waiting for child exit or
+a configured timeout, cancellation, or total-output-budget policy. Without a
+monitoring policy, reader failure alone does not wake the child wait. If timeout
+is selected first, it remains the primary error and the reader failure is retained
+in `cleanup_failures()`. After normal child exit, `ReadOutputFailed` can be
+returned if output collection completes without another monitoring decision.
+When using partial output, inspect the primary
+error, cleanup failures, and stream-completeness flags.
+
 For a policy error with output:
 
 <!-- doc-example:policy-error:compile -->

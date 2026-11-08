@@ -371,6 +371,13 @@ let powershell = Command::new("powershell")
 | 输出预算 | `OutputLimitExceeded` | 先通过 `reason()` 检查 `limit` 和包含哨兵字节的 `observed`，再从 `captured_output()` 读取字节并检查完整性、截断标志。`output()` 为 `None` 不代表没有保留字节。参见[有界输出与大输出](#有界输出与大输出)。 |
 | 策略结果 | `UnexpectedExit`、`OutputTruncated`、`TimedOut`、`Cancelled`、`CancelledBeforeStart` | 检查状态、配置策略、保留输出和流完整性标志。 |
 
+输出 reader 失败会停止该流的读取，但不会独立唤醒或终止对子进程的等待。runner 仍会等待
+子进程退出，或等待已配置的超时、取消或总输出预算策略决定收尾。未配置监控策略时，reader
+失败本身不会唤醒对子进程的等待。若超时先被选为终态，它仍是主错误，reader 失败保留在
+`cleanup_failures()` 中；子进程正常退出后，若输出收集结束前没有其他监控终态，reader
+失败可作为 `ReadOutputFailed` 返回。使用部分输出时，应同时检查主错误、清理失败和流完整性
+标志。
+
 处理带输出的策略错误时，可以这样检查：
 
 <!-- doc-example:policy-error:compile -->

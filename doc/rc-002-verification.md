@@ -2,6 +2,36 @@
 
 ## Latest evidence summary / 最新证据摘要 (2026-11-08)
 
+### CMD-REV-002 bounded Windows source audit at SHA `89e70ba35bed2a1d5d356826022c569d40a173cb` (2026-11-08)
+
+This T2 review compared the current source commit with the latest bounded source-audit entry above (`c79ed163959125d4ecf193b424952c76623c2ca7`). `git diff --exit-code c79ed163959125d4ecf193b424952c76623c2ca7 --` over the production cancellation/cleanup, output-reader, stdin, Windows probe, workflow, and identity-gate files exited 0. The source SHA is `89e70ba35bed2a1d5d356826022c569d40a173cb`; `uname -a` identifies Linux x86_64 and `rustc --version` reports `rustc 1.94.0 (4a4ef493e 2026-03-02)`. PowerShell is unavailable on this host (`pwsh` and `powershell` are not found). No tests or Windows commands were run.
+
+The audit read `src/command_runner/internal/command_io.rs`, `output_collector.rs`, `output_reader.rs`, `output_reader_finish.rs`, `io_cancellation.rs`, `io_cancellation_token.rs`, `cancel.rs`, `cancellable_reader.rs`, `stdin_pipe.rs`, `stdin_writer.rs`, and `pollable_stdin.rs`; it also read `windows_cancel_interleaving_tests.rs`, `output_collector/tests/windows_probe_tests.rs`, `.github/workflows/windows-cancellation-interleaving.yml`, `.github/scripts/assert-windows-probe-results.ps1`, and `.github/scripts/assert-windows-probe-results.tests.ps1`. Targeted `rg -n` searches for cancellation, join, witness, and watchdog fields exited 0. The worktree was initially clean. During the audit, the shared worktree acquired unrelated concurrent edits to `doc/design.md`, `doc/design.zh_CN.md`, `doc/user_guide.md`, `doc/user_guide.zh_CN.md`, and `src/command_runner.rs`; these were not changed by this audit and are not included in its edit.
+
+| Event | Source observation | Causal limit |
+| --- | --- | --- |
+| Successful cancellation | Windows `IoCancellation::cancel` publishes the token then calls `CancelSynchronousIo`; a successful result proceeds directly to the helper join. | This confirms the unbounded-join control flow, not that the join blocks. |
+| Output read-to-tee | The reader preserves bytes from a completed read, checks the token, then can synchronously `write_all` to the configured tee; EOF can lead to `flush`. Production uses a regular `File` tee. | The source check-to-I/O gap remains, but no new schedule demonstrates a successful cancel followed by blocked production I/O. |
+| Stdin | The worker checks cancellation before each readiness/write cycle; on Windows readiness itself only checks the token. | No new cancellable operation in the check-to-write gap, or successful cancel followed by a blocked production write, was found. |
+| Existing probe trace | Production `CommandIo` probe still records `original_io_return_is_subsequent_io=false`, `production_join_pending_witness=false`, `source_writer_manually_released=true`, and `watchdog_released=false`. The standalone blocked-pipe watchdog self-test is a separate trace. | No single trace proves successful cancellation, subsequent blocked production I/O, a production cleanup join pending because of that I/O, independent watchdog release, and helper/process recovery. The identity script verifies test names/results, not these causal facts. |
+
+No new production-reachable interleaving assumption was found, so the bounded condition for T3 was not triggered. RC-002 remains **`unresolved`**: the direct successful-cancel join exists, but the production hang is neither established nor excluded. The current host cannot provide Windows runtime evidence, and no Windows test command was run or represented as verified. The latest Windows run remains attributed to its historical SHA `5b046b0b11ea3413403c2df060638d3cb2b2fbb7`; this review adds no Windows result. No probe or production logic was changed. This review changes only this verification record and does not establish Windows safety.
+
+### CMD-REV-002 本轮 Windows 源码有界核查（源码 SHA `89e70ba35bed2a1d5d356826022c569d40a173cb`，2026-11-08）
+
+本轮 T2 将当前源码与上方最近一次有界源码审查（`c79ed163959125d4ecf193b424952c76623c2ca7`）比较。针对生产取消与收尾、output reader、stdin、Windows 探针、workflow 和身份门禁文件执行 `git diff --exit-code c79ed163959125d4ecf193b424952c76623c2ca7 -- ...`，退出码为 0。当前源码提交 SHA 为 `89e70ba35bed2a1d5d356826022c569d40a173cb`；`uname -a` 显示 Linux x86_64，`rustc --version` 为 `rustc 1.94.0 (4a4ef493e 2026-03-02)`。本机没有 PowerShell（找不到 `pwsh` 和 `powershell`）。未运行测试或 Windows 命令。
+
+本次阅读了 `src/command_runner/internal/command_io.rs`、`output_collector.rs`、`output_reader.rs`、`output_reader_finish.rs`、`io_cancellation.rs`、`io_cancellation_token.rs`、`cancel.rs`、`cancellable_reader.rs`、`stdin_pipe.rs`、`stdin_writer.rs`、`pollable_stdin.rs`；还阅读了 `windows_cancel_interleaving_tests.rs`、`output_collector/tests/windows_probe_tests.rs`、`.github/workflows/windows-cancellation-interleaving.yml`、`.github/scripts/assert-windows-probe-results.ps1` 和 `.github/scripts/assert-windows-probe-results.tests.ps1`。针对取消、join、见证字段和 watchdog 的定向 `rg -n` 检查退出码为 0。核查开始时 worktree 干净。核查期间共享 worktree 出现并行编辑：`doc/design.md`、`doc/design.zh_CN.md`、`doc/user_guide.md`、`doc/user_guide.zh_CN.md` 和 `src/command_runner.rs`；这些文件不是本核查修改的，也没有纳入本次改动。
+
+| 事件 | 源码观察 | 因果边界 |
+| --- | --- | --- |
+| 成功取消 | Windows `IoCancellation::cancel` 先发布 token，再调用 `CancelSynchronousIo`；调用成功后直接 join helper。 | 确认了无界 join 的控制流，但不能证明 join 会阻塞。 |
+| 输出 read-to-tee | reader 保留一次成功 read 的字节、检查 token，随后可能同步对配置的 tee 调用 `write_all`；EOF 后可能 flush。生产 tee 是普通 `File`。 | 源码仍存在检查到 I/O 的间隙，但没有新时序证明成功取消后发生了阻塞的生产 I/O。 |
+| Stdin | worker 在每轮 readiness/write 前检查取消；Windows readiness 本身只检查 token。 | 未发现 check-to-write 间隙中可被取消的操作，也未发现成功取消后接着发生阻塞生产写入的新时序。 |
+| 既有探针 trace | Production `CommandIo` 探针仍记录 `original_io_return_is_subsequent_io=false`、`production_join_pending_witness=false`、`source_writer_manually_released=true`、`watchdog_released=false`。独立的阻塞管道 watchdog 自测属于另一条 trace。 | 没有单条 trace 证明成功取消、随后阻塞的生产 I/O、由该 I/O 导致的 production cleanup join pending、独立 watchdog 释放，以及 helper/process 回收。身份脚本核对测试名和结果，不验证这些因果事实。 |
+
+没有发现新的生产可达交错假设，因此未触发 T3 的有界条件。RC-002 仍为 **`unresolved`**：成功取消后直接 join 确实存在，但生产挂起既未证实也未排除。当前主机不能提供 Windows 运行证据；本轮未运行或声称通过任何 Windows 测试命令。最近的 Windows run 仍只归属于其历史 SHA `5b046b0b11ea3413403c2df060638d3cb2b2fbb7`；本审查没有新增 Windows 结果。未修改探针或生产逻辑。本轮只修改本核查记录，也不证明 Windows 安全。
+
 ### CMD-REV-001 bounded source audit at SHA `c79ed163959125d4ecf193b424952c76623c2ca7` (2026-11-08)
 
 This T1 review was performed in the assigned implementation worktree on Linux x86_64. `git rev-parse HEAD` and `git status --short` exited 0; the worktree was clean before this record was edited. `uname -a` exited 0 and identified Linux x86_64. `rustc --version` exited 0 with `rustc 1.94.0 (4a4ef493e 2026-03-02)`. `command -v pwsh` and `command -v powershell` each exited 1; neither PowerShell executable is available. Read-only `rg -n` checks over the production paths, Windows probes, workflow, and identity scripts exited 0. `git diff --exit-code HEAD --` over the production source, probe, workflow, and identity-gate files exited 0. No tests were run, and no Windows runtime or PowerShell gate was available.
