@@ -132,6 +132,17 @@ impl CommandRunOptions {
     /// resolved from the parent process current working directory,
     /// regardless of the child process working directory.
     ///
+    /// Only ordinary files are accepted. Tee files contain raw process output;
+    /// diagnostic redaction does not filter their contents.
+    /// A per-stream capture limit does not limit tee writes. Timeout,
+    /// cancellation, a total output budget, or a read error may stop
+    /// collection. A tee write or flush failure may leave the file
+    /// incomplete even when
+    /// [`CommandOutput::stdout_complete`](crate::CommandOutput::stdout_complete)
+    /// reports EOF. Stream completeness does not establish tee completeness.
+    /// See [`CommandRunner::max_total_output_bytes`](crate::CommandRunner::max_total_output_bytes)
+    /// for a combined output budget.
+    ///
     /// # Type Parameters
     ///
     /// * `P` - Path-like value converted into an owned path.
@@ -168,6 +179,17 @@ impl CommandRunOptions {
     /// distinct paths when both logs must be retained. Relative paths are
     /// resolved from the parent process current working directory,
     /// regardless of the child process working directory.
+    ///
+    /// Only ordinary files are accepted. Tee files contain raw process output;
+    /// diagnostic redaction does not filter their contents.
+    /// A per-stream capture limit does not limit tee writes. Timeout,
+    /// cancellation, a total output budget, or a read error may stop
+    /// collection. A tee write or flush failure may leave the file
+    /// incomplete even when
+    /// [`CommandOutput::stderr_complete`](crate::CommandOutput::stderr_complete)
+    /// reports EOF. Stream completeness does not establish tee completeness.
+    /// See [`CommandRunner::max_total_output_bytes`](crate::CommandRunner::max_total_output_bytes)
+    /// for a combined output budget.
     ///
     /// # Type Parameters
     ///
