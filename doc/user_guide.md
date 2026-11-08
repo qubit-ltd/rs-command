@@ -150,7 +150,7 @@ assert_eq!(output.stdout_text()?, "input\n");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-On Windows, this structured-argument version requires Windows PowerShell. It echoes the supplied stdin bytes unchanged:
+On Windows, this structured-argument version requires Windows PowerShell. It echoes the sample text through text input/output APIs; it is not a binary byte-preserving copy example.
 
 <!-- doc-example:windows-stdin:windows -->
 ```rust

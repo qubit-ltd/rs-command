@@ -150,7 +150,7 @@ assert_eq!(output.stdout_text()?, "input\n");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-Windows 上可通过结构化参数调用 Windows PowerShell，把输入字节原样写回 stdout：
+Windows 上可通过结构化参数调用 Windows PowerShell，使用文本输入输出 API 回显示例文本；此示例不保证二进制字节原样透传。
 
 <!-- doc-example:windows-stdin:windows -->
 ```rust
