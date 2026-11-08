@@ -371,12 +371,16 @@ let powershell = Command::new("powershell")
 | 输出预算 | `OutputLimitExceeded` | 先通过 `reason()` 检查 `limit` 和包含哨兵字节的 `observed`，再从 `captured_output()` 读取字节并检查完整性、截断标志。`output()` 为 `None` 不代表没有保留字节。参见[有界输出与大输出](#有界输出与大输出)。 |
 | 策略结果 | `UnexpectedExit`、`OutputTruncated`、`TimedOut`、`Cancelled`、`CancelledBeforeStart` | 检查状态、配置策略、保留输出和流完整性标志。 |
 
-输出 reader 失败会停止该流的读取，但不会独立唤醒或终止对子进程的等待。runner 仍会等待
-子进程退出，或等待已配置的超时、取消或总输出预算策略决定收尾。未配置监控策略时，reader
-失败本身不会唤醒对子进程的等待。若超时先被选为终态，它仍是主错误，reader 失败保留在
-`cleanup_failures()` 中；子进程正常退出后，若输出收集结束前没有其他监控终态，reader
-失败可作为 `ReadOutputFailed` 返回。使用部分输出时，应同时检查主错误、清理失败和流完整性
-标志。
+runner 会在等待子进程及子进程退出后的继承输出管道时轮询 stdout/stderr reader。若读取失败先于
+其他终态被观察到，runner 会停止子进程；成功终止后，携带 collector 的原始 `ReadOutputFailed`
+错误和已保留的部分输出返回。若终止失败，进程控制错误仍是主错误，reader 错误保留为清理信息。
+同一流中更早发生的 tee 写入失败仍按现有 collector 顺序作为主错误。预算、
+子进程等待、取消、超时和时钟事件在已选定后保留原有优先级。未配置监控策略时，runner 使用
+自适应 1–10 ms 间隔轮询，只停止直接子进程；reader 故障本身不会启用进程树管理。读取错误先于
+deadline 被观察到时，结果可能从原先的 `TimedOut` 变为 `ReadOutputFailed`；依赖错误类别重试的
+调用方应同时考虑输出不完整。进程终止和普通文件 I/O 不属于硬截止时间保证。使用部分输出时，
+应同时检查主错误、清理失败和流完整性标志。
+`rs-mime` 的 `SystemMimeCommandExecutor` 等下游适配器应继续透传 `ReadOutputFailed`，不能把其中的部分输出当成业务数据解析。
 
 处理带输出的策略错误时，可以这样检查：
 

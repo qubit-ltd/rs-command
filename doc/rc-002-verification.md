@@ -2,6 +2,22 @@
 
 ## Latest evidence summary / 最新证据摘要 (2026-11-08)
 
+### CMD-REV-002 bounded follow-up after CMD-REV-001 (source SHA `dee876b`) (2026-11-08)
+
+This bounded review compared the committed CMD-REV-001 reader-state and polling changes with the prior source audit at `89e70ba35bed2a1d5d356826022c569d40a173cb`. The production cancellation, output-collector, stdin, Windows probe, workflow, and identity-gate paths in the original checkout still matched that audit before the CMD-REV-001 source commit (`git diff --exit-code 89e70ba35bed2a1d5d356826022c569d40a173cb -- <reviewed paths>` exited 0). The reviewed implementation source is commit `dee876b`; `uname -a` identified Linux x86_64 and `rustc --version` reported `rustc 1.94.0 (4a4ef493e 2026-03-02)`. `command -v pwsh` and `command -v powershell` both exited 1. No Windows runtime test or PowerShell identity script was run in this environment.
+
+The new `OutputReaderState::Finished` path is reached only after `JoinHandle::is_finished()` and join. Its cached result is consumed without another join, and cancellation is a no-op for that already-joined state. A still-running reader retains the existing cancellation request and helper-join path. The production read-to-tee, EOF-to-flush, stdin check-to-write, `CancelSynchronousIo`, and shared confirmation-deadline paths introduce no new operation after successful cancellation. This review found no new production-reachable interleaving in which successful cancellation is followed by blocked production I/O and an unbounded cleanup join. The existing control-flow concern remains, but no causal production hang was established or excluded. No probe or Windows cancellation logic was changed.
+
+RC-002 remains **`unresolved`**. This review is limited to the inspected source paths and schedules; it does not establish Windows safety. The Windows test filters and identity gate were not run locally because this host is Linux and lacks PowerShell.
+
+### CMD-REV-002 在 CMD-REV-001 后的有界复核（源码 SHA `dee876b`，2026-11-08）
+
+本次将已提交的 CMD-REV-001 reader 状态与轮询改动同此前 SHA `89e70ba35bed2a1d5d356826022c569d40a173cb` 的源码核查比较。在 CMD-REV-001 源码提交前，原 checkout 中生产取消、输出 collector、stdin、Windows 探针、workflow 和身份门禁路径仍与该审计一致（针对上述路径执行 `git diff --exit-code 89e70ba35bed2a1d5d356826022c569d40a173cb -- <reviewed paths>`，退出码为 0）。本次复核实现源码提交为 `dee876b`；`uname -a` 显示 Linux x86_64，`rustc --version` 为 `rustc 1.94.0 (4a4ef493e 2026-03-02)`。`command -v pwsh` 与 `command -v powershell` 均退出码为 1。本环境未运行 Windows runtime 测试或 PowerShell 身份脚本。
+
+新增的 `OutputReaderState::Finished` 仅在 `JoinHandle::is_finished()` 后 join 才会进入。缓存结果被直接消费，不会再次 join；该已 join 状态的取消请求是空操作。仍在运行的 reader 沿用既有取消请求和 helper join 路径。生产 read-to-tee、EOF-to-flush、stdin check-to-write、`CancelSynchronousIo` 和共享确认截止时间路径没有增加成功取消后的新 I/O 操作。本次没有发现新的生产可达时序，能在成功取消后继续执行阻塞生产 I/O 并使无界 cleanup join 等待。本轮仍确认该控制流疑点存在，但没有证实或排除因果性生产挂起。未修改探针或 Windows 取消逻辑。
+
+RC-002 仍为 **`unresolved`**。本审查仅适用于检查过的源码路径和时序，不证明 Windows 安全。本机为 Linux 且没有 PowerShell，因此未运行 Windows 测试过滤器和身份门禁。
+
 ### CMD-REV-002 bounded Windows source audit at SHA `89e70ba35bed2a1d5d356826022c569d40a173cb` (2026-11-08)
 
 This T2 review compared the current source commit with the latest bounded source-audit entry above (`c79ed163959125d4ecf193b424952c76623c2ca7`). `git diff --exit-code c79ed163959125d4ecf193b424952c76623c2ca7 --` over the production cancellation/cleanup, output-reader, stdin, Windows probe, workflow, and identity-gate files exited 0. The source SHA is `89e70ba35bed2a1d5d356826022c569d40a173cb`; `uname -a` identifies Linux x86_64 and `rustc --version` reports `rustc 1.94.0 (4a4ef493e 2026-03-02)`. PowerShell is unavailable on this host (`pwsh` and `powershell` are not found). No tests or Windows commands were run.

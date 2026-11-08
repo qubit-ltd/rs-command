@@ -215,14 +215,20 @@ The order is process tree, direct child, wait, clock, stdout, stderr, stdin.
 `Time` retains clock failures observed during finalization. Demoting a helper
 error also moves its retained output into the primary error. `KillFailed` and
 `CancelFailed` are removed; timeout and cancellation never change primary kind
-because cleanup failed. An output-reader failure stops reading that stream but
-does not independently wake or terminate the child wait. The runner continues
-waiting for child exit or a configured timeout, cancellation, or total-output-budget
-policy; without a monitoring policy, reader failure alone does not wake the wait.
-If timeout is selected first, it remains primary and the reader failure is retained
-in `cleanup_failures()`. After normal child exit, `ReadOutputFailed` can be returned
-if output collection completes without another monitoring decision. Callers using
-partial output should inspect the primary
+because cleanup failed. The monitor polls completed stdout/stderr readers while
+waiting for the child and for inherited output pipes after child exit. If a read
+failure is observed before another terminal event, the runner stops the child and
+returns the collector's original read error with retained output. If process
+termination fails, its process-control error remains primary and reader errors
+remain cleanup details. A tee write
+failure that happened earlier on the same stream remains primary under the existing
+collector ordering. Budget, child-wait, cancellation, timeout, and clock decisions
+retain their existing priority when already selected. With no monitoring policy,
+the runner polls using an adaptive 1–10 ms sleep and stops only the direct child;
+it does not enable process-tree management solely because a reader failed. A
+failure observed before the deadline can therefore change a previous `TimedOut`
+result into `ReadOutputFailed`. Process termination and ordinary-file I/O are not
+hard-deadline operations. Callers using partial output should inspect the primary
 error, cleanup failures, and stream-completeness flags.
 
 A tee failure remains observable if draining later ends through cancellation

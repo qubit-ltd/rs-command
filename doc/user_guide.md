@@ -388,15 +388,25 @@ text; explicitly formatting a full error chain is the caller's responsibility.
 | Output budget | `OutputLimitExceeded` | Inspect `reason()` for `limit` and `observed` (including the sentinel byte), then read `captured_output()` and check stream completeness and truncation. `output()` is `None`, which does not mean no bytes were retained. See [Bounded and Large Output](#bounded-and-large-output). |
 | Policy result | `UnexpectedExit`, `OutputTruncated`, `TimedOut`, `Cancelled`, `CancelledBeforeStart` | Inspect status, configured policy, retained output, and stream-completion flags. |
 
-An output-reader failure stops reading that stream but does not independently
-wake or terminate the child wait. The runner continues waiting for child exit or
-a configured timeout, cancellation, or total-output-budget policy. Without a
-monitoring policy, reader failure alone does not wake the child wait. If timeout
-is selected first, it remains the primary error and the reader failure is retained
-in `cleanup_failures()`. After normal child exit, `ReadOutputFailed` can be
-returned if output collection completes without another monitoring decision.
-When using partial output, inspect the primary
-error, cleanup failures, and stream-completeness flags.
+The runner polls completed stdout/stderr readers while it waits for the child and
+for inherited output pipes after child exit. If a read failure is observed before
+another terminal event, the runner stops the child; after successful
+termination it returns the collector's original `ReadOutputFailed` error with
+retained partial output. If termination fails, the process-control error remains
+primary and reader errors remain cleanup details. An earlier tee
+write failure on the same stream remains primary under the existing collector
+ordering. Budget, child-wait, cancellation, timeout, and clock events keep their
+existing priority once selected. With no monitoring policy, the runner uses an
+adaptive 1–10 ms polling sleep and stops only the direct child; a reader failure
+does not by itself enable process-tree management. A read failure observed before
+the deadline can change a previous `TimedOut` result into `ReadOutputFailed`, so
+callers that retry by error kind should account for incomplete output. Process
+termination and ordinary-file I/O are not hard-deadline operations. When using
+partial output, inspect the primary error, cleanup failures, and stream-completeness
+flags.
+Downstream adapters such as `rs-mime`'s `SystemMimeCommandExecutor` should
+propagate `ReadOutputFailed` and must not parse its partial output as business
+data.
 
 For a policy error with output:
 
