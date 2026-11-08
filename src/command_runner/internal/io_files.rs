@@ -60,6 +60,16 @@ pub(in crate::command_runner) fn open_input_candidate(path: &Path) -> io::Result
 /// # Parameters
 ///
 /// * `path` - Candidate path to open for reading.
+///
+/// # Returns
+///
+/// Returns an open file handle; callers must validate its type before use.
+/// Opening the candidate does not establish that it is a regular file or
+/// provide a bounded open operation.
+///
+/// # Errors
+///
+/// Returns the operating-system error reported while opening `path`.
 #[cfg(not(unix))]
 pub(in crate::command_runner) fn open_input_candidate(path: &Path) -> io::Result<File> {
     File::open(path)
@@ -94,6 +104,17 @@ pub(in crate::command_runner) fn open_output_candidate(path: &Path) -> io::Resul
 /// # Parameters
 ///
 /// * `path` - Candidate path to open for writing.
+///
+/// # Returns
+///
+/// Returns an open file handle; callers must validate its type before use.
+/// The open may create a new file but does not truncate an existing file.
+/// Opening the candidate does not establish that it is a regular file or
+/// provide a bounded open operation.
+///
+/// # Errors
+///
+/// Returns the operating-system error reported while opening `path`.
 #[cfg(not(unix))]
 pub(in crate::command_runner) fn open_output_candidate(path: &Path) -> io::Result<File> {
     OpenOptions::new().create(true).write(true).truncate(false).open(path)

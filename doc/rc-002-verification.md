@@ -1,8 +1,20 @@
 <a id="current-summary"></a>
 
-## Latest evidence summary / 最新证据摘要 (2026-11-07)
+## Latest evidence summary / 最新证据摘要 (2026-11-08)
 
-The bounded audit at SHA `9304afb53679f11f3707753d9b9a396baa78d448` and source review at SHA `1db1b9c50ee7581ff1f3758f8a2bef347f1c0275` are source-only records; neither ran Windows. The latest implementation verification is at SHA `a935e5bab3350de21002f0975c6d29867e0710e1`: its Windows workflow passed on `windows-2022` with 11 `windows_` tests, 2 command-I/O tests, and all 12 required identities passing. The production trace still lacks a subsequent-I/O, pending-production-join, and watchdog-release witness, so RC-002 remains `unresolved`; this run does not establish safety. Historical Windows runs below retain their own source SHAs.
+The latest source review is at SHA `f9a945b9e680ab0a902921892257cc3266987af2` on Linux x86_64; it found no new production-reachable interleaving hypothesis and produced no runtime trace. The latest implementation verification remains the historical run at SHA `a935e5bab3350de21002f0975c6d29867e0710e1`: its Windows workflow passed on `windows-2022` with 11 `windows_` tests, 2 command-I/O tests, and all 12 required identities passing. That production trace still lacks a subsequent-I/O, pending-production-join, and watchdog-release witness, so RC-002 remains `unresolved`; neither that run nor this source review establishes safety. Historical Windows runs below retain their own source SHAs.
+
+### Current task source review at SHA `f9a945b9e680ab0a902921892257cc3266987af2` (2026-11-08)
+
+This review was performed on Linux x86_64 in the assigned implementation worktree. I reviewed the current `CommandIo` cleanup path, `read_output_inner`, the Windows cancellation token and stdin paths, both existing Windows probe implementations, and the Windows identity-gate workflow. Successful cancellation still leads to an unbounded production helper join. The output collector checks cancellation after a successful read and before tee I/O; the Windows stdin path checks cancellation before its write loop. The existing probes do not introduce a new production-reachable schedule that witnesses a later blocking production I/O, a pending `CommandIo` cleanup join caused by it, and watchdog release. Existing probe source explicitly reports `production_join_pending_witness=false`, `original_io_return_is_subsequent_io=false`, and `watchdog_released=false` for its production trace schema. Thus source review confirms the unbounded-join control-flow concern, but neither confirms a blocking later I/O nor rules out a defect. RC-002 remains **`unresolved`**; no probe or speculative production fix was added.
+
+The host was Linux x86_64 with `rustc 1.94.0`; `pwsh` was unavailable. The Windows list/run commands and workflow identity gate were not run on this SHA, and no new runtime trace was produced. This record is source-only and is not Windows runtime or safety evidence.
+
+### 本轮源码核查（源码 SHA `f9a945b9e680ab0a902921892257cc3266987af2`，2026-11-08）
+
+本次在指定实施 worktree 的 Linux x86_64 环境中核查了当前 `CommandIo` cleanup 路径、`read_output_inner`、Windows 取消 token 与 stdin 路径、两个既有 Windows 探针实现，以及 Windows 身份门禁 workflow。成功取消后生产路径仍会执行无界 helper join。输出收集器在成功读取后、tee I/O 前再次检查取消；Windows stdin 路径在写循环前检查取消。既有探针没有提出新的生产可达调度，使后续阻塞生产 I/O、由其导致的 pending `CommandIo` cleanup join、以及 watchdog 释放形成见证。生产 trace schema 的探针源码明确写入 `production_join_pending_witness=false`、`original_io_return_is_subsequent_io=false`、`watchdog_released=false`。因此，源码审阅确认控制流存在无界 join，但既未确认后续 I/O 会阻塞，也未排除缺陷。RC-002 仍为 **`unresolved`**；本轮没有增加探针或猜测性生产修复。
+
+环境为 Linux x86_64，`rustc 1.94.0`；本机无 `pwsh`。本 SHA 未运行 Windows list/run 命令或 workflow 身份门禁，也未产生新运行 trace。本记录仅为源码审阅，不构成 Windows 运行或安全证据。
 
 ### Current implementation audit at SHA `c443528ef4243fb8f056c0b4d023c68ab3d74b23` (2026-11-08)
 

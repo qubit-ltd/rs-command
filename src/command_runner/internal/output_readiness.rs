@@ -41,6 +41,18 @@ pub(super) type OutputFd = std::os::windows::io::RawHandle;
 ///
 /// * `fd` - Output descriptor to poll.
 /// * `cancellation` - Token that can stop the readiness wait.
+///
+/// # Returns
+///
+/// Returns `Readable(8 KiB)` when polling reports the descriptor readable; the
+/// capacity is a read-chunk limit, not an exact byte count, and the next read
+/// may still return zero. Returns `Cancelled` when cancellation stops the
+/// wait.
+///
+/// # Errors
+///
+/// Returns an I/O error if polling fails for a reason other than an
+/// interrupted system call, which is retried internally.
 #[cfg(unix)]
 pub(super) fn wait_output_readiness(fd: OutputFd, cancellation: &IoCancellationToken) -> io::Result<OutputReadiness> {
     if cancellation.wait_for_fd(fd, libc::POLLIN)? {
@@ -56,6 +68,18 @@ pub(super) fn wait_output_readiness(fd: OutputFd, cancellation: &IoCancellationT
 ///
 /// * `fd` - Output pipe handle to inspect.
 /// * `cancellation` - Token that can stop the readiness wait.
+///
+/// # Returns
+///
+/// Returns `Readable(n)` with the byte count observed by `PeekNamedPipe`,
+/// `Eof` when the probe reports a broken pipe, or `Cancelled` when the token
+/// is set. The observed count is not reserved and may change before the next
+/// read.
+///
+/// # Errors
+///
+/// Returns the operating-system error from `PeekNamedPipe` unless it reports
+/// a broken pipe, which is returned as `Eof`.
 #[cfg(windows)]
 pub(super) fn wait_output_readiness(fd: OutputFd, cancellation: &IoCancellationToken) -> io::Result<OutputReadiness> {
     use std::ffi::c_void;
