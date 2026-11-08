@@ -9,7 +9,6 @@ use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
 
-use qubit_clock::BlockingSleeper;
 use qubit_clock::MonotonicInstant;
 use qubit_clock::TimeError;
 use qubit_clock::Timer;
@@ -21,6 +20,7 @@ use super::process_terminator::ProcessTerminator;
 use super::run_event::RunEvent;
 use super::stop_reason::StopReason;
 use super::total_output_budget::TotalOutputBudget;
+use super::wait_policy::next_poll_interval;
 use super::wait_policy::next_sleep;
 use crate::CommandCancellation;
 use crate::CommandCleanupFailure;
@@ -89,11 +89,9 @@ impl RunningCommand {
     /// Waits for the child process to complete, time out, be cancelled, or
     /// exceed its total output budget.
     ///
-    /// This method blocks the current thread. It delegates directly to the
-    /// child process's blocking wait operation only when no timeout,
-    /// cancellation handle, or total output budget is configured. Otherwise,
-    /// it monitors for process exit, timeout, cancellation, and budget
-    /// exhaustion.
+    /// This method blocks the current thread while polling the direct child
+    /// and output-reader results. It monitors for process exit, timeout,
+    /// cancellation, output-read failure, and budget exhaustion.
     ///
     /// # Parameters
     ///
@@ -124,13 +122,6 @@ impl RunningCommand {
     ///
     /// * `timeout` - Optional deadline measured from process start.
     fn wait_for_event(&mut self, timeout: Option<Duration>) -> RunEvent {
-        if timeout.is_none() && self.cancellation_token.is_none() && self.total_budget.is_none() {
-            return match self.child_process.wait() {
-                Ok(status) => RunEvent::Exited(status),
-                Err(source) => RunEvent::WaitFailed(source),
-            };
-        }
-
         let mut timeout_poll_count = 0;
         loop {
             if let Some((limit, observed)) = self.total_budget.as_ref().and_then(|budget| budget.exceeded()) {
@@ -163,19 +154,17 @@ impl RunningCommand {
     /// * `status` - Direct-child exit status for the collected output.
     /// * `timeout` - Optional deadline measured from process start.
     fn wait_for_io_event(&mut self, status: ExitStatus, timeout: Option<Duration>) -> RunEvent {
-        if timeout.is_some() || self.cancellation_token.is_some() || self.total_budget.is_some() {
-            let mut timeout_poll_count = 0;
-            while !self.io.is_finished() {
-                if let Some((limit, observed)) = self.total_budget.as_ref().and_then(|budget| budget.exceeded()) {
-                    return RunEvent::OutputLimitExceeded {
-                        limit,
-                        observed,
-                        status: Some(status),
-                    };
-                }
-                if let Err(event) = self.check_cancellation_and_wait(Some(status), timeout, &mut timeout_poll_count) {
-                    return event;
-                }
+        let mut timeout_poll_count = 0;
+        while !self.io.is_finished() {
+            if let Some((limit, observed)) = self.total_budget.as_ref().and_then(|budget| budget.exceeded()) {
+                return RunEvent::OutputLimitExceeded {
+                    limit,
+                    observed,
+                    status: Some(status),
+                };
+            }
+            if let Err(event) = self.check_cancellation_and_wait(Some(status), timeout, &mut timeout_poll_count) {
+                return event;
             }
         }
         if let Some((limit, observed)) = self.total_budget.as_ref().and_then(|budget| budget.exceeded()) {
@@ -184,6 +173,9 @@ impl RunningCommand {
                 observed,
                 status: Some(status),
             };
+        }
+        if self.io.poll_read_failure() {
+            return RunEvent::OutputReadFailed { status: Some(status) };
         }
         RunEvent::Exited(status)
     }
@@ -201,7 +193,7 @@ impl RunningCommand {
     /// * `timeout` - Optional deadline measured from process start.
     /// * `timeout_poll_count` - Mutable count of timeout polls.
     fn check_cancellation_and_wait(
-        &self,
+        &mut self,
         status: Option<ExitStatus>,
         timeout: Option<Duration>,
         timeout_poll_count: &mut usize,
@@ -225,11 +217,24 @@ impl RunningCommand {
                 *timeout_poll_count = timeout_poll_count.saturating_add(1);
                 sleep
             }
+            None if self.cancellation_token.is_none() && self.total_budget.is_none() => {
+                let sleep = next_poll_interval(*timeout_poll_count);
+                *timeout_poll_count = timeout_poll_count.saturating_add(1);
+                sleep
+            }
             None => CANCELLATION_POLL_INTERVAL,
         };
-        BlockingSleeper::new(Arc::clone(&self.timer))
-            .sleep_for(sleep)
-            .map_err(|source| RunEvent::TimeFailed { source, status })
+        if self.io.poll_read_failure() {
+            return Err(RunEvent::OutputReadFailed { status });
+        }
+        if timeout.is_none() && self.cancellation_token.is_none() && self.total_budget.is_none() {
+            std::thread::sleep(sleep);
+            Ok(())
+        } else {
+            qubit_clock::BlockingSleeper::new(Arc::clone(&self.timer))
+                .sleep_for(sleep)
+                .map_err(|source| RunEvent::TimeFailed { source, status })
+        }
     }
 
     /// Resolves one monitoring event through the single finalization pipeline.
@@ -289,6 +294,11 @@ impl RunningCommand {
         let finished = match finished {
             Ok(finished) => finished,
             Err(mut error) => {
+                if matches!(reason, StopReason::OutputReadFailed { .. }) {
+                    return Err(error
+                        .with_cleanup_failures(outcome.cleanup_failures)
+                        .with_cleanup_failures(io_cleanup_failures));
+                }
                 if let StopReason::OutputLimitExceeded { limit, observed, .. } = reason {
                     let captured = match total_budget.as_ref() {
                         Some(budget) => Some(budget.captured_output_with_joined(error.take_captured_output())),
@@ -426,11 +436,19 @@ mod tests {
     #[cfg(unix)]
     use std::io::Read;
     #[cfg(unix)]
+    use std::os::fd::RawFd;
+    #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt;
     #[cfg(windows)]
     use std::os::windows::process::ExitStatusExt;
     use std::path::PathBuf;
+    #[cfg(unix)]
+    use std::process::ChildStdout;
+    #[cfg(unix)]
+    use std::process::Command as ProcessCommand;
     use std::process::ExitStatus;
+    #[cfg(unix)]
+    use std::process::Stdio;
     use std::sync::Arc;
     use std::sync::Condvar;
     use std::sync::Mutex;
@@ -448,10 +466,14 @@ mod tests {
     use qubit_clock::ManualMonotonicClock;
     use qubit_clock::MonotonicClock;
     use qubit_clock::MonotonicInstant;
+    #[cfg(unix)]
+    use qubit_clock::StdTimer;
     use qubit_clock::TimeError;
     use qubit_clock::Timer;
     use qubit_clock::TimerFuture;
 
+    #[cfg(unix)]
+    use super::super::cancellable_reader::CancellableReader;
     use super::super::captured_output::CapturedOutput;
     use super::super::command_io::CommandIo;
     use super::super::finished_command::FinishedCommand;
@@ -459,6 +481,10 @@ mod tests {
     use super::super::io_cancellation_token::IoCancellationToken;
     use super::super::managed_child_process::ManagedChildProcess;
     use super::super::output_capture_error::OutputCaptureError;
+    #[cfg(unix)]
+    use super::super::output_capture_options::OutputCaptureOptions;
+    #[cfg(unix)]
+    use super::super::output_collector::read_output_stream;
     use super::super::output_reader::OutputReader;
     use super::super::run_event::RunEvent;
     use super::super::scripted_child::ScriptedChild;
@@ -470,6 +496,7 @@ mod tests {
     use crate::CommandError;
     use crate::CommandErrorKind;
     use crate::CommandErrorReason;
+    use crate::OutputStream;
 
     struct FailingTimer {
         clock: CountingClock,
@@ -676,6 +703,47 @@ mod tests {
         CommandIo::new(stdout, stderr, Some(stdin))
     }
 
+    #[derive(Debug)]
+    struct BudgetTripChild {
+        inner: Box<dyn ChildWrapper>,
+        budget: Arc<TotalOutputBudget>,
+        status: ExitStatus,
+        tripped: bool,
+    }
+
+    impl ChildWrapper for BudgetTripChild {
+        fn inner(&self) -> &dyn ChildWrapper {
+            self.inner.as_ref()
+        }
+
+        fn inner_mut(&mut self) -> &mut dyn ChildWrapper {
+            self.inner.as_mut()
+        }
+
+        fn into_inner(self: Box<Self>) -> Box<dyn ChildWrapper> {
+            self.inner
+        }
+
+        fn start_kill(&mut self) -> io::Result<()> {
+            self.inner.start_kill()
+        }
+
+        fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+            if !self.tripped {
+                let mut source = Cursor::new(*b"x");
+                let mut buffer = [0; 1];
+                self.budget
+                    .read_ready(&mut source, &mut buffer, 1, OutputStream::Stdout)?;
+                self.tripped = true;
+            }
+            Ok(Some(self.status))
+        }
+
+        fn wait(&mut self) -> io::Result<ExitStatus> {
+            self.inner.wait()
+        }
+    }
+
     fn running(child: ManagedChildProcess, io: CommandIo) -> RunningCommand {
         let clock = ManualMonotonicClock::new_shared();
         let started_at = clock.now();
@@ -806,6 +874,36 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    struct FaultInjectedStdout {
+        inner: ChildStdout,
+        read_failed: mpsc::Sender<()>,
+    }
+
+    #[cfg(unix)]
+    impl Read for FaultInjectedStdout {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let count = self.inner.read(buffer)?;
+            if count > 0 {
+                let _ = self.read_failed.send(());
+                Err(io::Error::other("injected ready-pipe read failure"))
+            } else {
+                Ok(0)
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl CancellableReader for FaultInjectedStdout {
+        fn prepare_for_cancellation(&self) -> io::Result<()> {
+            self.inner.prepare_for_cancellation()
+        }
+
+        fn raw_fd(&self) -> RawFd {
+            self.inner.raw_fd()
+        }
+    }
+
     fn audit_read_failure_reader(sender: mpsc::Sender<Instant>, events: Arc<AuditChildState>) -> OutputReader {
         let (cancellation, _token) = IoCancellation::pair().expect("reader cancellation should create");
         OutputReader::new(
@@ -836,6 +934,82 @@ mod tests {
             events: Mutex::new(Vec::new()),
             wait_started: Mutex::new(None),
         })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_real_child_pipe_read_failure_kills_and_reaps_before_timeout() {
+        let mut child = ProcessCommand::new("sh")
+            .args(["-c", "printf READY; exec sleep 30"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("real child should start");
+        let stdout = child.stdout.take().expect("child stdout should be piped");
+        let (read_failed_tx, read_failed_rx) = mpsc::channel();
+        let stdout_reader = read_output_stream(
+            FaultInjectedStdout {
+                inner: stdout,
+                read_failed: read_failed_tx,
+            },
+            OutputCaptureOptions::new(None, None),
+        )
+        .expect("fault-injected production reader should start");
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let child = ManagedChildProcess::new(
+            Box::new(ScriptedChild::new("real-child", Box::new(child), Arc::clone(&calls))),
+            false,
+        );
+        let timer: Arc<dyn Timer> = Arc::new(StdTimer::new());
+        let started_at = timer.clock().now();
+        let running = RunningCommand::new(
+            "real pipe read failure".to_owned(),
+            child,
+            CommandIo::new(stdout_reader, immediate_successful_reader(), None),
+            started_at,
+            timer,
+            None,
+            None,
+        );
+        let (result_tx, result_rx) = mpsc::channel();
+        let started = Instant::now();
+        let runner = thread::spawn(move || {
+            let result = running.wait_for_completion(Some(Duration::from_secs(3)));
+            result_tx
+                .send((Instant::now(), result))
+                .expect("runner result should be observed");
+        });
+
+        read_failed_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("real pipe data should reach the injected read failure");
+        let prompt_result = result_rx.recv_timeout(Duration::from_secs(2));
+        let returned = prompt_result.as_ref().map(|_| ()).is_ok();
+        let (returned_at, result) = match prompt_result {
+            Ok(result) => result,
+            Err(_) => result_rx
+                .recv_timeout(Duration::from_secs(4))
+                .expect("timeout guard should terminate the child if prompt handling regresses"),
+        };
+        runner.join().expect("runner thread should join");
+
+        let error = expect_error(result, "pipe read failure should be returned");
+        assert_eq!(error.kind(), CommandErrorKind::ReadOutputFailed);
+        assert!(returned, "runner should respond before the timeout guard");
+        assert!(returned_at.duration_since(started) < Duration::from_secs(2));
+        let status = error
+            .output()
+            .expect("terminated child status should be retained")
+            .exit_status();
+        assert!(status.signal().is_some(), "the live child should be killed");
+        assert!(
+            calls
+                .lock()
+                .expect("child call log should lock")
+                .iter()
+                .any(|call| call == "real-child.wait"),
+            "the terminated child should be reaped"
+        );
     }
 
     #[test]
@@ -876,27 +1050,24 @@ mod tests {
         });
 
         let failure_at = failure_rx.recv_timeout(Duration::from_secs(2));
-        let timer_registered = timer_rx.recv_timeout(Duration::from_secs(2));
-        let timer_advance = clock.advance(Duration::from_secs(5));
-        let first_result = return_rx.recv_timeout(Duration::from_secs(2));
-        let watchdog_used =
-            failure_at.is_err() || timer_registered.is_err() || timer_advance.is_err() || first_result.is_err();
+        let runner_result = return_rx.recv_timeout(Duration::from_secs(2)).ok();
+        let watchdog_used = runner_result.is_none();
         if watchdog_used {
             watchdog_child.release(status(0));
             let _ = clock.advance(Duration::from_secs(5));
         }
-        let runner_result = first_result
-            .ok()
-            .or_else(|| return_rx.recv_timeout(Duration::from_secs(2)).ok());
+        let runner_result = runner_result.or_else(|| return_rx.recv_timeout(Duration::from_secs(2)).ok());
         runner.join().expect("runner thread should join");
         let (returned_at, result) = runner_result.expect("runner should finish after timer or watchdog release");
         let failure_at = failure_at.expect("reader should fail");
-        assert!(timer_registered.is_ok(), "runner should register timeout timer");
-        assert!(timer_advance.is_ok(), "manual deadline should advance");
-        let error = expect_error(result, "timeout should terminate the still-live child");
+        assert!(
+            timer_rx.try_recv().is_err(),
+            "reader failure should precede timeout polling"
+        );
+        let error = expect_error(result, "reader failure should terminate the still-live child");
 
         events.events.lock().expect("events should lock").push("returned");
-        assert_eq!(error.kind(), CommandErrorKind::TimedOut);
+        assert_eq!(error.kind(), CommandErrorKind::ReadOutputFailed);
         let capture = error
             .captured_output()
             .expect("timeout should retain partial reader output");
@@ -912,7 +1083,7 @@ mod tests {
             *events.events.lock().expect("events should lock"),
             ["reader-failed", "kill", "wait", "returned"],
         );
-        assert_eq!(error.cleanup_failures().len(), 1);
+        assert!(error.cleanup_failures().is_empty());
     }
 
     #[test]
@@ -933,8 +1104,14 @@ mod tests {
         );
         let failure_at = failure_rx.recv_timeout(Duration::from_secs(2));
         let started = Instant::now();
+        let returned_events = Arc::clone(&events);
         let runner = thread::spawn(move || {
             let result = running.wait_for_completion(None);
+            returned_events
+                .events
+                .lock()
+                .expect("events should lock")
+                .push("returned");
             return_tx
                 .send((Instant::now(), result))
                 .expect("runner result should be observed");
@@ -947,27 +1124,29 @@ mod tests {
             Err(mpsc::RecvTimeoutError::Timeout)
         };
         let runner_was_blocked = early_result.is_err();
-        events
-            .events
-            .lock()
-            .expect("events should lock")
-            .push("watchdog-release");
-        watchdog_child.release(status(0));
+        if runner_was_blocked {
+            events
+                .events
+                .lock()
+                .expect("events should lock")
+                .push("watchdog-release");
+            watchdog_child.release(status(0));
+        }
         let runner_result = early_result
             .ok()
             .or_else(|| return_rx.recv_timeout(Duration::from_secs(2)).ok());
         runner.join().expect("runner thread should join");
-        let (returned_at, result) = runner_result.expect("watchdog should release runner");
+        let (returned_at, result) = runner_result.expect("reader failure should stop the runner");
         let failure_at = failure_at.expect("reader should fail");
         assert!(wait_started.is_ok(), "runner should enter child wait");
         let error = expect_error(result, "reader failure should be reported after child exits");
 
         assert!(returned_at >= failure_at);
-        assert!(returned_at.duration_since(started) >= Duration::from_secs(2));
+        assert!(returned_at.duration_since(started) < Duration::from_secs(2));
         assert_eq!(error.kind(), CommandErrorKind::ReadOutputFailed);
         assert!(
-            runner_was_blocked,
-            "watchdog must be the reason the no-timeout runner returned"
+            !runner_was_blocked,
+            "reader failure should return without a watchdog release"
         );
         let capture = error
             .captured_output()
@@ -976,7 +1155,7 @@ mod tests {
         assert!(!capture.stdout_complete());
         assert_eq!(
             *events.events.lock().expect("events should lock"),
-            ["reader-failed", "wait", "watchdog-release"],
+            ["reader-failed", "kill", "wait", "returned"],
         );
     }
 
@@ -1035,6 +1214,33 @@ mod tests {
                 observed: 2,
                 status: None
             }
+        ));
+    }
+
+    #[test]
+    fn test_post_try_wait_budget_crossing_precedes_cached_read_failure() {
+        let budget = Arc::new(TotalOutputBudget::new(0, None, None));
+        let child = BudgetTripChild {
+            inner: raw_child(),
+            budget: Arc::clone(&budget),
+            status: status(0),
+            tripped: false,
+        };
+        let command = running_with_budget(
+            ManagedChildProcess::new(Box::new(child), false),
+            CommandIo::new(failing_stdout(), successful_reader(), None),
+            budget,
+        );
+
+        let error = expect_error(
+            command.wait_for_completion(None),
+            "post-exit budget crossing should remain the primary error",
+        );
+
+        assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::OutputLimitExceeded { limit: 0, observed: 1 }
         ));
     }
 

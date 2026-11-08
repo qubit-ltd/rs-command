@@ -26,6 +26,7 @@ pub(in crate::command_runner) mod output_capture_options;
 pub(in crate::command_runner) mod output_collector;
 pub(in crate::command_runner) mod output_reader;
 mod output_reader_finish;
+pub(super) mod output_reader_state;
 pub(in crate::command_runner) mod output_readiness;
 pub(in crate::command_runner) mod output_tee;
 pub(in crate::command_runner) mod pollable_stdin;

@@ -157,16 +157,22 @@ pub const DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM: usize = 1024 * 1024;
 /// Timeout, cancellation, and total-output-budget monitoring use timer-based
 /// polling. Even when only a total output budget is configured, the timer
 /// backend must keep progressing independently while this thread is parked.
-/// An output-reader failure stops reading that stream but does not
-/// independently wake or terminate the child-process wait. The runner continues
-/// waiting for child exit or a configured timeout, cancellation, or
-/// total-output-budget policy. Without a monitoring policy, reader failure
-/// alone does not wake the child wait. If a timeout is selected first, it
-/// remains the primary error and the reader failure is retained in
-/// `cleanup_failures()`; after normal child exit, `ReadOutputFailed` can be
-/// returned if output collection completes without another monitoring decision.
-/// Check the primary error, cleanup failures,
-/// and stream-completeness flags when using partial output.
+/// The runner polls completed stdout/stderr readers while waiting for the child
+/// and for inherited output pipes after child exit. If a read failure is
+/// observed before another terminal event, the runner stops the child; after
+/// successful termination it returns the collector's original
+/// `ReadOutputFailed` error with retained partial output. If termination fails,
+/// the process-control error remains primary and reader errors remain cleanup
+/// details. An earlier tee write failure on that stream remains primary
+/// under the existing collector ordering. Budget, child-wait, cancellation,
+/// timeout, and clock events keep their existing priority once selected. With
+/// no monitoring policy, the runner uses an adaptive 1–10 ms polling sleep and
+/// stops only the direct child; a reader failure does not by itself enable
+/// process-tree management. A read failure observed before the deadline can
+/// change a previous `TimedOut` result into `ReadOutputFailed`. Check the
+/// primary error, cleanup failures, and stream-completeness flags when using
+/// partial output. Process termination and ordinary-file I/O are not
+/// hard-deadline operations.
 ///
 /// # Examples
 ///

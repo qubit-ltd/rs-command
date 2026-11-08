@@ -43,6 +43,11 @@ pub(super) enum RunEvent {
         /// Direct-child status observed during the same poll, if any.
         status: Option<ExitStatus>,
     },
+    /// A stdout or stderr reader failed before the command completed.
+    OutputReadFailed {
+        /// Direct-child status already observed while collecting output.
+        status: Option<ExitStatus>,
+    },
     /// Waiting for the direct child failed.
     WaitFailed(
         /// Error returned while waiting for the direct child.
@@ -79,6 +84,7 @@ impl RunEvent {
                 observed,
                 status,
             }),
+            Self::OutputReadFailed { status } => Err(StopReason::OutputReadFailed { status }),
             Self::WaitFailed(source) => Err(StopReason::WaitFailed(source)),
             Self::TimeFailed { source, status } => Err(StopReason::TimeFailed { source, status }),
         }

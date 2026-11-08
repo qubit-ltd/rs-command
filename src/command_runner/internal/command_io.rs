@@ -85,6 +85,13 @@ impl CommandIo {
             && self.stdin_writer.as_ref().is_none_or(|writer| writer.is_finished())
     }
 
+    /// Collects completed stdout and stderr results and reports read failures.
+    pub(in crate::command_runner) fn poll_read_failure(&mut self) -> bool {
+        let stdout_failed = self.stdout_reader.poll_read_failure();
+        let stderr_failed = self.stderr_reader.poll_read_failure();
+        stdout_failed || stderr_failed
+    }
+
     /// Collects output from all helper threads.
     ///
     /// # Parameters
@@ -595,6 +602,42 @@ mod tests {
 
     fn completed_reader(cancellation: IoCancellation) -> OutputReader {
         OutputReader::new(thread::spawn(|| Ok(CapturedOutput::default())), cancellation)
+    }
+
+    #[test]
+    fn test_poll_read_failure_collects_both_reader_results() {
+        use super::super::output_capture_error::OutputCaptureError;
+
+        let (stdout_cancel, _) = IoCancellation::pair().expect("stdout cancellation should create");
+        let (stderr_cancel, _) = IoCancellation::pair().expect("stderr cancellation should create");
+        let stdout = OutputReader::new(
+            thread::spawn(|| {
+                Err(OutputCaptureError::Read {
+                    source: io::Error::other("stdout read failed"),
+                    output: CapturedOutput::default(),
+                })
+            }),
+            stdout_cancel,
+        );
+        let stderr = OutputReader::new(
+            thread::spawn(|| {
+                Err(OutputCaptureError::Read {
+                    source: io::Error::other("stderr read failed"),
+                    output: CapturedOutput::default(),
+                })
+            }),
+            stderr_cancel,
+        );
+        let mut io = CommandIo::new(stdout, stderr, None);
+        while !io.stdout_reader.is_finished() || !io.stderr_reader.is_finished() {
+            thread::yield_now();
+        }
+
+        assert!(io.poll_read_failure());
+        assert!(io.poll_read_failure());
+        assert!(io.is_finished());
+        let failures = io.cancel_and_join("command");
+        assert_eq!(failures.len(), 2);
     }
 
     fn completed_writer(cancellation: IoCancellation) -> StdinWriter {

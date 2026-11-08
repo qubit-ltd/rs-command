@@ -41,6 +41,11 @@ pub(super) enum StopReason {
         /// Direct-child status observed during the same poll, if any.
         status: Option<ExitStatus>,
     },
+    /// A stdout or stderr reader failed before output collection completed.
+    OutputReadFailed {
+        /// Direct-child status already observed while collecting output.
+        status: Option<ExitStatus>,
+    },
     /// Waiting for the direct child failed.
     WaitFailed(
         /// Error returned while waiting for the direct child.
@@ -67,6 +72,7 @@ impl StopReason {
             Self::TimedOut { status, .. }
             | Self::Cancelled { status }
             | Self::OutputLimitExceeded { status, .. }
+            | Self::OutputReadFailed { status }
             | Self::TimeFailed { status, .. } => *status,
             Self::WaitFailed(_) => None,
         }
@@ -82,6 +88,7 @@ impl StopReason {
     pub(super) const fn retains_termination_output(&self) -> bool {
         match self {
             Self::TimedOut { .. } | Self::Cancelled { .. } | Self::OutputLimitExceeded { .. } => true,
+            Self::OutputReadFailed { .. } => true,
             Self::WaitFailed(_) => false,
             Self::TimeFailed { status, .. } => status.is_some(),
         }
@@ -110,6 +117,11 @@ impl StopReason {
             }
             Self::WaitFailed(source) => CommandErrorReason::WaitFailed { source },
             Self::TimeFailed { source, .. } => CommandErrorReason::TimeFailed { source },
+            Self::OutputReadFailed { .. } => CommandErrorReason::WaitFailed {
+                source: io::Error::other(
+                    "internal command-runner invariant failed: output-read stop event had no cached reader error",
+                ),
+            },
         };
         CommandError::from_reason(command, reason, output)
     }
@@ -187,6 +199,19 @@ mod tests {
         assert!(matches!(
             error.cleanup_failures(),
             [CommandCleanupFailure::StdoutRead { .. }]
+        ));
+    }
+
+    #[test]
+    fn test_output_read_stop_invariant_fallback_does_not_claim_a_stream() {
+        let reason = StopReason::OutputReadFailed { status: None };
+        let error = reason.into_primary_error("command", None);
+
+        assert_eq!(error.kind(), CommandErrorKind::WaitFailed);
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::WaitFailed { source }
+                if source.to_string().contains("internal command-runner invariant failed")
         ));
     }
 
