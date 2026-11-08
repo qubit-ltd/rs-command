@@ -2,7 +2,19 @@
 
 ## Latest evidence summary / 最新证据摘要 (2026-11-08)
 
-The latest source review is at SHA `f9a945b9e680ab0a902921892257cc3266987af2` on Linux x86_64; it found no new production-reachable interleaving hypothesis and produced no runtime trace. The latest implementation verification remains the historical run at SHA `a935e5bab3350de21002f0975c6d29867e0710e1`: its Windows workflow passed on `windows-2022` with 11 `windows_` tests, 2 command-I/O tests, and all 12 required identities passing. That production trace still lacks a subsequent-I/O, pending-production-join, and watchdog-release witness, so RC-002 remains `unresolved`; neither that run nor this source review establishes safety. Historical Windows runs below retain their own source SHAs.
+The latest Windows runtime verification is at SHA `5b046b0b11ea3413403c2df060638d3cb2b2fbb7` on `windows-2022` (workflow run `42439229542`): 11 `windows_` tests, 2 command-I/O tests, and all 12 required identities passed. Its production `CommandIo` trace still lacks the required subsequent-I/O, pending-production-join, and watchdog-release causal witness, so RC-002 remains `unresolved`; the run does not establish safety. The source-only review at SHA `f9a945b9e680ab0a902921892257cc3266987af2` on Linux found no new production-reachable interleaving hypothesis. Historical Windows runs below retain their own source SHAs.
+
+### Windows runtime verification at SHA `5b046b0b11ea3413403c2df060638d3cb2b2fbb7` (2026-11-08)
+
+GitHub Actions workflow run `42439229542` completed on `windows-2022`. The list commands `cargo test --lib windows_ -- --list --color never` and `cargo test --lib command_io::tests::test_error_not_found_ -- --list --color never` both exited 0. The run commands `cargo test --lib windows_ -- --show-output --test-threads=1 --color never` (11 passed) and `cargo test --lib command_io::tests::test_error_not_found_ -- --show-output --test-threads=1 --color never` (2 passed) both exited 0. The identity fixture script and result assertion passed; all 12 required test identities were discovered and passed.
+
+The production `CommandIo` scenario recorded a successful cancellation, source read error OS code 995, cleanup join completion, and process reaping. However, `production_join_pending_witness=false`, `original_io_return_is_subsequent_io=false`, `source_writer_manually_released=true`, and `watchdog_released=false`. Across the probe scenarios there were zero confirmed blocked tee writes and zero valid hits; the EOF-to-flush probe did record successful-cancel hits, but without the required blocked-production-I/O and cleanup-join causal chain. Therefore this runtime run does not confirm the hypothesized defect or prove safety. RC-002 remains **`unresolved`**, and production behavior was not changed.
+
+### Windows 源码 SHA `5b046b0b11ea3413403c2df060638d3cb2b2fbb7` 运行核查（2026-11-08）
+
+GitHub Actions workflow run `42439229542` 在 `windows-2022` 完成。`cargo test --lib windows_ -- --list --color never` 和 `cargo test --lib command_io::tests::test_error_not_found_ -- --list --color never` 两条 list 命令退出码均为 0。运行命令 `cargo test --lib windows_ -- --show-output --test-threads=1 --color never`（11 项通过）和 `cargo test --lib command_io::tests::test_error_not_found_ -- --show-output --test-threads=1 --color never`（2 项通过）退出码均为 0。身份门禁 fixtures 和结果断言通过；12 个必需测试身份均被发现且通过。
+
+生产 `CommandIo` 场景记录到取消成功、源读取错误 OS code 995、cleanup join 完成和进程回收。但 `production_join_pending_witness=false`、`original_io_return_is_subsequent_io=false`、`source_writer_manually_released=true`、`watchdog_released=false`。各探针场景确认的阻塞 tee 写入为 0、有效命中为 0；EOF-to-flush 探针虽记录到取消成功命中，但没有形成所需的阻塞生产 I/O 与 cleanup join 因果链。因此本次运行既未证实该疑点，也未证明安全。RC-002 仍为 **`unresolved`**，生产行为未修改。
 
 ### Current task source review at SHA `f9a945b9e680ab0a902921892257cc3266987af2` (2026-11-08)
 
