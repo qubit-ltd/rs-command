@@ -1,6 +1,6 @@
 [package]
 name = "qubit-command"
-version = "0.11.0"
+version = "0.11.1"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Haixing Hu <starfish.hu@gmail.com>"]
@@ -40,7 +40,7 @@ qubit-clock = "^0.13"
 qubit-redact = { version = "^0.10", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc = "^0.2"
 
 [dev-dependencies]
 criterion = { version = "^0.8", default-features = false }
