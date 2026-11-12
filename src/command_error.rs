@@ -155,12 +155,20 @@ impl CommandError {
         self.with_cleanup_failures(error.into_cleanup_failures())
     }
 
-    /// Returns the redacted command representation.
+    /// Returns the command representation rendered with the configured
+    /// diagnostic redaction policy and explicit sensitivity markers.
+    ///
+    /// Dedicated working-directory, stdin, and tee path settings are omitted
+    /// or masked in diagnostics. This does not guarantee that executable paths
+    /// or paths passed as ordinary arguments are hidden. Mark sensitive path
+    /// arguments with [`crate::Command::sensitive_arg`] or
+    /// [`crate::Command::sensitive_arg_os`].
     ///
     /// # Returns
     ///
-    /// The command text with sensitive arguments, environment values, and
-    /// paths removed or masked.
+    /// The stored diagnostic command text. Ordinary argument values may remain
+    /// visible unless explicit sensitivity markers or redaction rules hide
+    /// them.
     #[must_use]
     #[inline(always)]
     pub fn command(&self) -> &str {
