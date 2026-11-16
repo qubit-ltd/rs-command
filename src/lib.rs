@@ -88,7 +88,7 @@ pub use execution::{
     CommandSubmitFailureReason, SnapshotFailure,
 };
 pub use process_tree_policy::ProcessTreePolicy;
-pub use resource_run_options::CommandResourceRunOptions;
+pub use resource_run_options::{CommandResourceRunOptions, FileSinkPolicy};
 #[cfg(feature = "async")]
 pub use session::{CommandSession, CommandSessionApi};
 #[cfg(feature = "async")]

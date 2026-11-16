@@ -61,3 +61,14 @@ fn snapshot_submission_failure_retains_diagnostic() {
         matches!(reason, CommandSubmitFailureReason::Snapshot(ref failure) if failure.diagnostic.contains("working directory"))
     );
 }
+
+#[test]
+fn owned_output_sink_requires_and_retains_policy() {
+    use qubit_command::{CommandResourceRunOptions, FileSinkPolicy};
+    let sink = tempfile::tempfile().expect("create temporary sink");
+    let options = CommandResourceRunOptions::new().stdout_sink(sink, FileSinkPolicy::Preserve);
+    assert!(matches!(
+        options.configured_stdout(),
+        Some((_, FileSinkPolicy::Preserve))
+    ));
+}
