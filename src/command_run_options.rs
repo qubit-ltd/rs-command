@@ -9,6 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::CommandCancellation;
+use crate::ProcessTreePolicy;
 use crate::command_run_options_parts::CommandRunOptionsParts;
 
 /// Per-run options for [`CommandRunner`](crate::command_runner::CommandRunner).
@@ -38,6 +39,7 @@ pub struct CommandRunOptions {
     stdout_file: Option<PathBuf>,
     /// Optional per-run stderr tee path.
     stderr_file: Option<PathBuf>,
+    process_tree_policy: ProcessTreePolicy,
 }
 
 impl std::fmt::Debug for CommandRunOptions {
@@ -50,8 +52,15 @@ impl std::fmt::Debug for CommandRunOptions {
         formatter
             .debug_struct("CommandRunOptions")
             .field("cancellation_configured", &self.cancellation.is_some())
-            .field("stdout_file", &self.stdout_file.as_ref().map(|_| "<redacted path>"))
-            .field("stderr_file", &self.stderr_file.as_ref().map(|_| "<redacted path>"))
+            .field(
+                "stdout_file",
+                &self.stdout_file.as_ref().map(|_| "<redacted path>"),
+            )
+            .field(
+                "stderr_file",
+                &self.stderr_file.as_ref().map(|_| "<redacted path>"),
+            )
+            .field("process_tree_policy", &self.process_tree_policy)
             .finish()
     }
 }
@@ -65,6 +74,19 @@ impl CommandRunOptions {
     #[inline]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns the selected managed process tree policy.
+    #[inline]
+    pub fn process_tree_policy(&self) -> ProcessTreePolicy {
+        self.process_tree_policy
+    }
+
+    /// Selects the process tree policy for managed execution.
+    #[inline]
+    pub fn with_process_tree_policy(mut self, policy: ProcessTreePolicy) -> Self {
+        self.process_tree_policy = policy;
+        self
     }
 
     /// Returns configured cancellation, if any.
@@ -221,6 +243,7 @@ impl CommandRunOptions {
             cancellation: self.cancellation,
             stdout_file: self.stdout_file,
             stderr_file: self.stderr_file,
+            process_tree_policy: self.process_tree_policy,
         }
     }
 }

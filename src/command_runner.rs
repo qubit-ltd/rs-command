@@ -6,6 +6,9 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 use std::fmt;
+
+mod managed;
+pub use managed::ManagedCommandRunnerApi;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -101,8 +104,8 @@ mod tests {
     #[test]
     fn test_take_output_pipe_reports_each_missing_stream() {
         for stream in [OutputStream::Stdout, OutputStream::Stderr] {
-            let error =
-                take_output_pipe::<u8>("command", stream, || None).expect_err("missing output pipe should be reported");
+            let error = take_output_pipe::<u8>("command", stream, || None)
+                .expect_err("missing output pipe should be reported");
 
             assert_eq!(error.kind(), CommandErrorKind::ReadOutputFailed);
             assert!(matches!(
@@ -231,7 +234,10 @@ impl fmt::Debug for CommandRunner {
             .field("success_exit_codes", &self.success_exit_codes)
             .field("disable_logging", &self.disable_logging)
             .field("fail_on_output_truncation", &self.fail_on_output_truncation)
-            .field("diagnostic_redaction_policy", &self.diagnostic_redaction_policy)
+            .field(
+                "diagnostic_redaction_policy",
+                &self.diagnostic_redaction_policy,
+            )
             .field("max_stdout_bytes", &self.max_stdout_bytes)
             .field("max_stderr_bytes", &self.max_stderr_bytes)
             .field("max_total_output_bytes", &self.max_total_output_bytes)
@@ -335,12 +341,18 @@ impl CommandRunner {
     /// cancellation handle has already been requested before command
     /// preparation, and maps all process, I/O, and timeout failures as
     /// described by [`CommandRunner::run`].
-    pub fn run_with(&self, command: Command, options: CommandRunOptions) -> Result<CommandOutput, CommandError> {
+    pub fn run_with(
+        &self,
+        command: Command,
+        options: CommandRunOptions,
+    ) -> Result<CommandOutput, CommandError> {
         let CommandRunOptionsParts {
             cancellation,
             stdout_file,
             stderr_file,
+            process_tree_policy: ignored_managed_policy,
         } = options.into_parts();
+        let _ = ignored_managed_policy;
 
         let prepared = self.prepare_command_for_run(
             command,
@@ -348,7 +360,10 @@ impl CommandRunner {
             stdout_file.as_deref(),
             stderr_file.as_deref(),
         )?;
-        if cancellation.as_ref().is_some_and(CommandCancellation::is_cancelled) {
+        if cancellation
+            .as_ref()
+            .is_some_and(CommandCancellation::is_cancelled)
+        {
             return Err(CommandError::from_reason(
                 prepared.command_text,
                 CommandErrorReason::CancelledBeforeStart,
@@ -367,8 +382,9 @@ impl CommandRunner {
             log::debug!("Running command: {command_text}");
         }
 
-        let manage_process_tree =
-            self.timeout.is_some() || cancellation.is_some() || self.max_total_output_bytes.is_some();
+        let manage_process_tree = self.timeout.is_some()
+            || cancellation.is_some()
+            || self.max_total_output_bytes.is_some();
         let child_process = match spawn_child(process_command, manage_process_tree) {
             Ok(child_process) => child_process,
             Err(source) => return Err(spawn_failed(&command_text, source)),
@@ -376,14 +392,17 @@ impl CommandRunner {
         let mut starting_command = StartingCommand::new(&command_text, child_process);
         let total_budget = self
             .max_total_output_bytes
-            .map(|limit| TotalOutputBudget::new(limit, self.max_stdout_bytes, self.max_stderr_bytes))
+            .map(|limit| {
+                TotalOutputBudget::new(limit, self.max_stdout_bytes, self.max_stderr_bytes)
+            })
             .map(Arc::new);
         let started_at = self.timer.clock().now();
 
-        let stdin_writer = match write_stdin_bytes(&command_text, starting_command.child_process(), stdin_bytes) {
-            Ok(value) => value,
-            Err(error) => return Err(starting_command.abort(error)),
-        };
+        let stdin_writer =
+            match write_stdin_bytes(&command_text, starting_command.child_process(), stdin_bytes) {
+                Ok(value) => value,
+                Err(error) => return Err(starting_command.abort(error)),
+            };
         starting_command.set_stdin_writer(stdin_writer);
 
         let stdout = match take_output_pipe(&command_text, OutputStream::Stdout, || {
@@ -400,8 +419,10 @@ impl CommandRunner {
         };
         let stdout_reader = match start_output_reader(&command_text, OutputStream::Stdout, || {
             read_output_stream(stdout, {
-                let options =
-                    OutputCaptureOptions::new(self.max_stdout_bytes, stdout_tee.map(FileTee::into_output_tee));
+                let options = OutputCaptureOptions::new(
+                    self.max_stdout_bytes,
+                    stdout_tee.map(FileTee::into_output_tee),
+                );
                 if let Some(budget) = total_budget.as_ref() {
                     options.with_total_budget(Arc::clone(budget), OutputStream::Stdout)
                 } else {
@@ -415,8 +436,10 @@ impl CommandRunner {
         starting_command.set_stdout_reader(stdout_reader);
         let stderr_reader = match start_output_reader(&command_text, OutputStream::Stderr, || {
             read_output_stream(stderr, {
-                let options =
-                    OutputCaptureOptions::new(self.max_stderr_bytes, stderr_tee.map(FileTee::into_output_tee));
+                let options = OutputCaptureOptions::new(
+                    self.max_stderr_bytes,
+                    stderr_tee.map(FileTee::into_output_tee),
+                );
                 if let Some(budget) = total_budget.as_ref() {
                     options.with_total_budget(Arc::clone(budget), OutputStream::Stderr)
                 } else {
@@ -429,8 +452,11 @@ impl CommandRunner {
         };
         starting_command.set_stderr_reader(stderr_reader);
         if let Err(source) = self.timer.clock().now().duration_since(started_at) {
-            let error =
-                CommandError::from_reason(command_text.clone(), CommandErrorReason::TimeFailed { source }, None);
+            let error = CommandError::from_reason(
+                command_text.clone(),
+                CommandErrorReason::TimeFailed { source },
+                None,
+            );
             return Err(starting_command.abort(error));
         }
 
@@ -445,13 +471,18 @@ impl CommandRunner {
             total_budget,
         )
         .wait_for_completion(self.timeout)?;
-        let FinishedCommand { command_text, output } = finished;
+        let FinishedCommand {
+            command_text,
+            output,
+        } = finished;
 
         if output
             .exit_code()
             .is_some_and(|exit_code| self.success_exit_codes.contains(&exit_code))
         {
-            if self.fail_on_output_truncation && (output.stdout_truncated() || output.stderr_truncated()) {
+            if self.fail_on_output_truncation
+                && (output.stdout_truncated() || output.stderr_truncated())
+            {
                 if !self.disable_logging {
                     log::debug!(
                         "Finished command `{}` with truncated output in {:?}.",
@@ -466,12 +497,20 @@ impl CommandRunner {
                 ));
             }
             if !self.disable_logging {
-                log::debug!("Finished command `{}` in {:?}.", command_text, output.elapsed());
+                log::debug!(
+                    "Finished command `{}` in {:?}.",
+                    command_text,
+                    output.elapsed()
+                );
             }
             Ok(output)
         } else {
             if !self.disable_logging {
-                log::debug!("Command `{}` exited with code {:?}.", command_text, output.exit_code());
+                log::debug!(
+                    "Command `{}` exited with code {:?}.",
+                    command_text,
+                    output.exit_code()
+                );
             }
             Err(CommandError::from_reason(
                 command_text,

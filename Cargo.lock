@@ -367,18 +367,36 @@ dependencies = [
 
 [[package]]
 name = "qubit-command"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "criterion",
  "libc",
  "log",
  "process-wrap",
  "qubit-clock",
+ "qubit-io",
+ "qubit-operation",
  "qubit-redact",
  "same-file",
  "serde_json",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "qubit-io"
+version = "0.19.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e782e5b568b1dfa6ee6e9b3f8617a86980b9438f0c449235e3840533d25f83c"
+dependencies = [
+ "qubit-utils",
+]
+
+[[package]]
+name = "qubit-operation"
+version = "0.3.0"
+dependencies = [
+ "qubit-budget",
 ]
 
 [[package]]
@@ -389,6 +407,12 @@ checksum = "7d217d6f987adc5f32b9daa5d506e99c5a435f99b1493d5ab3ef55caf27a3c86"
 dependencies = [
  "qubit-budget",
 ]
+
+[[package]]
+name = "qubit-utils"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51269ed5cb6c0a936c79de455c299479653cbb28d772cfad8231710d2623a8b6"
 
 [[package]]
 name = "quote"

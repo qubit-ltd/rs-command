@@ -10,6 +10,7 @@
 use std::path::PathBuf;
 
 use crate::CommandCancellation;
+use crate::ProcessTreePolicy;
 
 /// Owned run options transferred from the public builder to the runner.
 #[derive(Clone)]
@@ -20,4 +21,5 @@ pub(crate) struct CommandRunOptionsParts {
     pub(crate) stdout_file: Option<PathBuf>,
     /// Optional stderr tee path transferred to the output helper.
     pub(crate) stderr_file: Option<PathBuf>,
+    pub(crate) process_tree_policy: ProcessTreePolicy,
 }

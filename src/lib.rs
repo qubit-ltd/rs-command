@@ -56,8 +56,12 @@ mod command_run_options;
 mod command_run_options_parts;
 mod command_runner;
 mod command_stdin;
+pub mod execution;
 mod internal;
 mod output_stream;
+mod process_tree_policy;
+mod resource_run_options;
+pub mod session;
 
 #[cfg(test)]
 mod tests;
@@ -74,3 +78,16 @@ pub use command_run_options::CommandRunOptions;
 pub use command_runner::CommandRunner;
 pub use command_runner::DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM;
 pub use output_stream::OutputStream;
+
+pub use command_runner::ManagedCommandRunnerApi;
+#[cfg(feature = "async")]
+pub use execution::AsyncCommandOperation;
+pub use execution::{
+    CommandExecutionConfig, CommandExecutor, CommandExecutorApi, CommandExecutorCreateError,
+    CommandOperation, CommandResourceSubmitFailure, CommandSubmitFailure,
+};
+pub use process_tree_policy::ProcessTreePolicy;
+pub use resource_run_options::CommandResourceRunOptions;
+pub use session::{CommandSession, CommandSessionApi};
+#[cfg(feature = "async")]
+pub use session::{CommandStderr, CommandStdin, CommandStdout};
