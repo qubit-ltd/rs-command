@@ -4,6 +4,19 @@ use qubit_operation::{OperationScope, ResourceRef};
 use std::fs::File;
 use std::io;
 use std::sync::Mutex;
+#[cfg(test)]
+use std::sync::{Arc, Barrier, OnceLock};
+
+#[cfg(test)]
+static AFTER_FIRST_REGISTRATION: OnceLock<Mutex<Option<Arc<(Barrier, Barrier)>>>> = OnceLock::new();
+
+#[cfg(test)]
+pub(super) fn gate_after_first_registration(gate: Option<Arc<(Barrier, Barrier)>>) {
+    *AFTER_FIRST_REGISTRATION
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .expect("test registration gate lock should not poison") = gate;
+}
 
 pub(super) fn register_files(
     _scope: &OperationScope,
@@ -32,7 +45,21 @@ pub(super) fn register_files(
             ));
         };
         match reservation.commit(Mutex::new(file)) {
-            Ok(reference) => refs[index] = Some(reference),
+            Ok(reference) => {
+                refs[index] = Some(reference);
+                #[cfg(test)]
+                if refs.iter().filter(|reference| reference.is_some()).count() == 1 {
+                    let gate = AFTER_FIRST_REGISTRATION
+                        .get_or_init(|| Mutex::new(None))
+                        .lock()
+                        .expect("test registration gate lock should not poison")
+                        .clone();
+                    if let Some(gate) = gate {
+                        gate.0.wait();
+                        gate.1.wait();
+                    }
+                }
+            }
             Err(error) => {
                 let (_, recovered_file, _) = error.into_parts();
                 values[index] = Some(

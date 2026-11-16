@@ -1,7 +1,9 @@
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::Path;
 
 use qubit_command::execution::ResourceInput;
+use qubit_command::execution::contracts::ExecutionSnapshot;
 use qubit_command::{CommandResourceRunOptions, CommandRunOptions, FileSinkPolicy};
 use qubit_operation::{
     GroupOptions, ManagerOptions, OperationManager, OperationOptions, OperationOutcome, ScopeLimits,
@@ -187,6 +189,42 @@ fn owned_sink_cannot_alias_a_legacy_tee_path() {
         .expect_err("owned sink must not alias the legacy tee");
         assert!(failure.input.is_some());
         assert_eq!(std::fs::read(path).unwrap(), b"must survive");
+    });
+}
+
+#[test]
+fn snapshot_directory_resolves_relative_tee_identity() {
+    let snapshot_dir = tempfile::tempdir().expect("snapshot directory should be created");
+    let output = tempfile::NamedTempFile::new().expect("owned sink should be created");
+    std::fs::write(output.path(), b"must survive").expect("owned sink should be populated");
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(output.path())
+        .expect("owned sink should open");
+    let alias_name = format!("owned-file-alias-{}", std::process::id());
+    let alias_path = snapshot_dir.path().join(&alias_name);
+    std::fs::hard_link(output.path(), &alias_path).expect("snapshot alias should be linked");
+    assert!(
+        !Path::new(&alias_name).exists(),
+        "current directory should differ from snapshot path"
+    );
+    let output_path = output.path().to_path_buf();
+    let snapshot = ExecutionSnapshot {
+        working_directory: snapshot_dir.path().to_path_buf(),
+        environment: Vec::new(),
+    };
+
+    with_scope(ScopeLimits::default(), move |scope| {
+        let failure = Box::new(
+            CommandResourceRunOptions::new()
+                .options(CommandRunOptions::new().tee_stdout_to_file(alias_name))
+                .stdout_sink(file, FileSinkPolicy::Truncate),
+        )
+        .prepare_files_with_snapshot(&scope, &snapshot)
+        .expect_err("submission-time relative tee alias must be rejected");
+        assert!(failure.input.is_some());
+        assert_eq!(std::fs::read(output_path).unwrap(), b"must survive");
     });
 }
 

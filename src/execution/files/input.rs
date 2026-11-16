@@ -1,8 +1,11 @@
-use crate::execution::contracts::{FilePreparationFailure, PreparedFiles, ResourceInput};
+use crate::execution::contracts::{
+    ExecutionSnapshot, FilePreparationFailure, PreparedFiles, ResourceInput,
+};
 use crate::resource_run_options::{CommandResourceRunOptions, FileSinkPolicy};
 use qubit_operation::OperationScope;
 use std::fs::File;
 use std::io;
+use std::path::{Path, PathBuf};
 
 use super::identity::{validate_files, validate_tee_paths};
 use super::prepared_files::{register_files, truncate_sinks};
@@ -11,6 +14,24 @@ impl ResourceInput for CommandResourceRunOptions {
     fn prepare_files(
         self: Box<Self>,
         scope: &OperationScope,
+    ) -> Result<PreparedFiles, FilePreparationFailure> {
+        self.prepare_with_directory(scope, None)
+    }
+
+    fn prepare_files_with_snapshot(
+        self: Box<Self>,
+        scope: &OperationScope,
+        snapshot: &ExecutionSnapshot,
+    ) -> Result<PreparedFiles, FilePreparationFailure> {
+        self.prepare_with_directory(scope, Some(&snapshot.working_directory))
+    }
+}
+
+impl CommandResourceRunOptions {
+    fn prepare_with_directory(
+        self: Box<Self>,
+        scope: &OperationScope,
+        working_directory: Option<&Path>,
     ) -> Result<PreparedFiles, FilePreparationFailure> {
         let parts = (*self).into_parts();
         let options = parts.options;
@@ -29,20 +50,43 @@ impl ResourceInput for CommandResourceRunOptions {
             all.push(("stderr", file));
         }
         let files: Vec<(&'static str, &File)> = all;
-        let tee_paths: Vec<(&'static str, &std::path::Path)> = [
-            options
-                .configured_stdout_file()
-                .map(|path| ("stdout", path)),
-            options
-                .configured_stderr_file()
-                .map(|path| ("stderr", path)),
+        let base = match working_directory {
+            Some(directory) => directory.to_path_buf(),
+            None => match std::env::current_dir() {
+                Ok(directory) => directory,
+                Err(error) => {
+                    return Err(failure(
+                        error,
+                        None,
+                        Some(restore_input(options, input, stdout, stderr)),
+                    ));
+                }
+            },
+        };
+        let tee_paths: Vec<(&'static str, PathBuf)> = [
+            options.configured_stdout_file().map(|path| {
+                (
+                    "stdout",
+                    super::identity::absolute_lexical_path(&base, path),
+                )
+            }),
+            options.configured_stderr_file().map(|path| {
+                (
+                    "stderr",
+                    super::identity::absolute_lexical_path(&base, path),
+                )
+            }),
         ]
         .into_iter()
         .flatten()
         .collect();
-        if let Err(error) =
-            validate_files(&files).and_then(|()| validate_tee_paths(&files, &tee_paths))
-        {
+        if let Err(error) = validate_files(&files).and_then(|()| {
+            let paths: Vec<_> = tee_paths
+                .iter()
+                .map(|(name, path)| (*name, path.as_path()))
+                .collect();
+            validate_tee_paths(&files, &paths)
+        }) {
             return Err(failure(
                 error,
                 None,
@@ -132,9 +176,13 @@ mod tests {
     use qubit_operation::{GroupOptions, ManagerOptions, OperationManager, OperationOptions};
     use std::sync::mpsc;
     use std::time::Duration;
+    static PREPARATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn helper_resource_reference_delays_scope_settlement_until_dropped() {
+        let _guard = PREPARATION_TEST_LOCK
+            .lock()
+            .expect("test lock should be available");
         let manager =
             OperationManager::new(ManagerOptions::default()).expect("manager should start");
         let group = manager
@@ -177,5 +225,88 @@ mod tests {
             .wait_settlement_for(Duration::from_secs(5))
             .expect("settlement observation should work");
         assert!(matches!(settled, qubit_operation::SettlementWait::Ready(_)));
+    }
+
+    #[test]
+    fn commit_failure_retains_registered_and_unregistered_file_owners() {
+        let _guard = PREPARATION_TEST_LOCK
+            .lock()
+            .expect("test lock should be available");
+        use std::sync::{Arc, Barrier};
+
+        let manager =
+            OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let group = manager
+            .group(GroupOptions { capacity: 4 })
+            .expect("group should start");
+        let gate = Arc::new((Barrier::new(2), Barrier::new(2)));
+        super::super::prepared_files::gate_after_first_registration(Some(Arc::clone(&gate)));
+
+        let first = tempfile::NamedTempFile::new().expect("first file should be created");
+        let second = tempfile::NamedTempFile::new().expect("second file should be created");
+        let (send, receive) = mpsc::sync_channel(1);
+        let mut handle = group
+            .submit(OperationOptions::default(), move |scope| {
+                let failure = Box::new(
+                    CommandResourceRunOptions::new()
+                        .stdout_sink(
+                            File::open(first.path()).expect("first file should open"),
+                            FileSinkPolicy::Preserve,
+                        )
+                        .stderr_sink(
+                            File::open(second.path()).expect("second file should open"),
+                            FileSinkPolicy::Preserve,
+                        ),
+                )
+                .prepare_files(&scope)
+                .expect_err("stop between commits should reject the second commit");
+                send.send(failure)
+                    .expect("failure should reach test thread");
+                Ok::<_, ()>(())
+            })
+            .expect("operation should be accepted");
+
+        gate.0.wait();
+        assert_eq!(
+            handle.request_stop(qubit_operation::StopReason::UserCancelled),
+            qubit_operation::StopRequestStatus::Accepted
+        );
+        gate.1.wait();
+        let mut failure = receive
+            .recv_timeout(Duration::from_secs(5))
+            .expect("preparation failure should arrive");
+        super::super::prepared_files::gate_after_first_registration(None);
+        assert!(
+            failure.prepared.is_some(),
+            "first committed owner must be retained"
+        );
+        assert!(
+            failure.input.is_some(),
+            "second uncommitted owner must be recoverable"
+        );
+        let _ = handle.wait_outcome();
+
+        let recovered_input = failure
+            .input
+            .take()
+            .expect("raw second file owner should be returned");
+        let recovery_manager = OperationManager::new(ManagerOptions::default())
+            .expect("recovery manager should start");
+        let recovery_group = recovery_manager
+            .group(GroupOptions { capacity: 2 })
+            .expect("recovery group should start");
+        let completion = recovery_group
+            .run_and_settle(OperationOptions::default(), move |scope| {
+                let prepared = recovered_input
+                    .prepare_files(&scope)
+                    .expect("unregistered owner should be retryable in a live scope");
+                Ok::<_, ()>(format!("{prepared:?}"))
+            })
+            .expect("recovery operation should be accepted");
+        assert!(matches!(
+            completion.outcome,
+            qubit_operation::OperationOutcome::Succeeded(ref state)
+                if state.contains("stderr: true") && state.contains("stdout: false")
+        ));
     }
 }
