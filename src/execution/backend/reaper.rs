@@ -1,5 +1,5 @@
 //! Dedicated bounded workers that retain uncertain process/helper ownership.
-use crate::execution::contracts::{FactSink, RecoveryOwner};
+use crate::execution::contracts::{FactSink, RecoveryEffectEvidence, RecoveryOwner};
 use std::io;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,6 +27,35 @@ impl DeferredReaperOwner {
 impl RecoveryOwner for DeferredReaperOwner {
     fn summary(&self) -> String {
         "managed child and I/O helpers awaiting bounded reaper capacity".to_owned()
+    }
+
+    fn effect_evidence(
+        &self,
+        operation_id: qubit_operation::OperationId,
+    ) -> RecoveryEffectEvidence {
+        if self.observer.is_complete() || !self.observer.is_pending() {
+            return RecoveryEffectEvidence::default();
+        }
+        let queued = self
+            .owner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_none();
+        let description = if queued {
+            "managed process/helper cleanup is pending in reaper"
+        } else {
+            "managed process/helper cleanup awaits reaper handoff"
+        };
+        RecoveryEffectEvidence {
+            effects: vec![qubit_operation::EffectRecord {
+                operation_id,
+                resource_id: None,
+                fact: qubit_operation::EffectFact::Unknown,
+                description: qubit_operation::DiagnosticSummary::new(description),
+            }],
+            effects_total: 1,
+            effect_overflow: 0,
+        }
     }
 
     fn retry_cleanup(&self) -> Result<(), crate::execution::contracts::RecoveryRetryError> {
@@ -250,11 +279,67 @@ impl Reaper {
 
 #[cfg(test)]
 mod tests {
-    use super::{Reaper, ReaperObserver, ReaperOwner};
+    use super::{DeferredReaperOwner, Reaper, ReaperObserver, ReaperOwner};
+    use crate::execution::contracts::RecoveryOwner;
+    use qubit_operation::{OperationManager, OperationOptions, OperationOutcome};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc::sync_channel;
     use std::time::Duration;
+
+    #[test]
+    fn deferred_process_owner_reports_bounded_unknown_effect_while_cleanup_is_pending() {
+        let (observer, completed) = ReaperObserver::pair();
+        observer.mark_pending();
+        let (cleanup_tx, cleanup_rx) = std::sync::mpsc::channel();
+        let cleanup_observer = observer.clone();
+        let owner = Arc::new(DeferredReaperOwner::new(
+            ReaperOwner::new(move || {
+                let _ = cleanup_rx.recv();
+                cleanup_observer.complete();
+            }),
+            observer.clone(),
+        ));
+        owner.retry_cleanup().unwrap();
+        let owner_for_operation = Arc::clone(&owner);
+        let (evidence_tx, evidence_rx) = std::sync::mpsc::channel();
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                evidence_tx
+                    .send((scope.id(), owner_for_operation.effect_evidence(scope.id())))
+                    .unwrap();
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        let (operation_id, evidence) = evidence_rx.recv().unwrap();
+        assert_eq!(evidence.effects_total, 1);
+        assert_eq!(evidence.effect_overflow, 0);
+        assert_eq!(evidence.effects.len(), 1);
+        let effect = &evidence.effects[0];
+        assert_eq!(effect.operation_id, operation_id);
+        assert_eq!(effect.resource_id, None);
+        assert_eq!(effect.fact, qubit_operation::EffectFact::Unknown);
+        assert_eq!(
+            effect.description.as_str(),
+            "managed process/helper cleanup is pending in reaper"
+        );
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        operation.wait_settlement().unwrap();
+
+        cleanup_tx.send(()).unwrap();
+        completed
+            .recv_timeout(Duration::from_secs(3))
+            .expect("reaper cleanup should publish completion");
+        let completed_evidence = owner.effect_evidence(operation_id);
+        assert!(completed_evidence.effects.is_empty());
+        assert_eq!(completed_evidence.effects_total, 0);
+        assert_eq!(completed_evidence.effect_overflow, 0);
+    }
 
     #[test]
     fn bounded_reaper_executes_transferred_owner_before_completion_signal() {
