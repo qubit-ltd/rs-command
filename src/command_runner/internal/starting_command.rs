@@ -17,6 +17,12 @@ use super::process_terminator::ProcessTerminator;
 use super::stdin_writer::OptionalStdinWriter;
 use crate::CommandCleanupFailure;
 use crate::CommandError;
+use crate::execution::backend::{Reaper, ReaperObserver, ReaperOwner};
+use crate::execution::contracts::ReservationLease;
+use crate::session::contracts::SessionBridge;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 /// Guards a spawned child until all runner-side I/O helpers are ready.
 ///
@@ -34,6 +40,12 @@ pub(in crate::command_runner) struct StartingCommand<'a> {
     stderr_reader: Option<OutputReader>,
     /// Optional started stdin writer.
     stdin_writer: OptionalStdinWriter,
+    /// Additional managed capacity retained during startup cleanup.
+    capacity_lease: Option<ReservationLease>,
+    /// Recovery observer for ownership handed to the reaper.
+    reaper_observer: Option<ReaperObserver>,
+    /// Session bridge closed while startup helpers are being reclaimed.
+    session_bridge: Option<Arc<dyn SessionBridge>>,
 }
 
 impl<'a> StartingCommand<'a> {
@@ -58,6 +70,28 @@ impl<'a> StartingCommand<'a> {
             stdout_reader: None,
             stderr_reader: None,
             stdin_writer: None,
+            capacity_lease: None,
+            reaper_observer: None,
+            session_bridge: None,
+        }
+    }
+
+    pub(in crate::command_runner) fn new_managed(
+        command: &'a str,
+        child_process: ManagedChildProcess,
+        capacity_lease: Option<ReservationLease>,
+        reaper_observer: Option<ReaperObserver>,
+        session_bridge: Option<Arc<dyn SessionBridge>>,
+    ) -> Self {
+        Self {
+            command,
+            child_process: Some(child_process),
+            stdout_reader: None,
+            stderr_reader: None,
+            stdin_writer: None,
+            capacity_lease,
+            reaper_observer,
+            session_bridge,
         }
     }
 
@@ -121,7 +155,15 @@ impl<'a> StartingCommand<'a> {
     /// registered.
     #[must_use = "transfer both the child and its I/O helpers to running state"]
     #[inline]
-    pub(in crate::command_runner) fn finish(mut self) -> (ManagedChildProcess, CommandIo) {
+    pub(in crate::command_runner) fn finish(
+        mut self,
+    ) -> (
+        ManagedChildProcess,
+        CommandIo,
+        Option<ReservationLease>,
+        Option<ReaperObserver>,
+        Option<Arc<dyn SessionBridge>>,
+    ) {
         let child_process = self
             .child_process
             .take()
@@ -135,9 +177,15 @@ impl<'a> StartingCommand<'a> {
             .take()
             .expect("stderr reader must be started before finishing");
         let stdin_writer = self.stdin_writer.take();
+        let capacity_lease = self.capacity_lease.take();
+        let reaper_observer = self.reaper_observer.take();
+        let session_bridge = self.session_bridge.take();
         (
             child_process,
             CommandIo::new(stdout_reader, stderr_reader, stdin_writer),
+            capacity_lease,
+            reaper_observer,
+            session_bridge,
         )
     }
 
@@ -159,6 +207,92 @@ impl<'a> StartingCommand<'a> {
     /// attempted but is not guaranteed to stop every process or helper.
     pub(in crate::command_runner) fn abort(mut self, primary: CommandError) -> CommandError {
         primary.with_cleanup_failures(self.cleanup())
+    }
+
+    /// Transfers a partially initialized managed process and its helpers to a reaper worker.
+    pub(in crate::command_runner) fn abort_managed(
+        mut self,
+        primary: CommandError,
+    ) -> CommandError {
+        let Some(observer) = self.reaper_observer.take() else {
+            return self.abort(primary);
+        };
+        observer.mark_pending();
+        if let Some(bridge) = &self.session_bridge {
+            bridge.request_output_stop();
+            bridge.close_stdin();
+        }
+        let command = self.command.to_owned();
+        let Some(mut child) = self.child_process.take() else {
+            return primary;
+        };
+        let mut stdout_reader = self.stdout_reader.take();
+        let mut stderr_reader = self.stderr_reader.take();
+        let mut stdin_writer = self.stdin_writer.take();
+        let capacity_lease = self.capacity_lease.take();
+        let cleanup_observer = observer.clone();
+        let cleanup_bridge = self.session_bridge.take();
+        let owner = ReaperOwner::new(move || {
+            let mut terminated = false;
+            loop {
+                if let Some(bridge) = &cleanup_bridge {
+                    bridge.request_output_stop();
+                    bridge.close_stdin();
+                }
+                if let Some(reader) = stdout_reader.as_ref() {
+                    let _ = reader.cancel();
+                }
+                if let Some(reader) = stderr_reader.as_ref() {
+                    let _ = reader.cancel();
+                }
+                if let Some(writer) = stdin_writer.as_ref() {
+                    let _ = writer.cancel();
+                }
+                if !terminated {
+                    match ProcessTerminator::new(&mut child).terminate(None) {
+                        Ok(_) => terminated = true,
+                        Err(error) => {
+                            log::error!("startup process cleanup remains uncertain: {error:?}");
+                        }
+                    }
+                }
+                let helpers_finished = stdout_reader
+                    .as_ref()
+                    .is_none_or(|helper| helper.is_finished())
+                    && stderr_reader
+                        .as_ref()
+                        .is_none_or(|helper| helper.is_finished())
+                    && stdin_writer
+                        .as_ref()
+                        .is_none_or(|helper| helper.is_finished());
+                if terminated && helpers_finished {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            let failures = cancel_and_join_started_helpers(
+                &command,
+                stdout_reader.take(),
+                stderr_reader.take(),
+                stdin_writer.take(),
+            );
+            if !failures.is_empty() {
+                log::error!("startup helper cleanup failures: {failures:?}");
+            }
+            drop(capacity_lease);
+            cleanup_observer.complete();
+        });
+        match Reaper::global() {
+            Ok(reaper) => match reaper.handoff(owner) {
+                Ok(()) => {}
+                Err(owner) => observer.retain_or_defer_reaper_owner(owner),
+            },
+            Err(error) => {
+                log::error!("failed to start process reaper: {error}");
+                observer.retain_or_defer_reaper_owner(owner);
+            }
+        }
+        primary
     }
 
     /// Takes all resources, terminates the child and joins the started helpers.
@@ -198,8 +332,12 @@ impl Drop for StartingCommand<'_> {
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::process::Command as ProcessCommand;
     use std::sync::Arc;
     use std::sync::Mutex;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::sync::mpsc;
 
     use qubit_clock::TimeError;
 
@@ -212,6 +350,153 @@ mod tests {
     use crate::CommandErrorKind;
     use crate::CommandErrorReason;
     use crate::OutputStream;
+
+    #[test]
+    fn managed_startup_abort_retains_child_helpers_and_capacity_until_reaper_cleanup() {
+        use std::thread;
+        use std::time::Duration;
+
+        use super::super::captured_output::CapturedOutput;
+        use super::super::io_cancellation::IoCancellation;
+        use super::super::output_reader::OutputReader;
+        use crate::execution::backend::ReaperObserver;
+        use crate::execution::contracts::ReservationLease;
+
+        let process = ProcessCommand::new("sh")
+            .args(["-c", "sleep 30"])
+            .spawn()
+            .expect("test process should start");
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let direct = super::super::scripted_child::ScriptedChild::new(
+            "child",
+            Box::new(process),
+            Arc::clone(&calls),
+        )
+        .kill_error(io::Error::other("first kill attempt fails"))
+        .delegate_kill_to_inner();
+        let child = super::super::scripted_child::ScriptedChild::new(
+            "tree",
+            Box::new(direct),
+            Arc::clone(&calls),
+        )
+        .kill_error(io::Error::other("first tree kill attempt fails"))
+        .delegate_kill_to_inner();
+        let (observer, completed) = ReaperObserver::pair();
+        let released = Arc::new(AtomicBool::new(false));
+        let lease_released = Arc::clone(&released);
+        let lease = ReservationLease::new(move || lease_released.store(true, Ordering::SeqCst));
+        let (unblock_tx, unblock_rx) = mpsc::channel();
+        let (cancel, _token) = IoCancellation::pair().expect("cancellation should initialize");
+        let reader = OutputReader::new(
+            thread::spawn(move || {
+                let _ = unblock_rx.recv();
+                Ok(CapturedOutput::default())
+            }),
+            cancel,
+        );
+        let mut guard = StartingCommand::new_managed(
+            "redacted",
+            ManagedChildProcess::new(Box::new(child), true),
+            Some(lease),
+            Some(observer.clone()),
+            None,
+        );
+        guard.set_stdout_reader(reader);
+        let error = guard.abort_managed(CommandError::from_reason(
+            "redacted",
+            CommandErrorReason::TimeFailed {
+                source: TimeError::InstantOverflow,
+            },
+            None,
+        ));
+
+        assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
+        assert!(observer.is_pending());
+        thread::sleep(Duration::from_millis(30));
+        assert!(!released.load(Ordering::SeqCst));
+
+        unblock_tx.send(()).expect("helper should be released");
+        completed
+            .recv_timeout(Duration::from_secs(3))
+            .expect("reaper should finish child and helper cleanup");
+        assert!(released.load(Ordering::SeqCst));
+        assert!(
+            calls
+                .lock()
+                .expect("calls should be readable")
+                .iter()
+                .filter(|call| call.as_str() == "child.kill")
+                .count()
+                >= 2
+        );
+    }
+
+    #[cfg(feature = "async")]
+    #[test]
+    fn managed_startup_abort_wakes_full_session_output_writer() {
+        use std::time::Duration;
+
+        use super::super::captured_output::CapturedOutput;
+        use super::super::io_cancellation::IoCancellation;
+        use super::super::output_reader::OutputReader;
+        use crate::execution::backend::ReaperObserver;
+        use crate::session::channel::SessionChannels;
+        use crate::session::contracts::SessionBridge;
+
+        let mut channels = SessionChannels::new();
+        let bridge: Arc<dyn SessionBridge> = channels.bridge.clone();
+        let chunk = vec![0x5a; 16 * 1024];
+        for _ in 0..4 {
+            bridge
+                .write_stdout(&chunk)
+                .expect("buffer should accept one complete channel capacity");
+        }
+        let writer_bridge = Arc::clone(&bridge);
+        let reader = OutputReader::new(
+            std::thread::spawn(move || {
+                writer_bridge
+                    .write_stdout(b"blocked startup output")
+                    .expect("managed startup abort should wake the blocked writer");
+                Ok(CapturedOutput::default())
+            }),
+            IoCancellation::pair()
+                .expect("reader cancellation should initialize")
+                .0,
+        );
+        channels.bridge.wait_for_stdout_writer_for_test();
+
+        let (observer, completed) = ReaperObserver::pair();
+        let mut guard = StartingCommand::new_managed(
+            "redacted",
+            ManagedChildProcess::new(raw_child(), false),
+            None,
+            Some(observer),
+            Some(bridge.clone()),
+        );
+        guard.set_stdout_reader(reader);
+        let _error = guard.abort_managed(CommandError::from_reason(
+            "redacted",
+            CommandErrorReason::TimeFailed {
+                source: TimeError::InstantOverflow,
+            },
+            None,
+        ));
+
+        let completed_without_endpoint_drop =
+            completed.recv_timeout(Duration::from_millis(150)).is_ok();
+        if !completed_without_endpoint_drop {
+            // Release the owner even after a regression so the test never strands a reaper worker.
+            bridge.request_output_stop();
+            completed
+                .recv_timeout(Duration::from_secs(2))
+                .expect("test cleanup should release the blocked writer");
+        }
+        assert!(
+            completed_without_endpoint_drop,
+            "startup abort must stop session output before waiting for helpers"
+        );
+        assert!(bridge.stdout_incomplete());
+    }
 
     #[test]
     fn test_startup_abort_retains_primary_without_waiting_after_failed_kills() {

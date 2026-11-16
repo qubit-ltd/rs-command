@@ -23,6 +23,9 @@ pub trait SessionBridge: Send + Sync {
     fn write_stderr(&self, bytes: &[u8]) -> io::Result<()>;
     fn close_stdin(&self);
 
+    /// Stops accepting future stdout and stderr bytes while preserving buffered output.
+    fn request_output_stop(&self) {}
+
     /// Reports whether stdout bytes were discarded before delivery.
     fn stdout_incomplete(&self) -> bool {
         false
@@ -37,6 +40,9 @@ pub trait SessionBridge: Send + Sync {
     fn stdin_broken_pipe(&self) -> bool {
         false
     }
+
+    /// Records a child-side stdin BrokenPipe observed by the process writer.
+    fn record_stdin_broken_pipe(&self) {}
 
     /// Reports whether the aggregate output byte budget requested termination.
     fn output_budget_exceeded(&self) -> bool {

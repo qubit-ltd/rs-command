@@ -260,6 +260,24 @@ pub(super) fn read_output_inner(
             write_error = Some((tee.path.clone(), source));
             options.tee = None;
         }
+        if let Some((bridge, stream)) = options.session_bridge.take() {
+            let result = match stream {
+                OutputStream::Stdout => bridge.write_stdout(chunk),
+                OutputStream::Stderr => bridge.write_stderr(chunk),
+            };
+            match result {
+                Ok(()) => options.session_bridge = Some((bridge, stream)),
+                Err(source) => {
+                    if write_error.is_none() {
+                        let name = match stream {
+                            OutputStream::Stdout => "stdout",
+                            OutputStream::Stderr => "stderr",
+                        };
+                        write_error = Some((format!("<session {name}>").into(), source));
+                    }
+                }
+            }
+        }
         if options
             .total_budget
             .as_ref()

@@ -28,6 +28,8 @@ pub(super) struct ScriptedChild {
     calls: Arc<Mutex<Vec<String>>>,
     /// Optional error returned by the next termination request.
     kill_error: Option<io::Error>,
+    /// Whether unscripted termination should be delegated to the inner child.
+    delegate_kill: bool,
     /// Optional result returned by the next blocking wait.
     wait_result: Option<io::Result<ExitStatus>>,
     /// Queued results returned by successive nonblocking waits.
@@ -46,6 +48,7 @@ impl ScriptedChild {
             inner,
             calls,
             kill_error: None,
+            delegate_kill: false,
             wait_result: None,
             try_wait_results: VecDeque::new(),
         }
@@ -54,6 +57,11 @@ impl ScriptedChild {
     /// Scripts the next termination request to return an error.
     pub(super) fn kill_error(mut self, source: io::Error) -> Self {
         self.kill_error = Some(source);
+        self
+    }
+
+    pub(super) fn delegate_kill_to_inner(mut self) -> Self {
+        self.delegate_kill = true;
         self
     }
 
@@ -104,6 +112,7 @@ impl ChildWrapper for ScriptedChild {
         self.record("kill");
         match self.kill_error.take() {
             Some(source) => Err(source),
+            None if self.delegate_kill => self.inner.start_kill(),
             None => Ok(()),
         }
     }

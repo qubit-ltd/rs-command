@@ -25,6 +25,10 @@ use super::wait_policy::next_sleep;
 use crate::CommandCancellation;
 use crate::CommandCleanupFailure;
 use crate::CommandError;
+use crate::execution::backend::{Reaper, ReaperObserver, ReaperOwner};
+use crate::execution::contracts::ReservationLease;
+use crate::session::contracts::SessionBridge;
+use qubit_operation::OperationContext;
 
 /// Maximum delay before a cancellation-aware wait observes cancellation.
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -46,6 +50,10 @@ pub(in crate::command_runner) struct RunningCommand {
     cancellation_token: Option<CommandCancellation>,
     /// Optional byte budget shared by this command's stdout and stderr.
     total_budget: Option<Arc<TotalOutputBudget>>,
+    capacity_lease: Option<ReservationLease>,
+    reaper_observer: Option<ReaperObserver>,
+    session_bridge: Option<Arc<dyn SessionBridge>>,
+    operation_context: Option<OperationContext>,
 }
 
 impl RunningCommand {
@@ -75,6 +83,34 @@ impl RunningCommand {
         cancellation_token: Option<CommandCancellation>,
         total_budget: Option<Arc<TotalOutputBudget>>,
     ) -> Self {
+        Self::new_with_reaper(
+            command_text,
+            child_process,
+            io,
+            started_at,
+            timer,
+            cancellation_token,
+            total_budget,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
+    pub(in crate::command_runner) fn new_with_reaper(
+        command_text: String,
+        child_process: ManagedChildProcess,
+        io: CommandIo,
+        started_at: MonotonicInstant,
+        timer: Arc<dyn Timer>,
+        cancellation_token: Option<CommandCancellation>,
+        total_budget: Option<Arc<TotalOutputBudget>>,
+        capacity_lease: Option<ReservationLease>,
+        reaper_observer: Option<ReaperObserver>,
+        session_bridge: Option<Arc<dyn SessionBridge>>,
+        operation_context: Option<OperationContext>,
+    ) -> Self {
         Self {
             command_text,
             child_process,
@@ -83,6 +119,10 @@ impl RunningCommand {
             timer,
             cancellation_token,
             total_budget,
+            capacity_lease,
+            reaper_observer,
+            session_bridge,
+            operation_context,
         }
     }
 
@@ -136,6 +176,13 @@ impl RunningCommand {
                     status,
                 };
             }
+            if let Some((limit, observed)) = self.session_budget_exceeded() {
+                return RunEvent::OutputLimitExceeded {
+                    limit,
+                    observed: u128::from(observed),
+                    status: self.child_process.try_wait().ok().flatten(),
+                };
+            }
             let maybe_status = match self.child_process.try_wait() {
                 Ok(status) => status,
                 Err(source) => return RunEvent::WaitFailed(source),
@@ -162,6 +209,13 @@ impl RunningCommand {
     fn wait_for_io_event(&mut self, status: ExitStatus, timeout: Option<Duration>) -> RunEvent {
         let mut timeout_poll_count = 0;
         while !self.io.is_finished() {
+            if let Some((limit, observed)) = self.session_budget_exceeded() {
+                return RunEvent::OutputLimitExceeded {
+                    limit,
+                    observed: u128::from(observed),
+                    status: Some(status),
+                };
+            }
             if let Some((limit, observed)) = self
                 .total_budget
                 .as_ref()
@@ -187,6 +241,13 @@ impl RunningCommand {
             return RunEvent::OutputLimitExceeded {
                 limit,
                 observed,
+                status: Some(status),
+            };
+        }
+        if let Some((limit, observed)) = self.session_budget_exceeded() {
+            return RunEvent::OutputLimitExceeded {
+                limit,
+                observed: u128::from(observed),
                 status: Some(status),
             };
         }
@@ -216,6 +277,19 @@ impl RunningCommand {
         timeout: Option<Duration>,
         timeout_poll_count: &mut usize,
     ) -> Result<(), RunEvent> {
+        if let Some(context) = &self.operation_context
+            && context.is_expired()
+        {
+            context.request_stop(qubit_operation::StopReason::Timeout);
+            return Err(RunEvent::Cancelled { status });
+        }
+        if let Some((limit, observed)) = self.session_budget_exceeded() {
+            return Err(RunEvent::OutputLimitExceeded {
+                limit,
+                observed: u128::from(observed),
+                status,
+            });
+        }
         if self
             .cancellation_token
             .as_ref()
@@ -253,6 +327,16 @@ impl RunningCommand {
                 .sleep_for(sleep)
                 .map_err(|source| RunEvent::TimeFailed { source, status })
         }
+    }
+
+    fn session_budget_exceeded(&self) -> Option<(u64, u64)> {
+        let bridge = self.session_bridge.as_ref()?;
+        bridge.output_budget_exceeded().then(|| {
+            (
+                bridge.output_budget_limit().unwrap_or(0),
+                bridge.output_bytes_observed(),
+            )
+        })
     }
 
     /// Resolves one monitoring event through the single finalization pipeline.
@@ -304,7 +388,7 @@ impl RunningCommand {
                     {
                         error = error.with_captured_output(budget.captured_output());
                     }
-                    return Err(self.finish_without_status(error));
+                    return Err(self.handoff_uncertain_owner(error));
                 }
             };
         let status = observed_status.unwrap_or(outcome.status);
@@ -371,6 +455,66 @@ impl RunningCommand {
             .into_primary_error(finished.command_text, Some(Box::new(finished.output)))
             .with_cleanup_failures(outcome.cleanup_failures)
             .with_cleanup_failures(io_cleanup_failures))
+    }
+
+    fn handoff_uncertain_owner(mut self, error: CommandError) -> CommandError {
+        let command_text = self.command_text.clone();
+        let mut child = self.child_process;
+        let io = self.io;
+        io.request_cancel();
+        let lease = self.capacity_lease.take();
+        let observer = self.reaper_observer.take();
+        if let Some(observer) = &observer {
+            observer.mark_pending();
+        }
+        let completion_observer = observer.clone();
+        let owner = ReaperOwner::new(move || {
+            loop {
+                match ProcessTerminator::new(&mut child).terminate(None) {
+                    Ok(outcome) => {
+                        io.request_cancel();
+                        while !io.is_finished() {
+                            std::thread::sleep(Duration::from_millis(2));
+                        }
+                        let _ = io.cancel_and_collect(&command_text, outcome.status, || {
+                            Ok::<Duration, TimeError>(Duration::ZERO)
+                        });
+                        drop(lease);
+                        if let Some(observer) = completion_observer {
+                            observer.complete();
+                        }
+                        break;
+                    }
+                    Err(_) => {
+                        io.request_cancel();
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                }
+            }
+        });
+        let handed_off = match Reaper::global() {
+            Ok(reaper) => reaper.handoff(owner),
+            Err(source) => {
+                log::error!("failed to start process reaper: {source}");
+                Err(owner)
+            }
+        };
+        match handed_off {
+            Ok(()) => error,
+            Err(owner) => match observer {
+                Some(observer) => {
+                    observer.retain_or_defer_reaper_owner(owner);
+                    error
+                }
+                None => {
+                    log::error!(
+                        "reaper unavailable without a managed recovery sink; retaining cleanup inline"
+                    );
+                    owner.run_inline();
+                    error
+                }
+            },
+        }
     }
 
     /// Completes a known-exited command by joining all I/O helpers.
@@ -1768,6 +1912,56 @@ mod tests {
         ManagedChildProcess::new(Box::new(tree), true)
     }
 
+    #[test]
+    fn termination_uncertainty_hands_child_helpers_and_capacity_to_reaper() {
+        use crate::execution::backend::ReaperObserver;
+        use crate::execution::contracts::ReservationLease;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let direct = ScriptedChild::new("child", raw_child(), Arc::clone(&calls))
+            .kill_error(io::Error::other("first direct kill denied"))
+            .try_wait_results((0..9).map(|_| Ok(None)))
+            .wait_status(status(0));
+        let tree = ScriptedChild::new("tree", Box::new(direct), calls)
+            .kill_error(io::Error::other("first tree kill denied"))
+            .try_wait_results((0..8).map(|_| Ok(None)))
+            .wait_status(status(0));
+        let releases = Arc::new(AtomicUsize::new(0));
+        let released = Arc::clone(&releases);
+        let lease = ReservationLease::new(move || {
+            released.fetch_add(1, Ordering::SeqCst);
+        });
+        let (observer, completed) = ReaperObserver::pair();
+        let started = ManualMonotonicClock::new_shared();
+        let timer = ManualMonotonicClock::new_shared();
+        let command = RunningCommand::new_with_reaper(
+            "reaper test".to_owned(),
+            ManagedChildProcess::new(Box::new(tree), true),
+            CommandIo::new(successful_reader(), joined_stderr_reader(), None),
+            started.now(),
+            timer.new_timer(),
+            None,
+            None,
+            Some(lease),
+            Some(observer.clone()),
+            None,
+            None,
+        );
+        let error = match command.resolve_event(RunEvent::Cancelled { status: None }, None) {
+            Ok(_) => panic!("stop remains an error while the reaper completes cleanup"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), CommandErrorKind::Cancelled);
+        assert!(observer.is_pending());
+        assert_eq!(releases.load(Ordering::SeqCst), 0);
+        completed
+            .recv_timeout(Duration::from_secs(3))
+            .expect("reaper should finish the transferred owner");
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
+    }
+
     fn running_with_elapsed_failure(child: ManagedChildProcess, io: CommandIo) -> RunningCommand {
         let started_clock = ManualMonotonicClock::new_shared();
         let timer_clock = ManualMonotonicClock::new_shared();
@@ -1931,16 +2125,7 @@ mod tests {
             .captured_output()
             .expect("the captured prefix must survive failed termination");
         assert_eq!(captured.stdout(), b"ab");
-        assert_eq!(
-            cleanup_order(&error),
-            [
-                "process-tree",
-                "direct-child",
-                "stdout-read",
-                "stderr-write",
-                "stdin-write"
-            ]
-        );
+        assert_eq!(cleanup_order(&error), ["process-tree", "direct-child"]);
     }
 
     #[derive(Clone, Copy)]
@@ -2096,7 +2281,16 @@ mod tests {
                     "event {event_kind}, termination mode {termination_mode}"
                 );
                 let cleanup = cleanup_order(&error);
-                assert!(cleanup.ends_with(&["stdout-read", "stderr-write", "stdin-write"]));
+                if termination_mode == 1 {
+                    assert!(cleanup.contains(&"process-tree"));
+                } else if termination_mode == 0 {
+                    assert!(cleanup.ends_with(&["stdout-read", "stderr-write", "stdin-write"]));
+                } else {
+                    assert!(
+                        cleanup == ["wait"]
+                            || cleanup.ends_with(&["stdout-read", "stderr-write", "stdin-write"])
+                    );
+                }
                 assert_eq!(error.process_tree_source().is_some(), termination_mode == 1);
                 assert_eq!(
                     error.child_source().is_some(),
