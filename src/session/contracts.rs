@@ -23,6 +23,9 @@ pub trait SessionBridge: Send + Sync {
     fn write_stderr(&self, bytes: &[u8]) -> io::Result<()>;
     fn close_stdin(&self);
 
+    /// Stops accepting future stdout and stderr bytes while preserving buffered output.
+    fn request_output_stop(&self) {}
+
     /// Reports whether stdout bytes were discarded before delivery.
     fn stdout_incomplete(&self) -> bool {
         false
