@@ -10,16 +10,35 @@ pub enum CapacityFailure {
     InputBytesExceeded,
     Closed,
 }
-/// Exclusive permit for one reservation; dropping returns unactivated capacity.
-#[derive(Debug)]
-#[allow(dead_code)]
+/// Exclusive scheduler permit. Its one-shot release callback runs on drop, including
+/// when the permit was never activated; moving it into `ActivatedRequest` keeps it held.
 pub struct Reservation {
     pub(crate) token: u64,
+    release: Option<Box<dyn FnOnce(u64) + Send + 'static>>,
 }
 impl Reservation {
-    #[allow(dead_code)]
-    pub(crate) fn new(token: u64) -> Self {
-        Self { token }
+    /// Creates a uniquely owned permit with its scheduler's nonblocking release hook.
+    pub(crate) fn new(token: u64, release: impl FnOnce(u64) + Send + 'static) -> Self {
+        Self {
+            token,
+            release: Some(Box::new(release)),
+        }
+    }
+}
+impl fmt::Debug for Reservation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Reservation")
+            .field("token", &self.token)
+            .field("active", &self.release.is_some())
+            .finish()
+    }
+}
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            release(self.token);
+        }
     }
 }
 /// Nonblocking stop-request port held by scheduled domain work.
@@ -55,4 +74,26 @@ pub trait Scheduler: Send + Sync {
     fn try_reserve(&self, input_bytes: usize) -> Result<Reservation, CapacityFailure>;
     fn enqueue(&self, job: ScheduledJob, permit: Reservation) -> Result<(), EnqueueFailure>;
     fn close_admission(&self);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Reservation;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn dropping_reservation_releases_its_token_once() {
+        let releases = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&releases);
+        let permit = Reservation::new(41, move |token| {
+            assert_eq!(token, 41);
+            observed.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(releases.load(Ordering::SeqCst), 0);
+        let activated_owner = permit;
+        assert_eq!(releases.load(Ordering::SeqCst), 0);
+        drop(activated_owner);
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
+    }
 }
