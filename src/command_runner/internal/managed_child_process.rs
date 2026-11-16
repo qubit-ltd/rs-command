@@ -35,7 +35,10 @@ impl ManagedChildProcess {
     ///
     /// A wrapper that records the child handle and its process-tree capability.
     #[inline]
-    pub(in crate::command_runner) fn new(child: Box<dyn ChildWrapper>, process_tree_managed: bool) -> Self {
+    pub(in crate::command_runner) fn new(
+        child: Box<dyn ChildWrapper>,
+        process_tree_managed: bool,
+    ) -> Self {
         Self {
             child,
             process_tree_managed,

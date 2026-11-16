@@ -48,7 +48,10 @@ impl<'a> StartingCommand<'a> {
     ///
     /// A guard that terminates the child unless initialization finishes.
     #[inline]
-    pub(in crate::command_runner) const fn new(command: &'a str, child_process: ManagedChildProcess) -> Self {
+    pub(in crate::command_runner) const fn new(
+        command: &'a str,
+        child_process: ManagedChildProcess,
+    ) -> Self {
         Self {
             command,
             child_process: Some(child_process),
@@ -184,7 +187,10 @@ impl Drop for StartingCommand<'_> {
     /// Reuses explicit cleanup as a fallback during unwinding.
     fn drop(&mut self) {
         for failure in self.cleanup() {
-            log::error!("Command '{}' failed during startup cleanup: {failure:?}", self.command);
+            log::error!(
+                "Command '{}' failed during startup cleanup: {failure:?}",
+                self.command
+            );
         }
     }
 }
@@ -210,12 +216,13 @@ mod tests {
     #[test]
     fn test_startup_abort_retains_primary_without_waiting_after_failed_kills() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let direct =
-            ScriptedChild::new("child", raw_child(), Arc::clone(&calls)).kill_error(io::Error::other("child denied"));
+        let direct = ScriptedChild::new("child", raw_child(), Arc::clone(&calls))
+            .kill_error(io::Error::other("child denied"));
         let tree = ScriptedChild::new("tree", Box::new(direct), Arc::clone(&calls))
             .kill_error(io::Error::other("tree denied"))
             .try_wait_results((0..9).map(|_| Ok(None)));
-        let guard = StartingCommand::new("redacted", ManagedChildProcess::new(Box::new(tree), true));
+        let guard =
+            StartingCommand::new("redacted", ManagedChildProcess::new(Box::new(tree), true));
         let primary = CommandError::from_reason(
             "redacted",
             CommandErrorReason::StartOutputThreadFailed {
@@ -235,8 +242,20 @@ mod tests {
         ));
         let calls = calls.lock().expect("calls should be readable");
         assert!(!calls.iter().any(|call| call.ends_with(".wait")));
-        assert_eq!(calls.iter().filter(|call| call.as_str() == "child.kill").count(), 1);
-        assert_eq!(calls.iter().filter(|call| call.as_str() == "tree.kill").count(), 1);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.as_str() == "child.kill")
+                .count(),
+            1
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.as_str() == "tree.kill")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -254,10 +273,12 @@ mod tests {
             let stage = usize::from(with_stdin) + readers;
             let calls = Arc::new(Mutex::new(Vec::new()));
             let tree = ScriptedChild::new("tree", raw_child(), Arc::clone(&calls));
-            let mut guard = StartingCommand::new("redacted", ManagedChildProcess::new(Box::new(tree), true));
+            let mut guard =
+                StartingCommand::new("redacted", ManagedChildProcess::new(Box::new(tree), true));
             let finished = Arc::new(AtomicUsize::new(0));
             if with_stdin {
-                let (cancel, token) = IoCancellation::pair().expect("stdin cancellation must initialize");
+                let (cancel, token) =
+                    IoCancellation::pair().expect("stdin cancellation must initialize");
                 let finished = Arc::clone(&finished);
                 guard.set_stdin_writer(Some(StdinWriter::new(
                     thread::spawn(move || {
@@ -271,7 +292,8 @@ mod tests {
                 )));
             }
             for stream in 0..readers {
-                let (cancel, token) = IoCancellation::pair().expect("output cancellation must initialize");
+                let (cancel, token) =
+                    IoCancellation::pair().expect("output cancellation must initialize");
                 let finished = Arc::clone(&finished);
                 let reader = OutputReader::new(
                     thread::spawn(move || {

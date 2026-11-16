@@ -29,7 +29,9 @@ use libc::O_NONBLOCK;
 use libc::fcntl;
 
 /// A child output pipe that can be switched to cancellation-aware reads.
-pub(in crate::command_runner) trait CancellableReader: io::Read + Send + 'static {
+pub(in crate::command_runner) trait CancellableReader:
+    io::Read + Send + 'static
+{
     /// Prepares the underlying pipe for cancellation polling.
     fn prepare_for_cancellation(&self) -> io::Result<()>;
     /// Returns the underlying Unix descriptor for event-driven reads.

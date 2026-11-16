@@ -107,7 +107,9 @@ impl OutputReader {
         matches!(
             &self.state,
             OutputReaderState::Finished {
-                result: Err(OutputCaptureError::Read { .. } | OutputCaptureError::ReadAfterWrite { .. }),
+                result: Err(
+                    OutputCaptureError::Read { .. } | OutputCaptureError::ReadAfterWrite { .. }
+                ),
             }
         )
     }
@@ -146,7 +148,10 @@ impl OutputReader {
     /// Attaches a Windows-only probe observer to the next cancellation call.
     #[cfg(all(test, windows))]
     /// # Parameters
-    pub(in crate::command_runner) fn observe_cancellation_for_test(&mut self, observer: Sender<Option<i32>>) {
+    pub(in crate::command_runner) fn observe_cancellation_for_test(
+        &mut self,
+        observer: Sender<Option<i32>>,
+    ) {
         self.cancellation.observe_test_cancellation(observer);
     }
 
@@ -255,7 +260,11 @@ fn apply_budget_to_result(
 fn replace_error_output(error: OutputCaptureError, output: CapturedOutput) -> OutputCaptureError {
     match error {
         OutputCaptureError::Read { source, .. } => OutputCaptureError::Read { source, output },
-        OutputCaptureError::Write { path, source, .. } => OutputCaptureError::Write { path, source, output },
+        OutputCaptureError::Write { path, source, .. } => OutputCaptureError::Write {
+            path,
+            source,
+            output,
+        },
         OutputCaptureError::ReadAfterWrite {
             path,
             write_source,
@@ -309,14 +318,21 @@ mod tests {
         assert!(reader.poll_read_failure());
         assert!(reader.is_finished());
         assert!(reader.cancel().is_ok());
-        let error = reader.join().expect_err("cached read failure must be returned");
-        assert!(matches!(error, OutputCaptureError::Read { output, .. } if output.bytes == b"partial"));
+        let error = reader
+            .join()
+            .expect_err("cached read failure must be returned");
+        assert!(
+            matches!(error, OutputCaptureError::Read { output, .. } if output.bytes == b"partial")
+        );
     }
 
     #[test]
     fn test_poll_read_failure_ignores_success_and_write_only_failure() {
         let (cancellation, _) = IoCancellation::pair().expect("cancellation should create");
-        let mut reader = OutputReader::new(thread::spawn(|| Ok(CapturedOutput::default())), cancellation);
+        let mut reader = OutputReader::new(
+            thread::spawn(|| Ok(CapturedOutput::default())),
+            cancellation,
+        );
         while !reader.is_finished() {
             thread::yield_now();
         }
@@ -338,7 +354,10 @@ mod tests {
             thread::yield_now();
         }
         assert!(!reader.poll_read_failure());
-        assert!(matches!(reader.join(), Err(OutputCaptureError::Write { .. })));
+        assert!(matches!(
+            reader.join(),
+            Err(OutputCaptureError::Write { .. })
+        ));
     }
 
     #[test]
@@ -414,6 +433,11 @@ mod tests {
             panic!("cached budget reader failure should be returned");
         };
         assert_eq!(output.bytes, b"budget bytes");
-        assert!(budget.take_captured_stream(OutputStream::Stdout).bytes.is_empty());
+        assert!(
+            budget
+                .take_captured_stream(OutputStream::Stdout)
+                .bytes
+                .is_empty()
+        );
     }
 }

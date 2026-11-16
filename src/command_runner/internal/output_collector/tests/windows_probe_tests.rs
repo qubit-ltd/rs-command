@@ -44,7 +44,12 @@ const BLOCKED_WRITE_OBSERVATION: Duration = Duration::from_millis(10);
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
-    fn CreatePipe(read_pipe: *mut RawHandle, write_pipe: *mut RawHandle, attributes: *const c_void, size: u32) -> i32;
+    fn CreatePipe(
+        read_pipe: *mut RawHandle,
+        write_pipe: *mut RawHandle,
+        attributes: *const c_void,
+        size: u32,
+    ) -> i32;
     fn GetNamedPipeInfo(
         pipe: RawHandle,
         flags: *mut u32,
@@ -117,7 +122,12 @@ impl Write for CountedFileWriter {
     }
 }
 
-struct ReadEntry(File, mpsc::Sender<ProbeEvent>, Arc<std::sync::atomic::AtomicBool>, bool);
+struct ReadEntry(
+    File,
+    mpsc::Sender<ProbeEvent>,
+    Arc<std::sync::atomic::AtomicBool>,
+    bool,
+);
 
 impl Read for ReadEntry {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
@@ -138,7 +148,11 @@ impl Read for ReadEntry {
 
 struct TeeEntry(File, mpsc::Sender<ProbeEvent>);
 
-struct StdinWriteEntry(File, mpsc::Sender<ProbeEvent>, Arc<std::sync::atomic::AtomicBool>);
+struct StdinWriteEntry(
+    File,
+    mpsc::Sender<ProbeEvent>,
+    Arc<std::sync::atomic::AtomicBool>,
+);
 
 impl Write for StdinWriteEntry {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
@@ -219,7 +233,10 @@ impl AttemptRecovery {
     }
 
     fn join_worker(&mut self) -> thread::Result<()> {
-        self.worker.take().expect("reader worker should be joined once").join()
+        self.worker
+            .take()
+            .expect("reader worker should be joined once")
+            .join()
     }
 }
 
@@ -298,8 +315,7 @@ fn fill_pipe(pipe: &mut File, observer: &File) -> io::Result<u32> {
 }
 
 const CHILD_ENV: &str = "QUBIT_COMMAND_WINDOWS_PROBE_SCENARIO";
-const CHILD_TEST: &str =
-    "command_runner::internal::output_collector::tests::windows_probe_tests::test_child_process_reports_probe_events";
+const CHILD_TEST: &str = "command_runner::internal::output_collector::tests::windows_probe_tests::test_child_process_reports_probe_events";
 struct ChildGuard(Option<std::process::Child>);
 impl ChildGuard {
     fn child(&mut self) -> &mut std::process::Child {
@@ -383,7 +399,11 @@ fn test_child_process_reports_probe_events() {
     eprintln!("WINDOWS_PROBE_CHILD_COMPLETED scenario={scenario}");
 }
 fn assert_completed(outcome: ChildOutcome, scenario: &str) {
-    assert!(!outcome.timed_out, "child exceeded watchdog; log: {}", outcome.log);
+    assert!(
+        !outcome.timed_out,
+        "child exceeded watchdog; log: {}",
+        outcome.log
+    );
     assert!(
         outcome.status.expect("child must be waited").success(),
         "child failed; log: {}",
@@ -397,9 +417,9 @@ fn assert_completed(outcome: ChildOutcome, scenario: &str) {
         outcome.log
     );
     assert!(
-        outcome
-            .log
-            .contains(&format!("WINDOWS_PROBE_CHILD_COMPLETED scenario={scenario}")),
+        outcome.log.contains(&format!(
+            "WINDOWS_PROBE_CHILD_COMPLETED scenario={scenario}"
+        )),
         "missing child completion marker: {}",
         outcome.log
     );
@@ -408,12 +428,16 @@ fn assert_completed(outcome: ChildOutcome, scenario: &str) {
         "child test count missing; log: {}",
         outcome.log
     );
-    eprintln!("WINDOWS_PROBE_CHILD_LOG scenario={scenario}\n{}", outcome.log);
+    eprintln!(
+        "WINDOWS_PROBE_CHILD_LOG scenario={scenario}\n{}",
+        outcome.log
+    );
 }
 #[test]
 fn test_windows_probe_watchdog_reaps_blocked_child() {
     let started = Instant::now();
-    let outcome = supervise_child("blocked", Duration::from_secs(1)).expect("child supervision should work");
+    let outcome =
+        supervise_child("blocked", Duration::from_secs(1)).expect("child supervision should work");
     assert!(
         outcome.timed_out,
         "blocked child must hit watchdog; log: {}",
@@ -421,7 +445,9 @@ fn test_windows_probe_watchdog_reaps_blocked_child() {
     );
     assert!(outcome.status.is_some(), "timed-out child must be waited");
     assert!(
-        outcome.log.contains("WINDOWS_PROBE_CHILD_STARTED scenario=blocked"),
+        outcome
+            .log
+            .contains("WINDOWS_PROBE_CHILD_STARTED scenario=blocked"),
         "blocked child start marker missing: {}",
         outcome.log
     );
@@ -444,25 +470,29 @@ fn test_windows_successful_cancel_interleaving_read_to_tee() {
 
 #[test]
 fn test_windows_successful_cancel_interleaving_readiness() {
-    let outcome = supervise_child("readiness", CHILD_WATCHDOG).expect("child supervision should work");
+    let outcome =
+        supervise_child("readiness", CHILD_WATCHDOG).expect("child supervision should work");
     assert_completed(outcome, "readiness");
 }
 
 #[test]
 fn test_windows_successful_cancel_interleaving_eof_to_flush() {
-    let outcome = supervise_child("eof-flush", CHILD_WATCHDOG).expect("child supervision should work");
+    let outcome =
+        supervise_child("eof-flush", CHILD_WATCHDOG).expect("child supervision should work");
     assert_completed(outcome, "eof-flush");
 }
 
 #[test]
 fn test_windows_successful_cancel_interleaving_stdin_check_to_write() {
-    let outcome = supervise_child("stdin-check-write", CHILD_WATCHDOG).expect("child supervision should work");
+    let outcome = supervise_child("stdin-check-write", CHILD_WATCHDOG)
+        .expect("child supervision should work");
     assert_completed(outcome, "stdin-check-write");
 }
 
 #[test]
 fn test_windows_successful_cancel_interleaving_production_command_io() {
-    let outcome = supervise_child("production-command-io", CHILD_WATCHDOG).expect("child supervision should work");
+    let outcome = supervise_child("production-command-io", CHILD_WATCHDOG)
+        .expect("child supervision should work");
     eprintln!(
         "{{\"event\":\"probe_process_reaping\",\"scenario\":\"production_command_io_blocked_read\",\"probe_child_reaped\":{}}}",
         outcome.status.is_some(),
@@ -472,16 +502,22 @@ fn test_windows_successful_cancel_interleaving_production_command_io() {
 
 #[test]
 fn test_windows_probe_controller_rejects_nonzero_child() {
-    let outcome = supervise_child("failure", Duration::from_secs(5)).expect("child supervision should work");
+    let outcome =
+        supervise_child("failure", Duration::from_secs(5)).expect("child supervision should work");
     assert!(!outcome.timed_out);
     assert!(!outcome.status.expect("child must be waited").success());
-    assert!(outcome.log.contains("WINDOWS_PROBE_CHILD_STARTED scenario=failure"));
+    assert!(
+        outcome
+            .log
+            .contains("WINDOWS_PROBE_CHILD_STARTED scenario=failure")
+    );
     assert!(std::panic::catch_unwind(|| assert_completed(outcome, "failure")).is_err());
 }
 
 #[test]
 fn test_windows_probe_controller_rejects_missing_completion_marker() {
-    let outcome = supervise_child("missing-completion", Duration::from_secs(5)).expect("child supervision should work");
+    let outcome = supervise_child("missing-completion", Duration::from_secs(5))
+        .expect("child supervision should work");
     assert!(!outcome.timed_out);
     assert!(outcome.status.expect("child must be waited").success());
     assert!(
@@ -507,7 +543,8 @@ fn run_real_probe(scenario: &str) {
         let use_readiness = scenario == "readiness";
         let use_eof_flush = scenario == "eof-flush";
         let attempt_start = Instant::now();
-        let (source_reader, mut source_writer) = anonymous_pipe().expect("source pipe should be created");
+        let (source_reader, mut source_writer) =
+            anonymous_pipe().expect("source pipe should be created");
         let (tee_reader, mut tee_writer) = anonymous_pipe().expect("tee pipe should be created");
         let tee_capacity = if use_eof_flush {
             0
@@ -519,7 +556,8 @@ fn run_real_probe(scenario: &str) {
         let worker_result_slot = Arc::clone(&worker_result);
         let (source_release_tx, source_release_rx) = mpsc::channel();
         let (close_source_tx, close_source_rx) = mpsc::channel();
-        let (cancellation, token) = IoCancellation::pair().expect("Windows cancellation should initialize");
+        let (cancellation, token) =
+            IoCancellation::pair().expect("Windows cancellation should initialize");
         let token_observer = Arc::clone(&token.cancelled);
         let read_token_observer = Arc::clone(&token.cancelled);
         let barrier = Arc::new(Barrier::new(2));
@@ -547,7 +585,12 @@ fn run_real_probe(scenario: &str) {
                 );
             }
             let result = read_output_inner(
-                &mut ReadEntry(source_reader, event_tx.clone(), read_token_observer, use_readiness),
+                &mut ReadEntry(
+                    source_reader,
+                    event_tx.clone(),
+                    read_token_observer,
+                    use_readiness,
+                ),
                 options,
                 Some(&token),
                 if use_readiness {
@@ -618,7 +661,10 @@ fn run_real_probe(scenario: &str) {
             }
         };
         recovery.release_barrier();
-        let worker = recovery.worker.as_ref().expect("worker handle should be live");
+        let worker = recovery
+            .worker
+            .as_ref()
+            .expect("worker handle should be live");
         let source_close_thread = if use_eof_flush {
             let close_barrier = Arc::new(Barrier::new(2));
             let close_thread_barrier = Arc::clone(&close_barrier);
@@ -642,7 +688,10 @@ fn run_real_probe(scenario: &str) {
             first_cancel_call.duration_since(attempt_start).as_nanos(),
             first_cancel_return.duration_since(attempt_start).as_nanos(),
             first_cancel_succeeded,
-            first_cancel.as_ref().err().and_then(io::Error::raw_os_error),
+            first_cancel
+                .as_ref()
+                .err()
+                .and_then(io::Error::raw_os_error),
             token_observer.load(Ordering::Acquire),
         );
         if let Err(source) = first_cancel {
@@ -651,7 +700,9 @@ fn run_real_probe(scenario: &str) {
             first_cancel_successes += 1;
         }
         if let Some(close_thread) = source_close_thread {
-            close_thread.join().expect("source close controller should not panic");
+            close_thread
+                .join()
+                .expect("source close controller should not panic");
         }
         let source_release = source_release_rx
             .recv_timeout(EVENT_TIMEOUT)
@@ -725,9 +776,14 @@ fn run_real_probe(scenario: &str) {
             eprintln!(
                 "Windows RC-002 attempt={attempt} second_cancel_call_ns={} second_cancel_return_ns={} success={} raw_os_error={:?} worker_unfinished_before_call={remained_unfinished}",
                 second_cancel_call.duration_since(attempt_start).as_nanos(),
-                second_cancel_return.duration_since(attempt_start).as_nanos(),
+                second_cancel_return
+                    .duration_since(attempt_start)
+                    .as_nanos(),
                 second_cancel.is_ok(),
-                second_cancel.as_ref().err().and_then(io::Error::raw_os_error),
+                second_cancel
+                    .as_ref()
+                    .err()
+                    .and_then(io::Error::raw_os_error),
             );
             confirmed_blocked = remained_unfinished && second_cancel.is_ok();
         }
@@ -749,7 +805,10 @@ fn run_real_probe(scenario: &str) {
         }
 
         // Close/release every pipe path before unbounded thread joins.
-        match recovery.join_source_writer().expect("source writer should not panic") {
+        match recovery
+            .join_source_writer()
+            .expect("source writer should not panic")
+        {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {
                 // Cancellation can close the read handle before this
@@ -784,13 +843,25 @@ fn run_real_probe(scenario: &str) {
         }
     }
 
-    let error_not_found_count = first_cancel_errors.iter().filter(|error| **error == Some(1168)).count();
+    let error_not_found_count = first_cancel_errors
+        .iter()
+        .filter(|error| **error == Some(1168))
+        .count();
     eprintln!(
         "Windows RC-002 scenario={scenario} attempts={}, first_cancel_successes={first_cancel_successes}, error_not_found_1168={error_not_found_count}, first_cancel_error_os_codes={first_cancel_errors:?}, tee_write_entries={tee_write_entries}, confirmed_blocked_writes={confirmed_blocked_writes}, source_writer_broken_pipes={source_writer_broken_pipes}, valid_hits={}, eof_pipe_successful_cancel_flush_hits={eof_pipe_successful_cancel_flush_hits:?}",
         valid_hits.last().map_or(ATTEMPTS, |hit| hit.0 + 1),
         valid_hits.len()
     );
-    for (attempt, attempt_start, read_entry, source_release, cancel_call, cancel_return, tee_entry) in &valid_hits {
+    for (
+        attempt,
+        attempt_start,
+        read_entry,
+        source_release,
+        cancel_call,
+        cancel_return,
+        tee_entry,
+    ) in &valid_hits
+    {
         eprintln!(
             "valid hit attempt={attempt} timeline_ns(attempt_start=0, read_entry={}, source_release={}, cancel_call={}, cancel_return={}, tee_write_entry={})",
             read_entry.duration_since(*attempt_start).as_nanos(),
@@ -814,7 +885,8 @@ fn run_real_probe(scenario: &str) {
 /// blocked source read; it does not claim a subsequent-I/O race witness.
 fn run_production_command_io_probe() {
     let attempt_start = Instant::now();
-    let (source_reader, source_writer) = anonymous_pipe().expect("production source pipe should be created");
+    let (source_reader, source_writer) =
+        anonymous_pipe().expect("production source pipe should be created");
     let (read_event_tx, read_event_rx) = mpsc::channel();
     let read_events = Arc::new(Mutex::new(read_event_rx));
     let tee_file = tempfile::NamedTempFile::new().expect("ordinary tee file should be created");
@@ -834,7 +906,8 @@ fn run_production_command_io_probe() {
     .expect("production output reader should start");
     let (cancel_observer_tx, cancel_observer_rx) = mpsc::channel();
     stdout.observe_cancellation_for_test(cancel_observer_tx);
-    let (stderr_cancellation, _stderr_token) = IoCancellation::pair().expect("stderr cancellation should start");
+    let (stderr_cancellation, _stderr_token) =
+        IoCancellation::pair().expect("stderr cancellation should start");
     let stderr = super::super::super::output_reader::OutputReader::new(
         thread::spawn(|| Ok(CapturedOutput::default())),
         stderr_cancellation,
@@ -859,8 +932,9 @@ fn run_production_command_io_probe() {
     // below is the evidence that synchronous I/O was pending.
     thread::sleep(BLOCKED_WRITE_OBSERVATION);
     let cleanup_started_ns = attempt_start.elapsed().as_nanos();
-    let cleanup =
-        thread::spawn(move || command_io.cancel_and_collect("production probe", status, || Ok(Duration::ZERO)));
+    let cleanup = thread::spawn(move || {
+        command_io.cancel_and_collect("production probe", status, || Ok(Duration::ZERO))
+    });
     let cancel_result = cancel_observer_rx
         .recv_timeout(EVENT_TIMEOUT)
         .expect("production CommandIo should report its cancellation result");
@@ -888,10 +962,13 @@ fn run_production_command_io_probe() {
         .metadata()
         .expect("tee file metadata should be readable")
         .len();
-    let source_sha = std::env::var("GITHUB_SHA").unwrap_or_else(|_| "local-uncommitted-worktree".to_owned());
-    let cancel_raw_os_error = cancel_result.map_or_else(|| "null".to_owned(), |code| code.to_string());
+    let source_sha =
+        std::env::var("GITHUB_SHA").unwrap_or_else(|_| "local-uncommitted-worktree".to_owned());
+    let cancel_raw_os_error =
+        cancel_result.map_or_else(|| "null".to_owned(), |code| code.to_string());
     let source_read_bytes = read_bytes.map_or_else(|| "null".to_owned(), |count| count.to_string());
-    let source_read_raw_os_error = read_error.map_or_else(|| "null".to_owned(), |code| code.to_string());
+    let source_read_raw_os_error =
+        read_error.map_or_else(|| "null".to_owned(), |code| code.to_string());
     let trace = format!(
         "{{\"event\":\"scenario_classification\",\"scenario\":\"production_command_io_blocked_read\",\
          \"source_sha\":\"{source_sha}\",\"attempts\":1,\"relative_ns\":{{\
@@ -912,7 +989,10 @@ fn run_production_command_io_probe() {
     );
     eprintln!("{trace}");
     assert_eq!(tee_path, tee_file.path());
-    assert_eq!(tee_write_entries, 0, "a cancelled blocked read has no bytes to tee");
+    assert_eq!(
+        tee_write_entries, 0,
+        "a cancelled blocked read has no bytes to tee"
+    );
     assert_eq!(tee_len, 0);
     assert!(!captured.stdout_truncated());
 }
@@ -969,7 +1049,11 @@ fn log_worker_result(attempt: usize, result: WorkerResult) {
             output.truncated,
             output.complete,
         ),
-        Err(OutputCaptureError::Write { path, source, output }) => eprintln!(
+        Err(OutputCaptureError::Write {
+            path,
+            source,
+            output,
+        }) => eprintln!(
             "Windows RC-002 attempt={attempt} worker_result=TeeWriteError path={} raw_os_error={:?} retained_bytes={} truncated={} complete={}",
             path.display(),
             source.raw_os_error(),
@@ -1015,7 +1099,10 @@ fn run_stdin_probe() {
             result
         });
         let write_entry = loop {
-            match event_rx.recv_timeout(EVENT_TIMEOUT).expect("stdin write should enter") {
+            match event_rx
+                .recv_timeout(EVENT_TIMEOUT)
+                .expect("stdin write should enter")
+            {
                 event @ ProbeEvent::StdinWriteEntry(at) => {
                     log_event(attempt, attempt_start, event);
                     break at;
@@ -1032,12 +1119,20 @@ fn run_stdin_probe() {
             cancel_call.duration_since(attempt_start).as_nanos(),
             cancel_return.duration_since(attempt_start).as_nanos(),
             cancel_result.is_ok(),
-            cancel_result.as_ref().err().and_then(io::Error::raw_os_error),
+            cancel_result
+                .as_ref()
+                .err()
+                .and_then(io::Error::raw_os_error),
         );
         if cancel_result.is_ok() {
             successful_cancels += 1;
         } else {
-            cancel_errors.push(cancel_result.as_ref().err().and_then(io::Error::raw_os_error));
+            cancel_errors.push(
+                cancel_result
+                    .as_ref()
+                    .err()
+                    .and_then(io::Error::raw_os_error),
+            );
             // Release a still-blocked pipe write if cancellation did not
             // interrupt it; the child watchdog remains the final outer bound.
             drop(reader);

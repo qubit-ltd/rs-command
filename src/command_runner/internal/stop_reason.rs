@@ -87,7 +87,9 @@ impl StopReason {
     #[inline]
     pub(super) const fn retains_termination_output(&self) -> bool {
         match self {
-            Self::TimedOut { .. } | Self::Cancelled { .. } | Self::OutputLimitExceeded { .. } => true,
+            Self::TimedOut { .. } | Self::Cancelled { .. } | Self::OutputLimitExceeded { .. } => {
+                true
+            }
             Self::OutputReadFailed { .. } => true,
             Self::WaitFailed(_) => false,
             Self::TimeFailed { status, .. } => status.is_some(),
@@ -112,9 +114,9 @@ impl StopReason {
         let reason = match self {
             Self::TimedOut { timeout, .. } => CommandErrorReason::TimedOut { timeout },
             Self::Cancelled { .. } => CommandErrorReason::Cancelled,
-            Self::OutputLimitExceeded { limit, observed, .. } => {
-                CommandErrorReason::OutputLimitExceeded { limit, observed }
-            }
+            Self::OutputLimitExceeded {
+                limit, observed, ..
+            } => CommandErrorReason::OutputLimitExceeded { limit, observed },
             Self::WaitFailed(source) => CommandErrorReason::WaitFailed { source },
             Self::TimeFailed { source, .. } => CommandErrorReason::TimeFailed { source },
             Self::OutputReadFailed { .. } => CommandErrorReason::WaitFailed {
@@ -241,13 +243,18 @@ mod tests {
 
         assert_eq!(error.kind(), CommandErrorKind::Cancelled);
         assert!(error.output().is_none());
-        let captured = error.captured_output().expect("collected bytes must survive");
+        let captured = error
+            .captured_output()
+            .expect("collected bytes must survive");
         assert_eq!(captured.stdout(), b"prefix");
         assert_eq!(captured.stderr(), b"err");
         assert!(captured.stdout_truncated());
         assert!(!captured.stderr_truncated());
         assert!(!captured.stdout_complete());
         assert!(captured.stderr_complete());
-        assert!(matches!(error.cleanup_failures(), [CommandCleanupFailure::Time { .. }]));
+        assert!(matches!(
+            error.cleanup_failures(),
+            [CommandCleanupFailure::Time { .. }]
+        ));
     }
 }
