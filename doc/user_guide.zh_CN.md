@@ -14,6 +14,7 @@ qubit-command = "^0.12"
 qubit-operation = "^0.3"
 ```
 
+<!-- doc-example:managed-service-quick-start:compile -->
 ```rust
 use qubit_command::{Command, CommandExecutionConfig, CommandExecutor, CommandRunOptions, CommandRunner, ManagedCommandRunnerApi};
 use qubit_operation::{ManagerOptions, OperationManager};
