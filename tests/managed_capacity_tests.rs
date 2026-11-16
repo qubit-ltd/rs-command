@@ -50,7 +50,7 @@ fn capacity_bounds_and_raii_release() {
     assert_eq!(s.try_reserve(1).unwrap_err(), CapacityFailure::QueueFull);
     drop(permits.remove(0));
     let x = s.snapshot();
-    assert_eq!((x.active, x.queued, x.input_bytes), (3, 64, 67));
+    assert_eq!((x.active, x.queued, x.input_bytes), (4, 63, 67));
 }
 #[test]
 fn zero_queue_only_admits_active_slots() {
@@ -140,11 +140,34 @@ fn multi_job_queue_promotes_only_after_active_release() {
     let (run, p) = s.wait_next().unwrap();
     (run.run)(p);
     assert_eq!(rx.recv().unwrap(), 1);
-    assert_eq!(s.snapshot().active, 0);
+    assert_eq!(s.snapshot().active, 1);
     let (run, p) = s.wait_next().unwrap();
     (run.run)(p);
     assert_eq!(rx2.recv().unwrap(), 2);
-    assert_eq!(s.snapshot().queued, 1);
+    assert_eq!(s.snapshot().queued, 0);
+}
+#[test]
+fn queued_reservation_dispatches_before_later_submission_after_release() {
+    let s = BoundedScheduler::new(config(1, 2, 1, 8)).unwrap();
+    let a = s.try_reserve(0).unwrap();
+    let b = s.try_reserve(0).unwrap();
+    let (tx, rx) = mpsc::channel();
+    let tx_a = tx.clone();
+    s.enqueue(job(move |_| tx_a.send('A').unwrap()), a).unwrap();
+    let tx_b = tx.clone();
+    s.enqueue(job(move |_| tx_b.send('B').unwrap()), b).unwrap();
+
+    let (run_a, permit_a) = s.wait_next().unwrap();
+    (run_a.run)(permit_a);
+    let c = s.try_reserve(0).unwrap();
+    s.enqueue(job(move |_| tx.send('C').unwrap()), c).unwrap();
+    assert_eq!((s.snapshot().active, s.snapshot().queued), (1, 1));
+
+    let (run_b, permit_b) = s.wait_next().unwrap();
+    (run_b.run)(permit_b);
+    let (run_c, permit_c) = s.wait_next().unwrap();
+    (run_c.run)(permit_c);
+    assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec!['A', 'B', 'C']);
 }
 #[test]
 fn enqueue_wakes_blocked_worker_and_close_drains() {

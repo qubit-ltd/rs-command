@@ -64,4 +64,11 @@ mod tests {
         assert_eq!(scheduler.snapshot().active, 0);
         assert_eq!(scheduler.snapshot().residual_helpers, 0);
     }
+    #[test]
+    fn expired_deadline_has_no_wait_duration() {
+        let deadline = std::time::Instant::now();
+        let after = deadline + std::time::Duration::from_nanos(1);
+        assert_eq!(state::deadline_wait_duration(deadline, after), None);
+        assert!(state::deadline_wait_duration(after, deadline).is_some());
+    }
 }

@@ -188,6 +188,7 @@ impl BoundedScheduler {
         if deadline.is_some_and(|d| Instant::now() >= d) {
             return Err(CapacityFailure::DeadlineExpired);
         }
+        promote_queued(&mut s, &self.0.config);
         let bytes = s
             .input_bytes
             .checked_add(input_bytes)
@@ -258,11 +259,15 @@ impl BoundedScheduler {
     }
     fn release_owner(shared: &Arc<Shared>, token: u64) {
         let mut s = shared.state.lock().unwrap();
+        let mut freed_active = false;
         if let Some(r) = s.records.get_mut(&token) {
             r.owner_live = false;
             if r.leases == 0 {
-                remove_record(&mut s, token)
+                freed_active = remove_record(&mut s, token)
             }
+        }
+        if freed_active {
+            promote_queued(&mut s, &shared.config)
         }
         notify_capacity(shared, s)
     }
@@ -275,8 +280,13 @@ impl BoundedScheduler {
             false
         };
         s.residual_helpers = s.residual_helpers.saturating_sub(1);
-        if remove {
+        let freed_active = if remove {
             remove_record(&mut s, token)
+        } else {
+            false
+        };
+        if freed_active {
+            promote_queued(&mut s, &shared.config)
         }
         notify_capacity(shared, s)
     }
@@ -287,13 +297,35 @@ fn available(s: &State, c: &CommandExecutionConfig, bytes: usize) -> bool {
         .is_some_and(|n| n <= c.max_queued_input_bytes)
         && (s.active < c.max_active || s.queued < c.max_queued)
 }
-fn remove_record(s: &mut State, token: u64) {
+fn remove_record(s: &mut State, token: u64) -> bool {
     if let Some(r) = s.records.remove(&token) {
+        let was_active = r.kind == Kind::Active;
         match r.kind {
             Kind::Active => s.active = s.active.saturating_sub(1),
             Kind::Queued => s.queued = s.queued.saturating_sub(1),
         }
-        s.input_bytes = s.input_bytes.saturating_sub(r.bytes)
+        s.input_bytes = s.input_bytes.saturating_sub(r.bytes);
+        was_active
+    } else {
+        false
+    }
+}
+fn promote_queued(s: &mut State, config: &CommandExecutionConfig) {
+    while s.active < config.max_active {
+        let next = s
+            .records
+            .iter()
+            .filter(|(_, r)| {
+                r.kind == Kind::Queued && !r.deadline.is_some_and(|d| Instant::now() >= d)
+            })
+            .map(|(token, _)| *token)
+            .min();
+        let Some(token) = next else { break };
+        if let Some(r) = s.records.get_mut(&token) {
+            r.kind = Kind::Active;
+            s.queued = s.queued.saturating_sub(1);
+            s.active += 1;
+        }
     }
 }
 fn notify_capacity(shared: &Arc<Shared>, mut s: std::sync::MutexGuard<'_, State>) {
@@ -320,6 +352,12 @@ fn next_job_position(s: &State, c: &CommandExecutionConfig) -> Option<usize> {
                 && (r.kind == Kind::Active || s.active < c.max_active)
         })
     })
+}
+pub(super) fn deadline_wait_duration(
+    deadline: Instant,
+    now: Instant,
+) -> Option<std::time::Duration> {
+    deadline.checked_duration_since(now)
 }
 fn promote(s: &mut State, q: &mut Queued) {
     let token = q.permit.token;
@@ -411,8 +449,10 @@ impl Scheduler for BoundedScheduler {
                 .min();
             if let Some(d) = next_deadline {
                 let now = Instant::now();
-                let (ns, _) = self.0.changed.wait_timeout(s, d - now).unwrap();
-                s = ns
+                if let Some(wait) = deadline_wait_duration(d, now) {
+                    let (ns, _) = self.0.changed.wait_timeout(s, wait).unwrap();
+                    s = ns
+                }
             } else {
                 s = self.0.changed.wait(s).unwrap()
             }
