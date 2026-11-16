@@ -60,8 +60,8 @@ impl StdinEndpointState for ByteChannel {
     ///
     /// # Parameters
     ///
-    /// * `_cx` - Async task context (unused by the in-memory channel).
-    /// Forwards the flush request to the endpoint state.
+    /// * `_cx` - Async task context (unused by the in-memory channel). Forwards
+    ///   the flush request to the endpoint state.
     fn poll_flush(&self, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
     }
@@ -69,8 +69,8 @@ impl StdinEndpointState for ByteChannel {
     ///
     /// # Parameters
     ///
-    /// * `_cx` - Async task context (unused by the in-memory channel).
-    /// Forwards closure to the endpoint state.
+    /// * `_cx` - Async task context (unused by the in-memory channel). Forwards
+    ///   closure to the endpoint state.
     fn poll_close(&self, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.close_writer();
         Poll::Ready(Ok(()))

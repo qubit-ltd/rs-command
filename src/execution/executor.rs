@@ -1856,7 +1856,6 @@ mod retry_wait_tests {
     use std::sync::atomic::Ordering;
     use std::task::Context;
     use std::task::Poll;
-    use std::task::Wake;
     use std::task::Waker;
 
     use qubit_operation::ClockDomainId;
@@ -1870,13 +1869,6 @@ mod retry_wait_tests {
 
     use super::wait_retry_tick;
 
-    struct NoopWake;
-    impl Wake for NoopWake {
-        ///
-        /// # Parameters
-        /// * `self`: Supplies the self value used by this operation.
-        fn wake(self: Arc<Self>) {}
-    }
     struct NoopRegistration;
     impl TimerRegistration for NoopRegistration {
         ///
@@ -1905,7 +1897,7 @@ mod retry_wait_tests {
     fn test_retry_wait_observes_operation_cancellation() {
         let context = OperationContext::new(ContextOptions::default()).unwrap();
         let mut retry = Box::pin(wait_retry_tick(Some(context.clone())));
-        let waker = Waker::from(Arc::new(NoopWake));
+        let waker = Waker::noop().clone();
         let mut cx = Context::from_waker(&waker);
         assert!(retry.as_mut().poll(&mut cx).is_pending());
         assert!(context.request_stop(StopReason::UserCancelled));
@@ -1926,7 +1918,7 @@ mod retry_wait_tests {
         })
         .unwrap();
         let mut retry = Box::pin(wait_retry_tick(Some(context.clone())));
-        let waker = Waker::from(Arc::new(NoopWake));
+        let waker = Waker::noop().clone();
         let mut cx = Context::from_waker(&waker);
         assert!(retry.as_mut().poll(&mut cx).is_pending());
         clock.ticks.store(5, Ordering::SeqCst);

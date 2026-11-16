@@ -65,7 +65,6 @@ impl ByteChannel {
 
     /// Signals test observers that a blocking writer reached its wait.
     #[cfg(test)]
-
     fn note_wait(&self) {
         let (lock, condition) = &self.wait_entered;
         *lock.lock().unwrap_or_else(|e| e.into_inner()) += 1;
@@ -74,7 +73,6 @@ impl ByteChannel {
 
     /// Waits until a writer reports reaching the capacity wait.
     #[cfg(test)]
-
     pub(crate) fn wait_until_blocked(&self) {
         let (lock, condition) = &self.wait_entered;
         let mut count = lock.lock().unwrap_or_else(|e| e.into_inner());
