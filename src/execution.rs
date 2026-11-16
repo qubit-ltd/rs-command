@@ -4,6 +4,8 @@ use crate::{Command, CommandError, CommandResourceRunOptions, CommandRunOptions,
 use qubit_operation::AsyncOperationHandle;
 use qubit_operation::OperationHandle;
 use thiserror::Error;
+#[path = "execution/adapter/mod.rs"]
+pub mod adapter;
 #[path = "execution/backend/mod.rs"]
 pub mod backend;
 #[path = "execution/contracts/mod.rs"]
@@ -57,12 +59,20 @@ impl CommandExecutionConfig {
 pub enum CommandExecutorCreateError {
     #[error("max_active must be greater than zero")]
     ZeroActiveCapacity,
+    #[error("failed to start managed command worker")]
+    WorkerStartFailed,
+    #[error("failed to bind command service operation group: {0}")]
+    GroupBinding(qubit_operation::GroupBindingError),
 }
 /// Executor configuration bound to an operation manager.
 #[derive(Clone)]
 pub struct CommandExecutor {
     manager: qubit_operation::OperationManager,
     config: CommandExecutionConfig,
+    pub(crate) scheduler: std::sync::Arc<scheduler::BoundedScheduler>,
+    pub(crate) backend: std::sync::Arc<backend::ProcessBackend>,
+    pub(crate) group: qubit_operation::OperationGroup,
+    pub(crate) recovery: std::sync::mpsc::SyncSender<adapter::cleanup::RecoveryItem>,
 }
 impl CommandExecutor {
     pub fn new(
@@ -70,7 +80,16 @@ impl CommandExecutor {
         config: CommandExecutionConfig,
     ) -> Result<Self, CommandExecutorCreateError> {
         config.validate()?;
-        Ok(Self { manager, config })
+        let (scheduler, backend, group, recovery, manager) =
+            executor::build_executor(manager.clone(), config.clone())?;
+        Ok(Self {
+            manager,
+            config,
+            scheduler: std::sync::Arc::new(scheduler),
+            backend: std::sync::Arc::new(backend),
+            group,
+            recovery,
+        })
     }
     /// Returns the immutable executor limits.
     pub fn config(&self) -> &CommandExecutionConfig {
@@ -81,6 +100,8 @@ impl CommandExecutor {
         &self.manager
     }
 }
+#[path = "execution/executor.rs"]
+mod executor;
 /// Frozen submission signatures implemented by the managed executor integration.
 pub trait CommandExecutorApi {
     fn submit(
@@ -215,6 +236,7 @@ pub struct CommandSubmitFailure {
 pub enum CommandSubmitFailureReason {
     Capacity(CapacityFailure),
     Admission(qubit_operation::AdmissionError),
+    GroupBinding(qubit_operation::GroupBindingError),
     Snapshot(SnapshotFailure),
 }
 /// Concrete diagnostic retained when submission snapshots cannot be captured.

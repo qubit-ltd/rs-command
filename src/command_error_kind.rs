@@ -65,4 +65,6 @@ pub enum CommandErrorKind {
     OutputLimitExceeded,
     /// The process exited with an unconfigured status.
     UnexpectedExit,
+    /// The operation manager rejected or failed a managed command operation.
+    ManagedOperationFailed,
 }

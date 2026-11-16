@@ -171,6 +171,8 @@ pub enum CommandErrorReason {
         /// Exit codes configured as successful.
         expected: Vec<i32>,
     },
+    /// The operation manager rejected or could not observe a managed command.
+    ManagedOperationFailed { diagnostic: String },
 }
 
 impl fmt::Debug for CommandErrorReason {
@@ -275,6 +277,9 @@ impl fmt::Debug for CommandErrorReason {
                 .field("timeout", timeout)
                 .finish(),
             Self::Cancelled => formatter.write_str("Cancelled"),
+            Self::ManagedOperationFailed { .. } => {
+                formatter.write_str("ManagedOperationFailed { diagnostic: <redacted> }")
+            }
             Self::OutputTruncated => formatter.write_str("OutputTruncated"),
             Self::OutputLimitExceeded { limit, observed } => formatter
                 .debug_struct("OutputLimitExceeded")

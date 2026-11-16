@@ -545,6 +545,9 @@ impl fmt::Display for CommandError {
             (CommandErrorReason::Cancelled, _) => {
                 write!(formatter, "command `{command}` was cancelled")
             }
+            (CommandErrorReason::ManagedOperationFailed { diagnostic }, _) => {
+                write!(formatter, "managed command operation failed: {diagnostic}")
+            }
             (CommandErrorReason::OutputTruncated, _) => write!(
                 formatter,
                 "command `{command}` completed successfully, but captured output was truncated"
@@ -629,6 +632,7 @@ impl From<&CommandErrorReason> for CommandErrorKind {
             CommandErrorReason::OutputTruncated => Self::OutputTruncated,
             CommandErrorReason::OutputLimitExceeded { .. } => Self::OutputLimitExceeded,
             CommandErrorReason::UnexpectedExit { .. } => Self::UnexpectedExit,
+            CommandErrorReason::ManagedOperationFailed { .. } => Self::ManagedOperationFailed,
         }
     }
 }
