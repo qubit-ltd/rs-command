@@ -11,6 +11,7 @@ use qubit_operation::OperationScope;
 use crate::Command;
 use crate::CommandError;
 use crate::CommandExecutor;
+use crate::CommandExecutorApi;
 use crate::CommandResourceRunOptions;
 use crate::CommandRunOptions;
 #[cfg(feature = "async")]
@@ -444,7 +445,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
         o: CommandRunOptions,
     ) -> Result<crate::CommandOutput, CommandError> {
         collect_async(
-            e.submit_async(self.clone(), c, o)
+            CommandExecutorApi::submit_async(e, self.clone(), c, o)
                 .map_err(|f| managed_error(format!("submission rejected: {:?}", f.reason)))?,
         )
         .await
@@ -471,7 +472,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
         o: CommandResourceRunOptions,
     ) -> Result<crate::CommandOutput, CommandError> {
         collect_async(
-            e.submit_async_resources(self.clone(), c, o)
+            CommandExecutorApi::submit_async_resources(e, self.clone(), c, o)
                 .map_err(|f| managed_error(format!("submission rejected: {:?}", f.reason)))?,
         )
         .await
@@ -547,7 +548,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
         o: CommandRunOptions,
     ) -> Result<crate::CommandOutput, CommandError> {
         collect_async(
-            e.submit_async_in(s, self.clone(), c, o)
+            CommandExecutorApi::submit_async_in(e, s, self.clone(), c, o)
                 .map_err(|f| managed_error(format!("submission rejected: {:?}", f.reason)))?,
         )
         .await
@@ -576,7 +577,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
         o: CommandResourceRunOptions,
     ) -> Result<crate::CommandOutput, CommandError> {
         collect_async(
-            e.submit_async_resources_in(s, self.clone(), c, o)
+            CommandExecutorApi::submit_async_resources_in(e, s, self.clone(), c, o)
                 .map_err(|f| managed_error(format!("submission rejected: {:?}", f.reason)))?,
         )
         .await

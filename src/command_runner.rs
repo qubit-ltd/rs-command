@@ -19,7 +19,6 @@ use std::time::Duration;
 pub use managed_command_runner_api::ManagedCommandRunnerApi;
 use qubit_clock::StdTimer;
 use qubit_clock::Timer;
-use qubit_operation::OperationContext;
 use qubit_redact::RedactionPolicy;
 use qubit_redact::Redactor;
 
@@ -40,7 +39,7 @@ use internal::running_command_resources::RunningCommandResources;
 use internal::starting_command::StartingCommand;
 use internal::stdin_pipe::write_stdin_session;
 use internal::total_output_budget::TotalOutputBudget;
-use run_tree_policy::RunTreePolicy;
+pub(crate) use run_tree_policy::RunTreePolicy;
 
 use crate::Command;
 use crate::CommandCancellation;
@@ -52,11 +51,7 @@ use crate::FileSinkPolicy;
 use crate::OutputStream;
 use crate::ProcessTreePolicy;
 use crate::command_run_options_parts::CommandRunOptionsParts;
-use crate::execution::backend::ReaperObserver;
-use crate::execution::backend::StartGate;
 use crate::execution::contracts::PreparedFiles;
-use crate::execution::contracts::ReservationLease;
-use crate::session::contracts::SessionBridge;
 
 /// Marker used when a configured working directory is redacted from
 /// diagnostics.
