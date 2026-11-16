@@ -28,6 +28,20 @@ impl StopPort for ChannelStop {
         let _ = self.0.send(reason);
     }
 }
+struct GatedStop {
+    requested: mpsc::Sender<StopReason>,
+    gate: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+}
+impl StopPort for GatedStop {
+    fn request_stop(&self, reason: StopReason) {
+        let _ = self.requested.send(reason);
+        let (released, changed) = &*self.gate;
+        let mut released = released.lock().unwrap();
+        while !*released {
+            released = changed.wait(released).unwrap();
+        }
+    }
+}
 struct Counter(AtomicUsize);
 impl Wake for Counter {
     fn wake(self: Arc<Self>) {
@@ -271,6 +285,66 @@ fn wait_next_requests_timeout_then_dispatches_completion_when_slot_opens() {
         "terminal completion"
     );
     thread.join().unwrap();
+}
+
+#[test]
+fn concurrent_workers_wait_for_timeout_stop_callback_to_return() {
+    let s = BoundedScheduler::new(config(1, 1, 2, 8)).unwrap();
+    let active = s.try_reserve(0).unwrap();
+    let scheduler_port: &dyn Scheduler = &s;
+    let permit = scheduler_port
+        .try_reserve_until(0, Some(Instant::now() + Duration::from_millis(20)))
+        .unwrap();
+    let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let stop_gate = gate.clone();
+    s.enqueue(
+        ScheduledJob {
+            run: Box::new(move |_| done_tx.send(()).unwrap()),
+            stop: Arc::new(GatedStop {
+                requested: stop_tx,
+                gate: stop_gate,
+            }),
+        },
+        permit,
+    )
+    .unwrap();
+
+    let (dispatch_tx, dispatch_rx) = mpsc::channel();
+    let (started_tx, started_rx) = mpsc::channel();
+    let worker = |id,
+                  scheduler: BoundedScheduler,
+                  dispatch: mpsc::Sender<usize>,
+                  started: Option<mpsc::Sender<()>>| {
+        std::thread::spawn(move || {
+            if let Some(started) = started {
+                started.send(()).unwrap();
+            }
+            if let Some((job, permit)) = scheduler.wait_next() {
+                dispatch.send(id).unwrap();
+                (job.run)(permit);
+            }
+        })
+    };
+    let first = worker(1, s.clone(), dispatch_tx.clone(), None);
+    assert_eq!(
+        stop_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        StopReason::Timeout
+    );
+    drop(active);
+    let second = worker(2, s.clone(), dispatch_tx, Some(started_tx));
+    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(dispatch_rx.recv_timeout(Duration::from_millis(30)).is_err());
+
+    let (released, changed) = &*gate;
+    *released.lock().unwrap() = true;
+    changed.notify_all();
+    dispatch_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    s.close_admission();
+    done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    first.join().unwrap();
+    second.join().unwrap();
 }
 #[test]
 fn close_after_reserve_returns_job_and_permit() {

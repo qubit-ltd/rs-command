@@ -234,19 +234,23 @@ impl BoundedScheduler {
     pub fn try_next(&self) -> Option<(ScheduledJob, Reservation)> {
         loop {
             let mut s = self.0.state.lock().unwrap();
-            if let Some(stop) = request_expired_stop(&mut s) {
+            if let Some((token, stop)) = request_expired_stop(&mut s) {
                 drop(s);
                 stop.request_stop(StopReason::Timeout);
+                timeout_stop_delivered(&self.0, token);
                 continue;
             }
             let pos = next_job_position(&s, &self.0.config);
             let mut q = s.workers.jobs.remove(pos?)?;
             if is_expired(&s, &q) && !q.timeout_requested {
                 q.timeout_requested = true;
+                q.timeout_pending = true;
+                let token = q.permit.token;
                 let stop = Arc::clone(&q.job.stop);
                 s.workers.jobs.insert(pos?, q);
                 drop(s);
                 stop.request_stop(StopReason::Timeout);
+                timeout_stop_delivered(&self.0, token);
                 continue;
             }
             promote(&mut s, &mut q);
@@ -334,7 +338,7 @@ fn is_expired(s: &State, q: &Queued) -> bool {
         .and_then(|r| r.deadline)
         .is_some_and(|deadline| Instant::now() >= deadline)
 }
-fn request_expired_stop(s: &mut State) -> Option<Arc<dyn crate::execution::StopPort>> {
+fn request_expired_stop(s: &mut State) -> Option<(u64, Arc<dyn crate::execution::StopPort>)> {
     let pos = s
         .workers
         .jobs
@@ -342,7 +346,16 @@ fn request_expired_stop(s: &mut State) -> Option<Arc<dyn crate::execution::StopP
         .position(|q| !q.timeout_requested && is_expired(s, q))?;
     let q = s.workers.jobs.get_mut(pos)?;
     q.timeout_requested = true;
-    Some(Arc::clone(&q.job.stop))
+    q.timeout_pending = true;
+    Some((q.permit.token, Arc::clone(&q.job.stop)))
+}
+fn timeout_stop_delivered(shared: &Arc<Shared>, token: u64) {
+    let mut s = shared.state.lock().unwrap();
+    if let Some(q) = s.workers.jobs.iter_mut().find(|q| q.permit.token == token) {
+        q.timeout_pending = false;
+    }
+    drop(s);
+    shared.changed.notify_all();
 }
 fn notify_capacity(shared: &Arc<Shared>, mut s: std::sync::MutexGuard<'_, State>) {
     let wakes = s.waiters.wake_all();
@@ -363,9 +376,9 @@ fn retain_lease(shared: &Arc<Shared>, token: u64) -> ReservationLease {
 }
 fn next_job_position(s: &State, c: &CommandExecutionConfig) -> Option<usize> {
     s.workers.jobs.iter().position(|q| {
-        s.records
-            .get(&q.permit.token)
-            .is_some_and(|r| r.kind == Kind::Active || s.active < c.max_active)
+        s.records.get(&q.permit.token).is_some_and(|r| {
+            !q.timeout_pending && (r.kind == Kind::Active || s.active < c.max_active)
+        })
     })
 }
 pub(super) fn deadline_wait_duration(
@@ -432,6 +445,7 @@ impl Scheduler for BoundedScheduler {
             job,
             permit,
             timeout_requested: false,
+            timeout_pending: false,
         });
         drop(s);
         self.0.changed.notify_all();
@@ -440,9 +454,10 @@ impl Scheduler for BoundedScheduler {
     fn wait_next(&self) -> Option<(ScheduledJob, Reservation)> {
         let mut s = self.0.state.lock().unwrap();
         loop {
-            if let Some(stop) = request_expired_stop(&mut s) {
+            if let Some((token, stop)) = request_expired_stop(&mut s) {
                 drop(s);
                 stop.request_stop(StopReason::Timeout);
+                timeout_stop_delivered(&self.0, token);
                 s = self.0.state.lock().unwrap();
                 continue;
             }
@@ -450,10 +465,13 @@ impl Scheduler for BoundedScheduler {
                 let mut q = s.workers.jobs.remove(pos)?;
                 if is_expired(&s, &q) && !q.timeout_requested {
                     q.timeout_requested = true;
+                    q.timeout_pending = true;
+                    let token = q.permit.token;
                     let stop = Arc::clone(&q.job.stop);
                     s.workers.jobs.insert(pos, q);
                     drop(s);
                     stop.request_stop(StopReason::Timeout);
+                    timeout_stop_delivered(&self.0, token);
                     s = self.0.state.lock().unwrap();
                     continue;
                 }
