@@ -32,8 +32,8 @@ impl qubit_command::session::contracts::SessionBridge for BridgeDefaults {
 
 #[test]
 fn test_public_stream_types_implement_qubit_io_traits() {
-    fn test_input<T: AsyncInput<Item = u8>>() {}
-    fn test_output<T: AsyncOutput<Item = u8> + AsyncClose>() {}
+    fn input<T: AsyncInput<Item = u8>>() {}
+    fn output<T: AsyncOutput<Item = u8> + AsyncClose>() {}
     input::<CommandStdout>();
     input::<CommandStderr>();
     output::<CommandStdin>();

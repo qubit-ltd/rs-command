@@ -8,7 +8,6 @@
 //! Mutable state protected by the managed byte channel's lock.
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
 use std::task::Waker;
 
 use super::output_budget::OutputBudget;

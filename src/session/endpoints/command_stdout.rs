@@ -46,12 +46,7 @@ impl OutputEndpointState for ByteChannel {
     ///
     /// * `cx` - Task context for pending reads.
     /// * `output` - Buffer receiving child output.
-    ///
-    /// # Safety
-    ///
-    /// The caller must uphold the async I/O trait contract for the supplied
-    /// buffer.
-    unsafe fn poll_read(&self, cx: &mut Context<'_>, output: &mut [u8]) -> Poll<io::Result<usize>> {
+    fn poll_read(&self, cx: &mut Context<'_>, output: &mut [u8]) -> Poll<io::Result<usize>> {
         ByteChannel::poll_read(self, cx, output)
     }
 }

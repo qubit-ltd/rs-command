@@ -121,7 +121,7 @@ impl ByteChannel {
             if let Some(budget) = s.budget.clone() {
                 let mut b = budget.state.lock().unwrap_or_else(|e| e.into_inner());
                 b.observed = b.observed.saturating_add(input.len() as u64);
-                if b.observed >= budget.limit {
+                if b.observed >= budget.limit() {
                     b.exceeded = true;
                 }
             }
@@ -146,12 +146,12 @@ impl ByteChannel {
                 s.incomplete = true;
                 return Poll::Ready(Ok(input.len()));
             }
-            let remaining = budget.limit.saturating_sub(b.observed).min(usize::MAX as u64) as usize;
+            let remaining = budget.limit().saturating_sub(b.observed).min(usize::MAX as u64) as usize;
             let available = CHANNEL_CAPACITY - s.bytes.len();
             let n = input.len().min(remaining).min(available);
             s.bytes.extend(&input[..n]);
             b.observed = b.observed.saturating_add(input.len() as u64);
-            let hit_limit = b.observed >= budget.limit;
+            let hit_limit = b.observed >= budget.limit();
             if hit_limit {
                 b.exceeded = true;
             }
@@ -313,7 +313,7 @@ impl ByteChannel {
                     if let Some(budget) = s.budget.clone() {
                         let mut b = budget.state.lock().unwrap_or_else(|e| e.into_inner());
                         b.observed = b.observed.saturating_add((bytes.len() - total_offset) as u64);
-                        if b.observed >= budget.limit {
+                        if b.observed >= budget.limit() {
                             b.exceeded = true;
                         }
                     }
@@ -324,7 +324,7 @@ impl ByteChannel {
                     if let Some(budget) = s.budget.clone() {
                         let mut b = budget.state.lock().unwrap_or_else(|e| e.into_inner());
                         b.observed = b.observed.saturating_add((bytes.len() - total_offset) as u64);
-                        if b.observed >= budget.limit {
+                        if b.observed >= budget.limit() {
                             b.exceeded = true;
                         }
                     }
@@ -353,7 +353,7 @@ impl ByteChannel {
                         s.incomplete = true;
                         return Ok(());
                     }
-                    let remaining = budget.limit.saturating_sub(b.observed).min(usize::MAX as u64) as usize;
+                    let remaining = budget.limit().saturating_sub(b.observed).min(usize::MAX as u64) as usize;
                     let offered = chunk.len() - offset;
                     let n = (CHANNEL_CAPACITY - s.bytes.len()).min(offered).min(remaining);
                     s.bytes.extend(&chunk[offset..offset + n]);
@@ -363,7 +363,7 @@ impl ByteChannel {
                     if n < offered {
                         s.incomplete = true;
                     }
-                    if b.observed >= budget.limit {
+                    if b.observed >= budget.limit() {
                         b.exceeded = true;
                     }
                     let waker = s.read_waker.take();
@@ -424,6 +424,7 @@ fn wake(w: Option<Waker>) {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
@@ -433,8 +434,6 @@ mod tests {
     use super::ByteChannel;
     use super::CHANNEL_CAPACITY;
     use super::MAX_BLOCK;
-    use super::channel_state::ChannelState;
-    use super::output_budget::OutputBudget;
     use crate::session::channel::SessionChannels;
     use crate::session::contracts::SessionBridge;
     use crate::session::contracts::SessionStreamPolicy;

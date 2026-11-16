@@ -38,7 +38,7 @@ fn test_zero_active_rejected_and_zero_queue_is_valid() {
 
 #[test]
 fn test_options_preserve_clone_and_managed_default() {
-    fn test_assert_clone<T: Clone>() {}
+    fn assert_clone<T: Clone>() {}
     assert_clone::<CommandRunOptions>();
     let options = CommandRunOptions::default();
     assert_eq!(options.process_tree_policy(), ProcessTreePolicy::Managed);
