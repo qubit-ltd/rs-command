@@ -60,6 +60,7 @@ impl<'a> StartingCommand<'a> {
     ///
     /// A guard that terminates the child unless initialization finishes.
     #[inline]
+    #[cfg(test)]
     pub(in crate::command_runner) const fn new(
         command: &'a str,
         child_process: ManagedChildProcess,
@@ -155,15 +156,7 @@ impl<'a> StartingCommand<'a> {
     /// registered.
     #[must_use = "transfer both the child and its I/O helpers to running state"]
     #[inline]
-    pub(in crate::command_runner) fn finish(
-        mut self,
-    ) -> (
-        ManagedChildProcess,
-        CommandIo,
-        Option<ReservationLease>,
-        Option<ReaperObserver>,
-        Option<Arc<dyn SessionBridge>>,
-    ) {
+    pub(in crate::command_runner) fn finish(mut self) -> FinishedStartingCommand {
         let child_process = self
             .child_process
             .take()
@@ -180,13 +173,13 @@ impl<'a> StartingCommand<'a> {
         let capacity_lease = self.capacity_lease.take();
         let reaper_observer = self.reaper_observer.take();
         let session_bridge = self.session_bridge.take();
-        (
+        FinishedStartingCommand {
             child_process,
-            CommandIo::new(stdout_reader, stderr_reader, stdin_writer),
+            io: CommandIo::new(stdout_reader, stderr_reader, stdin_writer),
             capacity_lease,
             reaper_observer,
             session_bridge,
-        )
+        }
     }
 
     /// Explicitly cleans up a failed initialization and preserves its primary
@@ -315,6 +308,14 @@ impl<'a> StartingCommand<'a> {
         ));
         failures
     }
+}
+
+pub(in crate::command_runner) struct FinishedStartingCommand {
+    pub(in crate::command_runner) child_process: ManagedChildProcess,
+    pub(in crate::command_runner) io: CommandIo,
+    pub(in crate::command_runner) capacity_lease: Option<ReservationLease>,
+    pub(in crate::command_runner) reaper_observer: Option<ReaperObserver>,
+    pub(in crate::command_runner) session_bridge: Option<Arc<dyn SessionBridge>>,
 }
 
 impl Drop for StartingCommand<'_> {

@@ -33,7 +33,7 @@ use internal::output_collector::read_output_stream;
 use internal::output_reader::OutputReader;
 use internal::prepared_command::PreparedCommand;
 use internal::process_launcher::spawn_child;
-use internal::running_command::RunningCommand;
+use internal::running_command::{RunningCommand, RunningCommandResources};
 use internal::starting_command::StartingCommand;
 use internal::stdin_pipe::write_stdin_session;
 use internal::total_output_budget::TotalOutputBudget;
@@ -53,6 +53,17 @@ use crate::execution::backend::StartGate;
 use crate::execution::contracts::PreparedFiles;
 use crate::execution::contracts::ReservationLease;
 use crate::session::contracts::SessionBridge;
+
+#[derive(Default)]
+pub(crate) struct RunTreePolicy<'a> {
+    pub(crate) managed_policy: Option<ProcessTreePolicy>,
+    pub(crate) start_gate: Option<&'a StartGate>,
+    pub(crate) prepared_files: Option<PreparedFiles>,
+    pub(crate) capacity_lease: Option<ReservationLease>,
+    pub(crate) reaper_observer: Option<ReaperObserver>,
+    pub(crate) session_bridge: Option<Arc<dyn SessionBridge>>,
+    pub(crate) operation_context: Option<OperationContext>,
+}
 
 /// Marker used when a configured working directory is redacted from
 /// diagnostics.
@@ -523,7 +534,7 @@ impl CommandRunner {
         command: Command,
         options: CommandRunOptions,
     ) -> Result<CommandOutput, CommandError> {
-        self.run_with_tree_policy(command, options, None, None, None, None, None, None, None)
+        self.run_with_tree_policy(command, options, RunTreePolicy::default())
     }
 
     /// Runs a command with an explicit process-tree policy for managed callers.
@@ -531,14 +542,17 @@ impl CommandRunner {
         &self,
         command: Command,
         options: CommandRunOptions,
-        managed_policy: Option<ProcessTreePolicy>,
-        start_gate: Option<&StartGate>,
-        prepared_files: Option<PreparedFiles>,
-        capacity_lease: Option<ReservationLease>,
-        reaper_observer: Option<ReaperObserver>,
-        session_bridge: Option<Arc<dyn SessionBridge>>,
-        operation_context: Option<OperationContext>,
+        tree_policy: RunTreePolicy<'_>,
     ) -> Result<CommandOutput, CommandError> {
+        let RunTreePolicy {
+            managed_policy,
+            start_gate,
+            prepared_files,
+            capacity_lease,
+            reaper_observer,
+            session_bridge,
+            operation_context,
+        } = tree_policy;
         #[cfg(not(any(unix, windows)))]
         if managed_policy == Some(ProcessTreePolicy::Managed) {
             let diagnostic = command.display_command(&self.diagnostic_redaction_policy);
@@ -714,21 +728,25 @@ impl CommandRunner {
             return Err(starting_command.abort_managed(error));
         }
 
-        let (child_process, command_io, capacity_lease, reaper_observer, session_bridge) =
-            starting_command.finish();
-        let command_io = command_io.with_session_bridge(session_bridge.clone());
+        let finished_start = starting_command.finish();
+        let child_process = finished_start.child_process;
+        let command_io = finished_start
+            .io
+            .with_session_bridge(finished_start.session_bridge.clone());
         let finished = RunningCommand::new_with_reaper(
             command_text,
             child_process,
             command_io,
             started_at,
             Arc::clone(&self.timer),
-            cancellation,
-            total_budget,
-            capacity_lease,
-            reaper_observer,
-            session_bridge,
-            operation_context,
+            RunningCommandResources {
+                cancellation_token: cancellation,
+                total_budget,
+                capacity_lease: finished_start.capacity_lease,
+                reaper_observer: finished_start.reaper_observer,
+                session_bridge: finished_start.session_bridge,
+                operation_context,
+            },
         )
         .wait_for_completion(self.timeout)?;
         let FinishedCommand {

@@ -230,10 +230,9 @@ impl PreparedExternalOperation<CommandOutput, CommandError> for AdapterState {
         if let Some(reason) = qubit_operation::OperationControl::snapshot(&*self.control)
             .stop
             .map(|x| x.reason)
+            && let Some(stop) = self.stop.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
         {
-            if let Some(stop) = self.stop.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-                stop.request_stop(reason)
-            }
+            stop.request_stop(reason)
         }
         match self.scheduler.enqueue(job, permit) {
             Ok(()) => Ok(()),

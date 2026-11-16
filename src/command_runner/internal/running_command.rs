@@ -56,6 +56,15 @@ pub(in crate::command_runner) struct RunningCommand {
     operation_context: Option<OperationContext>,
 }
 
+pub(in crate::command_runner) struct RunningCommandResources {
+    pub(in crate::command_runner) cancellation_token: Option<CommandCancellation>,
+    pub(in crate::command_runner) total_budget: Option<Arc<TotalOutputBudget>>,
+    pub(in crate::command_runner) capacity_lease: Option<ReservationLease>,
+    pub(in crate::command_runner) reaper_observer: Option<ReaperObserver>,
+    pub(in crate::command_runner) session_bridge: Option<Arc<dyn SessionBridge>>,
+    pub(in crate::command_runner) operation_context: Option<OperationContext>,
+}
+
 impl RunningCommand {
     /// Creates a running command state object.
     ///
@@ -74,6 +83,7 @@ impl RunningCommand {
     ///
     /// Running command state that owns the process and its I/O helpers.
     #[inline]
+    #[cfg(test)]
     pub(in crate::command_runner) fn new(
         command_text: String,
         child_process: ManagedChildProcess,
@@ -89,12 +99,14 @@ impl RunningCommand {
             io,
             started_at,
             timer,
-            cancellation_token,
-            total_budget,
-            None,
-            None,
-            None,
-            None,
+            RunningCommandResources {
+                cancellation_token,
+                total_budget,
+                capacity_lease: None,
+                reaper_observer: None,
+                session_bridge: None,
+                operation_context: None,
+            },
         )
     }
 
@@ -104,12 +116,7 @@ impl RunningCommand {
         io: CommandIo,
         started_at: MonotonicInstant,
         timer: Arc<dyn Timer>,
-        cancellation_token: Option<CommandCancellation>,
-        total_budget: Option<Arc<TotalOutputBudget>>,
-        capacity_lease: Option<ReservationLease>,
-        reaper_observer: Option<ReaperObserver>,
-        session_bridge: Option<Arc<dyn SessionBridge>>,
-        operation_context: Option<OperationContext>,
+        resources: RunningCommandResources,
     ) -> Self {
         Self {
             command_text,
@@ -117,12 +124,12 @@ impl RunningCommand {
             io,
             started_at,
             timer,
-            cancellation_token,
-            total_budget,
-            capacity_lease,
-            reaper_observer,
-            session_bridge,
-            operation_context,
+            cancellation_token: resources.cancellation_token,
+            total_budget: resources.total_budget,
+            capacity_lease: resources.capacity_lease,
+            reaper_observer: resources.reaper_observer,
+            session_bridge: resources.session_bridge,
+            operation_context: resources.operation_context,
         }
     }
 
@@ -617,6 +624,7 @@ impl RunningCommand {
 
 #[cfg(test)]
 mod tests {
+    use super::RunningCommandResources;
     use std::io;
     use std::io::Cursor;
     #[cfg(unix)]
@@ -1942,12 +1950,14 @@ mod tests {
             CommandIo::new(successful_reader(), joined_stderr_reader(), None),
             started.now(),
             timer.new_timer(),
-            None,
-            None,
-            Some(lease),
-            Some(observer.clone()),
-            None,
-            None,
+            RunningCommandResources {
+                cancellation_token: None,
+                total_budget: None,
+                capacity_lease: Some(lease),
+                reaper_observer: Some(observer.clone()),
+                session_bridge: None,
+                operation_context: None,
+            },
         );
         let error = match command.resolve_event(RunEvent::Cancelled { status: None }, None) {
             Ok(_) => panic!("stop remains an error while the reaper completes cleanup"),

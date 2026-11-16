@@ -423,12 +423,12 @@ fn next_job_position(s: &State, c: &CommandExecutionConfig) -> Option<usize> {
 }
 fn promote(s: &mut State, q: &mut Queued) {
     let token = q.permit.token;
-    if let Some(r) = s.records.get_mut(&token) {
-        if r.kind == Kind::Queued {
-            s.queued = s.queued.saturating_sub(1);
-            s.active += 1;
-            r.kind = Kind::Active
-        }
+    if let Some(r) = s.records.get_mut(&token)
+        && r.kind == Kind::Queued
+    {
+        s.queued = s.queued.saturating_sub(1);
+        s.active += 1;
+        r.kind = Kind::Active
     }
 }
 impl Scheduler for BoundedScheduler {

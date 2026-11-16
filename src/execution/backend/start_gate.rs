@@ -57,19 +57,13 @@ impl StartGate {
         won_before_start
     }
 
+    #[cfg(test)]
     pub(crate) fn stop_requested(&self) -> bool {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).stopped
     }
 
     pub(crate) fn stop_reason(&self) -> Option<StopReason> {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).reason
-    }
-
-    pub(crate) fn authorized(&self) -> bool {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .authorized
     }
 }
 
@@ -259,13 +253,12 @@ mod tests {
                     .arg("-c")
                     .arg("read value; printf '%s' \"$value\"; printf 'stderr' >&2"),
                 CommandRunOptions::new().cancellation(gate.cancellation()),
-                Some(crate::ProcessTreePolicy::Managed),
-                Some(&gate),
-                None,
-                None,
-                None,
-                Some(Arc::clone(&bridge) as Arc<dyn SessionBridge>),
-                None,
+                crate::command_runner::RunTreePolicy {
+                    managed_policy: Some(crate::ProcessTreePolicy::Managed),
+                    start_gate: Some(&gate),
+                    session_bridge: Some(Arc::clone(&bridge) as Arc<dyn SessionBridge>),
+                    ..Default::default()
+                },
             )
             .expect("session command should complete");
 
@@ -286,13 +279,12 @@ mod tests {
                     .arg("-c")
                     .arg("printf abc; exec sleep 30"),
                 CommandRunOptions::new().cancellation(gate.cancellation()),
-                Some(crate::ProcessTreePolicy::Managed),
-                Some(&gate),
-                None,
-                None,
-                None,
-                Some(Arc::clone(&bridge) as Arc<dyn SessionBridge>),
-                None,
+                crate::command_runner::RunTreePolicy {
+                    managed_policy: Some(crate::ProcessTreePolicy::Managed),
+                    start_gate: Some(&gate),
+                    session_bridge: Some(Arc::clone(&bridge) as Arc<dyn SessionBridge>),
+                    ..Default::default()
+                },
             )
             .expect_err("aggregate session limit should stop the child");
 
@@ -337,13 +329,12 @@ mod tests {
                     .arg("managed-test")
                     .arg(&ready_arg),
                 CommandRunOptions::new().cancellation(run_gate.cancellation()),
-                Some(crate::ProcessTreePolicy::Managed),
-                Some(&run_gate),
-                None,
-                None,
-                None,
-                None,
-                Some(runner_context),
+                crate::command_runner::RunTreePolicy {
+                    managed_policy: Some(crate::ProcessTreePolicy::Managed),
+                    start_gate: Some(&run_gate),
+                    operation_context: Some(runner_context),
+                    ..Default::default()
+                },
             )
         });
         let started = Instant::now();
@@ -376,13 +367,11 @@ mod tests {
             CommandRunOptions::new()
                 .cancellation(gate.cancellation())
                 .tee_stdout_to_file(&tee),
-            Some(crate::ProcessTreePolicy::Managed),
-            Some(&gate),
-            None,
-            None,
-            None,
-            None,
-            None,
+            crate::command_runner::RunTreePolicy {
+                managed_policy: Some(crate::ProcessTreePolicy::Managed),
+                start_gate: Some(&gate),
+                ..Default::default()
+            },
         );
         assert_eq!(
             result.unwrap_err().kind(),
@@ -408,13 +397,11 @@ mod tests {
                     .arg("managed-test")
                     .arg(&ready_arg),
                 CommandRunOptions::new().cancellation(run_gate.cancellation()),
-                Some(crate::ProcessTreePolicy::Managed),
-                Some(&run_gate),
-                None,
-                None,
-                None,
-                None,
-                None,
+                crate::command_runner::RunTreePolicy {
+                    managed_policy: Some(crate::ProcessTreePolicy::Managed),
+                    start_gate: Some(&run_gate),
+                    ..Default::default()
+                },
             )
         });
         let started = Instant::now();

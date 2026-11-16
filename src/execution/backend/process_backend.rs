@@ -15,7 +15,7 @@ use std::time::Duration;
 
 struct PreparationRecoveryOwner {
     retained: Mutex<Option<(FilePreparationFailure, qubit_operation::OperationScope)>>,
-    capacity_lease: Mutex<Option<crate::execution::contracts::ReservationLease>>,
+    _capacity_lease: Mutex<Option<crate::execution::contracts::ReservationLease>>,
 }
 
 impl RecoveryOwner for PreparationRecoveryOwner {
@@ -218,7 +218,7 @@ impl Backend for ProcessBackend {
                         let capacity_lease = reservation.retain();
                         let owner: Box<dyn RecoveryOwner> = Box::new(PreparationRecoveryOwner {
                             retained: Mutex::new(Some((failure, scope))),
-                            capacity_lease: Mutex::new(Some(capacity_lease)),
+                            _capacity_lease: Mutex::new(Some(capacity_lease)),
                         });
                         if let Err(error) = sink.publish_outcome(OperationOutcome::Failed(error)) {
                             log::error!("failed to publish preparation failure outcome: {error:?}");
@@ -245,13 +245,15 @@ impl Backend for ProcessBackend {
             Ok(files) => request.runner.run_with_tree_policy(
                 request.command,
                 options,
-                Some(tree_policy),
-                Some(&stop),
-                files,
-                Some(capacity_lease),
-                Some(reaper_observer.clone()),
-                session_bridge.clone(),
-                request.deadline.clone(),
+                crate::command_runner::RunTreePolicy {
+                    managed_policy: Some(tree_policy),
+                    start_gate: Some(&stop),
+                    prepared_files: files,
+                    capacity_lease: Some(capacity_lease),
+                    reaper_observer: Some(reaper_observer.clone()),
+                    session_bridge: session_bridge.clone(),
+                    operation_context: request.deadline.clone(),
+                },
             ),
             Err(error) => Err(error),
         };
