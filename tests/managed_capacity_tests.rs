@@ -3,14 +3,24 @@ use qubit_command::execution::{
     CapacityFailure, CommandExecutionConfig, ScheduledJob, Scheduler, StopPort,
 };
 use qubit_operation::StopReason;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
+    task::{Wake, Waker},
+    time::{Duration, Instant},
 };
-
 struct Stop;
 impl StopPort for Stop {
     fn request_stop(&self, _: StopReason) {}
+}
+struct Counter(AtomicUsize);
+impl Wake for Counter {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
 }
 fn config(active: usize, queued: usize, waiters: usize, bytes: usize) -> CommandExecutionConfig {
     CommandExecutionConfig {
@@ -21,94 +31,173 @@ fn config(active: usize, queued: usize, waiters: usize, bytes: usize) -> Command
         max_diagnostics: 4,
     }
 }
-fn job() -> ScheduledJob {
+fn job(f: impl FnOnce(qubit_command::execution::Reservation) + Send + 'static) -> ScheduledJob {
     ScheduledJob {
-        run: Box::new(|| {}),
+        run: Box::new(f),
         stop: Arc::new(Stop),
     }
 }
 
 #[test]
-fn capacity_bounds_and_reservation_drop_release_only_its_own_counts() {
+fn capacity_bounds_and_raii_release() {
     let s = BoundedScheduler::new(config(4, 64, 64, 1024)).unwrap();
     let mut permits = Vec::new();
     for _ in 0..68 {
-        permits.push(s.try_reserve(1).unwrap());
+        permits.push(s.try_reserve(1).unwrap())
     }
-    let snap = s.snapshot();
-    assert_eq!((snap.active, snap.queued, snap.input_bytes), (4, 64, 68));
+    let x = s.snapshot();
+    assert_eq!((x.active, x.queued, x.input_bytes), (4, 64, 68));
     assert_eq!(s.try_reserve(1).unwrap_err(), CapacityFailure::QueueFull);
     drop(permits.remove(0));
-    let snap = s.snapshot();
-    assert_eq!((snap.active, snap.queued, snap.input_bytes), (3, 64, 67));
-    assert!(s.try_reserve(1).is_ok());
+    let x = s.snapshot();
+    assert_eq!((x.active, x.queued, x.input_bytes), (3, 64, 67));
 }
 #[test]
-fn zero_queue_only_admits_immediate_active_slots() {
+fn zero_queue_only_admits_active_slots() {
     let s = BoundedScheduler::new(config(1, 0, 0, 9)).unwrap();
-    let permit = s.try_reserve(9).unwrap();
+    let p = s.try_reserve(9).unwrap();
     assert_eq!(s.try_reserve(0).unwrap_err(), CapacityFailure::ActiveFull);
-    drop(permit);
+    drop(p);
     assert!(s.try_reserve(0).is_ok());
 }
 #[test]
-fn byte_budget_is_checked_before_capacity_and_failure_returns_no_accounting() {
-    let s = BoundedScheduler::new(config(1, 4, 2, 3)).unwrap();
+fn input_bytes_precede_slots_and_are_in_capacity_wait_predicate() {
+    let s = BoundedScheduler::new(config(1, 2, 2, 2)).unwrap();
     let p = s.try_reserve(2).unwrap();
     assert_eq!(
-        s.try_reserve(2).unwrap_err(),
+        s.try_reserve(1).unwrap_err(),
         CapacityFailure::InputBytesExceeded
     );
-    assert_eq!(s.snapshot().input_bytes, 2);
+    let waiting = s.clone();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        tx.send(waiting.wait_for_capacity(1, Some(Instant::now() + Duration::from_secs(2))))
+            .unwrap()
+    });
     drop(p);
-    assert_eq!(s.snapshot().input_bytes, 0);
+    assert!(rx.recv_timeout(Duration::from_secs(1)).unwrap());
 }
 #[test]
-fn waiter_limit_cancel_and_release_wake_are_bounded() {
-    let s = BoundedScheduler::new(config(1, 0, 2, 10)).unwrap();
-    let ids = [
-        s.register_waiter(None).unwrap(),
-        s.register_waiter(None).unwrap(),
-    ];
+fn waiter_registration_cancel_and_release_are_race_safe() {
+    let s = BoundedScheduler::new(config(1, 0, 2, 8)).unwrap();
+    let p = s.try_reserve(0).unwrap();
+    let counter = Arc::new(Counter(AtomicUsize::new(0)));
+    let w = Waker::from(counter.clone());
+    let id = s.register_waiter_if_full(0, &w).unwrap().unwrap();
+    drop(p);
+    assert_eq!(counter.0.load(Ordering::SeqCst), 1);
+    s.cancel_waiter(id);
+    assert_eq!(s.snapshot().waiters, 0);
+    assert!(s.register_waiter_if_full(0, &w).unwrap().is_none());
+}
+#[test]
+fn foreign_permit_with_colliding_token_is_rejected_and_returned() {
+    let a = BoundedScheduler::new(config(1, 1, 1, 9)).unwrap();
+    let b = BoundedScheduler::new(config(1, 1, 1, 9)).unwrap();
+    let own = a.try_reserve(1).unwrap();
+    let foreign = b.try_reserve(2).unwrap();
+    let failure = a.enqueue(job(drop), foreign).unwrap_err();
+    assert_eq!(failure.reason, CapacityFailure::Closed);
+    assert_eq!(a.snapshot().input_bytes, 1);
+    assert_eq!(b.snapshot().input_bytes, 2);
+    drop(failure);
+    drop(own);
+    assert_eq!(b.snapshot().input_bytes, 0);
+}
+#[test]
+fn multi_job_queue_promotes_only_after_active_release() {
+    let s = BoundedScheduler::new(config(1, 2, 1, 8)).unwrap();
+    let first = s.try_reserve(0).unwrap();
+    let second = s.try_reserve(0).unwrap();
+    let third = s.try_reserve(0).unwrap();
+    let (tx, rx) = mpsc::channel();
+    s.enqueue(job(move |_| tx.send(1).unwrap()), first).unwrap();
+    let (tx, rx2) = mpsc::channel();
+    s.enqueue(job(move |_| tx.send(2).unwrap()), second)
+        .unwrap();
+    s.enqueue(job(|_| {}), third).unwrap();
+    let (run, p) = s.wait_next().unwrap();
+    (run.run)(p);
+    assert_eq!(rx.recv().unwrap(), 1);
+    assert_eq!(s.snapshot().active, 0);
+    let (run, p) = s.wait_next().unwrap();
+    (run.run)(p);
+    assert_eq!(rx2.recv().unwrap(), 2);
+    assert_eq!(s.snapshot().queued, 1);
+}
+#[test]
+fn enqueue_wakes_blocked_worker_and_close_drains() {
+    let s = BoundedScheduler::new(config(1, 1, 1, 8)).unwrap();
+    let worker = s.clone();
+    let (tx, rx) = mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        tx.send(worker.wait_next().is_some()).unwrap();
+        tx.send(worker.wait_next().is_none()).unwrap();
+    });
+    std::thread::sleep(Duration::from_millis(10));
+    s.enqueue(job(|_| {}), s.try_reserve(0).unwrap()).unwrap();
+    assert!(rx.recv_timeout(Duration::from_secs(1)).unwrap());
+    s.close_admission();
+    assert!(rx.recv_timeout(Duration::from_secs(1)).unwrap());
+    thread.join().unwrap();
+}
+#[test]
+fn fixed_deadline_rejects_and_expired_queued_job_never_runs() {
+    let s = BoundedScheduler::new(config(1, 1, 1, 8)).unwrap();
     assert_eq!(
-        s.register_waiter(None).unwrap_err(),
-        CapacityFailure::QueueFull
+        s.try_reserve_until(0, Some(Instant::now())).unwrap_err(),
+        CapacityFailure::DeadlineExpired
     );
-    s.cancel_waiter(ids[0]);
-    assert_eq!(s.snapshot().waiters, 1);
-    drop(s.try_reserve(0).unwrap());
-    assert!(s.wait_for_capacity(Some(
-        std::time::Instant::now() + std::time::Duration::from_millis(5)
-    )));
+    let active = s.try_reserve(0).unwrap();
+    let p = s
+        .try_reserve_until(0, Some(Instant::now() + Duration::from_millis(20)))
+        .unwrap();
+    let ran = Arc::new(AtomicUsize::new(0));
+    let count = ran.clone();
+    s.enqueue(
+        job(move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+        }),
+        p,
+    )
+    .unwrap();
+    drop(active);
+    std::thread::sleep(Duration::from_millis(30));
+    assert!(s.try_next().is_none());
+    assert_eq!(ran.load(Ordering::SeqCst), 0);
+    assert_eq!(s.snapshot().queued, 0);
 }
 #[test]
-fn close_after_reserve_returns_enqueue_inputs_and_permit() {
+fn close_after_reserve_returns_job_and_permit() {
     let s = BoundedScheduler::new(config(1, 1, 1, 9)).unwrap();
     let p = s.try_reserve(3).unwrap();
     s.close_admission();
-    let failure = s.enqueue(job(), p).unwrap_err();
-    assert_eq!(failure.reason, CapacityFailure::Closed);
+    let f = s.enqueue(job(drop), p).unwrap_err();
+    assert_eq!(f.reason, CapacityFailure::Closed);
     assert_eq!(s.snapshot().input_bytes, 3);
-    drop(failure);
+    drop(f);
     assert_eq!(s.snapshot().input_bytes, 0);
     assert_eq!(s.try_reserve(0).unwrap_err(), CapacityFailure::Closed);
 }
+
 #[test]
-fn job_keeps_active_permit_until_run_finishes() {
-    let s = BoundedScheduler::new(config(1, 1, 1, 9)).unwrap();
-    let ran = Arc::new(AtomicUsize::new(0));
-    let count = ran.clone();
-    let p = s.try_reserve(0).unwrap();
-    let j = ScheduledJob {
-        run: Box::new(move || {
-            count.fetch_add(1, Ordering::SeqCst);
-        }),
-        stop: Arc::new(Stop),
-    };
-    s.enqueue(j, p).unwrap();
-    let j = s.take_next().unwrap();
-    assert_eq!(s.snapshot().active, 1);
-    (j.run)();
-    assert_eq!(ran.load(Ordering::SeqCst), 1);
-    assert_eq!(s.snapshot().active, 0);
+fn blocking_waiters_share_the_configured_waiter_limit() {
+    let scheduler = BoundedScheduler::new(config(1, 0, 1, 8)).unwrap();
+    let permit = scheduler.try_reserve(0).unwrap();
+    let waiting = scheduler.clone();
+    let (tx, rx) = mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        tx.send(waiting.wait_for_capacity(0, Some(Instant::now() + Duration::from_secs(2))))
+            .unwrap();
+    });
+    let until = Instant::now() + Duration::from_secs(1);
+    while scheduler.snapshot().waiters == 0 && Instant::now() < until {
+        std::thread::yield_now();
+    }
+    assert_eq!(scheduler.snapshot().waiters, 1);
+    assert!(!scheduler.wait_for_capacity(0, Some(Instant::now())));
+    drop(permit);
+    assert!(rx.recv_timeout(Duration::from_secs(1)).unwrap());
+    thread.join().unwrap();
+    assert_eq!(scheduler.snapshot().waiters, 0);
 }

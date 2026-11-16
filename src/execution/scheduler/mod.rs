@@ -45,11 +45,23 @@ mod tests {
     fn fixed_deadline_expires_without_capacity() {
         let scheduler = BoundedScheduler::new(config()).unwrap();
         let _permit = scheduler.try_reserve(0).unwrap();
-        assert!(!scheduler.wait_for_capacity(Some(std::time::Instant::now())));
+        assert!(!scheduler.wait_for_capacity(0, Some(std::time::Instant::now())));
         scheduler.register_waiter(None).unwrap();
         assert_eq!(
             scheduler.register_waiter(None).unwrap_err(),
             CapacityFailure::QueueFull
         );
+    }
+    #[test]
+    fn helper_lease_keeps_active_slot_after_job_permit_drops() {
+        let scheduler = BoundedScheduler::new(config()).unwrap();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let helper = permit.retain();
+        drop(permit);
+        assert_eq!(scheduler.snapshot().active, 1);
+        assert_eq!(scheduler.snapshot().residual_helpers, 1);
+        drop(helper);
+        assert_eq!(scheduler.snapshot().active, 0);
+        assert_eq!(scheduler.snapshot().residual_helpers, 0);
     }
 }
