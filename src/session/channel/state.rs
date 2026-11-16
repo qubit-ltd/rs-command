@@ -22,7 +22,6 @@ struct State {
 }
 
 struct BudgetState {
-    written: u64,
     observed: u64,
     exceeded: bool,
 }
@@ -30,9 +29,6 @@ struct BudgetState {
 pub(crate) struct OutputBudget {
     limit: u64,
     state: Mutex<BudgetState>,
-    wait_gate: Mutex<()>,
-    changed: Condvar,
-    waiters: Mutex<Vec<Waker>>,
 }
 
 impl OutputBudget {
@@ -40,13 +36,9 @@ impl OutputBudget {
         Self {
             limit,
             state: Mutex::new(BudgetState {
-                written: 0,
                 observed: 0,
                 exceeded: limit == 0,
             }),
-            wait_gate: Mutex::new(()),
-            changed: Condvar::new(),
-            waiters: Mutex::new(Vec::new()),
         }
     }
 
@@ -67,36 +59,11 @@ impl OutputBudget {
     pub(crate) fn limit(&self) -> u64 {
         self.limit
     }
-
-    fn register_waiter(&self, waker: &Waker) {
-        let mut waiters = self.waiters.lock().unwrap_or_else(|e| e.into_inner());
-        if waiters.iter().all(|old| !old.will_wake(waker)) {
-            waiters.push(waker.clone());
-        }
-    }
-
-    fn notify_space(&self) {
-        let _gate = self.wait_gate.lock().unwrap_or_else(|e| e.into_inner());
-        self.changed.notify_all();
-    }
-
-    fn notify_exceeded(&self) {
-        {
-            let _gate = self.wait_gate.lock().unwrap_or_else(|e| e.into_inner());
-            self.changed.notify_all();
-        }
-        let waiters = std::mem::take(&mut *self.waiters.lock().unwrap_or_else(|e| e.into_inner()));
-        for waker in waiters {
-            waker.wake();
-        }
-    }
 }
 
 pub(crate) struct ByteChannel {
     state: Mutex<State>,
     changed: Condvar,
-    #[cfg(test)]
-    wait_entered: (Mutex<usize>, Condvar),
 }
 
 impl ByteChannel {
@@ -121,30 +88,7 @@ impl ByteChannel {
                 budget,
             }),
             changed: Condvar::new(),
-            #[cfg(test)]
-            wait_entered: (Mutex::new(0), Condvar::new()),
         }
-    }
-
-    #[cfg(test)]
-    fn note_wait(&self) {
-        let (lock, condition) = &self.wait_entered;
-        *lock.lock().unwrap_or_else(|e| e.into_inner()) += 1;
-        condition.notify_all();
-    }
-
-    #[cfg(test)]
-    fn wait_until_blocked(&self) {
-        let (lock, condition) = &self.wait_entered;
-        let mut count = lock.lock().unwrap_or_else(|e| e.into_inner());
-        while *count == 0 {
-            count = condition.wait(count).unwrap_or_else(|e| e.into_inner());
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn wait_until_blocked_for_test(&self) {
-        self.wait_until_blocked();
     }
 
     pub(crate) fn poll_write(
@@ -196,45 +140,27 @@ impl ByteChannel {
                 s.incomplete = true;
                 return Poll::Ready(Ok(input.len()));
             }
-            let remaining = budget.limit.saturating_sub(b.written);
-            if remaining == 0 {
-                b.exceeded = true;
-                b.observed = b.observed.saturating_add(input.len() as u64);
-                s.incomplete = true;
-                return Poll::Ready(Ok(input.len()));
-            }
-            let offered = input.len().min(remaining.min(usize::MAX as u64) as usize);
+            let remaining = budget
+                .limit
+                .saturating_sub(b.observed)
+                .min(usize::MAX as u64) as usize;
             let available = CHANNEL_CAPACITY - s.bytes.len();
-            if available == 0 {
-                register(&mut s.write_waker, cx.waker());
-                budget.register_waiter(cx.waker());
-                return Poll::Pending;
-            }
-            let n = offered.min(available);
+            let n = input.len().min(remaining).min(available);
             s.bytes.extend(&input[..n]);
-            b.written += n as u64;
-            let hit_limit = b.written >= budget.limit;
+            b.observed = b.observed.saturating_add(input.len() as u64);
+            let hit_limit = b.observed >= budget.limit;
             if hit_limit {
                 b.exceeded = true;
             }
-            if hit_limit && input.len() > n {
+            if input.len() > n {
                 s.incomplete = true;
             }
-            b.observed = b.observed.saturating_add(if hit_limit {
-                input.len() as u64
-            } else {
-                n as u64
-            });
-            let accepted = if hit_limit { input.len() } else { n };
             let waker = s.read_waker.take();
             self.changed.notify_all();
             drop(b);
             drop(s);
             wake(waker);
-            if hit_limit {
-                budget.notify_exceeded();
-            }
-            return Poll::Ready(Ok(accepted));
+            return Poll::Ready(Ok(input.len()));
         }
         let available = CHANNEL_CAPACITY - s.bytes.len();
         if available == 0 {
@@ -269,13 +195,9 @@ impl ByteChannel {
                 *slot = s.bytes.pop_front().expect("length checked");
             }
             let waker = s.write_waker.take();
-            let budget = s.budget.clone();
             self.changed.notify_all();
             drop(s);
             wake(waker);
-            if let Some(budget) = budget {
-                budget.notify_space();
-            }
             return Poll::Ready(Ok(n));
         }
         if s.writer_closed {
@@ -304,13 +226,9 @@ impl ByteChannel {
         s.incomplete = !s.bytes.is_empty();
         s.bytes.clear();
         let waker = s.write_waker.take();
-        let budget = s.budget.clone();
         self.changed.notify_all();
         drop(s);
         wake(waker);
-        if let Some(budget) = budget {
-            budget.notify_space();
-        }
     }
 
     pub(crate) fn incomplete(&self) -> bool {
@@ -324,6 +242,13 @@ impl ByteChannel {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .broken_pipe
+    }
+
+    pub(crate) fn record_broken_pipe(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .broken_pipe = true;
     }
 
     pub(crate) fn blocking_read(&self, out: &mut [u8]) -> io::Result<usize> {
@@ -342,13 +267,9 @@ impl ByteChannel {
             *slot = s.bytes.pop_front().expect("length checked");
         }
         let waker = s.write_waker.take();
-        let budget = s.budget.clone();
         self.changed.notify_all();
         drop(s);
         wake(waker);
-        if let Some(budget) = budget {
-            budget.notify_space();
-        }
         Ok(n)
     }
 
@@ -385,7 +306,7 @@ impl ByteChannel {
                 }
                 if let Some(budget) = s.budget.clone() {
                     let mut b = budget.state.lock().unwrap_or_else(|e| e.into_inner());
-                    if b.exceeded || b.written >= budget.limit {
+                    if b.exceeded {
                         b.exceeded = true;
                         b.observed = b
                             .observed
@@ -393,58 +314,29 @@ impl ByteChannel {
                         s.incomplete = true;
                         return Ok(());
                     }
-                    let remaining = (budget.limit - b.written).min(usize::MAX as u64) as usize;
+                    let remaining = budget
+                        .limit
+                        .saturating_sub(b.observed)
+                        .min(usize::MAX as u64) as usize;
+                    let offered = chunk.len() - offset;
                     let n = (CHANNEL_CAPACITY - s.bytes.len())
-                        .min(chunk.len() - offset)
+                        .min(offered)
                         .min(remaining);
-                    if n == 0 {
-                        // Below the aggregate limit, preserve backpressure. The
-                        // budget lock is dropped before waiting so the other
-                        // output stream can make progress against the budget.
-                        drop(b);
-                        drop(s);
-                        let gate = budget.wait_gate.lock().unwrap_or_else(|e| e.into_inner());
-                        let has_space = self
-                            .state
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .bytes
-                            .len()
-                            < CHANNEL_CAPACITY;
-                        if !budget.exceeded() && !has_space {
-                            #[cfg(test)]
-                            self.note_wait();
-                            let _gate =
-                                budget.changed.wait(gate).unwrap_or_else(|e| e.into_inner());
-                        }
-                        continue;
-                    }
                     s.bytes.extend(&chunk[offset..offset + n]);
-                    offset += n;
-                    total_offset += n;
-                    b.written += n as u64;
-                    b.observed = b.observed.saturating_add(n as u64);
-                    if b.written >= budget.limit {
+                    offset += offered;
+                    total_offset += offered;
+                    b.observed = b.observed.saturating_add(offered as u64);
+                    if n < offered {
+                        s.incomplete = true;
+                    }
+                    if b.observed >= budget.limit {
                         b.exceeded = true;
-                        if offset < chunk.len() {
-                            s.incomplete = true;
-                            b.observed = b
-                                .observed
-                                .saturating_add((bytes.len() - total_offset) as u64);
-                            drop(b);
-                            drop(s);
-                            budget.notify_exceeded();
-                            return Ok(());
-                        }
                     }
                     let waker = s.read_waker.take();
                     self.changed.notify_all();
                     drop(b);
                     drop(s);
                     wake(waker);
-                    if budget.exceeded() {
-                        budget.notify_exceeded();
-                    }
                     continue;
                 }
                 while s.bytes.len() == CHANNEL_CAPACITY && !s.reader_gone {
@@ -710,49 +602,35 @@ mod tests {
     }
 
     #[test]
-    fn sibling_budget_trip_wakes_full_channel_writer() {
+    fn same_full_stream_discards_and_counts_until_aggregate_limit() {
         let channels = SessionChannels::with_policy(SessionStreamPolicy::TerminateAfterBytes(
-            CHANNEL_CAPACITY as u64 + 1,
+            CHANNEL_CAPACITY as u64 + 100,
         ));
         let bridge = channels.bridge.clone();
-        bridge.write_stdout(&vec![6; CHANNEL_CAPACITY]).unwrap();
-        let writer_bridge = bridge.clone();
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let thread = std::thread::spawn(move || {
-            let result = writer_bridge.write_stdout(b"x");
-            done_tx.send(result).unwrap();
-        });
-        bridge.wait_for_stdout_writer_for_test();
-        bridge.write_stderr(b"y").unwrap();
-        done_rx
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("sibling budget trip must wake the blocked writer")
-            .unwrap();
-        thread.join().unwrap();
-        assert!(bridge.output_budget_exceeded());
+        bridge.write_stdout(&vec![8; CHANNEL_CAPACITY + 1]).unwrap();
+        assert_eq!(
+            bridge.output_bytes_observed(),
+            (CHANNEL_CAPACITY + 1) as u64
+        );
+        assert_eq!(
+            bridge.output_budget_limit(),
+            Some((CHANNEL_CAPACITY + 100) as u64)
+        );
+        assert!(!bridge.output_budget_exceeded());
         assert!(bridge.stdout_incomplete());
-    }
 
-    #[test]
-    fn reader_drop_wakes_full_budgeted_writer() {
-        let channels = SessionChannels::with_policy(SessionStreamPolicy::TerminateAfterBytes(
-            CHANNEL_CAPACITY as u64 + 1,
-        ));
-        let bridge = channels.bridge.clone();
-        bridge.write_stdout(&vec![8; CHANNEL_CAPACITY]).unwrap();
-        let writer_bridge = bridge.clone();
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let thread = std::thread::spawn(move || {
-            let result = writer_bridge.write_stdout(b"blocked");
-            done_tx.send(result).unwrap();
-        });
-        bridge.wait_for_stdout_writer_for_test();
-        drop(channels.stdout);
-        done_rx
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("reader drop must wake the blocked budget writer")
-            .unwrap();
-        thread.join().unwrap();
+        bridge.write_stdout(&[9; 99]).unwrap();
+        assert_eq!(
+            bridge.output_bytes_observed(),
+            (CHANNEL_CAPACITY + 100) as u64
+        );
+        assert!(bridge.output_budget_exceeded());
+        bridge.write_stdout(b"after-limit").unwrap();
+        assert_eq!(
+            bridge.output_bytes_observed(),
+            (CHANNEL_CAPACITY + 111) as u64
+        );
+        assert!(bridge.output_budget_exceeded());
         assert!(bridge.stdout_incomplete());
     }
 
@@ -766,6 +644,14 @@ mod tests {
         assert!(
             matches!(channels.stdin.state.poll_write(&mut context, b"x"), std::task::Poll::Ready(Err(ref error)) if error.kind() == io::ErrorKind::BrokenPipe)
         );
+        assert!(channels.bridge.stdin_broken_pipe());
+    }
+
+    #[test]
+    fn bridge_records_os_side_stdin_broken_pipe() {
+        let channels = SessionChannels::new();
+        assert!(!channels.bridge.stdin_broken_pipe());
+        channels.bridge.record_stdin_broken_pipe();
         assert!(channels.bridge.stdin_broken_pipe());
     }
 

@@ -91,6 +91,9 @@ impl super::contracts::SessionBridge for Bridge {
     fn stdin_broken_pipe(&self) -> bool {
         self.input.broken_pipe()
     }
+    fn record_stdin_broken_pipe(&self) {
+        self.input.record_broken_pipe();
+    }
     fn output_budget_exceeded(&self) -> bool {
         self.output_budget
             .as_ref()
@@ -103,12 +106,5 @@ impl super::contracts::SessionBridge for Bridge {
         self.output_budget
             .as_ref()
             .map_or(0, |budget| budget.observed())
-    }
-}
-
-#[cfg(all(feature = "async", test))]
-impl Bridge {
-    pub(crate) fn wait_for_stdout_writer_for_test(&self) {
-        self.output.wait_until_blocked_for_test();
     }
 }
