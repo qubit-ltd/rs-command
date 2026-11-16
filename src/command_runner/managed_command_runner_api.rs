@@ -37,7 +37,7 @@ pub trait ManagedCommandRunnerApi {
     ///
     /// # Returns
     ///
-    /// The operation output or session, resolving after managed execution.
+    /// The captured output produced by the managed command.
     ///
     /// # Errors
     ///
@@ -59,7 +59,7 @@ pub trait ManagedCommandRunnerApi {
     ///
     /// # Returns
     ///
-    /// The operation output or session, resolving after managed execution.
+    /// The captured output produced by the managed command.
     ///
     /// # Errors
     ///
@@ -82,7 +82,7 @@ pub trait ManagedCommandRunnerApi {
     ///
     /// # Returns
     ///
-    /// The operation output or session, resolving after managed execution.
+    /// The captured output produced by the managed command.
     ///
     /// # Errors
     ///
@@ -106,7 +106,7 @@ pub trait ManagedCommandRunnerApi {
     ///
     /// # Returns
     ///
-    /// The operation output or session, resolving after managed execution.
+    /// The captured output produced by the managed command.
     ///
     /// # Errors
     ///
@@ -129,7 +129,7 @@ pub trait ManagedCommandRunnerApi {
     ///
     /// # Returns
     ///
-    /// The operation output or session, resolving after managed execution.
+    /// The captured output produced by the managed command.
     ///
     /// # Errors
     ///
@@ -152,7 +152,7 @@ pub trait ManagedCommandRunnerApi {
     ///
     /// # Returns
     ///
-    /// The operation output or session, resolving after managed execution.
+    /// The captured output produced by the managed command.
     ///
     /// # Errors
     ///
@@ -175,7 +175,7 @@ pub trait ManagedCommandRunnerApi {
     ///
     /// # Returns
     ///
-    /// The operation output or session, resolving after managed execution.
+    /// The command session provided by the managed executor.
     ///
     /// # Errors
     ///
@@ -198,7 +198,7 @@ pub trait ManagedCommandRunnerApi {
     ///
     /// # Returns
     ///
-    /// The operation output or session, resolving after managed execution.
+    /// The command session provided by the managed executor.
     ///
     /// # Errors
     ///
@@ -222,7 +222,7 @@ pub trait ManagedCommandRunnerApi {
     ///
     /// # Returns
     ///
-    /// The operation output or session, resolving after managed execution.
+    /// The captured output produced by the managed command.
     ///
     /// # Errors
     ///
@@ -247,7 +247,7 @@ pub trait ManagedCommandRunnerApi {
     ///
     /// # Returns
     ///
-    /// The operation output or session, resolving after managed execution.
+    /// The captured output produced by the managed command.
     ///
     /// # Errors
     ///
@@ -272,7 +272,7 @@ pub trait ManagedCommandRunnerApi {
     ///
     /// # Returns
     ///
-    /// The operation output or session, resolving after managed execution.
+    /// The command session provided by the managed executor.
     ///
     /// # Errors
     ///
@@ -297,7 +297,7 @@ pub trait ManagedCommandRunnerApi {
     ///
     /// # Returns
     ///
-    /// The operation output or session, resolving after managed execution.
+    /// The command session provided by the managed executor.
     ///
     /// # Errors
     ///
@@ -323,7 +323,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     ///
     /// # Returns
     ///
-    /// The command output or session after managed execution.
+    /// The captured output produced by the managed command.
     ///
     /// # Errors
     ///
@@ -349,7 +349,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     ///
     /// # Returns
     ///
-    /// The command output or session after managed execution.
+    /// The captured output produced by the managed command.
     ///
     /// # Errors
     ///
@@ -376,7 +376,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     ///
     /// # Returns
     ///
-    /// The command output or session after managed execution.
+    /// The captured output produced by the managed command.
     ///
     /// # Errors
     ///
@@ -404,7 +404,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     ///
     /// # Returns
     ///
-    /// The command output or session after managed execution.
+    /// The captured output produced by the managed command.
     ///
     /// # Errors
     ///
@@ -431,7 +431,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     ///
     /// # Returns
     ///
-    /// The command output or session after managed execution.
+    /// The captured output produced by the managed command.
     ///
     /// # Errors
     ///
@@ -459,7 +459,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     ///
     /// # Returns
     ///
-    /// The command output or session after managed execution.
+    /// The captured output produced by the managed command.
     ///
     /// # Errors
     ///
@@ -486,7 +486,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     ///
     /// # Returns
     ///
-    /// The command output or session after managed execution.
+    /// The command session provided by the managed executor.
     ///
     /// # Errors
     ///
@@ -509,7 +509,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     ///
     /// # Returns
     ///
-    /// The command output or session after managed execution.
+    /// The command session provided by the managed executor.
     ///
     /// # Errors
     ///
@@ -533,7 +533,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     ///
     /// # Returns
     ///
-    /// The command output or session after managed execution.
+    /// The captured output produced by the managed command.
     ///
     /// # Errors
     ///
@@ -563,7 +563,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     ///
     /// # Returns
     ///
-    /// The command output or session after managed execution.
+    /// The captured output produced by the managed command.
     ///
     /// # Errors
     ///
@@ -592,7 +592,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     ///
     /// # Returns
     ///
-    /// The command output or session after managed execution.
+    /// The command session provided by the managed executor.
     ///
     /// # Errors
     ///
@@ -617,7 +617,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     ///
     /// # Returns
     ///
-    /// The command output or session after managed execution.
+    /// The command session provided by the managed executor.
     ///
     /// # Errors
     ///
@@ -712,7 +712,6 @@ fn collect(mut handle: crate::CommandOperation) -> Result<crate::CommandOutput, 
 /// # Errors
 ///
 /// Returns an error if the outcome cannot be read.
-#[cfg(feature = "async")]
 #[cfg(feature = "async")]
 async fn collect_async(
     mut handle: crate::AsyncCommandOperation,
