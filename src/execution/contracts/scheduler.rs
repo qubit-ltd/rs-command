@@ -125,6 +125,21 @@ impl fmt::Debug for EnqueueFailure {
 /// Port for bounded reservations and job enqueue.
 pub trait Scheduler: Send + Sync {
     fn try_reserve(&self, input_bytes: usize) -> Result<Reservation, CapacityFailure>;
+    /// Reserves capacity using the deadline captured at the original submission.
+    ///
+    /// Implementations should include this fixed deadline in both admission and
+    /// queued work. The default preserves compatibility for simple schedulers
+    /// while still rejecting a deadline that has already expired.
+    fn try_reserve_until(
+        &self,
+        input_bytes: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Reservation, CapacityFailure> {
+        if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+            return Err(CapacityFailure::DeadlineExpired);
+        }
+        self.try_reserve(input_bytes)
+    }
     fn enqueue(&self, job: ScheduledJob, permit: Reservation) -> Result<(), EnqueueFailure>;
     /// Blocks until a job and its unique permit are ready, or admission is closed and drained.
     fn wait_next(&self) -> Option<(ScheduledJob, Reservation)>;
