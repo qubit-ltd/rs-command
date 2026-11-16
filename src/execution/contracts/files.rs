@@ -66,7 +66,7 @@ impl std::fmt::Debug for PreparedFiles {
 pub struct FilePreparationFailure {
     pub message: String,
     pub input: Option<Box<dyn ResourceInput>>,
-    pub prepared: Option<PreparedFiles>,
+    pub prepared: Option<Box<PreparedFiles>>,
 }
 impl std::fmt::Debug for FilePreparationFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
