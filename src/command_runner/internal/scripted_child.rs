@@ -104,7 +104,7 @@ impl ChildWrapper for ScriptedChild {
         self.record("kill");
         match self.kill_error.take() {
             Some(source) => Err(source),
-            None => Ok(()),
+            None => self.inner.start_kill(),
         }
     }
 

@@ -27,10 +27,8 @@ use crate::CommandCleanupFailure;
 use crate::CommandError;
 use crate::execution::backend::{Reaper, ReaperObserver, ReaperOwner};
 use crate::execution::contracts::ReservationLease;
-use crate::execution::contracts::{RecoveryOwner, RecoveryRetryError};
 use crate::session::contracts::SessionBridge;
 use qubit_operation::OperationContext;
-use std::sync::Mutex;
 
 /// Maximum delay before a cancellation-aware wait observes cancellation.
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -56,43 +54,6 @@ pub(in crate::command_runner) struct RunningCommand {
     reaper_observer: Option<ReaperObserver>,
     session_bridge: Option<Arc<dyn SessionBridge>>,
     operation_context: Option<OperationContext>,
-}
-
-struct DeferredReaperOwner {
-    owner: Mutex<Option<ReaperOwner>>,
-    observer: ReaperObserver,
-}
-
-impl RecoveryOwner for DeferredReaperOwner {
-    fn summary(&self) -> String {
-        "managed child and I/O helpers awaiting bounded reaper capacity".to_owned()
-    }
-
-    fn retry_cleanup(&self) -> Result<(), RecoveryRetryError> {
-        let mut slot = self.owner.lock().unwrap_or_else(|error| error.into_inner());
-        let Some(owner) = slot.take() else {
-            return if self.observer.is_complete() {
-                Ok(())
-            } else {
-                Err(RecoveryRetryError::CleanupHandoffUnavailable)
-            };
-        };
-        let result = match Reaper::global() {
-            Ok(reaper) => reaper.handoff(owner),
-            Err(_) => Err(owner),
-        };
-        match result {
-            Ok(()) => Ok(()),
-            Err(owner) => {
-                *slot = Some(owner);
-                Err(RecoveryRetryError::CleanupHandoffUnavailable)
-            }
-        }
-    }
-
-    fn is_complete(&self) -> bool {
-        self.observer.is_complete()
-    }
 }
 
 impl RunningCommand {
@@ -542,18 +503,7 @@ impl RunningCommand {
             Ok(()) => error,
             Err(owner) => match observer {
                 Some(observer) => {
-                    let recovery_owner: Box<dyn RecoveryOwner> = Box::new(DeferredReaperOwner {
-                        owner: Mutex::new(Some(owner)),
-                        observer: observer.clone(),
-                    });
-                    if let Some(sink) = observer.recovery_sink() {
-                        match sink.retain_recovery_owner(recovery_owner) {
-                            Ok(()) => observer.mark_recovery_transferred(),
-                            Err(failure) => observer.defer_recovery_owner(failure.owner),
-                        }
-                    } else {
-                        observer.defer_recovery_owner(recovery_owner);
-                    }
+                    observer.retain_or_defer_reaper_owner(owner);
                     error
                 }
                 None => {

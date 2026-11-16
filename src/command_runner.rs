@@ -627,7 +627,13 @@ impl CommandRunner {
             Ok(child_process) => child_process,
             Err(source) => return Err(spawn_failed(&command_text, source)),
         };
-        let mut starting_command = StartingCommand::new(&command_text, child_process);
+        let mut starting_command = StartingCommand::new_managed(
+            &command_text,
+            child_process,
+            capacity_lease,
+            reaper_observer,
+            session_bridge.clone(),
+        );
         let total_budget = self
             .max_total_output_bytes
             .map(|limit| {
@@ -643,7 +649,7 @@ impl CommandRunner {
             session_bridge.clone(),
         ) {
             Ok(value) => value,
-            Err(error) => return Err(starting_command.abort(error)),
+            Err(error) => return Err(starting_command.abort_managed(error)),
         };
         starting_command.set_stdin_writer(stdin_writer);
 
@@ -651,13 +657,13 @@ impl CommandRunner {
             starting_command.child_process().stdout().take()
         }) {
             Ok(value) => value,
-            Err(error) => return Err(starting_command.abort(error)),
+            Err(error) => return Err(starting_command.abort_managed(error)),
         };
         let stderr = match take_output_pipe(&command_text, OutputStream::Stderr, || {
             starting_command.child_process().stderr().take()
         }) {
             Ok(value) => value,
-            Err(error) => return Err(starting_command.abort(error)),
+            Err(error) => return Err(starting_command.abort_managed(error)),
         };
         let stdout_reader = match start_output_reader(&command_text, OutputStream::Stdout, || {
             read_output_stream(stdout, {
@@ -676,7 +682,7 @@ impl CommandRunner {
             })
         }) {
             Ok(value) => value,
-            Err(error) => return Err(starting_command.abort(error)),
+            Err(error) => return Err(starting_command.abort_managed(error)),
         };
         starting_command.set_stdout_reader(stdout_reader);
         let stderr_reader = match start_output_reader(&command_text, OutputStream::Stderr, || {
@@ -696,7 +702,7 @@ impl CommandRunner {
             })
         }) {
             Ok(value) => value,
-            Err(error) => return Err(starting_command.abort(error)),
+            Err(error) => return Err(starting_command.abort_managed(error)),
         };
         starting_command.set_stderr_reader(stderr_reader);
         if let Err(source) = self.timer.clock().now().duration_since(started_at) {
@@ -705,10 +711,11 @@ impl CommandRunner {
                 CommandErrorReason::TimeFailed { source },
                 None,
             );
-            return Err(starting_command.abort(error));
+            return Err(starting_command.abort_managed(error));
         }
 
-        let (child_process, command_io) = starting_command.finish();
+        let (child_process, command_io, capacity_lease, reaper_observer, session_bridge) =
+            starting_command.finish();
         let command_io = command_io.with_session_bridge(session_bridge.clone());
         let finished = RunningCommand::new_with_reaper(
             command_text,

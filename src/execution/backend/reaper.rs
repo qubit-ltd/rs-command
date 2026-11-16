@@ -10,6 +10,52 @@ type Cleanup = Box<dyn FnOnce() + Send + 'static>;
 
 pub(crate) struct ReaperOwner(Option<Cleanup>);
 
+pub(crate) struct DeferredReaperOwner {
+    owner: std::sync::Mutex<Option<ReaperOwner>>,
+    observer: ReaperObserver,
+}
+
+impl DeferredReaperOwner {
+    pub(crate) fn new(owner: ReaperOwner, observer: ReaperObserver) -> Self {
+        Self {
+            owner: std::sync::Mutex::new(Some(owner)),
+            observer,
+        }
+    }
+}
+
+impl RecoveryOwner for DeferredReaperOwner {
+    fn summary(&self) -> String {
+        "managed child and I/O helpers awaiting bounded reaper capacity".to_owned()
+    }
+
+    fn retry_cleanup(&self) -> Result<(), crate::execution::contracts::RecoveryRetryError> {
+        let mut slot = self.owner.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(owner) = slot.take() else {
+            return if self.observer.is_complete() {
+                Ok(())
+            } else {
+                Err(crate::execution::contracts::RecoveryRetryError::CleanupHandoffUnavailable)
+            };
+        };
+        let result = match Reaper::global() {
+            Ok(reaper) => reaper.handoff(owner),
+            Err(_) => Err(owner),
+        };
+        match result {
+            Ok(()) => Ok(()),
+            Err(owner) => {
+                *slot = Some(owner);
+                Err(crate::execution::contracts::RecoveryRetryError::CleanupHandoffUnavailable)
+            }
+        }
+    }
+
+    fn is_complete(&self) -> bool {
+        self.observer.is_complete()
+    }
+}
+
 impl std::fmt::Debug for ReaperOwner {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -83,6 +129,19 @@ impl ReaperObserver {
             .deferred_owner
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = Some(owner);
+    }
+
+    pub(crate) fn retain_or_defer_reaper_owner(&self, owner: ReaperOwner) {
+        let recovery_owner: Box<dyn RecoveryOwner> =
+            Box::new(DeferredReaperOwner::new(owner, self.clone()));
+        if let Some(sink) = self.recovery_sink() {
+            match sink.retain_recovery_owner(recovery_owner) {
+                Ok(()) => self.mark_recovery_transferred(),
+                Err(failure) => self.defer_recovery_owner(failure.owner),
+            }
+        } else {
+            self.defer_recovery_owner(recovery_owner);
+        }
     }
 
     pub(crate) fn take_deferred_recovery_owner(&self) -> Option<Box<dyn RecoveryOwner>> {
@@ -245,7 +304,7 @@ mod tests {
     #[test]
     fn both_full_queues_return_owner_for_retry_after_capacity_drains() {
         let (sender, primary) = sync_channel(1);
-        let (overflow_sender, overflow) = sync_channel(1);
+        let (overflow_sender, _overflow) = sync_channel(1);
         let reaper = Reaper {
             sender,
             overflow_sender,
