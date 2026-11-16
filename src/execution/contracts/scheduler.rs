@@ -98,7 +98,8 @@ pub trait StopPort: Send + Sync {
 
 /// Domain task scheduled without borrowing an operation scope.
 pub struct ScheduledJob {
-    pub run: Box<dyn FnOnce() + Send + 'static>,
+    /// Runs on a domain worker and receives the unique capacity permit.
+    pub run: Box<dyn FnOnce(Reservation) + Send + 'static>,
     pub stop: Arc<dyn StopPort>,
 }
 impl fmt::Debug for ScheduledJob {
@@ -123,6 +124,8 @@ impl fmt::Debug for EnqueueFailure {
 pub trait Scheduler: Send + Sync {
     fn try_reserve(&self, input_bytes: usize) -> Result<Reservation, CapacityFailure>;
     fn enqueue(&self, job: ScheduledJob, permit: Reservation) -> Result<(), EnqueueFailure>;
+    /// Blocks until a job and its unique permit are ready, or admission is closed and drained.
+    fn wait_next(&self) -> Option<(ScheduledJob, Reservation)>;
     fn close_admission(&self);
 }
 
