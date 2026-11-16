@@ -1,1 +1,55 @@
-//! Contract namespace; behavior is implemented by the assigned module task.
+//! Bounded admission and dispatch for managed command work.
+mod reservation;
+mod state;
+mod waiter;
+mod worker;
+
+pub use state::{BoundedScheduler, SchedulerSnapshot};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::execution::{CapacityFailure, CommandExecutionConfig, Scheduler};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::task::{Wake, Waker};
+    struct CountWake(AtomicUsize);
+    impl Wake for CountWake {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    fn config() -> CommandExecutionConfig {
+        CommandExecutionConfig {
+            max_active: 1,
+            max_queued: 0,
+            max_waiters: 1,
+            max_queued_input_bytes: 8,
+            max_diagnostics: 1,
+        }
+    }
+    #[test]
+    fn reservation_release_wakes_registered_waiter() {
+        let scheduler = BoundedScheduler::new(config()).unwrap();
+        let permit = scheduler.try_reserve(2).unwrap();
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = Waker::from(counter.clone());
+        scheduler.register_waiter(Some(&waker)).unwrap();
+        drop(permit);
+        assert_eq!(counter.0.load(Ordering::SeqCst), 1);
+        assert_eq!(scheduler.snapshot().input_bytes, 0);
+    }
+    #[test]
+    fn fixed_deadline_expires_without_capacity() {
+        let scheduler = BoundedScheduler::new(config()).unwrap();
+        let _permit = scheduler.try_reserve(0).unwrap();
+        assert!(!scheduler.wait_for_capacity(Some(std::time::Instant::now())));
+        scheduler.register_waiter(None).unwrap();
+        assert_eq!(
+            scheduler.register_waiter(None).unwrap_err(),
+            CapacityFailure::QueueFull
+        );
+    }
+}
