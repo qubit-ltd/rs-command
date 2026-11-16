@@ -3,4 +3,3 @@ mod cleanup;
 mod identity;
 mod input;
 mod prepared_files;
-mod sink;

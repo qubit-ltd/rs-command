@@ -325,7 +325,7 @@ pub(super) fn write_stdin_until_cancelled<W: PollableStdin>(
         if cancellation.is_cancelled() {
             return Ok(());
         }
-        if !stdin.wait_writable(&cancellation)? {
+        if !stdin.wait_writable(cancellation)? {
             return Ok(());
         }
         match stdin.write(&bytes[offset..]) {
