@@ -15,7 +15,7 @@ impl ResourceInput for CommandResourceRunOptions {
         self: Box<Self>,
         scope: &OperationScope,
     ) -> Result<PreparedFiles, FilePreparationFailure> {
-        self.prepare_with_directory(scope, None)
+        (*self).prepare_with_directory(scope, None)
     }
 
     fn prepare_files_with_snapshot(
@@ -23,17 +23,17 @@ impl ResourceInput for CommandResourceRunOptions {
         scope: &OperationScope,
         snapshot: &ExecutionSnapshot,
     ) -> Result<PreparedFiles, FilePreparationFailure> {
-        self.prepare_with_directory(scope, Some(&snapshot.working_directory))
+        (*self).prepare_with_directory(scope, Some(&snapshot.working_directory))
     }
 }
 
 impl CommandResourceRunOptions {
     fn prepare_with_directory(
-        self: Box<Self>,
+        self,
         scope: &OperationScope,
         working_directory: Option<&Path>,
     ) -> Result<PreparedFiles, FilePreparationFailure> {
-        let parts = (*self).into_parts();
+        let parts = self.into_parts();
         let options = parts.options;
         let mut input = parts.stdin;
         let stdout = parts.stdout.map(|sink| (sink.file, sink.policy));
@@ -115,7 +115,8 @@ impl CommandResourceRunOptions {
         let registered = register_files(scope, &mut reservations, input.take(), stdout, stderr);
         let prepared = match registered {
             Ok(prepared) => prepared,
-            Err((error, recovered, mut raw)) => {
+            Err(error) => {
+                let (error, recovered, mut raw) = *error;
                 let raw_input = restore_input(
                     options,
                     raw[0].take(),
@@ -140,7 +141,7 @@ fn failure(
     FilePreparationFailure {
         message: error.to_string(),
         input,
-        prepared,
+        prepared: prepared.map(Box::new),
     }
 }
 

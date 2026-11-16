@@ -85,8 +85,8 @@ impl CommandExecutor {
             Ok(m) => m,
             Err(e) => {
                 return Err(CommandSubmitFailure {
-                    runner,
-                    command,
+                    runner: Box::new(runner),
+                    command: Box::new(command),
                     options,
                     reason: CommandSubmitFailureReason::GroupBinding(e),
                 });
@@ -114,9 +114,9 @@ impl CommandExecutor {
             Ok(m) => m,
             Err(e) => {
                 return Err(CommandResourceSubmitFailure {
-                    runner,
-                    command,
-                    options,
+                    runner: Box::new(runner),
+                    command: Box::new(command),
+                    options: Box::new(options),
                     reason: CommandSubmitFailureReason::GroupBinding(e),
                 });
             }
@@ -142,8 +142,8 @@ impl CommandExecutor {
             Ok(m) => m,
             Err(e) => {
                 return Err(CommandSubmitFailure {
-                    runner,
-                    command,
+                    runner: Box::new(runner),
+                    command: Box::new(command),
                     options,
                     reason: CommandSubmitFailureReason::GroupBinding(e),
                 });
@@ -162,9 +162,9 @@ impl CommandExecutor {
             Ok(m) => m,
             Err(e) => {
                 return Err(CommandResourceSubmitFailure {
-                    runner,
-                    command,
-                    options,
+                    runner: Box::new(runner),
+                    command: Box::new(command),
+                    options: Box::new(options),
                     reason: CommandSubmitFailureReason::GroupBinding(e),
                 });
             }
@@ -179,21 +179,21 @@ impl CommandExecutor {
         options: CommandRunOptions,
         deadline: Option<OperationContext>,
     ) -> Result<CommandOperation, CommandSubmitFailure> {
-        let request = make_request(runner, command, RequestOptions::Standard(options)).map_err(
-            |(runner, command, options, message)| {
+        let request =
+            make_request(runner, command, RequestOptions::Standard(options)).map_err(|error| {
+                let (runner, command, options, message) = *error;
                 let RequestOptions::Standard(options) = options else {
                     unreachable!()
                 };
                 CommandSubmitFailure {
-                    runner,
-                    command,
+                    runner: Box::new(runner),
+                    command: Box::new(command),
                     options,
                     reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure {
                         diagnostic: message,
                     }),
                 }
-            },
-        )?;
+            })?;
         let permit = match self.scheduler.try_reserve_until(0, deadline.clone()) {
             Ok(p) => p,
             Err(reason) => {
@@ -207,8 +207,8 @@ impl CommandExecutor {
                     unreachable!()
                 };
                 return Err(CommandSubmitFailure {
-                    runner,
-                    command,
+                    runner: Box::new(runner),
+                    command: Box::new(command),
                     options,
                     reason: CommandSubmitFailureReason::Capacity(reason),
                 });
@@ -240,8 +240,8 @@ impl CommandExecutor {
                     _ => unreachable!(),
                 };
                 Err(CommandSubmitFailure {
-                    runner: request.runner,
-                    command: request.command,
+                    runner: Box::new(request.runner),
+                    command: Box::new(request.command),
                     options,
                     reason: CommandSubmitFailureReason::Admission(reason),
                 })
@@ -256,21 +256,21 @@ impl CommandExecutor {
         options: CommandResourceRunOptions,
         deadline: Option<OperationContext>,
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
-        let request = make_request(runner, command, RequestOptions::Resources(options)).map_err(
-            |(runner, command, options, message)| {
+        let request =
+            make_request(runner, command, RequestOptions::Resources(options)).map_err(|error| {
+                let (runner, command, options, message) = *error;
                 let RequestOptions::Resources(options) = options else {
                     unreachable!()
                 };
                 CommandResourceSubmitFailure {
-                    runner,
-                    command,
-                    options,
+                    runner: Box::new(runner),
+                    command: Box::new(command),
+                    options: Box::new(options),
                     reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure {
                         diagnostic: message,
                     }),
                 }
-            },
-        )?;
+            })?;
         let bytes = resource_bytes(&request.options);
         let permit = match self.scheduler.try_reserve_until(bytes, deadline.clone()) {
             Ok(p) => p,
@@ -285,9 +285,9 @@ impl CommandExecutor {
                     unreachable!()
                 };
                 return Err(CommandResourceSubmitFailure {
-                    runner,
-                    command,
-                    options,
+                    runner: Box::new(runner),
+                    command: Box::new(command),
+                    options: Box::new(options),
                     reason: CommandSubmitFailureReason::Capacity(reason),
                 });
             }
@@ -317,9 +317,9 @@ impl CommandExecutor {
                     unreachable!()
                 };
                 Err(CommandResourceSubmitFailure {
-                    runner: request.runner,
-                    command: request.command,
-                    options,
+                    runner: Box::new(request.runner),
+                    command: Box::new(request.command),
+                    options: Box::new(options),
                     reason: CommandSubmitFailureReason::Admission(reason),
                 })
             }
@@ -339,21 +339,21 @@ impl CommandExecutor {
         let RequestOptions::Standard(options) = request_options else {
             unreachable!()
         };
-        let request = make_request(runner, command, RequestOptions::Standard(options)).map_err(
-            |(runner, command, options, message)| {
+        let request =
+            make_request(runner, command, RequestOptions::Standard(options)).map_err(|error| {
+                let (runner, command, options, message) = *error;
                 let RequestOptions::Standard(options) = options else {
                     unreachable!()
                 };
                 CommandSubmitFailure {
-                    runner,
-                    command,
+                    runner: Box::new(runner),
+                    command: Box::new(command),
                     options,
                     reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure {
                         diagnostic: message,
                     }),
                 }
-            },
-        )?;
+            })?;
         let permit = match self.scheduler.try_reserve_until(0, deadline.clone()) {
             Ok(p) => p,
             Err(reason) => {
@@ -367,8 +367,8 @@ impl CommandExecutor {
                     unreachable!()
                 };
                 return Err(CommandSubmitFailure {
-                    runner,
-                    command,
+                    runner: Box::new(runner),
+                    command: Box::new(command),
                     options,
                     reason: CommandSubmitFailureReason::Capacity(reason),
                 });
@@ -407,8 +407,8 @@ impl CommandExecutor {
                     unreachable!()
                 };
                 Err(CommandSubmitFailure {
-                    runner: request.runner,
-                    command: request.command,
+                    runner: Box::new(request.runner),
+                    command: Box::new(request.command),
                     options,
                     reason: CommandSubmitFailureReason::Admission(reason),
                 })
@@ -579,21 +579,21 @@ impl CommandExecutor {
         keepalive: Option<super::adapter::SessionOwners>,
         deadline: Option<OperationContext>,
     ) -> Result<super::AsyncCommandOperation, CommandResourceSubmitFailure> {
-        let request = make_request(runner, command, RequestOptions::Resources(options)).map_err(
-            |(runner, command, options, message)| {
+        let request =
+            make_request(runner, command, RequestOptions::Resources(options)).map_err(|error| {
+                let (runner, command, options, message) = *error;
                 let RequestOptions::Resources(options) = options else {
                     unreachable!()
                 };
                 CommandResourceSubmitFailure {
-                    runner,
-                    command,
-                    options,
+                    runner: Box::new(runner),
+                    command: Box::new(command),
+                    options: Box::new(options),
                     reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure {
                         diagnostic: message,
                     }),
                 }
-            },
-        )?;
+            })?;
         let bytes = resource_bytes(&request.options);
         let permit = match self.scheduler.try_reserve_until(bytes, deadline.clone()) {
             Ok(p) => p,
@@ -608,9 +608,9 @@ impl CommandExecutor {
                     unreachable!()
                 };
                 return Err(CommandResourceSubmitFailure {
-                    runner,
-                    command,
-                    options,
+                    runner: Box::new(runner),
+                    command: Box::new(command),
+                    options: Box::new(options),
                     reason: CommandSubmitFailureReason::Capacity(reason),
                 });
             }
@@ -647,9 +647,9 @@ impl CommandExecutor {
                     unreachable!()
                 };
                 Err(CommandResourceSubmitFailure {
-                    runner: request.runner,
-                    command: request.command,
-                    options,
+                    runner: Box::new(request.runner),
+                    command: Box::new(request.command),
+                    options: Box::new(options),
                     reason: CommandSubmitFailureReason::Admission(reason),
                 })
             }
@@ -728,6 +728,7 @@ fn deadline_failure(
         reason
     }
 }
+#[cfg(feature = "async")]
 fn async_capacity_retry(reason: &CommandSubmitFailureReason) -> bool {
     matches!(
         reason,
@@ -736,6 +737,7 @@ fn async_capacity_retry(reason: &CommandSubmitFailureReason) -> bool {
         )
     )
 }
+#[cfg(feature = "async")]
 fn retryable_async(reason: &CommandSubmitFailureReason) -> bool {
     async_capacity_retry(reason)
         || matches!(
@@ -743,11 +745,13 @@ fn retryable_async(reason: &CommandSubmitFailureReason) -> bool {
             CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy)
         )
 }
+#[cfg(feature = "async")]
 struct CapacityWait {
     scheduler: BoundedScheduler,
     bytes: usize,
     waiter: Option<u64>,
 }
+#[cfg(feature = "async")]
 impl std::future::Future for CapacityWait {
     type Output = bool;
     fn poll(
@@ -771,6 +775,7 @@ impl std::future::Future for CapacityWait {
         }
     }
 }
+#[cfg(feature = "async")]
 impl Drop for CapacityWait {
     fn drop(&mut self) {
         if let Some(id) = self.waiter.take() {
@@ -778,6 +783,7 @@ impl Drop for CapacityWait {
         }
     }
 }
+#[cfg(feature = "async")]
 async fn wait_capacity_async(
     scheduler: BoundedScheduler,
     bytes: usize,
@@ -812,6 +818,7 @@ async fn wait_capacity_async(
     }
 }
 
+#[cfg(feature = "async")]
 async fn wait_retryable_async(
     scheduler: BoundedScheduler,
     bytes: usize,
@@ -830,14 +837,17 @@ async fn wait_retryable_async(
     }
 }
 
+#[cfg(feature = "async")]
 struct RetryTimerMessage {
     due: std::time::Instant,
     waker: std::task::Waker,
     ready: Arc<std::sync::atomic::AtomicBool>,
     cancelled: Arc<std::sync::atomic::AtomicBool>,
 }
+#[cfg(feature = "async")]
 static RETRY_TIMER: std::sync::OnceLock<Option<std::sync::mpsc::SyncSender<RetryTimerMessage>>> =
     std::sync::OnceLock::new();
+#[cfg(feature = "async")]
 fn retry_timer() -> Option<&'static std::sync::mpsc::SyncSender<RetryTimerMessage>> {
     RETRY_TIMER
         .get_or_init(|| {
@@ -881,11 +891,13 @@ fn retry_timer() -> Option<&'static std::sync::mpsc::SyncSender<RetryTimerMessag
         })
         .as_ref()
 }
+#[cfg(feature = "async")]
 struct RetryDelay {
     ready: Arc<std::sync::atomic::AtomicBool>,
     cancelled: Arc<std::sync::atomic::AtomicBool>,
     scheduled: bool,
 }
+#[cfg(feature = "async")]
 impl RetryDelay {
     fn new() -> Self {
         Self {
@@ -895,6 +907,7 @@ impl RetryDelay {
         }
     }
 }
+#[cfg(feature = "async")]
 impl std::future::Future for RetryDelay {
     type Output = bool;
     fn poll(
@@ -925,12 +938,14 @@ impl std::future::Future for RetryDelay {
         }
     }
 }
+#[cfg(feature = "async")]
 impl Drop for RetryDelay {
     fn drop(&mut self) {
         self.cancelled
             .store(true, std::sync::atomic::Ordering::Release)
     }
 }
+#[cfg(feature = "async")]
 async fn wait_retry_tick(context: Option<OperationContext>) -> bool {
     let mut delay = Box::pin(RetryDelay::new());
     if let Some(context) = context {
@@ -970,7 +985,7 @@ fn make_request(
     runner: CommandRunner,
     command: Command,
     options: RequestOptions,
-) -> Result<Request, (CommandRunner, Command, RequestOptions, String)> {
+) -> Result<Request, Box<(CommandRunner, Command, RequestOptions, String)>> {
     let wd = if let Some(path) = runner
         .configured_working_directory()
         .or_else(|| command.working_directory_override())
@@ -980,12 +995,12 @@ fn make_request(
         match std::env::current_dir() {
             Ok(path) => path,
             Err(e) => {
-                return Err((
+                return Err(Box::new((
                     runner,
                     command,
                     options,
                     format!("working directory snapshot failed: {e}"),
-                ));
+                )));
             }
         }
     };
@@ -1066,8 +1081,8 @@ impl CommandExecutorApi for CommandExecutor {
                         reason,
                     } = failure;
                     if retry_wait(&reason, &self.scheduler, 0, Some(deadline.clone())) {
-                        r = runner;
-                        c = command;
+                        r = *runner;
+                        c = *command;
                         o = options;
                         continue;
                     }
@@ -1098,8 +1113,8 @@ impl CommandExecutorApi for CommandExecutor {
                         reason,
                     } = failure;
                     if retry_wait(&reason, &self.scheduler, 0, None) {
-                        r = runner;
-                        c = command;
+                        r = *runner;
+                        c = *command;
                         o = options;
                         continue;
                     }
@@ -1131,9 +1146,9 @@ impl CommandExecutorApi for CommandExecutor {
                         reason,
                     } = failure;
                     if retry_wait(&reason, &self.scheduler, bytes, None) {
-                        r = runner;
-                        c = command;
-                        o = options;
+                        r = *runner;
+                        c = *command;
+                        o = *options;
                         continue;
                     }
                     return Err(CommandResourceSubmitFailure {
@@ -1166,9 +1181,9 @@ impl CommandExecutorApi for CommandExecutor {
                         reason,
                     } = failure;
                     if retry_wait(&reason, &self.scheduler, bytes, Some(deadline.clone())) {
-                        r = runner;
-                        c = command;
-                        o = options;
+                        r = *runner;
+                        c = *command;
+                        o = *options;
                         continue;
                     }
                     return Err(CommandResourceSubmitFailure {
@@ -1208,9 +1223,9 @@ impl CommandExecutorApi for CommandExecutor {
                     }
                     if wait_retryable_async(self.scheduler.as_ref().clone(), 0, &reason, None).await
                     {
-                        r = runner;
-                        c = command;
-                        o = options;
+                        r = *runner;
+                        c = *command;
+                        o = *options;
                         continue;
                     }
                     return Err(CommandSubmitFailure {
@@ -1252,9 +1267,9 @@ impl CommandExecutorApi for CommandExecutor {
                     if wait_retryable_async(self.scheduler.as_ref().clone(), bytes, &reason, None)
                         .await
                     {
-                        r = runner;
-                        c = command;
-                        o = options;
+                        r = *runner;
+                        c = *command;
+                        o = *options;
                         continue;
                     }
                     return Err(CommandResourceSubmitFailure {
@@ -1303,9 +1318,9 @@ impl CommandExecutorApi for CommandExecutor {
                     )
                     .await
                     {
-                        r = runner;
-                        c = command;
-                        o = options;
+                        r = *runner;
+                        c = *command;
+                        o = *options;
                         continue;
                     }
                     return Err(CommandResourceSubmitFailure {
@@ -1391,9 +1406,9 @@ impl CommandExecutorApi for CommandExecutor {
                     )
                     .await
                     {
-                        r = runner;
-                        c = command;
-                        o = options;
+                        r = *runner;
+                        c = *command;
+                        o = *options;
                         continue;
                     }
                     return Err(CommandSubmitFailure {

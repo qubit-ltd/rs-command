@@ -8,10 +8,16 @@ use std::sync::Mutex;
 use std::sync::{Arc, Barrier, OnceLock};
 
 #[cfg(test)]
-static AFTER_FIRST_REGISTRATION: OnceLock<Mutex<Option<Arc<(Barrier, Barrier)>>>> = OnceLock::new();
+type RegistrationGate = Arc<(Barrier, Barrier)>;
+#[cfg(test)]
+type RegistrationGateSlot = OnceLock<Mutex<Option<RegistrationGate>>>;
+#[cfg(test)]
+static AFTER_FIRST_REGISTRATION: RegistrationGateSlot = OnceLock::new();
+
+type RegistrationFailure = (io::Error, Option<PreparedFiles>, [Option<File>; 3]);
 
 #[cfg(test)]
-pub(super) fn gate_after_first_registration(gate: Option<Arc<(Barrier, Barrier)>>) {
+pub(super) fn gate_after_first_registration(gate: Option<RegistrationGate>) {
     *AFTER_FIRST_REGISTRATION
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -24,7 +30,7 @@ pub(super) fn register_files(
     stdin: Option<File>,
     stdout: Option<(File, FileSinkPolicy)>,
     stderr: Option<(File, FileSinkPolicy)>,
-) -> Result<PreparedFiles, (io::Error, Option<PreparedFiles>, [Option<File>; 3])> {
+) -> Result<PreparedFiles, Box<RegistrationFailure>> {
     let (stdout_file, stdout_policy) =
         stdout.map_or((None, None), |(file, policy)| (Some(file), Some(policy)));
     let (stderr_file, stderr_policy) =
@@ -38,11 +44,11 @@ pub(super) fn register_files(
         };
         let Some(reservation) = reservations.pop() else {
             values[index] = Some(file);
-            return Err((
+            return Err(Box::new((
                 io::Error::other("missing reserved resource slot"),
                 partial(refs, policies),
                 values,
-            ));
+            )));
         };
         match reservation.commit(Mutex::new(file)) {
             Ok(reference) => {
@@ -67,11 +73,11 @@ pub(super) fn register_files(
                         .into_inner()
                         .unwrap_or_else(|e| e.into_inner()),
                 );
-                return Err((
+                return Err(Box::new((
                     io::Error::other("resource registration failed"),
                     partial(refs, policies),
                     values,
-                ));
+                )));
             }
         }
     }

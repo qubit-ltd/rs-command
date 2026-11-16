@@ -226,8 +226,8 @@ pub trait CommandExecutorApi {
 /// Inputs returned when ordinary submission is rejected before ownership transfers.
 #[derive(Debug)]
 pub struct CommandSubmitFailure {
-    pub runner: CommandRunner,
-    pub command: Command,
+    pub runner: Box<CommandRunner>,
+    pub command: Box<Command>,
     pub options: CommandRunOptions,
     pub reason: CommandSubmitFailureReason,
 }
@@ -247,8 +247,8 @@ pub struct SnapshotFailure {
 /// Inputs returned when resource submission is rejected.
 #[derive(Debug)]
 pub struct CommandResourceSubmitFailure {
-    pub runner: CommandRunner,
-    pub command: Command,
-    pub options: CommandResourceRunOptions,
+    pub runner: Box<CommandRunner>,
+    pub command: Box<Command>,
+    pub options: Box<CommandResourceRunOptions>,
     pub reason: CommandSubmitFailureReason,
 }
