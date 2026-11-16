@@ -43,6 +43,7 @@ use crate::CommandErrorReason;
 use crate::CommandOutput;
 use crate::CommandRunOptions;
 use crate::OutputStream;
+use crate::ProcessTreePolicy;
 use crate::command_run_options_parts::CommandRunOptionsParts;
 
 /// Marker used when a configured working directory is redacted from
@@ -346,6 +347,16 @@ impl CommandRunner {
         command: Command,
         options: CommandRunOptions,
     ) -> Result<CommandOutput, CommandError> {
+        self.run_with_tree_policy(command, options, None)
+    }
+
+    /// Runs a command with an explicit process-tree policy for managed callers.
+    pub(crate) fn run_with_tree_policy(
+        &self,
+        command: Command,
+        options: CommandRunOptions,
+        managed_policy: Option<ProcessTreePolicy>,
+    ) -> Result<CommandOutput, CommandError> {
         let CommandRunOptionsParts {
             cancellation,
             stdout_file,
@@ -382,9 +393,11 @@ impl CommandRunner {
             log::debug!("Running command: {command_text}");
         }
 
-        let manage_process_tree = self.timeout.is_some()
-            || cancellation.is_some()
-            || self.max_total_output_bytes.is_some();
+        let manage_process_tree = managed_policy == Some(ProcessTreePolicy::Managed)
+            || (managed_policy != Some(ProcessTreePolicy::DirectChild)
+                && (self.timeout.is_some()
+                    || cancellation.is_some()
+                    || self.max_total_output_bytes.is_some()));
         let child_process = match spawn_child(process_command, manage_process_tree) {
             Ok(child_process) => child_process,
             Err(source) => return Err(spawn_failed(&command_text, source)),
