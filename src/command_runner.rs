@@ -10,6 +10,7 @@ use std::fmt;
 mod managed;
 pub use managed::ManagedCommandRunnerApi;
 use std::io;
+use std::io::{Seek, SeekFrom};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,9 +43,12 @@ use crate::CommandError;
 use crate::CommandErrorReason;
 use crate::CommandOutput;
 use crate::CommandRunOptions;
+use crate::FileSinkPolicy;
 use crate::OutputStream;
 use crate::ProcessTreePolicy;
 use crate::command_run_options_parts::CommandRunOptionsParts;
+use crate::execution::backend::ManagedFileSet;
+use crate::execution::backend::StartGate;
 
 /// Marker used when a configured working directory is redacted from
 /// diagnostics.
@@ -90,6 +94,174 @@ fn start_output_reader(
             None,
         )
     })
+}
+
+fn validate_prepared_files(
+    command: &str,
+    files: &ManagedFileSet,
+    prepared: &PreparedCommand,
+) -> Result<(), CommandError> {
+    if (files.stdout.is_some() || files.stderr.is_some())
+        && (prepared.stdout_file_path.is_some() || prepared.stderr_file_path.is_some())
+    {
+        return Err(owned_file_error(
+            command,
+            OutputStream::Stdout,
+            "<owned sink>",
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "owned sinks cannot be combined with path tees",
+            ),
+        ));
+    }
+    let stdin = files
+        .stdin
+        .as_ref()
+        .map(|resource| {
+            resource
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .try_clone()
+        })
+        .transpose()
+        .map_err(|source| {
+            owned_file_error(command, OutputStream::Stdout, "<owned stdin>", source)
+        })?;
+    let stdout = files
+        .stdout
+        .as_ref()
+        .map(|sink| {
+            sink.file
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .try_clone()
+        })
+        .transpose()
+        .map_err(|source| {
+            owned_file_error(command, OutputStream::Stdout, "<owned stdout>", source)
+        })?;
+    let stderr = files
+        .stderr
+        .as_ref()
+        .map(|sink| {
+            sink.file
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .try_clone()
+        })
+        .transpose()
+        .map_err(|source| {
+            owned_file_error(command, OutputStream::Stderr, "<owned stderr>", source)
+        })?;
+    let handle = |file: &std::fs::File| same_file::Handle::from_file(file.try_clone()?);
+    let stdin_handle = stdin.as_ref().map(handle).transpose().map_err(|source| {
+        owned_file_error(command, OutputStream::Stdout, "<owned stdin>", source)
+    })?;
+    let stdout_handle = stdout.as_ref().map(handle).transpose().map_err(|source| {
+        owned_file_error(command, OutputStream::Stdout, "<owned stdout>", source)
+    })?;
+    let stderr_handle = stderr.as_ref().map(handle).transpose().map_err(|source| {
+        owned_file_error(command, OutputStream::Stderr, "<owned stderr>", source)
+    })?;
+    if stdin_handle
+        .as_ref()
+        .zip(stdout_handle.as_ref())
+        .is_some_and(|(a, b)| a == b)
+        || stdin_handle
+            .as_ref()
+            .zip(stderr_handle.as_ref())
+            .is_some_and(|(a, b)| a == b)
+    {
+        return Err(owned_file_error(
+            command,
+            OutputStream::Stdout,
+            "<owned sink>",
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "stdin and output sink refer to the same file",
+            ),
+        ));
+    }
+    if stdout_handle
+        .as_ref()
+        .zip(stderr_handle.as_ref())
+        .is_some_and(|(a, b)| a == b)
+    {
+        return Err(owned_file_error(
+            command,
+            OutputStream::Stderr,
+            "<owned stderr>",
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "stdout and stderr sinks refer to the same file",
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn apply_prepared_files(
+    command: &str,
+    files: &ManagedFileSet,
+    committed: &mut CommittedCommand,
+) -> Result<(), CommandError> {
+    if let Some(stdin) = files.stdin.as_ref() {
+        let file = stdin
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .try_clone()
+            .map_err(|source| {
+                owned_file_error(command, OutputStream::Stdout, "<owned stdin>", source)
+            })?;
+        committed
+            .process_command
+            .stdin(std::process::Stdio::from(file));
+    }
+    if let Some(sink) = files.stdout.as_ref() {
+        committed.stdout_tee = Some(owned_sink(command, OutputStream::Stdout, sink)?);
+    }
+    if let Some(sink) = files.stderr.as_ref() {
+        committed.stderr_tee = Some(owned_sink(command, OutputStream::Stderr, sink)?);
+    }
+    Ok(())
+}
+
+fn owned_sink(
+    command: &str,
+    stream: OutputStream,
+    sink: &crate::execution::backend::ManagedSink,
+) -> Result<FileTee, CommandError> {
+    use std::io::Write;
+    let mut file = sink
+        .file
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .try_clone()
+        .map_err(|source| owned_file_error(command, stream, "<owned sink>", source))?;
+    if sink.policy == FileSinkPolicy::Truncate {
+        file.set_len(0)
+            .and_then(|()| file.seek(SeekFrom::Start(0)))
+            .map_err(|source| owned_file_error(command, stream, "<owned sink>", source))?;
+    }
+    let _ = file.flush();
+    Ok(FileTee::new(file, std::path::PathBuf::from("<owned sink>")))
+}
+
+fn owned_file_error(
+    command: &str,
+    stream: OutputStream,
+    path: &str,
+    source: io::Error,
+) -> CommandError {
+    CommandError::from_reason(
+        command,
+        CommandErrorReason::WriteOutputFailed {
+            stream,
+            path: std::path::PathBuf::from(path),
+            source,
+        },
+        None,
+    )
 }
 
 #[cfg(test)]
@@ -347,7 +519,7 @@ impl CommandRunner {
         command: Command,
         options: CommandRunOptions,
     ) -> Result<CommandOutput, CommandError> {
-        self.run_with_tree_policy(command, options, None)
+        self.run_with_tree_policy(command, options, None, None, None)
     }
 
     /// Runs a command with an explicit process-tree policy for managed callers.
@@ -356,7 +528,20 @@ impl CommandRunner {
         command: Command,
         options: CommandRunOptions,
         managed_policy: Option<ProcessTreePolicy>,
+        start_gate: Option<&StartGate>,
+        prepared_files: Option<ManagedFileSet>,
     ) -> Result<CommandOutput, CommandError> {
+        #[cfg(not(any(unix, windows)))]
+        if managed_policy == Some(ProcessTreePolicy::Managed) {
+            let diagnostic = command.display_command(&self.diagnostic_redaction_policy);
+            return Err(spawn_failed(
+                &diagnostic,
+                io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "managed process-tree termination is unsupported on this platform",
+                ),
+            ));
+        }
         let CommandRunOptionsParts {
             cancellation,
             stdout_file,
@@ -381,13 +566,34 @@ impl CommandRunner {
                 None,
             ));
         }
+        if let Some(files) = prepared_files.as_ref() {
+            validate_prepared_files(&prepared.command_text, files, &prepared)?;
+        }
+        let _start_permit = match start_gate {
+            Some(gate) => match gate.authorize() {
+                Some(permit) => Some(permit),
+                None => {
+                    return Err(CommandError::from_reason(
+                        prepared.command_text,
+                        CommandErrorReason::CancelledBeforeStart,
+                        None,
+                    ));
+                }
+            },
+            None => None,
+        };
+        let command_diagnostic = prepared.command_text.clone();
+        let mut committed = prepared.commit()?;
+        if let Some(files) = prepared_files.as_ref() {
+            apply_prepared_files(&command_diagnostic, files, &mut committed)?;
+        }
         let CommittedCommand {
             command_text,
             process_command,
             stdin_bytes,
             stdout_tee,
             stderr_tee,
-        } = prepared.commit()?;
+        } = committed;
 
         if !self.disable_logging {
             log::debug!("Running command: {command_text}");
