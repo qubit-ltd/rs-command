@@ -54,6 +54,11 @@ impl CommandResourceRunOptions {
         self
     }
 
+    /// Borrows ordinary runner settings before owned file options are consumed.
+    pub fn ordinary_options(&self) -> &CommandRunOptions {
+        &self.options
+    }
+
     /// Transfers an owned stdin file, read from its current cursor.
     pub fn stdin_file(mut self, file: File) -> Self {
         self.stdin = Some(file);
