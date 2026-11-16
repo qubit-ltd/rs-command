@@ -1,20 +1,23 @@
-use crate::execution::contracts::{
-    ExecutionSnapshot, FilePreparationFailure, PreparedFiles, ResourceInput,
-};
-use crate::resource_run_options::{CommandResourceRunOptions, FileSinkPolicy};
-use qubit_operation::OperationScope;
 use std::fs::File;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
-use super::identity::{validate_files, validate_tee_paths};
-use super::prepared_files::{register_files, truncate_sinks};
+use qubit_operation::OperationScope;
+
+use super::identity::validate_files;
+use super::identity::validate_tee_paths;
+use super::prepared_files::register_files;
+use super::prepared_files::truncate_sinks;
+use crate::execution::contracts::ExecutionSnapshot;
+use crate::execution::contracts::FilePreparationFailure;
+use crate::execution::contracts::PreparedFiles;
+use crate::execution::contracts::ResourceInput;
+use crate::resource_run_options::CommandResourceRunOptions;
+use crate::resource_run_options::FileSinkPolicy;
 
 impl ResourceInput for CommandResourceRunOptions {
-    fn prepare_files(
-        self: Box<Self>,
-        scope: &OperationScope,
-    ) -> Result<PreparedFiles, FilePreparationFailure> {
+    fn prepare_files(self: Box<Self>, scope: &OperationScope) -> Result<PreparedFiles, FilePreparationFailure> {
         (*self).prepare_with_directory(scope, None)
     }
 
@@ -64,27 +67,18 @@ impl CommandResourceRunOptions {
             },
         };
         let tee_paths: Vec<(&'static str, PathBuf)> = [
-            options.configured_stdout_file().map(|path| {
-                (
-                    "stdout",
-                    super::identity::absolute_lexical_path(&base, path),
-                )
-            }),
-            options.configured_stderr_file().map(|path| {
-                (
-                    "stderr",
-                    super::identity::absolute_lexical_path(&base, path),
-                )
-            }),
+            options
+                .configured_stdout_file()
+                .map(|path| ("stdout", super::identity::absolute_lexical_path(&base, path))),
+            options
+                .configured_stderr_file()
+                .map(|path| ("stderr", super::identity::absolute_lexical_path(&base, path))),
         ]
         .into_iter()
         .flatten()
         .collect();
         if let Err(error) = validate_files(&files).and_then(|()| {
-            let paths: Vec<_> = tee_paths
-                .iter()
-                .map(|(name, path)| (*name, path.as_path()))
-                .collect();
+            let paths: Vec<_> = tee_paths.iter().map(|(name, path)| (*name, path.as_path())).collect();
             validate_tee_paths(&files, &paths)
         }) {
             return Err(failure(
@@ -173,22 +167,22 @@ fn _policy_is_exhaustive(policy: FileSinkPolicy) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use qubit_operation::{GroupOptions, ManagerOptions, OperationManager, OperationOptions};
     use std::sync::mpsc;
     use std::time::Duration;
+
+    use qubit_operation::GroupOptions;
+    use qubit_operation::ManagerOptions;
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOptions;
+
+    use super::*;
     static PREPARATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn helper_resource_reference_delays_scope_settlement_until_dropped() {
-        let _guard = PREPARATION_TEST_LOCK
-            .lock()
-            .expect("test lock should be available");
-        let manager =
-            OperationManager::new(ManagerOptions::default()).expect("manager should start");
-        let group = manager
-            .group(GroupOptions { capacity: 2 })
-            .expect("group should start");
+        let _guard = PREPARATION_TEST_LOCK.lock().expect("test lock should be available");
+        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let group = manager.group(GroupOptions { capacity: 2 }).expect("group should start");
         let (send, receive) = mpsc::sync_channel(1);
         let input = tempfile::tempfile().expect("stdin file should be created");
         let mut handle = group
@@ -196,14 +190,8 @@ mod tests {
                 let prepared = Box::new(CommandResourceRunOptions::new().stdin_file(input))
                     .prepare_files(&scope)
                     .expect("stdin should be registered");
-                send.send(
-                    prepared
-                        .stdin
-                        .as_ref()
-                        .expect("stdin owner should exist")
-                        .clone(),
-                )
-                .expect("test should receive retained helper reference");
+                send.send(prepared.stdin.as_ref().expect("stdin owner should exist").clone())
+                    .expect("test should receive retained helper reference");
                 Ok::<_, ()>(())
             })
             .expect("operation should be accepted");
@@ -217,10 +205,7 @@ mod tests {
         let pending = handle
             .wait_settlement_for(Duration::from_millis(20))
             .expect("settlement observation should work");
-        assert!(matches!(
-            pending,
-            qubit_operation::SettlementWait::Pending(_)
-        ));
+        assert!(matches!(pending, qubit_operation::SettlementWait::Pending(_)));
         drop(helper_reference);
         let settled = handle
             .wait_settlement_for(Duration::from_secs(5))
@@ -230,16 +215,12 @@ mod tests {
 
     #[test]
     fn commit_failure_retains_registered_and_unregistered_file_owners() {
-        let _guard = PREPARATION_TEST_LOCK
-            .lock()
-            .expect("test lock should be available");
-        use std::sync::{Arc, Barrier};
+        let _guard = PREPARATION_TEST_LOCK.lock().expect("test lock should be available");
+        use std::sync::Arc;
+        use std::sync::Barrier;
 
-        let manager =
-            OperationManager::new(ManagerOptions::default()).expect("manager should start");
-        let group = manager
-            .group(GroupOptions { capacity: 4 })
-            .expect("group should start");
+        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let group = manager.group(GroupOptions { capacity: 4 }).expect("group should start");
         let gate = Arc::new((Barrier::new(2), Barrier::new(2)));
         super::super::prepared_files::gate_after_first_registration(Some(Arc::clone(&gate)));
 
@@ -261,8 +242,7 @@ mod tests {
                 )
                 .prepare_files(&scope)
                 .expect_err("stop between commits should reject the second commit");
-                send.send(failure)
-                    .expect("failure should reach test thread");
+                send.send(failure).expect("failure should reach test thread");
                 Ok::<_, ()>(())
             })
             .expect("operation should be accepted");
@@ -277,22 +257,12 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("preparation failure should arrive");
         super::super::prepared_files::gate_after_first_registration(None);
-        assert!(
-            failure.prepared.is_some(),
-            "first committed owner must be retained"
-        );
-        assert!(
-            failure.input.is_some(),
-            "second uncommitted owner must be recoverable"
-        );
+        assert!(failure.prepared.is_some(), "first committed owner must be retained");
+        assert!(failure.input.is_some(), "second uncommitted owner must be recoverable");
         let _ = handle.wait_outcome();
 
-        let recovered_input = failure
-            .input
-            .take()
-            .expect("raw second file owner should be returned");
-        let recovery_manager = OperationManager::new(ManagerOptions::default())
-            .expect("recovery manager should start");
+        let recovered_input = failure.input.take().expect("raw second file owner should be returned");
+        let recovery_manager = OperationManager::new(ManagerOptions::default()).expect("recovery manager should start");
         let recovery_group = recovery_manager
             .group(GroupOptions { capacity: 2 })
             .expect("recovery group should start");

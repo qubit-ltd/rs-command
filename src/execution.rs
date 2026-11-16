@@ -1,9 +1,14 @@
 //! Managed command execution contracts and bounded configuration.
-use crate::{Command, CommandError, CommandResourceRunOptions, CommandRunOptions, CommandRunner};
 #[cfg(feature = "async")]
 use qubit_operation::AsyncOperationHandle;
 use qubit_operation::OperationHandle;
 use thiserror::Error;
+
+use crate::Command;
+use crate::CommandError;
+use crate::CommandResourceRunOptions;
+use crate::CommandRunOptions;
+use crate::CommandRunner;
 #[path = "execution/adapter/mod.rs"]
 pub mod adapter;
 #[path = "execution/backend/mod.rs"]
@@ -14,11 +19,23 @@ pub mod contracts;
 pub mod files;
 #[path = "execution/scheduler/mod.rs"]
 pub mod scheduler;
-pub use contracts::{
-    ActivatedRequest, Backend, CapacityFailure, EnqueueFailure, FactSink, FilePreparationFailure,
-    PreparedFiles, RecoveryOwner, RecoveryPublishError, RecoveryPublishFailure, RecoveryRetryError,
-    Request, Reservation, ResourceInput, ScheduledJob, Scheduler, StopPort,
-};
+pub use contracts::ActivatedRequest;
+pub use contracts::Backend;
+pub use contracts::CapacityFailure;
+pub use contracts::EnqueueFailure;
+pub use contracts::FactSink;
+pub use contracts::FilePreparationFailure;
+pub use contracts::PreparedFiles;
+pub use contracts::RecoveryOwner;
+pub use contracts::RecoveryPublishError;
+pub use contracts::RecoveryPublishFailure;
+pub use contracts::RecoveryRetryError;
+pub use contracts::Request;
+pub use contracts::Reservation;
+pub use contracts::ResourceInput;
+pub use contracts::ScheduledJob;
+pub use contracts::Scheduler;
+pub use contracts::StopPort;
 
 /// Synchronous command operation handle.
 pub type CommandOperation = OperationHandle<crate::CommandOutput, CommandError>;
@@ -80,8 +97,7 @@ impl CommandExecutor {
         config: CommandExecutionConfig,
     ) -> Result<Self, CommandExecutorCreateError> {
         config.validate()?;
-        let (scheduler, backend, group, recovery, manager) =
-            executor::build_executor(manager.clone(), config.clone())?;
+        let (scheduler, backend, group, recovery, manager) = executor::build_executor(manager.clone(), config.clone())?;
         Ok(Self {
             manager,
             config,
@@ -102,7 +118,8 @@ impl CommandExecutor {
 }
 #[path = "execution/executor.rs"]
 mod executor;
-/// Frozen submission signatures implemented by the managed executor integration.
+/// Frozen submission signatures implemented by the managed executor
+/// integration.
 pub trait CommandExecutorApi {
     fn submit(
         &self,
@@ -169,9 +186,7 @@ pub trait CommandExecutorApi {
         runner: CommandRunner,
         command: Command,
         options: CommandResourceRunOptions,
-    ) -> impl std::future::Future<
-        Output = Result<AsyncCommandOperation, CommandResourceSubmitFailure>,
-    > + Send;
+    ) -> impl std::future::Future<Output = Result<AsyncCommandOperation, CommandResourceSubmitFailure>> + Send;
     #[cfg(feature = "async")]
     fn submit_wait_resources_in<'a>(
         &'a self,
@@ -179,10 +194,7 @@ pub trait CommandExecutorApi {
         runner: CommandRunner,
         command: Command,
         options: CommandResourceRunOptions,
-    ) -> impl std::future::Future<
-        Output = Result<AsyncCommandOperation, CommandResourceSubmitFailure>,
-    > + Send
-    + 'a;
+    ) -> impl std::future::Future<Output = Result<AsyncCommandOperation, CommandResourceSubmitFailure>> + Send + 'a;
     #[cfg(feature = "async")]
     fn submit_async(
         &self,
@@ -223,7 +235,8 @@ pub trait CommandExecutorApi {
     ) -> impl std::future::Future<Output = Result<AsyncCommandOperation, CommandSubmitFailure>> + Send + 'a;
 }
 
-/// Inputs returned when ordinary submission is rejected before ownership transfers.
+/// Inputs returned when ordinary submission is rejected before ownership
+/// transfers.
 #[derive(Debug)]
 pub struct CommandSubmitFailure {
     pub runner: Box<CommandRunner>,

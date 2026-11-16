@@ -38,12 +38,12 @@ use super::output_tee::OutputTee;
 
 const ATTEMPTS: usize = 128;
 const CHILD_MODE: &str = "QUBIT_WINDOWS_CANCEL_INTERLEAVING_CHILD";
-const TEST_FILTER: &str = "command_runner::internal::windows_cancel_interleaving_tests::windows_successful_cancel_interleaving";
+const TEST_FILTER: &str =
+    "command_runner::internal::windows_cancel_interleaving_tests::windows_successful_cancel_interleaving";
 const WATCHDOG_LIMIT: Duration = Duration::from_secs(10);
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 const BLOCKED_WRITE_OBSERVATION: Duration = Duration::from_millis(10);
-const WATCHDOG_PARENT_CHECK: &str =
-    r#"{"event":"watchdog_parent_check","child_reaped":true,"child_kill_used":false}"#;
+const WATCHDOG_PARENT_CHECK: &str = r#"{"event":"watchdog_parent_check","child_reaped":true,"child_kill_used":false}"#;
 const WATCHDOG_SELF_TEST: &str = r#"{"event":"watchdog_self_test","blocked_real_pipe":true,"watchdog_released_pipe":true,"helper_reaped":true,"child_kill_used":false}"#;
 const EOF_TO_FLUSH_CLASSIFICATION: &str = r#"{"event":"scenario_classification","schema":1,"scenario":"eof_to_flush","classification":"uncovered","attempts":0,"reason":"production tee is an unbuffered File writer; no buffered bytes remain for a blocking flush after EOF. A BufferWriter/BufWriter would change the production path and cannot establish this interleaving"}"#;
 const STDIN_CHECK_TO_WRITE_CLASSIFICATION: &str = r#"{"event":"scenario_classification","schema":1,"scenario":"stdin_check_to_write","classification":"uncovered","attempts":0,"reason":"Windows wait_writable only checks the cancellation token; there is no pending synchronous I/O in the check-to-write gap for CancelSynchronousIo to successfully cancel. A success would target the write after it entered the kernel"}"#;
@@ -51,12 +51,7 @@ const OVERALL_CLASSIFICATION: &str = r#"{"event":"overall_classification","schem
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
-    fn CreatePipe(
-        read_pipe: *mut RawHandle,
-        write_pipe: *mut RawHandle,
-        attributes: *const c_void,
-        size: u32,
-    ) -> i32;
+    fn CreatePipe(read_pipe: *mut RawHandle, write_pipe: *mut RawHandle, attributes: *const c_void, size: u32) -> i32;
     fn GetNamedPipeInfo(
         pipe: RawHandle,
         flags: *mut u32,
@@ -134,10 +129,7 @@ impl AttemptRecovery {
     }
 
     fn join_worker(&mut self) -> thread::Result<WorkerResult> {
-        self.worker
-            .take()
-            .expect("reader worker should be joined once")
-            .join()
+        self.worker.take().expect("reader worker should be joined once").join()
     }
 }
 
@@ -234,10 +226,7 @@ fn test_successful_cancellation_interleaving_completes() {
             );
             eprintln!("{WATCHDOG_PARENT_CHECK}");
             let probe = run_child("probe", WATCHDOG_LIMIT);
-            assert!(
-                !probe.timed_out,
-                "Windows real-pipe probe exceeded watchdog limit"
-            );
+            assert!(!probe.timed_out, "Windows real-pipe probe exceeded watchdog limit");
             assert_eq!(
                 probe.status.and_then(|status| status.code()),
                 Some(0),
@@ -255,14 +244,10 @@ struct ChildOutcome {
 
 fn run_watchdog_fault_self_test() {
     let (reader, mut writer) = anonymous_pipe().expect("watchdog self-test pipe should be created");
-    let capacity =
-        fill_pipe(&mut writer, &reader).expect("watchdog self-test pipe should be filled");
+    let capacity = fill_pipe(&mut writer, &reader).expect("watchdog self-test pipe should be filled");
     let helper = thread::spawn(move || writer.write_all(b"x"));
     thread::sleep(Duration::from_millis(50));
-    assert!(
-        !helper.is_finished(),
-        "helper should block while the real pipe is full"
-    );
+    assert!(!helper.is_finished(), "helper should block while the real pipe is full");
     let watchdog = thread::spawn(move || {
         let mut reader = reader;
         let mut drained = Vec::new();
@@ -276,10 +261,7 @@ fn run_watchdog_fault_self_test() {
         .expect("blocked pipe helper should be reaped")
         .expect("released helper write should succeed");
     let (drained, capacity) = watchdog.join().expect("pipe watchdog should be reaped");
-    assert!(
-        drained >= capacity as usize,
-        "watchdog should drain the filled pipe"
-    );
+    assert!(drained >= capacity as usize, "watchdog should drain the filled pipe");
     eprintln!("{WATCHDOG_SELF_TEST}");
 }
 
@@ -297,25 +279,18 @@ fn run_child(mode: &str, timeout: Duration) -> ChildOutcome {
     let stdout_reader = thread::spawn(move || {
         let mut output = Vec::new();
         let mut stdout = stdout;
-        stdout
-            .read_to_end(&mut output)
-            .expect("child stdout should be drained");
+        stdout.read_to_end(&mut output).expect("child stdout should be drained");
         output
     });
     let stderr_reader = thread::spawn(move || {
         let mut output = Vec::new();
         let mut stderr = stderr;
-        stderr
-            .read_to_end(&mut output)
-            .expect("child stderr should be drained");
+        stderr.read_to_end(&mut output).expect("child stderr should be drained");
         output
     });
     let deadline = Instant::now() + timeout;
     loop {
-        match child
-            .try_wait()
-            .expect("watchdog should inspect child status")
-        {
+        match child.try_wait().expect("watchdog should inspect child status") {
             Some(status) => {
                 log_child_output(mode, "stdout", stdout_reader);
                 log_child_output(mode, "stderr", stderr_reader);
@@ -327,9 +302,7 @@ fn run_child(mode: &str, timeout: Duration) -> ChildOutcome {
             }
             None if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
             None => {
-                child
-                    .kill()
-                    .expect("watchdog should terminate overdue child");
+                child.kill().expect("watchdog should terminate overdue child");
                 let status = child.wait().expect("watchdog should reap terminated child");
                 log_child_output(mode, "stdout", stdout_reader);
                 log_child_output(mode, "stderr", stderr_reader);
@@ -362,16 +335,13 @@ fn run_read_to_tee_probe() {
 
     for attempt in 0..ATTEMPTS {
         let attempt_start = Instant::now();
-        let (source_reader, mut source_writer) =
-            anonymous_pipe().expect("source pipe should be created");
+        let (source_reader, mut source_writer) = anonymous_pipe().expect("source pipe should be created");
         let (tee_reader, mut tee_writer) = anonymous_pipe().expect("tee pipe should be created");
-        let tee_capacity =
-            fill_pipe(&mut tee_writer, &tee_reader).expect("tee pipe should be filled and checked");
+        let tee_capacity = fill_pipe(&mut tee_writer, &tee_reader).expect("tee pipe should be filled and checked");
         let (read_tx, read_rx) = mpsc::channel();
         let (tee_tx, tee_rx) = mpsc::channel();
         let (source_release_tx, source_release_rx) = mpsc::channel();
-        let (cancellation, token) =
-            IoCancellation::pair().expect("Windows cancellation should initialize");
+        let (cancellation, token) = IoCancellation::pair().expect("Windows cancellation should initialize");
         let barrier = Arc::new(Barrier::new(2));
         let writer_barrier = Arc::clone(&barrier);
         let source_writer_thread = thread::spawn(move || {
@@ -379,10 +349,7 @@ fn run_read_to_tee_probe() {
             let _ = source_release_tx.send(Instant::now());
             source_writer.write_all(&[0x41])
         });
-        let tee = OutputTee::new(
-            Box::new(TeeEntry(tee_writer, tee_tx)),
-            PathBuf::from("pipe-tee.log"),
-        );
+        let tee = OutputTee::new(Box::new(TeeEntry(tee_writer, tee_tx)), PathBuf::from("pipe-tee.log"));
         let worker = thread::spawn(move || {
             read_output_inner(
                 &mut ReadEntry(source_reader, read_tx),
@@ -403,10 +370,7 @@ fn run_read_to_tee_probe() {
             .recv_timeout(EVENT_TIMEOUT)
             .expect("worker should enter the real source-pipe read");
         recovery.release_barrier();
-        let worker = recovery
-            .worker
-            .as_ref()
-            .expect("worker handle should be live");
+        let worker = recovery.worker.as_ref().expect("worker handle should be live");
         let first_cancel_call = Instant::now();
         let first_cancel = cancellation.cancel(worker);
         let first_cancel_return = Instant::now();
@@ -454,10 +418,7 @@ fn run_read_to_tee_probe() {
         }
 
         // Close/release every pipe path before unbounded thread joins.
-        match recovery
-            .join_source_writer()
-            .expect("source writer should not panic")
-        {
+        match recovery.join_source_writer().expect("source writer should not panic") {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {
                 // Cancellation can close the read handle before this
@@ -472,32 +433,20 @@ fn run_read_to_tee_probe() {
             .expect("tee pipe should drain after its writer is released");
         assert!(drained.len() >= tee_capacity as usize);
         recovery.close_tee_reader();
-        let _ = recovery
-            .join_worker()
-            .expect("reader helper should be recoverable");
+        let _ = recovery.join_worker().expect("reader helper should be recoverable");
         if !legacy_candidates.is_empty() {
             break;
         }
     }
 
-    let error_not_found_count = first_cancel_errors
-        .iter()
-        .filter(|error| **error == Some(1168))
-        .count();
+    let error_not_found_count = first_cancel_errors.iter().filter(|error| **error == Some(1168)).count();
     eprintln!(
         "Windows RC-002 read-to-tee attempts={}, first_cancel_successes={first_cancel_successes}, error_not_found_1168={error_not_found_count}, first_cancel_error_os_codes={first_cancel_errors:?}, tee_write_entries={tee_write_entries}, legacy_confirmed_blocked_writes={confirmed_blocked_writes}, source_writer_broken_pipes={source_writer_broken_pipes}, legacy_candidate_count={}",
         legacy_candidates.last().map_or(ATTEMPTS, |hit| hit.0 + 1),
         legacy_candidates.len()
     );
-    for (
-        attempt,
-        attempt_start,
-        read_entry,
-        source_release,
-        cancel_call,
-        cancel_return,
-        tee_entry,
-    ) in &legacy_candidates
+    for (attempt, attempt_start, read_entry, source_release, cancel_call, cancel_return, tee_entry) in
+        &legacy_candidates
     {
         eprintln!(
             "legacy candidate attempt={attempt} timeline_ns(attempt_start=0, read_entry={}, source_release={}, cancel_call={}, cancel_return={}, tee_write_entry={})",

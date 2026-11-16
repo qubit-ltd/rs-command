@@ -1,5 +1,7 @@
+use std::io::Write;
+use std::io::{self};
+
 use crate::execution::contracts::PreparedSink;
-use std::io::{self, Write};
 
 /// Writes tee bytes while serializing helpers that share an owned sink.
 pub(crate) fn write_sink(sink: &PreparedSink, bytes: &[u8]) -> io::Result<()> {

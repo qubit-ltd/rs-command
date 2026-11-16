@@ -23,10 +23,7 @@ impl Waiters {
         self.entries.retain(|(key, _)| *key != id);
     }
     pub fn wake_all(&mut self) -> Vec<Waker> {
-        self.entries
-            .iter_mut()
-            .filter_map(|(_, w)| w.take())
-            .collect()
+        self.entries.iter_mut().filter_map(|(_, w)| w.take()).collect()
     }
     pub fn len(&self) -> usize {
         self.entries.len()

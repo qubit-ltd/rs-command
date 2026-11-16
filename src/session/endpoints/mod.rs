@@ -1,4 +1,5 @@
-//! Opaque caller-facing stream endpoint types; channel behavior is implemented in T5.
+//! Opaque caller-facing stream endpoint types; channel behavior is implemented
+//! in T5.
 #[cfg(feature = "async")]
 mod stderr;
 #[cfg(feature = "async")]

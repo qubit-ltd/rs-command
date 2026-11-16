@@ -1,10 +1,19 @@
 //! Frozen managed command runner entry points.
+use qubit_operation::OperationScope;
+
+use crate::Command;
+use crate::CommandError;
+use crate::CommandExecutor;
+use crate::CommandResourceRunOptions;
+use crate::CommandRunOptions;
 #[cfg(feature = "async")]
 use crate::CommandSession;
-use crate::{Command, CommandError, CommandExecutor, CommandResourceRunOptions, CommandRunOptions};
 #[cfg(feature = "async")]
-use crate::{CommandStderr, CommandStdin, CommandStdout};
-use qubit_operation::OperationScope;
+use crate::CommandStderr;
+#[cfg(feature = "async")]
+use crate::CommandStdin;
+#[cfg(feature = "async")]
+use crate::CommandStdout;
 
 /// Managed runner signatures; behavior is implemented by T6.
 pub trait ManagedCommandRunnerApi {
@@ -277,9 +286,7 @@ fn collect(mut handle: crate::CommandOperation) -> Result<crate::CommandOutput, 
     map_outcome(outcome)
 }
 #[cfg(feature = "async")]
-async fn collect_async(
-    mut handle: crate::AsyncCommandOperation,
-) -> Result<crate::CommandOutput, CommandError> {
+async fn collect_async(mut handle: crate::AsyncCommandOperation) -> Result<crate::CommandOutput, CommandError> {
     let outcome = handle
         .wait_outcome()
         .await
@@ -301,9 +308,7 @@ fn map_outcome(
         qubit_operation::OperationOutcome::ChildFailed(failure) => {
             Err(managed_error(failure.outcome.summary.as_str().to_owned()))
         }
-        qubit_operation::OperationOutcome::Panicked(panic) => {
-            Err(managed_error(panic.summary.as_str().to_owned()))
-        }
+        qubit_operation::OperationOutcome::Panicked(panic) => Err(managed_error(panic.summary.as_str().to_owned())),
         qubit_operation::OperationOutcome::ExecutionFailed(failure) => {
             Err(managed_error(failure.summary.as_str().to_owned()))
         }
@@ -312,9 +317,7 @@ fn map_outcome(
 fn managed_error(message: String) -> CommandError {
     CommandError::from_reason(
         "<managed command>",
-        crate::CommandErrorReason::ManagedOperationFailed {
-            diagnostic: message,
-        },
+        crate::CommandErrorReason::ManagedOperationFailed { diagnostic: message },
         None,
     )
 }

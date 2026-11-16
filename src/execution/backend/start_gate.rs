@@ -1,8 +1,10 @@
 //! Linearizes cancellation against the first operation with external effects.
+use std::sync::Mutex;
+
+use qubit_operation::StopReason;
+
 use crate::CommandCancellation;
 use crate::execution::contracts::StopPort;
-use qubit_operation::StopReason;
-use std::sync::Mutex;
 
 #[derive(Debug, Default)]
 pub(crate) struct StartGate {
@@ -101,18 +103,28 @@ impl StopPort for StartGate {
 
 #[cfg(test)]
 mod tests {
-    use super::StartGate;
-    use crate::session::contracts::SessionBridge;
-    use crate::{Command, CommandErrorKind, CommandRunOptions, CommandRunner};
-    use qubit_operation::StopReason;
     use std::fs;
-    use std::io::{self, Cursor, Read};
+    use std::io::Cursor;
+    use std::io::Read;
+    use std::io::{self};
     use std::sync::Arc;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
     use std::task::Waker;
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
+    use std::time::Instant;
+
+    use qubit_operation::StopReason;
+
+    use super::StartGate;
+    use crate::Command;
+    use crate::CommandErrorKind;
+    use crate::CommandRunOptions;
+    use crate::CommandRunner;
+    use crate::session::contracts::SessionBridge;
 
     struct ManualContextClock {
         domain: qubit_operation::ClockDomainId,
@@ -162,8 +174,7 @@ mod tests {
 
         fn record(&self, output: &Mutex<Vec<u8>>, bytes: &[u8]) {
             output.lock().unwrap().extend_from_slice(bytes);
-            self.observed_output
-                .fetch_add(bytes.len() as u64, Ordering::SeqCst);
+            self.observed_output.fetch_add(bytes.len() as u64, Ordering::SeqCst);
         }
     }
 
@@ -275,9 +286,7 @@ mod tests {
         let gate = StartGate::default();
         let error = CommandRunner::without_timeout()
             .run_with_tree_policy(
-                Command::new("sh")
-                    .arg("-c")
-                    .arg("printf abc; exec sleep 30"),
+                Command::new("sh").arg("-c").arg("printf abc; exec sleep 30"),
                 CommandRunOptions::new().cancellation(gate.cancellation()),
                 crate::command_runner::RunTreePolicy {
                     managed_policy: Some(crate::ProcessTreePolicy::Managed),
@@ -291,10 +300,7 @@ mod tests {
         assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
         assert!(matches!(
             error.reason(),
-            crate::CommandErrorReason::OutputLimitExceeded {
-                limit: 2,
-                observed: 3
-            }
+            crate::CommandErrorReason::OutputLimitExceeded { limit: 2, observed: 3 }
         ));
     }
 
@@ -312,9 +318,9 @@ mod tests {
         });
         let context = qubit_operation::OperationContext::new(qubit_operation::ContextOptions {
             clock: Some(clock),
-            deadline: Some(qubit_operation::Deadline::at(
-                qubit_operation::MonotonicTime::new(domain, 1),
-            )),
+            deadline: Some(qubit_operation::Deadline::at(qubit_operation::MonotonicTime::new(
+                domain, 1,
+            ))),
             budget: None,
         })
         .unwrap();
@@ -373,10 +379,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(
-            result.unwrap_err().kind(),
-            CommandErrorKind::CancelledBeforeStart
-        );
+        assert_eq!(result.unwrap_err().kind(), CommandErrorKind::CancelledBeforeStart);
         assert!(!marker.exists());
         assert_eq!(fs::read(&tee).unwrap(), b"keep");
     }
@@ -409,10 +412,7 @@ mod tests {
         while !ready_path.exists() && started.elapsed() < Duration::from_secs(5) {
             thread::yield_now();
         }
-        assert!(
-            ready_path.exists(),
-            "child did not reach its readiness marker"
-        );
+        assert!(ready_path.exists(), "child did not reach its readiness marker");
         gate.request_stop(StopReason::UserCancelled);
         let result = runner.join().expect("runner thread should join");
         assert_eq!(result.unwrap_err().kind(), CommandErrorKind::Cancelled);

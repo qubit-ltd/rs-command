@@ -1,16 +1,25 @@
 //! Submitted request snapshots and activated ownership bundle.
-use super::{FactSink, Reservation};
-use crate::{Command, CommandResourceRunOptions, CommandRunOptions, CommandRunner};
-use qubit_operation::{OperationContext, OperationId, OperationScope};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use qubit_operation::OperationContext;
+use qubit_operation::OperationId;
+use qubit_operation::OperationScope;
+
+use super::FactSink;
+use super::Reservation;
+use crate::Command;
+use crate::CommandResourceRunOptions;
+use crate::CommandRunOptions;
+use crate::CommandRunner;
+
 /// Submitted command and frozen execution inputs.
 ///
-/// `operation_id` is absent before upstream binding and set exactly once before activation;
-/// `snapshot` and `io_paths` are captured before admission side effects, while actual file
-/// identity checks and file access remain worker responsibilities.
+/// `operation_id` is absent before upstream binding and set exactly once before
+/// activation; `snapshot` and `io_paths` are captured before admission side
+/// effects, while actual file identity checks and file access remain worker
+/// responsibilities.
 pub struct Request {
     pub operation_id: Option<OperationId>,
     pub runner: CommandRunner,
@@ -18,7 +27,8 @@ pub struct Request {
     pub options: RequestOptions,
     pub snapshot: ExecutionSnapshot,
     pub io_paths: IoPathSnapshot,
-    /// Inherited operation context used to observe the fixed total deadline in its clock domain.
+    /// Inherited operation context used to observe the fixed total deadline in
+    /// its clock domain.
     pub deadline: Option<OperationContext>,
 }
 
@@ -44,7 +54,8 @@ pub struct ExecutionSnapshot {
     pub environment: Vec<(OsString, Option<OsString>)>,
 }
 
-/// Lexical I/O paths captured with the request; file identity is checked later by preparation.
+/// Lexical I/O paths captured with the request; file identity is checked later
+/// by preparation.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct IoPathSnapshot {
     pub stdin: Option<PathBuf>,

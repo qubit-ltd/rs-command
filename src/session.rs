@@ -2,7 +2,11 @@
 pub mod channel;
 pub mod contracts;
 #[cfg(feature = "async")]
-pub use endpoints::{CommandStderr, CommandStdin, CommandStdout};
+pub use endpoints::CommandStderr;
+#[cfg(feature = "async")]
+pub use endpoints::CommandStdin;
+#[cfg(feature = "async")]
+pub use endpoints::CommandStdout;
 pub mod endpoints;
 
 /// Streaming session owning its operation handle and any untaken endpoints.

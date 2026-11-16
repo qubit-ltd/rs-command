@@ -77,19 +77,29 @@ pub use command_output::CommandOutput;
 pub use command_run_options::CommandRunOptions;
 pub use command_runner::CommandRunner;
 pub use command_runner::DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM;
-pub use output_stream::OutputStream;
-
 pub use command_runner::ManagedCommandRunnerApi;
 #[cfg(feature = "async")]
 pub use execution::AsyncCommandOperation;
-pub use execution::{
-    CommandExecutionConfig, CommandExecutor, CommandExecutorApi, CommandExecutorCreateError,
-    CommandOperation, CommandResourceSubmitFailure, CommandSubmitFailure,
-    CommandSubmitFailureReason, SnapshotFailure,
-};
+pub use execution::CommandExecutionConfig;
+pub use execution::CommandExecutor;
+pub use execution::CommandExecutorApi;
+pub use execution::CommandExecutorCreateError;
+pub use execution::CommandOperation;
+pub use execution::CommandResourceSubmitFailure;
+pub use execution::CommandSubmitFailure;
+pub use execution::CommandSubmitFailureReason;
+pub use execution::SnapshotFailure;
+pub use output_stream::OutputStream;
 pub use process_tree_policy::ProcessTreePolicy;
-pub use resource_run_options::{CommandResourceRunOptions, FileSinkPolicy};
+pub use resource_run_options::CommandResourceRunOptions;
+pub use resource_run_options::FileSinkPolicy;
 #[cfg(feature = "async")]
-pub use session::{CommandSession, CommandSessionApi};
+pub use session::CommandSession;
 #[cfg(feature = "async")]
-pub use session::{CommandStderr, CommandStdin, CommandStdout};
+pub use session::CommandSessionApi;
+#[cfg(feature = "async")]
+pub use session::CommandStderr;
+#[cfg(feature = "async")]
+pub use session::CommandStdin;
+#[cfg(feature = "async")]
+pub use session::CommandStdout;

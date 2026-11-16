@@ -37,10 +37,7 @@ pub(in crate::command_runner) fn spawn_failed(command: &str, source: io::Error) 
 ///
 /// Structured output-read failure describing the missing pipe.
 #[inline]
-pub(in crate::command_runner) fn output_pipe_error(
-    command: &str,
-    stream: OutputStream,
-) -> CommandError {
+pub(in crate::command_runner) fn output_pipe_error(command: &str, stream: OutputStream) -> CommandError {
     CommandError::from_reason(
         command,
         CommandErrorReason::ReadOutputFailed {

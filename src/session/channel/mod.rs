@@ -9,7 +9,9 @@ mod writer;
 #[cfg(feature = "async")]
 pub(crate) use reader::ChannelReader;
 #[cfg(feature = "async")]
-pub(crate) use state::{ByteChannel, OutputBudget};
+pub(crate) use state::ByteChannel;
+#[cfg(feature = "async")]
+pub(crate) use state::OutputBudget;
 #[cfg(feature = "async")]
 pub(crate) use writer::ChannelWriter;
 
@@ -20,9 +22,11 @@ pub(crate) struct SessionChannels {
     pub(crate) stdin: super::endpoints::CommandStdin,
     pub(crate) stdout: super::endpoints::CommandStdout,
     pub(crate) stderr: super::endpoints::CommandStderr,
-    /// Owned by the process worker; dropping it means the child stopped reading.
+    /// Owned by the process worker; dropping it means the child stopped
+    /// reading.
     pub(crate) stdin_reader: ChannelReader,
-    /// Owned by the process worker; dropping either writer publishes output EOF.
+    /// Owned by the process worker; dropping either writer publishes output
+    /// EOF.
     pub(crate) stdout_writer: ChannelWriter,
     pub(crate) stderr_writer: ChannelWriter,
 }
@@ -99,17 +103,13 @@ impl super::contracts::SessionBridge for Bridge {
         self.input.record_broken_pipe();
     }
     fn output_budget_exceeded(&self) -> bool {
-        self.output_budget
-            .as_ref()
-            .is_some_and(|budget| budget.exceeded())
+        self.output_budget.as_ref().is_some_and(|budget| budget.exceeded())
     }
     fn output_budget_limit(&self) -> Option<u64> {
         self.output_budget.as_ref().map(|budget| budget.limit())
     }
     fn output_bytes_observed(&self) -> u64 {
-        self.output_budget
-            .as_ref()
-            .map_or(0, |budget| budget.observed())
+        self.output_budget.as_ref().map_or(0, |budget| budget.observed())
     }
 }
 

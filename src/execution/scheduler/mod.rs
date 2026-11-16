@@ -4,17 +4,20 @@ mod state;
 mod waiter;
 mod worker;
 
-pub use state::{BoundedScheduler, SchedulerSnapshot};
+pub use state::BoundedScheduler;
+pub use state::SchedulerSnapshot;
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::task::Wake;
+    use std::task::Waker;
+
     use super::*;
-    use crate::execution::{CommandExecutionConfig, Scheduler};
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-    use std::task::{Wake, Waker};
+    use crate::execution::CommandExecutionConfig;
+    use crate::execution::Scheduler;
     struct CountWake(AtomicUsize);
     impl Wake for CountWake {
         fn wake(self: Arc<Self>) {

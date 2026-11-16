@@ -1,24 +1,25 @@
-use super::{
-    reservation::Kind,
-    waiter::Waiters,
-    worker::{Queued, WorkerQueue},
-};
-use crate::execution::{
-    CommandExecutionConfig,
-    contracts::{
-        CapacityFailure, EnqueueFailure, Reservation, ReservationLease, ScheduledJob, Scheduler,
-    },
-};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::Condvar;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::task::Waker;
+
 use qubit_operation::OperationContext;
 use qubit_operation::StopReason;
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc, Condvar, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    task::Waker,
-};
+
+use super::reservation::Kind;
+use super::waiter::Waiters;
+use super::worker::Queued;
+use super::worker::WorkerQueue;
+use crate::execution::CommandExecutionConfig;
+use crate::execution::contracts::CapacityFailure;
+use crate::execution::contracts::EnqueueFailure;
+use crate::execution::contracts::Reservation;
+use crate::execution::contracts::ReservationLease;
+use crate::execution::contracts::ScheduledJob;
+use crate::execution::contracts::Scheduler;
 
 static NEXT_SCHEDULER_ID: AtomicU64 = AtomicU64::new(1);
 const CLOCK_RECHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
@@ -48,8 +49,9 @@ struct Shared {
     config: CommandExecutionConfig,
 }
 
-/// Thread-safe bounded scheduler. Its internal queue and dispatch threads are bounded by the
-/// configured active and queued permits; worker threads are owned and started by the executor.
+/// Thread-safe bounded scheduler. Its internal queue and dispatch threads are
+/// bounded by the configured active and queued permits; worker threads are
+/// owned and started by the executor.
 #[derive(Clone)]
 pub struct BoundedScheduler(Arc<Shared>);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,9 +63,7 @@ pub struct SchedulerSnapshot {
     pub residual_helpers: usize,
 }
 impl BoundedScheduler {
-    pub fn new(
-        config: CommandExecutionConfig,
-    ) -> Result<Self, crate::execution::CommandExecutorCreateError> {
+    pub fn new(config: CommandExecutionConfig) -> Result<Self, crate::execution::CommandExecutorCreateError> {
         config.validate()?;
         let id = NEXT_SCHEDULER_ID.fetch_add(1, Ordering::Relaxed);
         Ok(Self(Arc::new(Shared {
@@ -102,11 +102,7 @@ impl BoundedScheduler {
             .insert(waker, self.0.config.max_waiters)
             .ok_or(CapacityFailure::QueueFull)
     }
-    pub fn register_waiter_if_full(
-        &self,
-        input_bytes: usize,
-        waker: &Waker,
-    ) -> Result<Option<u64>, CapacityFailure> {
+    pub fn register_waiter_if_full(&self, input_bytes: usize, waker: &Waker) -> Result<Option<u64>, CapacityFailure> {
         let mut s = self.0.state.lock().unwrap();
         if s.closed {
             return Err(CapacityFailure::Closed);
@@ -130,11 +126,7 @@ impl BoundedScheduler {
         drop(s);
         self.0.changed.notify_all()
     }
-    pub fn wait_for_capacity(
-        &self,
-        input_bytes: usize,
-        deadline: Option<OperationContext>,
-    ) -> bool {
+    pub fn wait_for_capacity(&self, input_bytes: usize, deadline: Option<OperationContext>) -> bool {
         let mut s = self.0.state.lock().unwrap();
         if deadline.as_ref().is_some_and(OperationContext::is_expired) {
             return false;
@@ -157,15 +149,8 @@ impl BoundedScheduler {
             if available(&s, &self.0.config, input_bytes) {
                 break true;
             }
-            if deadline
-                .as_ref()
-                .is_some_and(|context| context.deadline().is_some())
-            {
-                let (next, _) = self
-                    .0
-                    .changed
-                    .wait_timeout(s, CLOCK_RECHECK_INTERVAL)
-                    .unwrap();
+            if deadline.as_ref().is_some_and(|context| context.deadline().is_some()) {
+                let (next, _) = self.0.changed.wait_timeout(s, CLOCK_RECHECK_INTERVAL).unwrap();
                 s = next;
             } else {
                 s = self.0.changed.wait(s).unwrap();
@@ -176,7 +161,8 @@ impl BoundedScheduler {
         }
         result
     }
-    /// Concrete entry point for submissions carrying their original, inherited deadline.
+    /// Concrete entry point for submissions carrying their original, inherited
+    /// deadline.
     pub fn try_reserve_until(
         &self,
         input_bytes: usize,
@@ -187,11 +173,7 @@ impl BoundedScheduler {
         }
         self.reserve(input_bytes, deadline)
     }
-    fn reserve(
-        &self,
-        input_bytes: usize,
-        deadline: Option<OperationContext>,
-    ) -> Result<Reservation, CapacityFailure> {
+    fn reserve(&self, input_bytes: usize, deadline: Option<OperationContext>) -> Result<Reservation, CapacityFailure> {
         let mut s = self.0.state.lock().unwrap();
         if s.closed {
             return Err(CapacityFailure::Closed);
@@ -240,7 +222,8 @@ impl BoundedScheduler {
             move |id| retain_lease(&shared, id),
         ))
     }
-    /// Retrieves immediately when possible. `wait_next` is preferred by worker threads.
+    /// Retrieves immediately when possible. `wait_next` is preferred by worker
+    /// threads.
     pub fn try_next(&self) -> Option<(ScheduledJob, Reservation)> {
         loop {
             let mut s = self.0.state.lock().unwrap();
@@ -296,11 +279,7 @@ impl BoundedScheduler {
             false
         };
         s.residual_helpers = s.residual_helpers.saturating_sub(1);
-        let freed_active = if remove {
-            remove_record(&mut s, token)
-        } else {
-            false
-        };
+        let freed_active = if remove { remove_record(&mut s, token) } else { false };
         if freed_active {
             promote_queued(&mut s, &shared.config)
         }
@@ -523,18 +502,12 @@ impl Scheduler for BoundedScheduler {
                 return None;
             }
             let has_deadline = s.workers.jobs.iter().any(|q| {
-                s.records.get(&q.permit.token).is_some_and(|r| {
-                    r.deadline
-                        .as_ref()
-                        .is_some_and(|context| context.deadline().is_some())
-                })
+                s.records
+                    .get(&q.permit.token)
+                    .is_some_and(|r| r.deadline.as_ref().is_some_and(|context| context.deadline().is_some()))
             });
             if has_deadline {
-                let (ns, _) = self
-                    .0
-                    .changed
-                    .wait_timeout(s, CLOCK_RECHECK_INTERVAL)
-                    .unwrap();
+                let (ns, _) = self.0.changed.wait_timeout(s, CLOCK_RECHECK_INTERVAL).unwrap();
                 s = ns
             } else {
                 s = self.0.changed.wait(s).unwrap()

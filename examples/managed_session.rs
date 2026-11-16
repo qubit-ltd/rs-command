@@ -1,20 +1,29 @@
-use qubit_command::{
-    Command, CommandExecutionConfig, CommandExecutor, CommandRunOptions, CommandRunner,
-    CommandSessionApi, ManagedCommandRunnerApi,
-};
-use qubit_io::{AsyncClose, AsyncInput};
-use qubit_operation::{ManagerOptions, OperationManager, OperationOutcome};
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::Context;
+use std::task::Poll;
+use std::task::Wake;
+use std::task::Waker;
 use std::time::Duration;
+
+use qubit_command::Command;
+use qubit_command::CommandExecutionConfig;
+use qubit_command::CommandExecutor;
+use qubit_command::CommandRunOptions;
+use qubit_command::CommandRunner;
+use qubit_command::CommandSessionApi;
+use qubit_command::ManagedCommandRunnerApi;
+use qubit_io::AsyncClose;
+use qubit_io::AsyncInput;
+use qubit_operation::ManagerOptions;
+use qubit_operation::OperationManager;
+use qubit_operation::OperationOutcome;
 
 pub fn run() {
     block_on(async {
         let manager = OperationManager::new(ManagerOptions::default()).expect("manager");
-        let executor =
-            CommandExecutor::new(manager, CommandExecutionConfig::default()).expect("executor");
+        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).expect("executor");
         let runner = CommandRunner::without_timeout();
         let command = if cfg!(windows) {
             Command::new("cmd").args(&["/C", "echo out & echo err 1>&2"])
@@ -33,19 +42,10 @@ pub fn run() {
         let (out, err) = std::thread::scope(|threads| {
             let out_reader = threads.spawn(|| block_on(read_all(&mut stdout)));
             let err_reader = threads.spawn(|| block_on(read_all(&mut stderr)));
-            block_on(std::future::poll_fn(|cx| {
-                Pin::new(&mut stdin).poll_close(cx)
-            }))
-            .expect("close stdin");
+            block_on(std::future::poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).expect("close stdin");
             (
-                out_reader
-                    .join()
-                    .expect("stdout reader")
-                    .expect("stdout read"),
-                err_reader
-                    .join()
-                    .expect("stderr reader")
-                    .expect("stderr read"),
+                out_reader.join().expect("stdout reader").expect("stdout read"),
+                err_reader.join().expect("stderr reader").expect("stderr read"),
             )
         });
 

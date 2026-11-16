@@ -1,11 +1,24 @@
-use crate::{CommandError, CommandOutput};
-use qubit_operation::{
-    ChildOutcomeKind, ChildOutcomeSummary, ChildRelease, ChildSnapshot, DiagnosticSummary,
-    ExecutionPhase, OperationControl, OperationId, OperationOutcome, SettlementReport, StopReason,
-    StopReport,
-};
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Waker};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::task::Context;
+use std::task::Poll;
+use std::task::Waker;
+
+use qubit_operation::ChildOutcomeKind;
+use qubit_operation::ChildOutcomeSummary;
+use qubit_operation::ChildRelease;
+use qubit_operation::ChildSnapshot;
+use qubit_operation::DiagnosticSummary;
+use qubit_operation::ExecutionPhase;
+use qubit_operation::OperationControl;
+use qubit_operation::OperationId;
+use qubit_operation::OperationOutcome;
+use qubit_operation::SettlementReport;
+use qubit_operation::StopReason;
+use qubit_operation::StopReport;
+
+use crate::CommandError;
+use crate::CommandOutput;
 
 pub(crate) struct CommandControl {
     state: Mutex<State>,
@@ -56,10 +69,7 @@ impl CommandControl {
     pub(crate) fn running(&self) {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).phase = ExecutionPhase::Running;
     }
-    pub(crate) fn publish_outcome(
-        &self,
-        outcome: OperationOutcome<CommandOutput, CommandError>,
-    ) -> bool {
+    pub(crate) fn publish_outcome(&self, outcome: OperationOutcome<CommandOutput, CommandError>) -> bool {
         let wakers = {
             let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
             let Some(id) = s.id else {
@@ -69,24 +79,14 @@ impl CommandControl {
                 return false;
             }
             let (kind, diagnostic): (ChildOutcomeKind, String) = match &outcome {
-                OperationOutcome::Succeeded(_) => {
-                    (ChildOutcomeKind::Succeeded, "command succeeded".to_owned())
-                }
+                OperationOutcome::Succeeded(_) => (ChildOutcomeKind::Succeeded, "command succeeded".to_owned()),
                 OperationOutcome::Failed(e) => (ChildOutcomeKind::Failed, e.to_string()),
-                OperationOutcome::ChildFailed(e) => (
-                    ChildOutcomeKind::Failed,
-                    e.outcome.summary.as_str().to_owned(),
-                ),
-                OperationOutcome::Stopped(_) => {
-                    (ChildOutcomeKind::Stopped, "command stopped".to_owned())
+                OperationOutcome::ChildFailed(e) => (ChildOutcomeKind::Failed, e.outcome.summary.as_str().to_owned()),
+                OperationOutcome::Stopped(_) => (ChildOutcomeKind::Stopped, "command stopped".to_owned()),
+                OperationOutcome::Panicked(p) => (ChildOutcomeKind::Panicked, p.summary.as_str().to_owned()),
+                OperationOutcome::ExecutionFailed(f) => {
+                    (ChildOutcomeKind::ExecutionFailed, f.summary.as_str().to_owned())
                 }
-                OperationOutcome::Panicked(p) => {
-                    (ChildOutcomeKind::Panicked, p.summary.as_str().to_owned())
-                }
-                OperationOutcome::ExecutionFailed(f) => (
-                    ChildOutcomeKind::ExecutionFailed,
-                    f.summary.as_str().to_owned(),
-                ),
             };
             s.summary = Some(ChildOutcomeSummary {
                 operation_id: id,
@@ -134,10 +134,7 @@ impl CommandControl {
         }
         true
     }
-    pub(crate) fn take(
-        &self,
-        cx: &mut Context<'_>,
-    ) -> Poll<OperationOutcome<CommandOutput, CommandError>> {
+    pub(crate) fn take(&self, cx: &mut Context<'_>) -> Poll<OperationOutcome<CommandOutput, CommandError>> {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(out) = s.outcome.take() {
             return Poll::Ready(out);
@@ -161,9 +158,7 @@ impl OperationControl for CommandControl {
     fn snapshot(&self) -> ChildSnapshot {
         let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         ChildSnapshot {
-            operation_id: s
-                .id
-                .expect("operation manager binds before observing child"),
+            operation_id: s.id.expect("operation manager binds before observing child"),
             execution: s.phase,
             stop: s.stop.clone(),
             outcome: s.summary.clone(),

@@ -41,8 +41,8 @@ use support::temp_dir::LocalTempDir;
 
 #[test]
 fn test_runner_pre_cancelled_command_does_not_prepare_output_file() {
-    let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
-        .expect("command test temporary directory should be created");
+    let temp_dir =
+        LocalTempDir::with_prefix("qubit-command-test-").expect("command test temporary directory should be created");
     let stdout_path = temp_dir.path().join("stdout.log");
     let cancellation = CommandCancellation::new();
     cancellation.cancel();
@@ -62,8 +62,8 @@ fn test_runner_pre_cancelled_command_does_not_prepare_output_file() {
 
 #[test]
 fn test_runner_pre_cancelled_command_does_not_truncate_existing_output_file() {
-    let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
-        .expect("command test temporary directory should be created");
+    let temp_dir =
+        LocalTempDir::with_prefix("qubit-command-test-").expect("command test temporary directory should be created");
     let stdout_path = temp_dir.path().join("stdout.log");
     fs::write(&stdout_path, b"must-survive-cancellation").expect("tee fixture should be written");
     let cancellation = CommandCancellation::new();
@@ -87,8 +87,8 @@ fn test_runner_pre_cancelled_command_does_not_truncate_existing_output_file() {
 
 #[test]
 fn test_command_runner_rejects_directory_as_stdin_file() {
-    let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
-        .expect("command test temporary directory should be created");
+    let temp_dir =
+        LocalTempDir::with_prefix("qubit-command-test-").expect("command test temporary directory should be created");
 
     let error = CommandRunner::new(Duration::from_secs(10))
         .run(Command::new("true").stdin_file(temp_dir.path()))
@@ -99,8 +99,8 @@ fn test_command_runner_rejects_directory_as_stdin_file() {
 
 #[test]
 fn test_command_runner_rejects_directory_as_stdout_tee() {
-    let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
-        .expect("command test temporary directory should be created");
+    let temp_dir =
+        LocalTempDir::with_prefix("qubit-command-test-").expect("command test temporary directory should be created");
 
     let error = CommandRunner::new(Duration::from_secs(10))
         .run_with(
@@ -120,8 +120,8 @@ fn test_command_runner_rejects_directory_as_stdout_tee() {
 
 #[test]
 fn test_command_runner_rejects_directory_as_stderr_tee() {
-    let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
-        .expect("command test temporary directory should be created");
+    let temp_dir =
+        LocalTempDir::with_prefix("qubit-command-test-").expect("command test temporary directory should be created");
 
     let error = CommandRunner::new(Duration::from_secs(10))
         .run_with(
@@ -217,14 +217,8 @@ mod unix {
                         .terminate_if_recorded()
                         .expect("escaped descendant should be cleaned up after fixture exit");
                     if fixture == "watchdog-self-test" {
-                        assert!(
-                            !status.success(),
-                            "stalled fixture should be terminated by watchdog"
-                        );
-                        assert!(
-                            cleaned,
-                            "watchdog should find and clean the escaped descendant"
-                        );
+                        assert!(!status.success(), "stalled fixture should be terminated by watchdog");
+                        assert!(cleaned, "watchdog should find and clean the escaped descendant");
                     } else {
                         assert!(status.success(), "timeout fixture failed: {status}");
                     }
@@ -238,10 +232,7 @@ mod unix {
                         .terminate_if_recorded()
                         .expect("watchdog should clean up escaped descendant");
                     if fixture == "watchdog-self-test" {
-                        assert!(
-                            cleaned,
-                            "watchdog should find and clean the escaped descendant"
-                        );
+                        assert!(cleaned, "watchdog should find and clean the escaped descendant");
                         return;
                     }
                     panic!("timeout fixture exceeded {watchdog:?} watchdog");
@@ -315,8 +306,7 @@ mod unix {
         let readiness = escaped.try_wait_until_recorded(READY_TIMEOUT);
         if readiness.is_ok() {
             let deadline = Instant::now() + READY_TIMEOUT;
-            while (fixture == "ready-timeout" || !ready_path.exists()) && Instant::now() < deadline
-            {
+            while (fixture == "ready-timeout" || !ready_path.exists()) && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
@@ -374,18 +364,10 @@ mod unix {
         );
         direct_exit.expect("direct command should exit before timeout");
         if fixture == "ready-timeout" {
-            assert!(
-                ready.is_err(),
-                "injected readiness failure should be reported"
-            );
-            assert!(
-                !observed_before_release,
-                "readiness failure must not advance timeout"
-            );
-            let natural_result =
-                after_release.expect("runner should finish after readiness-failure cleanup");
-            let output = natural_result
-                .expect("releasing the fixture should complete naturally, not by timeout");
+            assert!(ready.is_err(), "injected readiness failure should be reported");
+            assert!(!observed_before_release, "readiness failure must not advance timeout");
+            let natural_result = after_release.expect("runner should finish after readiness-failure cleanup");
+            let output = natural_result.expect("releasing the fixture should complete naturally, not by timeout");
             assert!(
                 output.stdout_complete(),
                 "readiness-failure output should complete after release"
@@ -398,14 +380,8 @@ mod unix {
         }
         if fixture == "worker-panic" {
             assert!(ready.is_ok(), "fixture readiness failed: {ready:?}");
-            assert!(
-                observed.is_err(),
-                "panicking worker should disconnect result channel"
-            );
-            assert!(
-                worker.join().is_err(),
-                "injected result worker panic should be joined"
-            );
+            assert!(observed.is_err(), "panicking worker should disconnect result channel");
+            assert!(worker.join().is_err(), "injected result worker panic should be joined");
             return;
         }
         if fixture == "no-advance" {
@@ -415,10 +391,8 @@ mod unix {
                 !observed_before_release,
                 "runner must not time out before manual time advances"
             );
-            let natural_result =
-                after_release.expect("natural completion after release should be observed");
-            let output =
-                natural_result.expect("release should complete naturally, not as a timeout");
+            let natural_result = after_release.expect("natural completion after release should be observed");
+            let output = natural_result.expect("release should complete naturally, not as a timeout");
             assert!(
                 output.stdout_complete(),
                 "no-advance output should complete after release"
@@ -463,10 +437,7 @@ mod unix {
                 "stdout prefix should survive timeout"
             );
         }
-        assert!(
-            after_release.is_none(),
-            "no second result should arrive after release"
-        );
+        assert!(after_release.is_none(), "no second result should arrive after release");
     }
 
     #[cfg(target_os = "linux")]
@@ -496,10 +467,7 @@ mod unix {
         .expect("cancellation fixture subprocess should start");
         let deadline = Instant::now() + WATCHDOG;
         loop {
-            match child
-                .try_wait()
-                .expect("fixture subprocess should be observable")
-            {
+            match child.try_wait().expect("fixture subprocess should be observable") {
                 Some(status) => {
                     if fixture == "late-pid" && !status.success() {
                         let _ = escaped.try_wait_until_recorded(Duration::from_secs(2));
@@ -596,10 +564,8 @@ mod unix {
                     _ => unreachable!("fixture name was checked before worker start"),
                 }
             };
-            let result = CommandRunner::without_timeout().run_with(
-                command,
-                CommandRunOptions::new().cancellation(run_cancellation),
-            );
+            let result = CommandRunner::without_timeout()
+                .run_with(command, CommandRunOptions::new().cancellation(run_cancellation));
             if fixture_owned == "worker-panic" {
                 panic!("injected result-worker panic after runner cleanup: {result:?}");
             }
@@ -653,9 +619,7 @@ mod unix {
                 if ready_path.exists() {
                     Ok(())
                 } else {
-                    Err(format!(
-                        "fixture readiness marker missing after {ready_timeout:?}"
-                    ))
+                    Err(format!("fixture readiness marker missing after {ready_timeout:?}"))
                 }
             }
         } else if fixture == "late-pid" {
@@ -663,22 +627,21 @@ mod unix {
         } else {
             escaped.try_wait_until_recorded(ready_timeout)
         };
-        let post_release_ready =
-            if fixture == "delayed-readiness" && pid_handshake.is_ok() && direct_exit.is_ok() {
-                let release = fs::write(&release_path, b"release");
-                let released_ready = if release.is_ok() {
-                    let deadline = Instant::now() + READY_TIMEOUT;
-                    while Instant::now() < deadline && !ready_path.exists() {
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
-                    ready_path.exists()
-                } else {
-                    false
-                };
-                Some((release.is_ok(), released_ready))
+        let post_release_ready = if fixture == "delayed-readiness" && pid_handshake.is_ok() && direct_exit.is_ok() {
+            let release = fs::write(&release_path, b"release");
+            let released_ready = if release.is_ok() {
+                let deadline = Instant::now() + READY_TIMEOUT;
+                while Instant::now() < deadline && !ready_path.exists() {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                ready_path.exists()
             } else {
-                None
+                false
             };
+            Some((release.is_ok(), released_ready))
+        } else {
+            None
+        };
         let abort_cleanup = if matches!(fixture, "delayed-readiness" | "late-pid")
             && (pid_handshake.is_err() || direct_exit.is_err())
         {
@@ -703,8 +666,8 @@ mod unix {
             None
         };
         if readiness.is_ok() && fixture_kind == "stdout" {
-            let parent_pid = fs::read_to_string(&parent_pid_path)
-                .expect("direct child should record its PID before exiting");
+            let parent_pid =
+                fs::read_to_string(&parent_pid_path).expect("direct child should record its PID before exiting");
             let parent_pid = parent_pid.trim();
             let deadline = Instant::now() + READY_TIMEOUT;
             let mut parent_exited = false;
@@ -721,10 +684,7 @@ mod unix {
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
-            assert!(
-                parent_exited,
-                "direct command process should exit before cancellation"
-            );
+            assert!(parent_exited, "direct command process should exit before cancellation");
         }
 
         let before_cancel = receiver.recv_timeout(PRE_CANCEL_OBSERVATION);
@@ -741,18 +701,12 @@ mod unix {
             let worker_result = worker.join();
             cleanup_result.expect("escaped descendant cleanup should succeed after worker panic");
             assert!(readiness.is_ok(), "fixture readiness failed: {readiness:?}");
-            assert!(matches!(
-                before_cancel,
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-            ));
+            assert!(matches!(before_cancel, Err(std::sync::mpsc::RecvTimeoutError::Timeout)));
             assert!(matches!(
                 first_result,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
             ));
-            assert!(
-                worker_result.is_err(),
-                "injected result-worker panic should be joined"
-            );
+            assert!(worker_result.is_err(), "injected result-worker panic should be joined");
             return;
         }
 
@@ -764,28 +718,23 @@ mod unix {
             };
             let worker_result = natural_result.map(|result| (result, worker.join()));
             cleanup_result.expect("fault-injected descendant cleanup should succeed");
-            assert!(matches!(
-                before_cancel,
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-            ));
+            assert!(matches!(before_cancel, Err(std::sync::mpsc::RecvTimeoutError::Timeout)));
             assert!(
                 !observed_before_release,
                 "missing cancellation must not appear responsive"
             );
-            let (result, joined) =
-                worker_result.expect("runner should finish after the pipe is released");
+            let (result, joined) = worker_result.expect("runner should finish after the pipe is released");
             let output = result.expect("natural EOF after release should complete the command");
             assert!(output.stdout().starts_with(b"started"));
             joined.expect("runner worker should return after natural EOF");
             return;
         }
 
-        let readiness_pid =
-            if readiness.is_err() && !matches!(fixture, "delayed-readiness" | "late-pid") {
-                Some(escaped.try_wait_until_recorded(READY_TIMEOUT))
-            } else {
-                None
-            };
+        let readiness_pid = if readiness.is_err() && !matches!(fixture, "delayed-readiness" | "late-pid") {
+            Some(escaped.try_wait_until_recorded(READY_TIMEOUT))
+        } else {
+            None
+        };
         let cleanup_result = escaped.terminate_if_recorded();
         let result = match first_result {
             Ok(result) => Some(result),
@@ -793,11 +742,8 @@ mod unix {
         };
         let worker_result = worker.join();
 
-        let descendant_reclaimed =
-            cleanup_result.expect("escaped descendant cleanup should succeed");
-        if matches!(fixture, "delayed-readiness" | "late-pid")
-            && (pid_handshake.is_err() || direct_exit.is_err())
-        {
+        let descendant_reclaimed = cleanup_result.expect("escaped descendant cleanup should succeed");
+        if matches!(fixture, "delayed-readiness" | "late-pid") && (pid_handshake.is_err() || direct_exit.is_err()) {
             let (abort_written, pid_recorded, abort_acknowledged) =
                 abort_cleanup.expect("preflight failure should run abort cleanup");
             assert!(
@@ -818,18 +764,9 @@ mod unix {
             );
         }
         if fixture == "delayed-readiness" {
-            assert!(
-                pid_handshake.is_ok(),
-                "escaped PID handshake failed: {pid_handshake:?}"
-            );
-            assert!(
-                direct_exit.is_ok(),
-                "direct command did not exit: {direct_exit:?}"
-            );
-            assert!(
-                readiness.is_err(),
-                "delayed fixture should miss the readiness deadline"
-            );
+            assert!(pid_handshake.is_ok(), "escaped PID handshake failed: {pid_handshake:?}");
+            assert!(direct_exit.is_ok(), "direct command did not exit: {direct_exit:?}");
+            assert!(readiness.is_err(), "delayed fixture should miss the readiness deadline");
             assert_eq!(
                 post_release_ready,
                 Some((true, true)),
@@ -848,14 +785,8 @@ mod unix {
                 direct_exit.is_ok(),
                 "direct command should exit during late PID publication"
             );
-            assert!(
-                readiness.is_err(),
-                "late PID should remain unavailable before abort"
-            );
-            assert_eq!(
-                post_release_ready, None,
-                "preflight failure must not release readiness"
-            );
+            assert!(readiness.is_err(), "late PID should remain unavailable before abort");
+            assert_eq!(post_release_ready, None, "preflight failure must not release readiness");
             assert!(
                 !release_path.exists(),
                 "late PID preflight failure must not create release marker"
@@ -874,10 +805,7 @@ mod unix {
             );
         }
         assert!(
-            matches!(
-                before_cancel,
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-            ),
+            matches!(before_cancel, Err(std::sync::mpsc::RecvTimeoutError::Timeout)),
             "runner must remain active before cancellation"
         );
         assert!(
@@ -963,10 +891,7 @@ mod unix {
         let output = runner
             .run(Command::shell("head -c 1048577 /dev/zero"))
             .expect("explicitly unbounded output should retain the full stream");
-        assert_eq!(
-            output.stdout().len(),
-            DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM + 1,
-        );
+        assert_eq!(output.stdout().len(), DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM + 1,);
         assert!(!output.stdout_truncated());
     }
 
@@ -982,8 +907,7 @@ mod unix {
             .expect("the test policy field must be valid")
             .build()
             .expect("the diagnostic redaction policy should be valid");
-        let runner =
-            CommandRunner::new(Duration::from_secs(10)).diagnostic_redaction_policy(policy.clone());
+        let runner = CommandRunner::new(Duration::from_secs(10)).diagnostic_redaction_policy(policy.clone());
 
         assert_eq!(runner.configured_diagnostic_redaction_policy(), &policy,);
     }
@@ -1050,8 +974,7 @@ mod unix {
     fn test_command_runner_debug_redacts_path_configuration() {
         let debug = format!(
             "{:?}",
-            CommandRunner::new(Duration::from_secs(10))
-                .working_directory("customer/working-directory"),
+            CommandRunner::new(Duration::from_secs(10)).working_directory("customer/working-directory"),
         );
         let options_debug = format!(
             "{:?}",
@@ -1105,8 +1028,8 @@ mod unix {
 
     #[test]
     fn test_runner_cancellation_without_timeout_terminates_running_command() {
-        let temp_dir = LocalTempDir::with_prefix("qubit-command-managed-test-")
-            .expect("test temp directory should be created");
+        let temp_dir =
+            LocalTempDir::with_prefix("qubit-command-managed-test-").expect("test temp directory should be created");
         let pid_path = temp_dir.path().join("command.pid");
         let test_name = std::thread::current()
             .name()
@@ -1146,36 +1069,26 @@ mod unix {
                         .cancellation(run_cancellation)
                         .tee_stdout_to_file(tee_path),
                 );
-                sender
-                    .send(result)
-                    .expect("test receiver should remain connected");
+                sender.send(result).expect("test receiver should remain connected");
             });
 
             let deadline = Instant::now() + Duration::from_secs(5);
-            while fs::read(&captured_path).ok().as_deref() != Some(b"started".as_slice())
-                && Instant::now() < deadline
-            {
+            while fs::read(&captured_path).ok().as_deref() != Some(b"started".as_slice()) && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(10));
             }
-            let ready = started_path.exists()
-                && fs::read(&captured_path).ok().as_deref() == Some(b"started".as_slice());
+            let ready =
+                started_path.exists() && fs::read(&captured_path).ok().as_deref() == Some(b"started".as_slice());
             cancellation.cancel();
             let result = receiver.recv_timeout(Duration::from_secs(2));
             let join = worker.join();
-            assert!(
-                ready,
-                "command output should be observed in tee before cancellation"
-            );
+            assert!(ready, "command output should be observed in tee before cancellation");
             let error = result
                 .expect("cancelled runner should return promptly")
                 .expect_err("cancelled command should return an error");
             join.expect("runner thread should not panic");
 
             assert_eq!(error.kind(), CommandErrorKind::Cancelled);
-            assert_eq!(
-                error.output().expect("cancelled output").stdout(),
-                b"started"
-            );
+            assert_eq!(error.output().expect("cancelled output").stdout(), b"started");
         });
     }
 
@@ -1251,16 +1164,10 @@ mod unix {
     #[test]
     fn test_command_runner_run_applies_environment_override() {
         let output = CommandRunner::new(Duration::from_secs(10))
-            .run(
-                Command::shell("printf \"$QUBIT_COMMAND_TEST\"")
-                    .env("QUBIT_COMMAND_TEST", "from-env"),
-            )
+            .run(Command::shell("printf \"$QUBIT_COMMAND_TEST\"").env("QUBIT_COMMAND_TEST", "from-env"))
             .expect("command should receive environment override");
 
-        assert_eq!(
-            output.stdout_text().expect("stdout should be valid UTF-8"),
-            "from-env",
-        );
+        assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8"), "from-env",);
     }
 
     #[test]
@@ -1273,10 +1180,7 @@ mod unix {
             )
             .expect("command should remove configured environment variable");
 
-        assert_eq!(
-            output.stdout_text().expect("stdout should be valid UTF-8"),
-            "missing",
-        );
+        assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8"), "missing",);
     }
 
     #[test]
@@ -1301,13 +1205,7 @@ mod unix {
             .run(Command::shell("pwd").working_directory("/"))
             .expect("command should run in requested working directory");
 
-        assert_eq!(
-            output
-                .stdout_text()
-                .expect("stdout should be valid UTF-8")
-                .trim(),
-            "/",
-        );
+        assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8").trim(), "/",);
     }
 
     #[test]
@@ -1317,21 +1215,13 @@ mod unix {
             .run(Command::shell("pwd"))
             .expect("command should run in runner working directory");
 
-        assert_eq!(
-            output
-                .stdout_text()
-                .expect("stdout should be valid UTF-8")
-                .trim(),
-            "/",
-        );
+        assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8").trim(), "/",);
     }
 
     #[test]
     fn test_command_runner_run_reports_unexpected_exit() {
         let error = CommandRunner::new(Duration::from_secs(10))
-            .run(Command::shell(
-                "printf fail-out; printf fail-err >&2; exit 7",
-            ))
+            .run(Command::shell("printf fail-out; printf fail-err >&2; exit 7"))
             .expect_err("non-success exit code should be rejected");
 
         assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
@@ -1341,14 +1231,8 @@ mod unix {
             CommandErrorReason::UnexpectedExit { expected, .. } if expected == &[0]
         ));
         let output = error.output().expect("unexpected output");
-        assert_eq!(
-            output.stdout_text().expect("stdout should be valid UTF-8"),
-            "fail-out"
-        );
-        assert_eq!(
-            output.stderr_text().expect("stderr should be valid UTF-8"),
-            "fail-err"
-        );
+        assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8"), "fail-out");
+        assert_eq!(output.stderr_text().expect("stderr should be valid UTF-8"), "fail-err");
     }
 
     #[test]
@@ -1391,9 +1275,7 @@ mod unix {
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let worker = std::thread::spawn(move || {
             let result = runner.run(Command::shell("sleep 0.05"));
-            sender
-                .send(result)
-                .expect("test receiver should remain connected");
+            sender.send(result).expect("test receiver should remain connected");
         });
 
         let first_result = receiver.recv_timeout(Duration::from_secs(2));
@@ -1458,8 +1340,8 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_reads_stdin_file() {
-        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
-            .expect("command test temp directory should be created");
+        let temp_dir =
+            LocalTempDir::with_prefix("qubit-command-test-").expect("command test temp directory should be created");
         let path = temp_dir.path().join("stdin.txt");
         fs::write(&path, b"stdin-file").expect("stdin fixture should be written");
 
@@ -1479,25 +1361,20 @@ mod unix {
             .run(Command::shell("printf inherited").stdin_inherit())
             .expect("command should run with inherited stdin");
 
-        assert_eq!(
-            output.stdout_text().expect("stdout should be valid UTF-8"),
-            "inherited",
-        );
+        assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8"), "inherited",);
     }
 
     #[test]
     fn test_command_runner_run_reports_missing_stdin_file() {
-        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
-            .expect("command test temp directory should be created");
+        let temp_dir =
+            LocalTempDir::with_prefix("qubit-command-test-").expect("command test temp directory should be created");
         let path = temp_dir.path().join("missing-stdin.txt");
         let error = CommandRunner::new(Duration::from_secs(10))
             .run(Command::shell("cat").stdin_file(path.clone()))
             .expect_err("missing stdin file should be reported");
 
         match error.reason() {
-            CommandErrorReason::OpenInputFailed {
-                path: actual_path, ..
-            } => {
+            CommandErrorReason::OpenInputFailed { path: actual_path, .. } => {
                 assert_eq!(actual_path, &path)
             }
             other => panic!("expected stdin open failure, got {other:?}"),
@@ -1530,22 +1407,16 @@ mod unix {
 
     #[test]
     fn test_command_runner_output_file_updates_configuration() {
-        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
-            .expect("command test temp directory should be created");
+        let temp_dir =
+            LocalTempDir::with_prefix("qubit-command-test-").expect("command test temp directory should be created");
         let stdout_path = temp_dir.path().join("stdout-config.txt");
         let stderr_path = temp_dir.path().join("stderr-config.txt");
         let options = CommandRunOptions::new()
             .tee_stdout_to_file(stdout_path.clone())
             .tee_stderr_to_file(stderr_path.clone());
 
-        assert_eq!(
-            options.configured_stdout_file(),
-            Some(stdout_path.as_path())
-        );
-        assert_eq!(
-            options.configured_stderr_file(),
-            Some(stderr_path.as_path())
-        );
+        assert_eq!(options.configured_stdout_file(), Some(stdout_path.as_path()));
+        assert_eq!(options.configured_stderr_file(), Some(stderr_path.as_path()));
     }
 
     #[test]
@@ -1561,16 +1432,8 @@ mod unix {
         let records = captured_log_records_containing(MARKER);
         assert_eq!(records.len(), 2);
         assert!(records.iter().all(|(level, _)| *level == log::Level::Debug));
-        assert!(
-            records
-                .iter()
-                .any(|(_, message)| message.contains("Running"))
-        );
-        assert!(
-            records
-                .iter()
-                .any(|(_, message)| message.contains("Finished"))
-        );
+        assert!(records.iter().any(|(_, message)| message.contains("Running")));
+        assert!(records.iter().any(|(_, message)| message.contains("Finished")));
     }
 
     #[test]
@@ -1632,10 +1495,7 @@ mod unix {
             )
             .expect("command should run successfully");
 
-        assert_eq!(
-            output.stdout(),
-            format!("{MARKER}--password{SECRET}").as_bytes()
-        );
+        assert_eq!(output.stdout(), format!("{MARKER}--password{SECRET}").as_bytes());
 
         let records = captured_log_records_containing(MARKER);
         assert_eq!(records.len(), 2);
@@ -1651,9 +1511,7 @@ mod unix {
         match error.reason() {
             CommandErrorReason::TimedOut { timeout } => {
                 assert_eq!(*timeout, Duration::from_millis(50));
-                assert!(
-                    error.output().expect("timeout output").elapsed() >= Duration::from_millis(50)
-                );
+                assert!(error.output().expect("timeout output").elapsed() >= Duration::from_millis(50));
             }
             other => panic!("expected timeout error, got {other:?}"),
         }
@@ -1689,42 +1547,35 @@ mod unix {
     #[cfg(target_os = "linux")]
     #[test]
     fn test_command_runner_timeout_ready_timeout_is_bounded_and_cleaned() {
-        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
-            .expect("temporary directory should be created");
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-").expect("temporary directory should be created");
         run_timeout_fixture_with_watchdog(&temp_dir.path().join("escaped.pid"), "ready-timeout");
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn test_command_runner_timeout_without_clock_advance_does_not_report_timeout() {
-        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
-            .expect("temporary directory should be created");
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-").expect("temporary directory should be created");
         run_timeout_fixture_with_watchdog(&temp_dir.path().join("escaped.pid"), "no-advance");
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn test_command_runner_timeout_worker_panic_is_cleaned() {
-        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
-            .expect("temporary directory should be created");
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-").expect("temporary directory should be created");
         run_timeout_fixture_with_watchdog(&temp_dir.path().join("escaped.pid"), "worker-panic");
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn test_command_runner_timeout_watchdog_cleans_stalled_fixture() {
-        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
-            .expect("temporary directory should be created");
-        run_timeout_fixture_with_watchdog(
-            &temp_dir.path().join("escaped.pid"),
-            "watchdog-self-test",
-        );
+        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-").expect("temporary directory should be created");
+        run_timeout_fixture_with_watchdog(&temp_dir.path().join("escaped.pid"), "watchdog-self-test");
     }
 
     #[test]
     fn test_runner_timeout_uses_injected_manual_timer() {
-        let temp_dir = LocalTempDir::with_prefix("qubit-command-managed-test-")
-            .expect("test temp directory should be created");
+        let temp_dir =
+            LocalTempDir::with_prefix("qubit-command-managed-test-").expect("test temp directory should be created");
         let pid_path = temp_dir.path().join("command.pid");
         let test_name = std::thread::current()
             .name()
@@ -1754,10 +1605,7 @@ mod unix {
                     .arg_os(&worker_pid_path)
                     .arg_os(&abort_path)
                     .arg_os(&abort_ack_path);
-                let result = runner.run_with(
-                    command,
-                    CommandRunOptions::new().cancellation(worker_cancellation),
-                );
+                let result = runner.run_with(command, CommandRunOptions::new().cancellation(worker_cancellation));
                 let _ = sender.send(result);
             });
 
@@ -1780,10 +1628,7 @@ mod unix {
             }
             let join = worker.join();
             assert!(waiting, "runner should register its manual timeout waiter");
-            assert!(
-                pid_ready,
-                "command should publish its PID before manual time advances"
-            );
+            assert!(pid_ready, "command should publish its PID before manual time advances");
             let error = result
                 .expect("runner should return within the real-time watchdog")
                 .expect_err("command should fail");
@@ -1794,8 +1639,8 @@ mod unix {
 
     #[test]
     fn test_runner_timeout_accepts_child_that_exits_before_deadline() {
-        let temp_dir = LocalTempDir::with_prefix("qubit-command-managed-test-")
-            .expect("test temp directory should be created");
+        let temp_dir =
+            LocalTempDir::with_prefix("qubit-command-managed-test-").expect("test temp directory should be created");
         let pid_path = temp_dir.path().join("command.pid");
         let test_name = std::thread::current()
             .name()
@@ -1848,8 +1693,7 @@ mod unix {
             }
             let pid_ready = pid_path.exists();
             if waiting && pid_ready {
-                fs::write(&signal_path, b"release")
-                    .expect("signal file should release child command");
+                fs::write(&signal_path, b"release").expect("signal file should release child command");
             } else {
                 cancellation.cancel();
             }
@@ -1910,26 +1754,20 @@ mod unix {
             .name()
             .expect("test thread should be named")
             .to_owned();
-        super::support::managed_test_process::run_for(
-            &test_name,
-            None,
-            Duration::from_secs(15),
-            || {
-                let gate = std::env::var_os("QUBIT_COMMAND_MANAGED_TEST_GATE")
-                    .expect("managed child should receive its gate path");
-                fs::write(&ready, gate.as_os_str().as_bytes())
-                    .expect("A should publish its gate path");
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while !release.exists() && Instant::now() < deadline {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                assert!(release.exists(), "parent should release fixture A");
-                let gate = std::path::PathBuf::from(OsString::from_vec(
-                    fs::read(&ready).expect("A gate path should remain readable"),
-                ));
-                assert!(gate.exists(), "A's start gate should survive B cleanup");
-            },
-        )
+        super::support::managed_test_process::run_for(&test_name, None, Duration::from_secs(15), || {
+            let gate = std::env::var_os("QUBIT_COMMAND_MANAGED_TEST_GATE")
+                .expect("managed child should receive its gate path");
+            fs::write(&ready, gate.as_os_str().as_bytes()).expect("A should publish its gate path");
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !release.exists() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(release.exists(), "parent should release fixture A");
+            let gate = std::path::PathBuf::from(OsString::from_vec(
+                fs::read(&ready).expect("A gate path should remain readable"),
+            ));
+            assert!(gate.exists(), "A's start gate should survive B cleanup");
+        })
         .expect("fixture A should complete");
     }
 
@@ -1944,17 +1782,11 @@ mod unix {
             .name()
             .expect("test thread should be named")
             .to_owned();
-        super::support::managed_test_process::run_for(
-            &test_name,
-            None,
-            Duration::from_secs(5),
-            || {
-                let gate = std::env::var_os("QUBIT_COMMAND_MANAGED_TEST_GATE")
-                    .expect("managed child should receive its gate path");
-                fs::write(fixture.join("b.gate"), gate.as_os_str().as_bytes())
-                    .expect("B should publish its gate path");
-            },
-        )
+        super::support::managed_test_process::run_for(&test_name, None, Duration::from_secs(5), || {
+            let gate = std::env::var_os("QUBIT_COMMAND_MANAGED_TEST_GATE")
+                .expect("managed child should receive its gate path");
+            fs::write(fixture.join("b.gate"), gate.as_os_str().as_bytes()).expect("B should publish its gate path");
+        })
         .expect("fixture B should complete");
     }
 
@@ -1969,9 +1801,7 @@ mod unix {
             .name()
             .expect("test thread should be named")
             .to_owned();
-        let module = current_name
-            .rsplit_once("::")
-            .map_or("", |(module, _)| module);
+        let module = current_name.rsplit_once("::").map_or("", |(module, _)| module);
         let a_name = format!("{module}::test_managed_gate_fixture_a");
         let b_name = format!("{module}::test_managed_gate_fixture_b");
         let (a_tx, a_rx) = mpsc::sync_channel(1);
@@ -2020,10 +1850,7 @@ mod unix {
         a.join().expect("A worker should be joined");
         b.join().expect("B worker should be joined");
 
-        assert!(
-            a_ready,
-            "fixture A should publish readiness before B starts"
-        );
+        assert!(a_ready, "fixture A should publish readiness before B starts");
         let a_gate = fs::read(fixture.path().join("a.ready"))
             .ok()
             .map(|path| std::path::PathBuf::from(OsString::from_vec(path)));
@@ -2031,15 +1858,9 @@ mod unix {
             b_result.is_ok(),
             "fixture B should finish within eight seconds: {b_result:?}"
         );
-        assert!(
-            a_result.is_ok(),
-            "fixture A should finish after release: {a_result:?}"
-        );
+        assert!(a_result.is_ok(), "fixture A should finish after release: {a_result:?}");
         assert!(b_gate.is_some(), "fixture B should publish its gate path");
-        assert_ne!(
-            a_gate, b_gate,
-            "A and B should receive distinct start gates"
-        );
+        assert_ne!(a_gate, b_gate, "A and B should receive distinct start gates");
         assert!(
             a_gate.is_some_and(|path| !path.exists()),
             "A's gate directory should be removed on return"
@@ -2060,11 +1881,8 @@ mod unix {
             .name()
             .expect("test thread should be named")
             .to_owned();
-        let result = super::support::managed_test_process::run_for(
-            &test_name,
-            Some(&pid_path),
-            Duration::from_secs(1),
-            || {
+        let result =
+            super::support::managed_test_process::run_for(&test_name, Some(&pid_path), Duration::from_secs(1), || {
                 let command_pid_path = super::support::managed_test_process::command_pid_path();
                 let abort_path = super::support::managed_test_process::command_abort_path();
                 let abort_ack_path = super::support::managed_test_process::command_abort_ack_path();
@@ -2099,8 +1917,7 @@ mod unix {
                 loop {
                     std::thread::sleep(Duration::from_secs(60));
                 }
-            },
-        );
+            });
         assert!(
             result
                 .as_ref()
@@ -2169,14 +1986,9 @@ mod unix {
             worker
                 .join()
                 .expect("runner worker should be joined after failed readiness");
-            assert!(
-                !ready,
-                "fixture intentionally withholds its readiness marker"
-            );
+            assert!(!ready, "fixture intentionally withholds its readiness marker");
             assert_eq!(
-                result
-                    .expect_err("failed readiness path should cancel runner")
-                    .kind(),
+                result.expect_err("failed readiness path should cancel runner").kind(),
                 CommandErrorKind::Cancelled
             );
         });
@@ -2187,10 +1999,7 @@ mod unix {
         let clock = ManualMonotonicClock::new_shared();
         let runner = CommandRunner::new(Duration::from_secs(10)).timer(clock.new_timer());
 
-        assert_eq!(
-            runner.configured_timer().clock().now().domain(),
-            clock.now().domain(),
-        );
+        assert_eq!(runner.configured_timer().clock().now().domain(), clock.now().domain(),);
     }
 
     #[test]
@@ -2246,9 +2055,7 @@ mod unix {
             .expect_err("truncated successful output should be rejected");
 
         assert_eq!(error.kind(), CommandErrorKind::OutputTruncated);
-        let output = error
-            .output()
-            .expect("truncation error should expose output");
+        let output = error.output().expect("truncation error should expose output");
         assert_eq!(output.stdout(), b"abc");
         assert_eq!(output.stderr(), b"wx");
         assert!(output.stdout_truncated());
@@ -2296,8 +2103,8 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_tees_output_to_files() {
-        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
-            .expect("command test temp directory should be created");
+        let temp_dir =
+            LocalTempDir::with_prefix("qubit-command-test-").expect("command test temp directory should be created");
         let stdout_path = temp_dir.path().join("stdout.txt");
         let stderr_path = temp_dir.path().join("stderr.txt");
 
@@ -2326,8 +2133,8 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_reports_output_file_open_failure() {
-        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
-            .expect("command test temp directory should be created");
+        let temp_dir =
+            LocalTempDir::with_prefix("qubit-command-test-").expect("command test temp directory should be created");
         let path = temp_dir.path().join("missing-dir").join("stdout.txt");
         let error = CommandRunner::new(Duration::from_secs(10))
             .run_with(
@@ -2351,8 +2158,8 @@ mod unix {
 
     #[test]
     fn test_command_runner_run_reports_stderr_file_open_failure() {
-        let temp_dir = LocalTempDir::with_prefix("qubit-command-test-")
-            .expect("command test temp directory should be created");
+        let temp_dir =
+            LocalTempDir::with_prefix("qubit-command-test-").expect("command test temp directory should be created");
         let path = temp_dir.path().join("missing-dir").join("stderr.txt");
         let error = CommandRunner::new(Duration::from_secs(10))
             .run_with(
@@ -2723,9 +2530,7 @@ mod windows {
                 CommandRunOptions::new().cancellation(cancellation),
             )
             .expect_err("long-running Windows command should be cancelled");
-        canceller
-            .join()
-            .expect("Windows cancellation thread should finish");
+        canceller.join().expect("Windows cancellation thread should finish");
 
         assert_eq!(error.kind(), CommandErrorKind::Cancelled);
         assert!(
@@ -2750,8 +2555,8 @@ mod windows {
 
     #[test]
     fn test_command_runner_windows_tees_output_to_file() {
-        let temp_dir = LocalTempDir::with_prefix("qubit-command-windows-")
-            .expect("command test temp directory should be created");
+        let temp_dir =
+            LocalTempDir::with_prefix("qubit-command-windows-").expect("command test temp directory should be created");
         let stdout_path = temp_dir.path().join("stdout.txt");
         let output = CommandRunner::new(Duration::from_secs(10))
             .max_stdout_bytes(3)

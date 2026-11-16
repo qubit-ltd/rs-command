@@ -1,20 +1,27 @@
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc;
+use std::task::Wake;
+use std::task::Waker;
+use std::time::Duration;
+use std::time::Instant;
+
+use qubit_command::execution::CapacityFailure;
+use qubit_command::execution::CommandExecutionConfig;
+use qubit_command::execution::ScheduledJob;
+use qubit_command::execution::Scheduler;
+use qubit_command::execution::StopPort;
 use qubit_command::execution::scheduler::BoundedScheduler;
-use qubit_command::execution::{
-    CapacityFailure, CommandExecutionConfig, ScheduledJob, Scheduler, StopPort,
-};
-use qubit_operation::{
-    ClockDomainId, ClockSource, ContextOptions, Deadline, MonotonicTime, OperationContext,
-    StopReason, TimerRegistration,
-};
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-        mpsc,
-    },
-    task::{Wake, Waker},
-    time::{Duration, Instant},
-};
+use qubit_operation::ClockDomainId;
+use qubit_operation::ClockSource;
+use qubit_operation::ContextOptions;
+use qubit_operation::Deadline;
+use qubit_operation::MonotonicTime;
+use qubit_operation::OperationContext;
+use qubit_operation::StopReason;
+use qubit_operation::TimerRegistration;
 struct ManualClock {
     domain: ClockDomainId,
     ticks: AtomicU64,
@@ -129,10 +136,7 @@ fn zero_queue_only_admits_active_slots() {
 fn input_bytes_precede_slots_and_are_in_capacity_wait_predicate() {
     let s = BoundedScheduler::new(config(1, 2, 2, 2)).unwrap();
     let p = s.try_reserve(2).unwrap();
-    assert_eq!(
-        s.try_reserve(1).unwrap_err(),
-        CapacityFailure::InputBytesExceeded
-    );
+    assert_eq!(s.try_reserve(1).unwrap_err(), CapacityFailure::InputBytesExceeded);
     let waiting = s.clone();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(waiting.wait_for_capacity(1, None)).unwrap());
@@ -164,25 +168,13 @@ fn foreign_permit_with_colliding_token_is_rejected_and_returned() {
     assert_eq!(failure.reason, CapacityFailure::ForeignReservation);
     let a_before = a.snapshot();
     let b_before = b.snapshot();
-    assert_eq!(
-        (a_before.active, a_before.queued, a_before.input_bytes),
-        (1, 1, 3)
-    );
-    assert_eq!(
-        (b_before.active, b_before.queued, b_before.input_bytes),
-        (1, 1, 7)
-    );
+    assert_eq!((a_before.active, a_before.queued, a_before.input_bytes), (1, 1, 3));
+    assert_eq!((b_before.active, b_before.queued, b_before.input_bytes), (1, 1, 7));
     drop(failure);
     let a_after = a.snapshot();
     let b_after = b.snapshot();
-    assert_eq!(
-        (a_after.active, a_after.queued, a_after.input_bytes),
-        (1, 1, 3)
-    );
-    assert_eq!(
-        (b_after.active, b_after.queued, b_after.input_bytes),
-        (1, 0, 3)
-    );
+    assert_eq!((a_after.active, a_after.queued, a_after.input_bytes), (1, 1, 3));
+    assert_eq!((b_after.active, b_after.queued, b_after.input_bytes), (1, 0, 3));
     drop(own_queued);
     drop(own_active);
     drop(origin_active);
@@ -196,8 +188,7 @@ fn multi_job_queue_promotes_only_after_active_release() {
     let (tx, rx) = mpsc::channel();
     s.enqueue(job(move |_| tx.send(1).unwrap()), first).unwrap();
     let (tx, rx2) = mpsc::channel();
-    s.enqueue(job(move |_| tx.send(2).unwrap()), second)
-        .unwrap();
+    s.enqueue(job(move |_| tx.send(2).unwrap()), second).unwrap();
     s.enqueue(job(|_| {}), third).unwrap();
     let (run, p) = s.wait_next().unwrap();
     (run.run)(p);
@@ -254,16 +245,12 @@ fn manual_clock_deadline_rejects_and_expired_accepted_job_dispatches_completion(
     let expired_context = clock.context(0);
     let scheduler_port: &dyn Scheduler = &s;
     assert_eq!(
-        scheduler_port
-            .try_reserve_until(0, Some(expired_context))
-            .unwrap_err(),
+        scheduler_port.try_reserve_until(0, Some(expired_context)).unwrap_err(),
         CapacityFailure::DeadlineExpired
     );
     let active = s.try_reserve(0).unwrap();
     let deadline_context = clock.context(10);
-    let p = scheduler_port
-        .try_reserve_until(0, Some(deadline_context))
-        .unwrap();
+    let p = scheduler_port.try_reserve_until(0, Some(deadline_context)).unwrap();
     let ran = Arc::new(AtomicUsize::new(0));
     let count = ran.clone();
     let stops = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -298,8 +285,7 @@ fn capacity_wait_rechecks_inherited_manual_clock_domain() {
     let waiting = s.clone();
     let (tx, rx) = mpsc::channel();
     let thread = std::thread::spawn(move || {
-        tx.send(waiting.wait_for_capacity(0, Some(context)))
-            .unwrap();
+        tx.send(waiting.wait_for_capacity(0, Some(context))).unwrap();
     });
     let until = Instant::now() + Duration::from_secs(1);
     while s.snapshot().waiters == 0 && Instant::now() < until {
@@ -319,9 +305,7 @@ fn wait_next_requests_timeout_then_dispatches_completion_when_slot_opens() {
     let active = s.try_reserve(0).unwrap();
     let clock = ManualClock::new();
     let scheduler_port: &dyn Scheduler = &s;
-    let p = scheduler_port
-        .try_reserve_until(0, Some(clock.context(10)))
-        .unwrap();
+    let p = scheduler_port.try_reserve_until(0, Some(clock.context(10))).unwrap();
     let (stop_tx, stop_rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
     s.enqueue(
@@ -359,9 +343,7 @@ fn concurrent_workers_wait_for_timeout_stop_callback_to_return() {
     let active_b = s.try_reserve(0).unwrap();
     let clock = ManualClock::new();
     let scheduler_port: &dyn Scheduler = &s;
-    let expired = scheduler_port
-        .try_reserve_until(0, Some(clock.context(10)))
-        .unwrap();
+    let expired = scheduler_port.try_reserve_until(0, Some(clock.context(10))).unwrap();
     let later = s.try_reserve(0).unwrap();
     let last = s.try_reserve(0).unwrap();
     let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
@@ -380,10 +362,8 @@ fn concurrent_workers_wait_for_timeout_stop_callback_to_return() {
     )
     .unwrap();
     let run_b = run_tx.clone();
-    s.enqueue(job(move |_| run_b.send('B').unwrap()), later)
-        .unwrap();
-    s.enqueue(job(move |_| run_tx.send('C').unwrap()), last)
-        .unwrap();
+    s.enqueue(job(move |_| run_b.send('B').unwrap()), later).unwrap();
+    s.enqueue(job(move |_| run_tx.send('C').unwrap()), last).unwrap();
 
     let (started_tx, started_rx) = mpsc::channel();
     let worker = |scheduler: BoundedScheduler, started: Option<mpsc::Sender<()>>| {

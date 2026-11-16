@@ -1,23 +1,27 @@
 //! Owned-resource options for managed command execution.
-use crate::CommandRunOptions;
 use std::fs::File;
+
+use crate::CommandRunOptions;
 
 /// Explicit treatment of an owned output sink during preparation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileSinkPolicy {
-    /// Preserve existing contents and the file's current cursor; never seek implicitly.
+    /// Preserve existing contents and the file's current cursor; never seek
+    /// implicitly.
     Preserve,
-    /// Truncate to zero and position at the beginning during worker preparation.
+    /// Truncate to zero and position at the beginning during worker
+    /// preparation.
     Truncate,
 }
 
 /// Owned options for one managed command run.
 ///
-/// The stdin file is read from its current cursor without an implicit seek. Output sinks
-/// require an explicit policy. Truncation occurs only after command capacity and resource
-/// reservations succeed, and is an observable side effect. File identity checks happen
-/// during preparation and compare handles, so path aliases do not bypass conflict checks.
-/// This type is intentionally not `Clone` because it transfers file ownership.
+/// The stdin file is read from its current cursor without an implicit seek.
+/// Output sinks require an explicit policy. Truncation occurs only after
+/// command capacity and resource reservations succeed, and is an observable
+/// side effect. File identity checks happen during preparation and compare
+/// handles, so path aliases do not bypass conflict checks. This type is
+/// intentionally not `Clone` because it transfers file ownership.
 #[derive(Debug, Default)]
 pub struct CommandResourceRunOptions {
     /// Ordinary per-run command settings.

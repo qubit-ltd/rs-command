@@ -4,7 +4,8 @@ use std::path::Path;
 
 use same_file::Handle;
 
-/// Checks ordinary-file status and identity using the opened handles themselves.
+/// Checks ordinary-file status and identity using the opened handles
+/// themselves.
 pub(super) fn validate_files(files: &[(&'static str, &File)]) -> io::Result<()> {
     let mut identities = Vec::with_capacity(files.len());
     for (name, file) in files {
@@ -100,8 +101,7 @@ mod tests {
     #[test]
     fn identity_rejects_non_regular_handles() {
         let directory = File::open(std::env::temp_dir()).expect("temp directory should open");
-        let error = validate_files(&[("stdin", &directory)])
-            .expect_err("directories are not valid file streams");
+        let error = validate_files(&[("stdin", &directory)]).expect_err("directories are not valid file streams");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
 }

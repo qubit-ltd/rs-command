@@ -64,15 +64,9 @@ fn test_total_output_combines_both_streams_and_retains_sentinel() {
     assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
     assert!(matches!(
         error.reason(),
-        CommandErrorReason::OutputLimitExceeded {
-            limit: 8,
-            observed: 9
-        }
+        CommandErrorReason::OutputLimitExceeded { limit: 8, observed: 9 }
     ));
-    assert!(
-        error.output().is_none(),
-        "budget errors must not invent an ExitStatus"
-    );
+    assert!(error.output().is_none(), "budget errors must not invent an ExitStatus");
     let captured = error
         .captured_output()
         .expect("partial captured bytes should remain available");
@@ -120,10 +114,7 @@ fn test_total_output_idle_stream_does_not_reserve_budget() {
         .expect_err("the active stdout stream must be charged when stderr is idle");
     assert!(matches!(
         error.reason(),
-        CommandErrorReason::OutputLimitExceeded {
-            limit: 8,
-            observed: 9
-        }
+        CommandErrorReason::OutputLimitExceeded { limit: 8, observed: 9 }
     ));
 }
 
@@ -145,9 +136,7 @@ fn test_total_output_counts_bytes_discarded_by_memory_retention_limit() {
         .max_output_bytes(0)
         .run(cmd)
         .expect_err("the hard budget counts bytes independently of memory retention");
-    let captured = error
-        .captured_output()
-        .expect("budget error retains capture metadata");
+    let captured = error.captured_output().expect("budget error retains capture metadata");
     assert!(captured.stdout().is_empty());
     assert!(captured.stdout_truncated());
     assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);

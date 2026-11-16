@@ -1,5 +1,6 @@
-use crate::execution::contracts::ScheduledJob;
 use std::collections::VecDeque;
+
+use crate::execution::contracts::ScheduledJob;
 
 pub(super) struct Queued {
     pub job: ScheduledJob,

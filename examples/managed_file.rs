@@ -1,10 +1,16 @@
-use qubit_command::{
-    Command, CommandExecutionConfig, CommandExecutor, CommandResourceRunOptions, CommandRunner,
-    FileSinkPolicy, ManagedCommandRunnerApi,
-};
-use qubit_operation::{ManagerOptions, OperationManager};
 use std::fs::OpenOptions;
-use std::io::{Seek, SeekFrom};
+use std::io::Seek;
+use std::io::SeekFrom;
+
+use qubit_command::Command;
+use qubit_command::CommandExecutionConfig;
+use qubit_command::CommandExecutor;
+use qubit_command::CommandResourceRunOptions;
+use qubit_command::CommandRunner;
+use qubit_command::FileSinkPolicy;
+use qubit_command::ManagedCommandRunnerApi;
+use qubit_operation::ManagerOptions;
+use qubit_operation::OperationManager;
 
 pub fn run() {
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -13,10 +19,7 @@ pub fn run() {
     std::fs::write(&input_path, b"skip-data").expect("seed input");
     std::fs::write(&output_path, b"old contents").expect("seed output");
 
-    let mut input = OpenOptions::new()
-        .read(true)
-        .open(&input_path)
-        .expect("open input");
+    let mut input = OpenOptions::new().read(true).open(&input_path).expect("open input");
     input.seek(SeekFrom::Start(5)).expect("set caller cursor");
     let position = input.stream_position().expect("read current position");
     assert_eq!(position, 5);
@@ -35,8 +38,7 @@ pub fn run() {
         Command::new("cat")
     };
     let manager = OperationManager::new(ManagerOptions::default()).expect("manager");
-    let executor =
-        CommandExecutor::new(manager, CommandExecutionConfig::default()).expect("executor");
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).expect("executor");
     let output = CommandRunner::without_timeout()
         .run_managed_resources(&executor, command, resources)
         .expect("managed file command");
@@ -47,10 +49,7 @@ pub fn run() {
     // its directory; the path string itself did not act as a lease.
     let written = std::fs::read(&output_path).expect("read sink");
     assert!(written.starts_with(b"data"));
-    println!(
-        "input started at byte {position}; sink now contains {:?}",
-        written
-    );
+    println!("input started at byte {position}; sink now contains {:?}", written);
     drop(directory);
 }
 

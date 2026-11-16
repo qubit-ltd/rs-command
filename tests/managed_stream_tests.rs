@@ -1,8 +1,13 @@
 #![cfg(feature = "async")]
 
-use qubit_command::{CommandStderr, CommandStdin, CommandStdout};
-use qubit_io::{AsyncClose, AsyncInput, AsyncOutput};
 use std::io;
+
+use qubit_command::CommandStderr;
+use qubit_command::CommandStdin;
+use qubit_command::CommandStdout;
+use qubit_io::AsyncClose;
+use qubit_io::AsyncInput;
+use qubit_io::AsyncOutput;
 
 struct BridgeDefaults;
 impl qubit_command::session::contracts::SessionBridge for BridgeDefaults {

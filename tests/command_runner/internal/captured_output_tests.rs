@@ -20,11 +20,7 @@ fn test_captured_output_records_stdout_truncation() {
         .run(Command::new("rustc").arg("--version"))
         .expect("rustc version command should run successfully");
 
-    assert_eq!(
-        output.stdout().len(),
-        5,
-        "stdout should be limited to five bytes"
-    );
+    assert_eq!(output.stdout().len(), 5, "stdout should be limited to five bytes");
     assert!(output.stdout_truncated(), "stdout should report truncation");
 }
 
@@ -40,10 +36,7 @@ fn test_captured_output_can_keep_zero_stdout() {
         output.stdout().is_empty(),
         "stdout should be empty when its limit is zero"
     );
-    assert!(
-        output.stdout_truncated(),
-        "stdout should report discarded output"
-    );
+    assert!(output.stdout_truncated(), "stdout should report discarded output");
 }
 
 #[test]

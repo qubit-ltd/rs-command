@@ -1,11 +1,17 @@
 //! Single bounded worker retains unresolved cleanup owners through handoff.
+use std::sync::Arc;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::sync_channel;
+
+use qubit_operation::OperationId;
+use qubit_operation::SettlementReport;
+use qubit_operation::SettlementStatus;
+
 use super::CommandControl;
-use crate::execution::contracts::{RecoveryEffectEvidence, RecoveryOwner, RecoveryRetryError};
-use qubit_operation::{OperationId, SettlementReport, SettlementStatus};
-use std::sync::{
-    Arc,
-    mpsc::{Receiver, SyncSender, sync_channel},
-};
+use crate::execution::contracts::RecoveryEffectEvidence;
+use crate::execution::contracts::RecoveryOwner;
+use crate::execution::contracts::RecoveryRetryError;
 
 const MAX_RECOVERY_EFFECTS: usize = 64;
 
@@ -24,23 +30,14 @@ pub(crate) struct OperationObserverSlot {
 }
 impl OperationObserverSlot {
     pub(crate) fn set(&self, observer: qubit_operation::OperationObserver) {
-        *self
-            .observer
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(observer);
+        *self.observer.lock().unwrap_or_else(|error| error.into_inner()) = Some(observer);
         self.available.notify_all();
     }
 
     fn wait(&self) -> qubit_operation::OperationObserver {
-        let mut observer = self
-            .observer
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut observer = self.observer.lock().unwrap_or_else(|error| error.into_inner());
         while observer.is_none() {
-            observer = self
-                .available
-                .wait(observer)
-                .unwrap_or_else(|error| error.into_inner());
+            observer = self.available.wait(observer).unwrap_or_else(|error| error.into_inner());
         }
         observer.as_ref().expect("observer is set").clone()
     }
@@ -86,10 +83,7 @@ fn recovery_loop(rx: Receiver<RecoveryItem>) {
         }
     }
 }
-fn recovery_settlement(
-    id: OperationId,
-    mut effect_evidence: RecoveryEffectEvidence,
-) -> SettlementReport {
+fn recovery_settlement(id: OperationId, mut effect_evidence: RecoveryEffectEvidence) -> SettlementReport {
     for effect in &mut effect_evidence.effects {
         effect.operation_id = id;
     }
@@ -99,11 +93,7 @@ fn recovery_settlement(
             .len()
             .saturating_add(effect_evidence.effect_overflow),
     );
-    let retained_effects: Vec<_> = effect_evidence
-        .effects
-        .into_iter()
-        .take(MAX_RECOVERY_EFFECTS)
-        .collect();
+    let retained_effects: Vec<_> = effect_evidence.effects.into_iter().take(MAX_RECOVERY_EFFECTS).collect();
     let effects_total = observed_total.max(retained_effects.len());
     // The normalized total covers all producer-reported and adapter-omitted
     // records, so overflow is exactly the portion not retained here.
@@ -138,17 +128,30 @@ fn recovery_settlement(
 
 #[cfg(test)]
 mod tests {
-    use super::{OperationObserverSlot, RecoveryItem, recovery_settlement, start_recovery_worker};
+    use std::sync::Arc;
+    use std::sync::Condvar;
+    use std::sync::Mutex;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    use qubit_operation::DiagnosticSummary;
+    use qubit_operation::EffectFact;
+    use qubit_operation::EffectRecord;
+    use qubit_operation::OperationControl;
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOptions;
+    use qubit_operation::OperationOutcome;
+
+    use super::OperationObserverSlot;
+    use super::RecoveryItem;
+    use super::recovery_settlement;
+    use super::start_recovery_worker;
     use crate::execution::adapter::CommandControl;
-    use crate::execution::contracts::{
-        RecoveryEffectEvidence, RecoveryOwner, RecoveryRetryError, ReservationLease,
-    };
-    use qubit_operation::{
-        DiagnosticSummary, EffectFact, EffectRecord, OperationControl, OperationManager,
-        OperationOptions, OperationOutcome,
-    };
-    use std::sync::{Arc, Condvar, Mutex, mpsc};
-    use std::time::{Duration, Instant};
+    use crate::execution::contracts::RecoveryEffectEvidence;
+    use crate::execution::contracts::RecoveryOwner;
+    use crate::execution::contracts::RecoveryRetryError;
+    use crate::execution::contracts::ReservationLease;
 
     struct BlockingDrop {
         started: mpsc::SyncSender<()>,
@@ -173,10 +176,7 @@ mod tests {
         fn summary(&self) -> String {
             "test owner".to_owned()
         }
-        fn effect_evidence(
-            &self,
-            _operation_id: qubit_operation::OperationId,
-        ) -> RecoveryEffectEvidence {
+        fn effect_evidence(&self, _operation_id: qubit_operation::OperationId) -> RecoveryEffectEvidence {
             self.evidence.clone()
         }
         fn retry_cleanup(&self) -> Result<(), RecoveryRetryError> {
@@ -244,9 +244,7 @@ mod tests {
             .unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(5);
-        while OperationControl::snapshot(&*control).settlement.is_none()
-            && Instant::now() < deadline
-        {
+        while OperationControl::snapshot(&*control).settlement.is_none() && Instant::now() < deadline {
             std::thread::yield_now();
         }
         assert!(OperationControl::snapshot(&*control).input_released);
@@ -275,10 +273,7 @@ mod tests {
         let (released, changed) = &*gate;
         *released.lock().unwrap() = true;
         changed.notify_all();
-        let report = match operation
-            .wait_settlement_for(Duration::from_secs(5))
-            .unwrap()
-        {
+        let report = match operation.wait_settlement_for(Duration::from_secs(5)).unwrap() {
             qubit_operation::SettlementWait::Ready(report) => report,
             qubit_operation::SettlementWait::Pending(_) => {
                 panic!("scope must settle after gate release")
@@ -340,10 +335,7 @@ mod tests {
             if let Some(report) = OperationControl::snapshot(&*control).settlement {
                 break report;
             }
-            assert!(
-                Instant::now() < deadline,
-                "recovery report should be published"
-            );
+            assert!(Instant::now() < deadline, "recovery report should be published");
             std::thread::yield_now();
         };
 
@@ -351,12 +343,7 @@ mod tests {
         assert_eq!(report.effects_total, 71);
         assert_eq!(report.effect_overflow, 7);
         assert_eq!(report.recovery_count, 1);
-        assert!(
-            report
-                .effects
-                .iter()
-                .all(|effect| effect.operation_id == id)
-        );
+        assert!(report.effects.iter().all(|effect| effect.operation_id == id));
     }
 
     #[test]

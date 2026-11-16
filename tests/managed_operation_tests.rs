@@ -1,18 +1,33 @@
 #[cfg(feature = "async")]
-use qubit_command::{AsyncCommandOperation, CommandExecutorApi};
-use qubit_command::{
-    Command, CommandExecutionConfig, CommandExecutor, CommandResourceRunOptions, CommandRunner,
-    FileSinkPolicy,
-};
-use qubit_operation::{ManagerOptions, OperationManager, OperationOutcome, SettlementStatus};
-use std::time::Duration;
+use std::future::Future;
 #[cfg(feature = "async")]
-use std::{
-    future::Future,
-    sync::Arc,
-    task::{Context, Poll, Wake, Waker},
-    thread,
-};
+use std::sync::Arc;
+#[cfg(feature = "async")]
+use std::task::Context;
+#[cfg(feature = "async")]
+use std::task::Poll;
+#[cfg(feature = "async")]
+use std::task::Wake;
+#[cfg(feature = "async")]
+use std::task::Waker;
+#[cfg(feature = "async")]
+use std::thread;
+use std::time::Duration;
+
+#[cfg(feature = "async")]
+use qubit_command::AsyncCommandOperation;
+use qubit_command::Command;
+use qubit_command::CommandExecutionConfig;
+use qubit_command::CommandExecutor;
+#[cfg(feature = "async")]
+use qubit_command::CommandExecutorApi;
+use qubit_command::CommandResourceRunOptions;
+use qubit_command::CommandRunner;
+use qubit_command::FileSinkPolicy;
+use qubit_operation::ManagerOptions;
+use qubit_operation::OperationManager;
+use qubit_operation::OperationOutcome;
+use qubit_operation::SettlementStatus;
 
 #[test]
 fn managed_submit_runs_through_operation_manager() {
@@ -49,10 +64,7 @@ fn owned_preparation_failure_retains_and_reports_recovery() {
             options,
         )
         .unwrap();
-    assert!(matches!(
-        operation.wait_outcome().unwrap(),
-        OperationOutcome::Failed(_)
-    ));
+    assert!(matches!(operation.wait_outcome().unwrap(), OperationOutcome::Failed(_)));
     let settlement = operation.wait_settlement().unwrap();
     let external = settlement
         .external_settlement
@@ -72,10 +84,7 @@ fn owned_preparation_failure_retains_and_reports_recovery() {
     assert!(!external.recoveries_truncated);
     assert_eq!(settlement.resource_reports_total, 1);
     assert_eq!(settlement.effects_total, 1);
-    assert_eq!(
-        settlement.effects[0].fact,
-        qubit_operation::EffectFact::Unknown
-    );
+    assert_eq!(settlement.effects[0].fact, qubit_operation::EffectFact::Unknown);
     assert!(settlement.effects[0].resource_id.is_some());
 }
 
@@ -119,7 +128,8 @@ fn executor_shutdown_isolated_to_its_group() {
 #[cfg(unix)]
 #[test]
 fn shutdown_drain_returns_pending_then_completed_report() {
-    use qubit_operation::{ShutdownMode, ShutdownWait};
+    use qubit_operation::ShutdownMode;
+    use qubit_operation::ShutdownWait;
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
     let mut operation = executor
@@ -223,9 +233,6 @@ fn async_wait_future_is_lazy_and_cancelled_waiter_is_removed() {
             (outcome, settlement)
         }
     });
-    assert!(matches!(
-        second_outcome.unwrap(),
-        OperationOutcome::Succeeded(_)
-    ));
+    assert!(matches!(second_outcome.unwrap(), OperationOutcome::Succeeded(_)));
     assert!(second_settlement.all_released());
 }

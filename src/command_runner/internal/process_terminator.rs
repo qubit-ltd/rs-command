@@ -160,10 +160,7 @@ impl<'a> ProcessTerminator<'a> {
     /// * `status` - Final direct-child exit status.
     /// * `cleanup_failures` - Cleanup failures to retain in the outcome.
     #[must_use]
-    fn success(
-        status: ExitStatus,
-        cleanup_failures: Vec<CommandCleanupFailure>,
-    ) -> ProcessTerminationOutcome {
+    fn success(status: ExitStatus, cleanup_failures: Vec<CommandCleanupFailure>) -> ProcessTerminationOutcome {
         ProcessTerminationOutcome {
             status,
             cleanup_failures,
@@ -326,10 +323,7 @@ mod tests {
                 },
                 CommandErrorKind::TimedOut,
             ),
-            (
-                StopReason::Cancelled { status: None },
-                CommandErrorKind::Cancelled,
-            ),
+            (StopReason::Cancelled { status: None }, CommandErrorKind::Cancelled),
         ];
 
         for (reason, expected_kind) in cases {
@@ -376,20 +370,11 @@ mod tests {
                 CommandCleanupFailure::ChildTermination { .. }
             ));
             if wait_error {
-                assert!(matches!(
-                    error.cleanup_failures[2],
-                    CommandCleanupFailure::Wait { .. }
-                ));
+                assert!(matches!(error.cleanup_failures[2], CommandCleanupFailure::Wait { .. }));
             }
             let calls = calls.lock().expect("calls should be readable");
             assert!(!calls.iter().any(|call| call.ends_with(".wait")));
-            assert_eq!(
-                calls
-                    .iter()
-                    .filter(|call| call.as_str() == "child.kill")
-                    .count(),
-                1
-            );
+            assert_eq!(calls.iter().filter(|call| call.as_str() == "child.kill").count(), 1);
         }
     }
 
@@ -425,8 +410,8 @@ mod tests {
     fn test_process_terminator_does_not_wait_for_observed_status() {
         for managed in [false, true] {
             let calls = Arc::new(Mutex::new(Vec::new()));
-            let tree = ScriptedChild::new("tree", raw_child(), Arc::clone(&calls))
-                .kill_error(io::Error::other("tree denied"));
+            let tree =
+                ScriptedChild::new("tree", raw_child(), Arc::clone(&calls)).kill_error(io::Error::other("tree denied"));
             let mut child = ManagedChildProcess::new(Box::new(tree), managed);
             let result = ProcessTerminator::new(&mut child)
                 .terminate(Some(status(9)))

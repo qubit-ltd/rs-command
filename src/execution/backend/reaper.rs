@@ -1,10 +1,16 @@
 //! Dedicated bounded workers that retain uncertain process/helper ownership.
-use crate::execution::contracts::{FactSink, RecoveryEffectEvidence, RecoveryOwner};
 use std::io;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::TrySendError;
+use std::sync::mpsc::sync_channel;
 use std::thread;
+
+use crate::execution::contracts::FactSink;
+use crate::execution::contracts::RecoveryEffectEvidence;
+use crate::execution::contracts::RecoveryOwner;
 
 type Cleanup = Box<dyn FnOnce() + Send + 'static>;
 
@@ -29,18 +35,11 @@ impl RecoveryOwner for DeferredReaperOwner {
         "managed child and I/O helpers awaiting bounded reaper capacity".to_owned()
     }
 
-    fn effect_evidence(
-        &self,
-        operation_id: qubit_operation::OperationId,
-    ) -> RecoveryEffectEvidence {
+    fn effect_evidence(&self, operation_id: qubit_operation::OperationId) -> RecoveryEffectEvidence {
         if self.observer.is_complete() || !self.observer.is_pending() {
             return RecoveryEffectEvidence::default();
         }
-        let queued = self
-            .owner
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .is_none();
+        let queued = self.owner.lock().unwrap_or_else(|error| error.into_inner()).is_none();
         let description = if queued {
             "managed process/helper cleanup is pending in reaper"
         } else {
@@ -87,9 +86,7 @@ impl RecoveryOwner for DeferredReaperOwner {
 
 impl std::fmt::Debug for ReaperOwner {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ReaperOwner")
-            .finish_non_exhaustive()
+        formatter.debug_struct("ReaperOwner").finish_non_exhaustive()
     }
 }
 
@@ -135,14 +132,9 @@ impl ReaperObserver {
         )
     }
 
-    pub(crate) fn pair_with_recovery_sink(
-        sink: std::sync::Arc<dyn FactSink>,
-    ) -> (Self, std::sync::mpsc::Receiver<()>) {
+    pub(crate) fn pair_with_recovery_sink(sink: std::sync::Arc<dyn FactSink>) -> (Self, std::sync::mpsc::Receiver<()>) {
         let (observer, receiver) = Self::pair();
-        *observer
-            .recovery_sink
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(sink);
+        *observer.recovery_sink.lock().unwrap_or_else(|error| error.into_inner()) = Some(sink);
         (observer, receiver)
     }
 
@@ -154,15 +146,11 @@ impl ReaperObserver {
     }
 
     pub(crate) fn defer_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) {
-        *self
-            .deferred_owner
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(owner);
+        *self.deferred_owner.lock().unwrap_or_else(|error| error.into_inner()) = Some(owner);
     }
 
     pub(crate) fn retain_or_defer_reaper_owner(&self, owner: ReaperOwner) {
-        let recovery_owner: Box<dyn RecoveryOwner> =
-            Box::new(DeferredReaperOwner::new(owner, self.clone()));
+        let recovery_owner: Box<dyn RecoveryOwner> = Box::new(DeferredReaperOwner::new(owner, self.clone()));
         if let Some(sink) = self.recovery_sink() {
             match sink.retain_recovery_owner(recovery_owner) {
                 Ok(()) => self.mark_recovery_transferred(),
@@ -238,10 +226,7 @@ impl Reaper {
                 .name(format!("qubit-command-reaper-{name}-{index}"))
                 .spawn(move || {
                     loop {
-                        let task = receiver
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner())
-                            .recv();
+                        let task = receiver.lock().unwrap_or_else(|error| error.into_inner()).recv();
                         match task {
                             Ok(task) => task.reap(),
                             Err(_) => break,
@@ -268,9 +253,7 @@ impl Reaper {
             Err(TrySendError::Full(owner) | TrySendError::Disconnected(owner)) => {
                 match self.overflow_sender.try_send(owner) {
                     Ok(()) => Ok(()),
-                    Err(TrySendError::Full(owner) | TrySendError::Disconnected(owner)) => {
-                        Err(owner)
-                    }
+                    Err(TrySendError::Full(owner) | TrySendError::Disconnected(owner)) => Err(owner),
                 }
             }
         }
@@ -279,13 +262,21 @@ impl Reaper {
 
 #[cfg(test)]
 mod tests {
-    use super::{DeferredReaperOwner, Reaper, ReaperObserver, ReaperOwner};
-    use crate::execution::contracts::RecoveryOwner;
-    use qubit_operation::{OperationManager, OperationOptions, OperationOutcome};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::sync::mpsc::sync_channel;
     use std::time::Duration;
+
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOptions;
+    use qubit_operation::OperationOutcome;
+
+    use super::DeferredReaperOwner;
+    use super::Reaper;
+    use super::ReaperObserver;
+    use super::ReaperOwner;
+    use crate::execution::contracts::RecoveryOwner;
 
     #[test]
     fn deferred_process_owner_reports_bounded_unknown_effect_while_cleanup_is_pending() {

@@ -1,18 +1,31 @@
-//! Internal ports connecting scheduling, process execution, resource preparation, and facts.
+//! Internal ports connecting scheduling, process execution, resource
+//! preparation, and facts.
 mod backend;
 mod facts;
 mod files;
 mod request;
 mod scheduler;
 pub use backend::Backend;
-pub use facts::{
-    FactPublishError, FactSink, RecoveryEffectEvidence, RecoveryOwner, RecoveryPublishError,
-    RecoveryPublishFailure, RecoveryRetryError,
-};
+pub use facts::FactPublishError;
+pub use facts::FactSink;
+pub use facts::RecoveryEffectEvidence;
+pub use facts::RecoveryOwner;
+pub use facts::RecoveryPublishError;
+pub use facts::RecoveryPublishFailure;
+pub use facts::RecoveryRetryError;
+pub use files::FilePreparationFailure;
+pub use files::PreparedFiles;
 pub(crate) use files::PreparedSink;
-pub use files::{FilePreparationFailure, PreparedFiles, ResourceInput};
-pub use request::{ActivatedRequest, ExecutionSnapshot, IoPathSnapshot, Request, RequestOptions};
+pub use files::ResourceInput;
+pub use request::ActivatedRequest;
+pub use request::ExecutionSnapshot;
+pub use request::IoPathSnapshot;
+pub use request::Request;
+pub use request::RequestOptions;
+pub use scheduler::CapacityFailure;
+pub use scheduler::EnqueueFailure;
+pub use scheduler::Reservation;
 pub(crate) use scheduler::ReservationLease;
-pub use scheduler::{
-    CapacityFailure, EnqueueFailure, Reservation, ScheduledJob, Scheduler, StopPort,
-};
+pub use scheduler::ScheduledJob;
+pub use scheduler::Scheduler;
+pub use scheduler::StopPort;

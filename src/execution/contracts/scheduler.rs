@@ -1,7 +1,9 @@
 //! Scheduler capacity and transfer contracts.
-use qubit_operation::{OperationContext, StopReason};
 use std::fmt;
 use std::sync::Arc;
+
+use qubit_operation::OperationContext;
+use qubit_operation::StopReason;
 /// Reason a reservation could not be obtained.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CapacityFailure {
@@ -12,8 +14,9 @@ pub enum CapacityFailure {
     ForeignReservation,
     Closed,
 }
-/// Exclusive scheduler permit. Its one-shot release callback runs on drop, including
-/// when the permit was never activated; moving it into `ActivatedRequest` keeps it held.
+/// Exclusive scheduler permit. Its one-shot release callback runs on drop,
+/// including when the permit was never activated; moving it into
+/// `ActivatedRequest` keeps it held.
 pub struct Reservation {
     pub(crate) scheduler_id: u64,
     pub(crate) token: u64,
@@ -21,9 +24,11 @@ pub struct Reservation {
     retain: Arc<dyn Fn(u64) -> ReservationLease + Send + Sync + 'static>,
 }
 impl Reservation {
-    /// Creates a uniquely owned permit with its scheduler's nonblocking release hook.
+    /// Creates a uniquely owned permit with its scheduler's nonblocking release
+    /// hook.
     ///
-    /// The release callback must be nonblocking and must not panic because it runs from `Drop`.
+    /// The release callback must be nonblocking and must not panic because it
+    /// runs from `Drop`.
     pub(crate) fn new(
         scheduler_id: u64,
         token: u64,
@@ -43,7 +48,8 @@ impl Reservation {
         self.scheduler_id == scheduler_id
     }
 
-    /// Retains active capacity for one process/helper user beyond the permit's lifetime.
+    /// Retains active capacity for one process/helper user beyond the permit's
+    /// lifetime.
     pub(crate) fn retain(&self) -> ReservationLease {
         (self.retain)(self.token)
     }
@@ -64,7 +70,8 @@ pub(crate) struct ReservationLease {
     release: Option<Box<dyn FnOnce() + Send + 'static>>,
 }
 impl ReservationLease {
-    /// Creates a unique lease whose drop reports the user's final capacity release.
+    /// Creates a unique lease whose drop reports the user's final capacity
+    /// release.
     pub(crate) fn new(release: impl FnOnce() + Send + 'static) -> Self {
         Self {
             release: Some(Box::new(release)),
@@ -141,16 +148,20 @@ pub trait Scheduler: Send + Sync {
         self.try_reserve(input_bytes)
     }
     fn enqueue(&self, job: ScheduledJob, permit: Reservation) -> Result<(), EnqueueFailure>;
-    /// Blocks until a job and its unique permit are ready, or admission is closed and drained.
+    /// Blocks until a job and its unique permit are ready, or admission is
+    /// closed and drained.
     fn wait_next(&self) -> Option<(ScheduledJob, Reservation)>;
     fn close_admission(&self);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Reservation, ReservationLease};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    use super::Reservation;
+    use super::ReservationLease;
 
     #[test]
     fn dropping_reservation_releases_its_token_once() {

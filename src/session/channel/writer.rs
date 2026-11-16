@@ -1,5 +1,6 @@
-use super::ByteChannel;
 use std::sync::Arc;
+
+use super::ByteChannel;
 
 pub(crate) struct ChannelWriter(pub(crate) Arc<ByteChannel>);
 

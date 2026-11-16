@@ -1,10 +1,11 @@
-use crate::session::{channel::ByteChannel, contracts::OutputEndpointState};
-use std::{
-    io,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-};
+use std::io;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::Context;
+use std::task::Poll;
+
+use crate::session::channel::ByteChannel;
+use crate::session::contracts::OutputEndpointState;
 pub struct CommandStderr {
     pub(crate) state: Arc<dyn OutputEndpointState>,
     channel: Arc<ByteChannel>,
