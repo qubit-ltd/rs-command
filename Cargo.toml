@@ -31,6 +31,23 @@ doctest = true
 name = "command_runner"
 harness = false
 
+[[bench]]
+name = "managed_execution"
+harness = false
+required-features = ["async"]
+
+[[example]]
+name = "managed_collect"
+required-features = ["async"]
+
+[[example]]
+name = "managed_session"
+required-features = ["async"]
+
+[[example]]
+name = "managed_shutdown"
+required-features = ["async"]
+
 [features]
 default = []
 async = ["dep:qubit-io"]
