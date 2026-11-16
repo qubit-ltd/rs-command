@@ -2,6 +2,21 @@
 
 use qubit_command::{CommandStderr, CommandStdin, CommandStdout};
 use qubit_io::{AsyncClose, AsyncInput, AsyncOutput};
+use std::io;
+
+struct BridgeDefaults;
+impl qubit_command::session::contracts::SessionBridge for BridgeDefaults {
+    fn read_stdin(&self, _buffer: &mut [u8]) -> io::Result<usize> {
+        Ok(0)
+    }
+    fn write_stdout(&self, _bytes: &[u8]) -> io::Result<()> {
+        Ok(())
+    }
+    fn write_stderr(&self, _bytes: &[u8]) -> io::Result<()> {
+        Ok(())
+    }
+    fn close_stdin(&self) {}
+}
 
 #[test]
 fn public_stream_types_implement_qubit_io_traits() {
@@ -10,4 +25,16 @@ fn public_stream_types_implement_qubit_io_traits() {
     input::<CommandStdout>();
     input::<CommandStderr>();
     output::<CommandStdin>();
+}
+
+#[test]
+fn bridge_status_contract_defaults_to_no_reported_stream_failure() {
+    use qubit_command::session::contracts::SessionBridge;
+    let bridge = BridgeDefaults;
+    assert!(!bridge.stdout_incomplete());
+    assert!(!bridge.stderr_incomplete());
+    assert!(!bridge.stdin_broken_pipe());
+    assert!(!bridge.output_budget_exceeded());
+    assert_eq!(bridge.output_budget_limit(), None);
+    assert_eq!(bridge.output_bytes_observed(), 0);
 }
