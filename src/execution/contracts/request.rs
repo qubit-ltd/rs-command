@@ -1,18 +1,16 @@
 //! Submitted request snapshots and activated ownership bundle.
 use super::{FactSink, Reservation};
 use crate::{Command, CommandResourceRunOptions, CommandRunOptions, CommandRunner};
-use qubit_operation::{OperationId, OperationScope};
+use qubit_operation::{OperationContext, OperationId, OperationScope};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 
 /// Submitted command and frozen execution inputs.
 ///
 /// `operation_id` is absent before upstream binding and set exactly once before activation;
 /// `snapshot` and `io_paths` are captured before admission side effects, while actual file
 /// identity checks and file access remain worker responsibilities.
-#[derive(Debug)]
 pub struct Request {
     pub operation_id: Option<OperationId>,
     pub runner: CommandRunner,
@@ -20,7 +18,23 @@ pub struct Request {
     pub options: RequestOptions,
     pub snapshot: ExecutionSnapshot,
     pub io_paths: IoPathSnapshot,
-    pub deadline: Option<Instant>,
+    /// Inherited operation context used to observe the fixed total deadline in its clock domain.
+    pub deadline: Option<OperationContext>,
+}
+
+impl std::fmt::Debug for Request {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Request")
+            .field("operation_id", &self.operation_id)
+            .field("runner", &self.runner)
+            .field("command", &self.command)
+            .field("options", &self.options)
+            .field("snapshot", &self.snapshot)
+            .field("io_paths", &self.io_paths)
+            .field("deadline_configured", &self.deadline.is_some())
+            .finish()
+    }
 }
 
 /// Immutable working-directory and environment view captured at submission.

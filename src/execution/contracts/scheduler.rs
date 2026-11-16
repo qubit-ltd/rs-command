@@ -1,5 +1,5 @@
 //! Scheduler capacity and transfer contracts.
-use qubit_operation::StopReason;
+use qubit_operation::{OperationContext, StopReason};
 use std::fmt;
 use std::sync::Arc;
 /// Reason a reservation could not be obtained.
@@ -125,17 +125,17 @@ impl fmt::Debug for EnqueueFailure {
 /// Port for bounded reservations and job enqueue.
 pub trait Scheduler: Send + Sync {
     fn try_reserve(&self, input_bytes: usize) -> Result<Reservation, CapacityFailure>;
-    /// Reserves capacity using the deadline captured at the original submission.
+    /// Reserves capacity using the context captured at the original submission.
     ///
-    /// Implementations should include this fixed deadline in both admission and
+    /// Implementations should use the inherited clock domain for admission and
     /// queued work. The default preserves compatibility for simple schedulers
-    /// while still rejecting a deadline that has already expired.
+    /// while still rejecting an already-expired context.
     fn try_reserve_until(
         &self,
         input_bytes: usize,
-        deadline: Option<std::time::Instant>,
+        context: Option<OperationContext>,
     ) -> Result<Reservation, CapacityFailure> {
-        if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+        if context.as_ref().is_some_and(OperationContext::is_expired) {
             return Err(CapacityFailure::DeadlineExpired);
         }
         self.try_reserve(input_bytes)
