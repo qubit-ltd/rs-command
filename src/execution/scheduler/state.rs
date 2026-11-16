@@ -9,6 +9,7 @@ use crate::execution::{
         CapacityFailure, EnqueueFailure, Reservation, ReservationLease, ScheduledJob, Scheduler,
     },
 };
+use qubit_operation::OperationContext;
 use qubit_operation::StopReason;
 use std::{
     collections::HashMap,
@@ -17,15 +18,15 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
     task::Waker,
-    time::Instant,
 };
 
 static NEXT_SCHEDULER_ID: AtomicU64 = AtomicU64::new(1);
-#[derive(Clone, Copy)]
+const CLOCK_RECHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+#[derive(Clone)]
 struct Record {
     kind: Kind,
     bytes: usize,
-    deadline: Option<Instant>,
+    deadline: Option<OperationContext>,
     owner_live: bool,
     leases: usize,
 }
@@ -129,8 +130,15 @@ impl BoundedScheduler {
         drop(s);
         self.0.changed.notify_all()
     }
-    pub fn wait_for_capacity(&self, input_bytes: usize, deadline: Option<Instant>) -> bool {
+    pub fn wait_for_capacity(
+        &self,
+        input_bytes: usize,
+        deadline: Option<OperationContext>,
+    ) -> bool {
         let mut s = self.0.state.lock().unwrap();
+        if deadline.as_ref().is_some_and(OperationContext::is_expired) {
+            return false;
+        }
         let waiter_id = if available(&s, &self.0.config, input_bytes) {
             None
         } else {
@@ -143,22 +151,24 @@ impl BoundedScheduler {
             if s.closed {
                 break false;
             }
+            if deadline.as_ref().is_some_and(OperationContext::is_expired) {
+                break false;
+            }
             if available(&s, &self.0.config, input_bytes) {
                 break true;
             }
-            match deadline {
-                Some(d) => {
-                    let now = Instant::now();
-                    if now >= d {
-                        break false;
-                    }
-                    let (next, t) = self.0.changed.wait_timeout(s, d - now).unwrap();
-                    s = next;
-                    if t.timed_out() && !available(&s, &self.0.config, input_bytes) {
-                        break false;
-                    }
-                }
-                None => s = self.0.changed.wait(s).unwrap(),
+            if deadline
+                .as_ref()
+                .is_some_and(|context| context.deadline().is_some())
+            {
+                let (next, _) = self
+                    .0
+                    .changed
+                    .wait_timeout(s, CLOCK_RECHECK_INTERVAL)
+                    .unwrap();
+                s = next;
+            } else {
+                s = self.0.changed.wait(s).unwrap();
             }
         };
         if let Some(id) = waiter_id {
@@ -170,9 +180,9 @@ impl BoundedScheduler {
     pub fn try_reserve_until(
         &self,
         input_bytes: usize,
-        deadline: Option<Instant>,
+        deadline: Option<OperationContext>,
     ) -> Result<Reservation, CapacityFailure> {
-        if deadline.is_some_and(|d| Instant::now() >= d) {
+        if deadline.as_ref().is_some_and(OperationContext::is_expired) {
             return Err(CapacityFailure::DeadlineExpired);
         }
         self.reserve(input_bytes, deadline)
@@ -180,13 +190,13 @@ impl BoundedScheduler {
     fn reserve(
         &self,
         input_bytes: usize,
-        deadline: Option<Instant>,
+        deadline: Option<OperationContext>,
     ) -> Result<Reservation, CapacityFailure> {
         let mut s = self.0.state.lock().unwrap();
         if s.closed {
             return Err(CapacityFailure::Closed);
         }
-        if deadline.is_some_and(|d| Instant::now() >= d) {
+        if deadline.as_ref().is_some_and(OperationContext::is_expired) {
             return Err(CapacityFailure::DeadlineExpired);
         }
         promote_queued(&mut s, &self.0.config);
@@ -335,8 +345,8 @@ fn promote_queued(s: &mut State, config: &CommandExecutionConfig) {
 fn is_expired(s: &State, q: &Queued) -> bool {
     s.records
         .get(&q.permit.token)
-        .and_then(|r| r.deadline)
-        .is_some_and(|deadline| Instant::now() >= deadline)
+        .and_then(|r| r.deadline.as_ref())
+        .is_some_and(OperationContext::is_expired)
 }
 fn request_expired_stop(s: &mut State) -> Option<(u64, Arc<dyn crate::execution::StopPort>)> {
     let pos = s
@@ -375,17 +385,41 @@ fn retain_lease(shared: &Arc<Shared>, token: u64) -> ReservationLease {
     ReservationLease::new(move || BoundedScheduler::release_lease(&shared, token))
 }
 fn next_job_position(s: &State, c: &CommandExecutionConfig) -> Option<usize> {
-    s.workers.jobs.iter().position(|q| {
-        s.records.get(&q.permit.token).is_some_and(|r| {
-            !q.timeout_pending && (r.kind == Kind::Active || s.active < c.max_active)
+    let oldest_active = s
+        .workers
+        .jobs
+        .iter()
+        .enumerate()
+        .filter_map(|(position, q)| {
+            s.records
+                .get(&q.permit.token)
+                .filter(|r| r.kind == Kind::Active)
+                .map(|_| (position, q.permit.token, q.timeout_pending))
         })
-    })
-}
-pub(super) fn deadline_wait_duration(
-    deadline: Instant,
-    now: Instant,
-) -> Option<std::time::Duration> {
-    deadline.checked_duration_since(now)
+        .min_by_key(|(_, token, _)| *token);
+    let (position, _, timeout_pending) = if let Some(active) = oldest_active {
+        active
+    } else if s.active < c.max_active {
+        s.workers
+            .jobs
+            .iter()
+            .enumerate()
+            .filter_map(|(position, q)| {
+                s.records
+                    .get(&q.permit.token)
+                    .filter(|r| r.kind == Kind::Queued)
+                    .map(|_| (position, q.permit.token, q.timeout_pending))
+            })
+            .min_by_key(|(_, token, _)| *token)?
+    } else {
+        return None;
+    };
+    // A job awaiting its Timeout callback retains its FIFO position; later accepted
+    // jobs cannot overtake it while the callback is running outside the state lock.
+    if timeout_pending {
+        return None;
+    }
+    Some(position)
 }
 fn promote(s: &mut State, q: &mut Queued) {
     let token = q.permit.token;
@@ -404,7 +438,7 @@ impl Scheduler for BoundedScheduler {
     fn try_reserve_until(
         &self,
         input_bytes: usize,
-        deadline: Option<Instant>,
+        deadline: Option<OperationContext>,
     ) -> Result<Reservation, CapacityFailure> {
         BoundedScheduler::try_reserve_until(self, input_bytes, deadline)
     }
@@ -433,7 +467,8 @@ impl Scheduler for BoundedScheduler {
         }
         if s.records[&permit.token]
             .deadline
-            .is_some_and(|d| Instant::now() >= d)
+            .as_ref()
+            .is_some_and(OperationContext::is_expired)
         {
             return Err(EnqueueFailure {
                 reason: CapacityFailure::DeadlineExpired,
@@ -487,19 +522,20 @@ impl Scheduler for BoundedScheduler {
             if s.closed && s.records.is_empty() {
                 return None;
             }
-            let next_deadline = s
-                .workers
-                .jobs
-                .iter()
-                .filter_map(|q| s.records.get(&q.permit.token).and_then(|r| r.deadline))
-                .filter(|deadline| *deadline > Instant::now())
-                .min();
-            if let Some(d) = next_deadline {
-                let now = Instant::now();
-                if let Some(wait) = deadline_wait_duration(d, now) {
-                    let (ns, _) = self.0.changed.wait_timeout(s, wait).unwrap();
-                    s = ns
-                }
+            let has_deadline = s.workers.jobs.iter().any(|q| {
+                s.records.get(&q.permit.token).is_some_and(|r| {
+                    r.deadline
+                        .as_ref()
+                        .is_some_and(|context| context.deadline().is_some())
+                })
+            });
+            if has_deadline {
+                let (ns, _) = self
+                    .0
+                    .changed
+                    .wait_timeout(s, CLOCK_RECHECK_INTERVAL)
+                    .unwrap();
+                s = ns
             } else {
                 s = self.0.changed.wait(s).unwrap()
             }

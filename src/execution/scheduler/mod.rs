@@ -9,7 +9,7 @@ pub use state::{BoundedScheduler, SchedulerSnapshot};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::execution::{CapacityFailure, CommandExecutionConfig, Scheduler};
+    use crate::execution::{CommandExecutionConfig, Scheduler};
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -42,17 +42,6 @@ mod tests {
         assert_eq!(scheduler.snapshot().input_bytes, 0);
     }
     #[test]
-    fn fixed_deadline_expires_without_capacity() {
-        let scheduler = BoundedScheduler::new(config()).unwrap();
-        let _permit = scheduler.try_reserve(0).unwrap();
-        assert!(!scheduler.wait_for_capacity(0, Some(std::time::Instant::now())));
-        scheduler.register_waiter(None).unwrap();
-        assert_eq!(
-            scheduler.register_waiter(None).unwrap_err(),
-            CapacityFailure::QueueFull
-        );
-    }
-    #[test]
     fn helper_lease_keeps_active_slot_after_job_permit_drops() {
         let scheduler = BoundedScheduler::new(config()).unwrap();
         let permit = scheduler.try_reserve(0).unwrap();
@@ -63,12 +52,5 @@ mod tests {
         drop(helper);
         assert_eq!(scheduler.snapshot().active, 0);
         assert_eq!(scheduler.snapshot().residual_helpers, 0);
-    }
-    #[test]
-    fn expired_deadline_has_no_wait_duration() {
-        let deadline = std::time::Instant::now();
-        let after = deadline + std::time::Duration::from_nanos(1);
-        assert_eq!(state::deadline_wait_duration(deadline, after), None);
-        assert!(state::deadline_wait_duration(after, deadline).is_some());
     }
 }
