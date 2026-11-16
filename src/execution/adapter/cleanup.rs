@@ -88,28 +88,26 @@ fn recovery_loop(rx: Receiver<RecoveryItem>) {
 }
 fn recovery_settlement(
     id: OperationId,
-    effect_evidence: RecoveryEffectEvidence,
+    mut effect_evidence: RecoveryEffectEvidence,
 ) -> SettlementReport {
+    for effect in &mut effect_evidence.effects {
+        effect.operation_id = id;
+    }
     let observed_total = effect_evidence.effects_total.max(
         effect_evidence
             .effects
             .len()
             .saturating_add(effect_evidence.effect_overflow),
     );
-    let omitted_by_adapter = effect_evidence
-        .effects
-        .len()
-        .saturating_sub(MAX_RECOVERY_EFFECTS);
     let retained_effects: Vec<_> = effect_evidence
         .effects
         .into_iter()
         .take(MAX_RECOVERY_EFFECTS)
         .collect();
     let effects_total = observed_total.max(retained_effects.len());
-    let effect_overflow = effect_evidence
-        .effect_overflow
-        .saturating_add(omitted_by_adapter)
-        .max(effects_total.saturating_sub(retained_effects.len()));
+    // The normalized total covers all producer-reported and adapter-omitted
+    // records, so overflow is exactly the portion not retained here.
+    let effect_overflow = effects_total.saturating_sub(retained_effects.len());
     SettlementReport {
         operation_id: id,
         status: SettlementStatus::RecoveryRequired,
@@ -140,7 +138,7 @@ fn recovery_settlement(
 
 #[cfg(test)]
 mod tests {
-    use super::{OperationObserverSlot, RecoveryItem, start_recovery_worker};
+    use super::{OperationObserverSlot, RecoveryItem, recovery_settlement, start_recovery_worker};
     use crate::execution::adapter::CommandControl;
     use crate::execution::contracts::{
         RecoveryEffectEvidence, RecoveryOwner, RecoveryRetryError, ReservationLease,
@@ -301,10 +299,16 @@ mod tests {
         let _ = operation.wait_outcome().unwrap();
         let id = operation.id();
         operation.wait_settlement().unwrap();
+        let mut foreign_operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let _ = foreign_operation.wait_outcome().unwrap();
+        let foreign_id = foreign_operation.id();
+        foreign_operation.wait_settlement().unwrap();
 
         let effects = (0..70)
             .map(|_| EffectRecord {
-                operation_id: id,
+                operation_id: foreign_id,
                 resource_id: None,
                 fact: EffectFact::Unknown,
                 description: DiagnosticSummary::new("boundedness evidence"),
@@ -353,5 +357,35 @@ mod tests {
                 .iter()
                 .all(|effect| effect.operation_id == id)
         );
+    }
+
+    #[test]
+    fn recovery_settlement_caps_overflow_to_total_minus_retained() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let _ = operation.wait_outcome().unwrap();
+        let id = operation.id();
+        operation.wait_settlement().unwrap();
+
+        let report = recovery_settlement(
+            id,
+            RecoveryEffectEvidence {
+                effects: vec![EffectRecord {
+                    operation_id: id,
+                    resource_id: None,
+                    fact: EffectFact::Unknown,
+                    description: DiagnosticSummary::new("max overflow evidence"),
+                }],
+                effects_total: 0,
+                effect_overflow: usize::MAX,
+            },
+        );
+
+        assert_eq!(report.effects_total, usize::MAX);
+        assert_eq!(report.effects.len(), 1);
+        assert_eq!(report.effect_overflow, usize::MAX - 1);
+        assert!(report.effect_overflow <= report.effects_total - report.effects.len());
     }
 }

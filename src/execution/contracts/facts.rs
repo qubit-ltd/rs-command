@@ -36,8 +36,9 @@ pub trait RecoveryOwner: Send + Sync {
     /// must not be copied here. Owners without a known resource effect return
     /// the empty default; they must not invent resource identities. Producers
     /// should retain at most 64 effects and report omitted records through
-    /// `effects_total` and `effect_overflow`; the adapter enforces the same
-    /// bound at the settlement boundary.
+    /// `effects_total` and `effect_overflow`, and every record should use the
+    /// supplied `operation_id`. The adapter enforces the same bound and
+    /// canonicalizes record identities at the settlement boundary.
     fn effect_evidence(
         &self,
         _operation_id: qubit_operation::OperationId,
