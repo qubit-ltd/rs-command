@@ -3,12 +3,45 @@ use std::io;
 #[cfg(feature = "async")]
 use std::task::{Context, Poll};
 
+/// Output-channel behavior after the bounded per-stream buffer fills.
+#[cfg(feature = "async")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum SessionStreamPolicy {
+    /// Apply backpressure until the caller consumes buffered output.
+    #[default]
+    Backpressure,
+    /// Discard excess output and mark that stream incomplete while continuing to drain.
+    Discard,
+    /// Count stdout and stderr together, then signal termination after this many bytes.
+    TerminateAfterBytes(u64),
+}
+
 /// Blocking byte bridge used by process workers.
 pub trait SessionBridge: Send + Sync {
     fn read_stdin(&self, buffer: &mut [u8]) -> io::Result<usize>;
     fn write_stdout(&self, bytes: &[u8]) -> io::Result<()>;
     fn write_stderr(&self, bytes: &[u8]) -> io::Result<()>;
     fn close_stdin(&self);
+
+    /// Reports whether stdout bytes were discarded before delivery.
+    fn stdout_incomplete(&self) -> bool {
+        false
+    }
+
+    /// Reports whether stderr bytes were discarded before delivery.
+    fn stderr_incomplete(&self) -> bool {
+        false
+    }
+
+    /// Reports whether the stdin consumer observed a broken pipe.
+    fn stdin_broken_pipe(&self) -> bool {
+        false
+    }
+
+    /// Reports whether the aggregate output byte budget requested termination.
+    fn output_budget_exceeded(&self) -> bool {
+        false
+    }
 }
 
 /// State contract delegated to by the async stdin endpoint.
