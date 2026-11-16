@@ -286,6 +286,9 @@ impl ByteChannel {
                         b.observed = b
                             .observed
                             .saturating_add((bytes.len() - total_offset) as u64);
+                        if b.observed >= budget.limit {
+                            b.exceeded = true;
+                        }
                     }
                     return Ok(());
                 }
@@ -653,6 +656,18 @@ mod tests {
         assert!(!channels.bridge.stdin_broken_pipe());
         channels.bridge.record_stdin_broken_pipe();
         assert!(channels.bridge.stdin_broken_pipe());
+    }
+
+    #[test]
+    fn dropped_output_reader_still_trips_aggregate_budget() {
+        let channels = SessionChannels::with_policy(SessionStreamPolicy::TerminateAfterBytes(10));
+        let bridge = channels.bridge.clone();
+        drop(channels.stdout);
+        assert_eq!(bridge.output_bytes_observed(), 0);
+        bridge.write_stdout(b"more-than-ten").unwrap();
+        assert_eq!(bridge.output_bytes_observed(), 13);
+        assert!(bridge.output_budget_exceeded());
+        assert!(bridge.stdout_incomplete());
     }
 
     #[test]
