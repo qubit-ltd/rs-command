@@ -8,8 +8,6 @@
 
 use std::collections::HashMap;
 
-use qubit_operation::OperationContext;
-
 use super::Record;
 use crate::execution::scheduler::waiters::Waiters;
 use crate::execution::scheduler::worker::WorkerQueue;

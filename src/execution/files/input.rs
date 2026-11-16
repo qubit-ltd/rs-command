@@ -210,6 +210,7 @@ fn _policy_is_exhaustive(policy: FileSinkPolicy) {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
     use std::sync::mpsc;
     use std::time::Duration;
 

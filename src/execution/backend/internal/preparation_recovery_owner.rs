@@ -13,11 +13,12 @@ use crate::execution::contracts::RecoveryOwner;
 
 /// Represents the preparation recovery owner state or contract used by managed
 /// command execution.
-pub(super) struct PreparationRecoveryOwner {
+pub(crate) struct PreparationRecoveryOwner {
     /// Stores the retained value used by this execution component.
-    retained: Mutex<Option<(FilePreparationFailure, qubit_operation::OperationScope)>>,
+    pub(in crate::execution::backend) retained:
+        Mutex<Option<(FilePreparationFailure, qubit_operation::OperationScope)>>,
     /// Stores the  capacity lease value used by this execution component.
-    _capacity_lease: Mutex<Option<crate::execution::contracts::ReservationLease>>,
+    pub(in crate::execution::backend) _capacity_lease: Mutex<Option<crate::execution::contracts::ReservationLease>>,
 }
 
 impl RecoveryOwner for PreparationRecoveryOwner {

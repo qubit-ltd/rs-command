@@ -6,6 +6,7 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 
+use std::fmt;
 use std::sync::Arc;
 
 use super::Reservation;

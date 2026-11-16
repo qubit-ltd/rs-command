@@ -8,5 +8,5 @@
 
 mod queued;
 mod worker_queue;
-pub(super) use queued::Queued;
-pub(super) use worker_queue::WorkerQueue;
+pub(crate) use queued::Queued;
+pub(crate) use worker_queue::WorkerQueue;

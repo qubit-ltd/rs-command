@@ -60,7 +60,7 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use super::Reservation;
-    use super::ReservationLease;
+    use crate::execution::contracts::ReservationLease;
 
     #[test]
     fn test_dropping_reservation_releases_its_token_once() {

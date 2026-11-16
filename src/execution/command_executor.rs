@@ -27,7 +27,7 @@ pub struct CommandExecutor {
     /// Stores the group value used by this execution component.
     pub(crate) group: qubit_operation::OperationGroup,
     /// Stores the recovery value used by this execution component.
-    pub(crate) recovery: std::sync::mpsc::SyncSender<adapter::cleanup::RecoveryItem>,
+    pub(crate) recovery: adapter::RecoverySender,
 }
 impl CommandExecutor {
     /// Performs the new step in the managed command execution lifecycle.

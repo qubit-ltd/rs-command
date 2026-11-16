@@ -6,8 +6,6 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 
-use std::sync::Mutex;
-
 use qubit_operation::StopReason;
 
 use crate::CommandCancellation;

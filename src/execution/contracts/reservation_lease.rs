@@ -37,3 +37,13 @@ impl fmt::Debug for ReservationLease {
             .finish()
     }
 }
+
+impl Drop for ReservationLease {
+    /// Releases the retained scheduler capacity when the final helper lease
+    /// drops.
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            release();
+        }
+    }
+}

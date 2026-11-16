@@ -12,10 +12,8 @@ use qubit_operation::OperationOutcome;
 use qubit_operation::SettlementReport;
 
 use super::FactPublishError;
-use super::RecoveryEffectEvidence;
 use super::RecoveryOwner;
 use super::RecoveryPublishFailure;
-use super::RecoveryRetryError;
 use crate::CommandError;
 use crate::CommandOutput;
 

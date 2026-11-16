@@ -8,17 +8,15 @@
 //! Single bounded worker retains unresolved cleanup owners through handoff.
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
-use std::sync::mpsc::SyncSender;
 use std::sync::mpsc::sync_channel;
 
+use qubit_operation::OperationId;
 use qubit_operation::SettlementReport;
 use qubit_operation::SettlementStatus;
 
-use super::CommandControl;
-use super::OperationObserverSlot;
 use super::RecoveryItem;
+use super::RecoverySender;
 use crate::execution::contracts::RecoveryEffectEvidence;
-use crate::execution::contracts::RecoveryOwner;
 use crate::execution::contracts::RecoveryRetryError;
 
 const MAX_RECOVERY_EFFECTS: usize = 64;
@@ -138,11 +136,11 @@ mod tests {
     use qubit_operation::OperationOptions;
     use qubit_operation::OperationOutcome;
 
-    use super::OperationObserverSlot;
     use super::RecoveryItem;
     use super::recovery_settlement;
     use super::start_recovery_worker;
     use crate::execution::adapter::CommandControl;
+    use crate::execution::adapter::OperationObserverSlot;
     use crate::execution::contracts::RecoveryEffectEvidence;
     use crate::execution::contracts::RecoveryOwner;
     use crate::execution::contracts::RecoveryRetryError;

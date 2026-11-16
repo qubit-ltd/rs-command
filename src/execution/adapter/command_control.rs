@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::task::Context;
 use std::task::Poll;
-use std::task::Waker;
 
 use qubit_operation::ChildOutcomeKind;
 use qubit_operation::ChildOutcomeSummary;

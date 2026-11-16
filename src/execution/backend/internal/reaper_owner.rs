@@ -32,7 +32,7 @@ impl ReaperOwner {
     }
 
     /// Performs the reap step in the managed command execution lifecycle.
-    pub(super) fn reap(mut self) {
+    pub(in crate::execution::backend) fn reap(mut self) {
         if let Some(cleanup) = self.0.take() {
             cleanup();
         }

@@ -14,17 +14,16 @@ use qubit_operation::OperationId;
 use qubit_operation::StopReason;
 
 use crate::execution::backend::StartGate;
-use crate::execution::contracts::StopPort;
 
 /// Represents the operation stop port state or contract used by managed command
 /// execution.
-pub(super) struct OperationStopPort {
+pub(crate) struct OperationStopPort {
     /// Stores the operation id value used by this execution component.
-    operation_id: OperationId,
+    pub(in crate::execution::backend) operation_id: OperationId,
     /// Stores the gate value used by this execution component.
-    gate: Arc<StartGate>,
+    pub(in crate::execution::backend) gate: Arc<StartGate>,
     /// Stores the gates value used by this execution component.
-    gates: std::sync::Weak<Mutex<HashMap<OperationId, Arc<StartGate>>>>,
+    pub(in crate::execution::backend) gates: std::sync::Weak<Mutex<HashMap<OperationId, Arc<StartGate>>>>,
 }
 
 impl crate::execution::contracts::StopPort for OperationStopPort {

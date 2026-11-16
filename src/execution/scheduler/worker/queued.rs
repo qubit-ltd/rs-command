@@ -10,7 +10,7 @@ use crate::execution::Reservation;
 use crate::execution::contracts::ScheduledJob;
 
 /// Represents the queued state or contract used by managed command execution.
-pub(super) struct Queued {
+pub(crate) struct Queued {
     /// Stores the job value used by this execution component.
     pub job: ScheduledJob,
     /// Stores the permit value used by this execution component.

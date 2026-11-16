@@ -6,9 +6,9 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 
-use super::Reaper;
 use super::ReaperObserver;
 use super::ReaperOwner;
+use crate::execution::backend::Reaper;
 use crate::execution::contracts::RecoveryEffectEvidence;
 use crate::execution::contracts::RecoveryOwner;
 
@@ -27,7 +27,7 @@ impl DeferredReaperOwner {
     /// # Parameters
     /// * `owner`: Supplies the owner value used by this operation.
     /// * `observer`: Supplies the observer value used by this operation.
-    pub(super) fn new(owner: ReaperOwner, observer: ReaperObserver) -> Self {
+    pub(crate) fn new(owner: ReaperOwner, observer: ReaperObserver) -> Self {
         Self {
             owner: std::sync::Mutex::new(Some(owner)),
             observer,

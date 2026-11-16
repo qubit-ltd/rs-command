@@ -11,10 +11,8 @@ use qubit_operation::OperationContext;
 use qubit_operation::OperationId;
 
 use super::ExecutionSnapshot;
-use super::FactSink;
 use super::IoPathSnapshot;
 use super::RequestOptions;
-use super::Reservation;
 use crate::Command;
 use crate::CommandRunner;
 

@@ -9,4 +9,4 @@
 /// Represents the start permit state or contract used by managed command
 /// execution.
 #[derive(Debug)]
-pub(crate) struct StartPermit(#[doc = "Marker proving start authorization won the race."] ());
+pub(crate) struct StartPermit(#[doc = "Marker proving start authorization won the race."] pub(crate) ());

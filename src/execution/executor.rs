@@ -14,8 +14,8 @@ use qubit_operation::OperationManager;
 use qubit_operation::OperationOptions;
 use qubit_operation::OperationScope;
 
-use super::AsyncCommandOperation;
 use super::CommandExecutionConfig;
+use super::CommandExecutor;
 use super::CommandExecutorApi;
 use super::CommandExecutorCreateError;
 use super::CommandOperation;
@@ -25,12 +25,15 @@ use super::CommandSubmitFailureReason;
 use super::SnapshotFailure;
 use super::adapter::AdapterState;
 use super::backend::ProcessBackend;
+use super::contracts::CapacityFailure;
 use super::contracts::ExecutionSnapshot;
 use super::contracts::IoPathSnapshot;
 use super::contracts::Request;
 use super::contracts::RequestOptions;
+use super::contracts::Scheduler;
 use super::scheduler::BoundedScheduler;
 use crate::Command;
+use crate::CommandError;
 use crate::CommandResourceRunOptions;
 use crate::CommandRunOptions;
 use crate::CommandRunner;
@@ -1775,7 +1778,7 @@ pub(crate) fn build_executor(
         BoundedScheduler,
         ProcessBackend,
         qubit_operation::OperationGroup,
-        super::adapter::cleanup::RecoverySender,
+        super::adapter::RecoverySender,
         OperationManager,
     ),
     CommandExecutorCreateError,

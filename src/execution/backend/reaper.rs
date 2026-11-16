@@ -9,6 +9,7 @@
 use std::io;
 use std::sync::OnceLock;
 use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::TrySendError;
 use std::sync::mpsc::sync_channel;
 use std::thread;
 
@@ -94,10 +95,10 @@ mod tests {
     use qubit_operation::OperationOptions;
     use qubit_operation::OperationOutcome;
 
-    use super::DeferredReaperOwner;
     use super::Reaper;
-    use super::ReaperObserver;
     use super::ReaperOwner;
+    use crate::execution::backend::ReaperObserver;
+    use crate::execution::backend::internal::DeferredReaperOwner;
     use crate::execution::contracts::RecoveryOwner;
 
     #[test]

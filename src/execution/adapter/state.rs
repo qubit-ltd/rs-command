@@ -48,9 +48,9 @@ pub(crate) struct AdapterState {
     /// Stores the stop value used by this execution component.
     stop: Mutex<Option<Arc<dyn StopPort>>>,
     /// Stores the recovery value used by this execution component.
-    recovery: super::cleanup::RecoverySender,
+    recovery: super::RecoverySender,
     /// Stores the observer value used by this execution component.
-    observer: Arc<super::cleanup::OperationObserverSlot>,
+    observer: Arc<super::OperationObserverSlot>,
     /// Stores the session bridge value used by this execution component.
     session_bridge: Option<Arc<dyn crate::session::contracts::SessionBridge>>,
     /// Describes the item case handled by managed command execution.
@@ -111,7 +111,7 @@ impl AdapterState {
         scheduler: Arc<dyn crate::execution::Scheduler>,
         backend: Arc<dyn Backend>,
         process_backend: Arc<ProcessBackend>,
-        recovery: super::cleanup::RecoverySender,
+        recovery: super::RecoverySender,
         session_bridge: Option<Arc<dyn crate::session::contracts::SessionBridge>>,
     ) -> Self {
         Self {
@@ -126,7 +126,7 @@ impl AdapterState {
             control: Arc::new(CommandControl::default()),
             stop: Mutex::new(None),
             recovery,
-            observer: Arc::new(super::cleanup::OperationObserverSlot::default()),
+            observer: Arc::new(super::OperationObserverSlot::default()),
             session_bridge,
             #[cfg(feature = "async")]
             session_keepalive: None,
@@ -210,7 +210,7 @@ impl FactSink for AdapterState {
                 owner,
             });
         };
-        let item = super::cleanup::RecoveryItem {
+        let item = super::RecoveryItem {
             owner,
             control: Arc::clone(&self.control),
             id,
@@ -462,7 +462,7 @@ mod activation_failure_tests {
     use crate::CommandExecutionConfig;
     use crate::CommandOutput;
     use crate::CommandRunner;
-    use crate::execution::adapter::control::CommandControl;
+    use crate::execution::adapter::command_control::CommandControl;
     use crate::execution::contracts::ExecutionSnapshot;
     use crate::execution::contracts::IoPathSnapshot;
     use crate::execution::contracts::Request;

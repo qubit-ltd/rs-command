@@ -15,6 +15,7 @@ use qubit_operation::OperationId;
 use qubit_operation::OperationOutcome;
 use qubit_operation::SettlementReport;
 use qubit_operation::SettlementStatus;
+use qubit_operation::StopReason;
 
 use super::internal::OperationStopPort;
 use super::internal::PreparationRecoveryOwner;
@@ -26,6 +27,7 @@ use crate::execution::backend::StartGate;
 use crate::execution::contracts::ActivatedRequest;
 use crate::execution::contracts::Backend;
 use crate::execution::contracts::FactSink;
+use crate::execution::contracts::RecoveryOwner;
 use crate::execution::contracts::RequestOptions;
 use crate::execution::contracts::ResourceInput;
 

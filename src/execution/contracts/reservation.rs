@@ -79,14 +79,6 @@ impl fmt::Debug for Reservation {
     }
 }
 
-impl Drop for ReservationLease {
-    /// Performs the drop step in the managed command execution lifecycle.
-    fn drop(&mut self) {
-        if let Some(release) = self.release.take() {
-            release();
-        }
-    }
-}
 impl Drop for Reservation {
     /// Performs the drop step in the managed command execution lifecycle.
     fn drop(&mut self) {

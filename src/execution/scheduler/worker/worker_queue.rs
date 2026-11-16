@@ -13,7 +13,7 @@ use super::Queued;
 /// Represents the worker queue state or contract used by managed command
 /// execution.
 #[derive(Default)]
-pub(super) struct WorkerQueue {
+pub(crate) struct WorkerQueue {
     /// Stores the jobs value used by this execution component.
     pub jobs: VecDeque<Queued>,
 }
