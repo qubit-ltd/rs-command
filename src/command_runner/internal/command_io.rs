@@ -103,6 +103,7 @@ impl CommandIo {
     /// Requests every helper to stop while retaining the helper handles.
     pub(in crate::command_runner) fn request_cancel(&self) {
         if let Some(bridge) = &self.session_bridge {
+            bridge.request_output_stop();
             bridge.close_stdin();
         }
         let _ = self.stdout_reader.cancel();
@@ -661,6 +662,74 @@ mod tests {
     use super::cancel_and_join_started_helpers;
     use super::finish_helpers_with_wait;
     use crate::CommandCleanupFailure;
+
+    #[cfg(feature = "async")]
+    #[test]
+    fn cancellation_stops_full_session_output_writer_without_dropping_session() {
+        use crate::session::channel::SessionChannels;
+        use crate::session::contracts::SessionBridge;
+        use qubit_io::AsyncInput;
+        use std::task::{Context, Poll, Waker};
+
+        let mut channels = SessionChannels::new();
+        let bridge: Arc<dyn SessionBridge> = channels.bridge.clone();
+        let chunk = vec![0x5a; 16 * 1024];
+        for _ in 0..4 {
+            bridge
+                .write_stdout(&chunk)
+                .expect("buffer should accept one complete channel capacity");
+        }
+
+        let writer_bridge = Arc::clone(&bridge);
+        let blocked = OutputReader::new(
+            thread::spawn(move || {
+                writer_bridge
+                    .write_stdout(b"blocked output")
+                    .expect("output stop should release blocked writer");
+                Ok(CapturedOutput::default())
+            }),
+            IoCancellation::pair()
+                .expect("stdout cancellation should initialize")
+                .0,
+        );
+        let stderr = completed_reader(
+            IoCancellation::pair()
+                .expect("stderr cancellation should initialize")
+                .0,
+        );
+        channels.bridge.wait_for_stdout_writer_for_test();
+
+        let command_io =
+            CommandIo::new(blocked, stderr, None).with_session_bridge(Some(Arc::clone(&bridge)));
+        command_io.request_cancel();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !command_io.is_finished() && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        assert!(
+            command_io.is_finished(),
+            "output stop should wake the writer before any session endpoint drops"
+        );
+        assert!(bridge.stdout_incomplete());
+
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        let mut received = Vec::new();
+        let mut buffer = vec![0; 16 * 1024];
+        while received.len() < 64 * 1024 {
+            match std::pin::Pin::new(&mut channels.stdout).poll_read(&mut context, &mut buffer) {
+                Poll::Ready(Ok(count)) if count > 0 => {
+                    received.extend_from_slice(&buffer[..count]);
+                }
+                other => panic!("buffered output should remain readable: {other:?}"),
+            }
+        }
+        assert_eq!(received, vec![0x5a; 64 * 1024]);
+        assert!(matches!(
+            std::pin::Pin::new(&mut channels.stdout).poll_read(&mut context, &mut buffer),
+            Poll::Ready(Ok(0))
+        ));
+    }
 
     struct ReleaseOnDrop(Arc<AtomicBool>);
 

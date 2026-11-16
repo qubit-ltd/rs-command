@@ -370,13 +370,15 @@ mod tests {
             Box::new(process),
             Arc::clone(&calls),
         )
-        .kill_error(io::Error::other("first kill attempt fails"));
+        .kill_error(io::Error::other("first kill attempt fails"))
+        .delegate_kill_to_inner();
         let child = super::super::scripted_child::ScriptedChild::new(
             "tree",
             Box::new(direct),
             Arc::clone(&calls),
         )
-        .kill_error(io::Error::other("first tree kill attempt fails"));
+        .kill_error(io::Error::other("first tree kill attempt fails"))
+        .delegate_kill_to_inner();
         let (observer, completed) = ReaperObserver::pair();
         let released = Arc::new(AtomicBool::new(false));
         let lease_released = Arc::clone(&released);
