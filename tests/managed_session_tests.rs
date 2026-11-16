@@ -1,19 +1,28 @@
 #![cfg(feature = "async")]
 
-use qubit_command::{
-    Command, CommandExecutionConfig, CommandExecutor, CommandRunner, ManagedCommandRunnerApi,
-    session::CommandSessionApi,
-};
-use qubit_io::{AsyncClose, AsyncInput};
-use qubit_operation::{ManagerOptions, OperationManager, OperationOutcome};
+use std::future::poll_fn;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::Context;
+use std::task::Poll;
+use std::task::Wake;
+use std::task::Waker;
+use std::thread;
 use std::time::Duration;
-use std::{
-    future::poll_fn,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll, Wake, Waker},
-    thread,
-};
+
+use qubit_command::Command;
+use qubit_command::CommandErrorReason;
+use qubit_command::CommandExecutionConfig;
+use qubit_command::CommandExecutor;
+use qubit_command::CommandRunOptions;
+use qubit_command::CommandRunner;
+use qubit_command::ManagedCommandRunnerApi;
+use qubit_command::session::CommandSessionApi;
+use qubit_io::AsyncClose;
+use qubit_io::AsyncInput;
+use qubit_operation::ManagerOptions;
+use qubit_operation::OperationManager;
+use qubit_operation::OperationOutcome;
 
 struct ThreadWake(thread::Thread);
 impl Wake for ThreadWake {
@@ -36,21 +45,29 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
     }
 }
 
+async fn read_all(reader: &mut (impl AsyncInput<Item = u8> + Unpin)) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 128];
+    loop {
+        let count = reader.read_async(&mut chunk).await?;
+        if count == 0 {
+            return Ok(bytes);
+        }
+        bytes.extend_from_slice(&chunk[..count]);
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn managed_session_returns_endpoints_and_streams_both_pipes() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
     let runner = CommandRunner::new(Duration::from_secs(5));
-    let mut session = block_on(
-        runner.start_session(
-            &executor,
-            Command::new("sh")
-                .arg("-c")
-                .arg("printf out; printf err >&2"),
-            Default::default(),
-        ),
-    )
+    let mut session = block_on(runner.start_session(
+        &executor,
+        Command::new("sh").arg("-c").arg("printf out; printf err >&2"),
+        Default::default(),
+    ))
     .unwrap();
     let mut stdin = session.take_stdin().unwrap();
     block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).unwrap();
@@ -100,8 +117,45 @@ fn managed_session_returns_endpoints_and_streams_both_pipes() {
 
 #[cfg(unix)]
 #[test]
+fn managed_session_applies_runner_total_output_budget() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let runner = CommandRunner::without_timeout().max_total_output_bytes(8);
+    let mut session = block_on(runner.start_session(
+        &executor,
+        Command::new("sh").arg("-c").arg("printf 12345678901234567890"),
+        CommandRunOptions::new(),
+    ))
+    .unwrap();
+    let mut stdin = session.take_stdin().unwrap();
+    let mut stdout = session.take_stdout().unwrap();
+    let mut stderr = session.take_stderr().unwrap();
+    let mut operation = session.take_operation().unwrap();
+
+    let (out, err) = thread::scope(|scope| {
+        let out_reader = scope.spawn(|| block_on(read_all(&mut stdout)));
+        let err_reader = scope.spawn(|| block_on(read_all(&mut stderr)));
+        block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).unwrap();
+        (out_reader.join().unwrap().unwrap(), err_reader.join().unwrap().unwrap())
+    });
+    assert!(!out.is_empty());
+    assert!(err.is_empty());
+    let outcome = operation.wait_outcome().unwrap();
+    assert!(matches!(
+        outcome,
+        OperationOutcome::Failed(ref error)
+            if matches!(error.reason(), CommandErrorReason::OutputLimitExceeded { limit: 8, observed } if *observed > 8)
+    ));
+    drop((stdin, stdout, stderr));
+    operation.wait_settlement().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn dropping_session_requests_stop_and_preserves_observable_settlement() {
-    use qubit_operation::{SettlementWait, ShutdownMode, StopReason};
+    use qubit_operation::SettlementWait;
+    use qubit_operation::ShutdownMode;
+    use qubit_operation::StopReason;
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
     let runner = CommandRunner::without_timeout();
@@ -120,41 +174,33 @@ fn dropping_session_requests_stop_and_preserves_observable_settlement() {
         if let Some(stop) = observer.snapshot().stop {
             break stop;
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "session drop must request stop"
-        );
+        assert!(std::time::Instant::now() < deadline, "session drop must request stop");
         thread::yield_now();
     };
     assert_eq!(stop.reason, StopReason::UserCancelled);
     let shutdown = executor.request_shutdown(ShutdownMode::Drain);
     let _ = shutdown.wait_for(Duration::from_secs(5)).unwrap();
     assert!(matches!(
-        observer
-            .wait_settlement_for(Duration::from_secs(5))
-            .unwrap(),
+        observer.wait_settlement_for(Duration::from_secs(5)).unwrap(),
         SettlementWait::Ready(_)
     ));
 }
 
-async fn futures_join<A: std::future::Future, B: std::future::Future>(
-    a: A,
-    b: B,
-) -> (A::Output, B::Output) {
+async fn futures_join<A: std::future::Future, B: std::future::Future>(a: A, b: B) -> (A::Output, B::Output) {
     let mut a = Box::pin(a);
     let mut b = Box::pin(b);
     let mut ao = None;
     let mut bo = None;
     poll_fn(|cx| {
-        if ao.is_none() {
-            if let Poll::Ready(x) = a.as_mut().poll(cx) {
-                ao = Some(x)
-            }
+        if ao.is_none()
+            && let Poll::Ready(x) = a.as_mut().poll(cx)
+        {
+            ao = Some(x)
         }
-        if bo.is_none() {
-            if let Poll::Ready(x) = b.as_mut().poll(cx) {
-                bo = Some(x)
-            }
+        if bo.is_none()
+            && let Poll::Ready(x) = b.as_mut().poll(cx)
+        {
+            bo = Some(x)
         }
         if ao.is_some() && bo.is_some() {
             Poll::Ready((ao.take().unwrap(), bo.take().unwrap()))
