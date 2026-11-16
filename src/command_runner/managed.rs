@@ -248,6 +248,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     }
 }
 
+#[cfg(feature = "async")]
 impl crate::session::CommandSessionApi for CommandSession {
     fn operation(&self) -> Option<&crate::CommandOperation> {
         self.operation.as_ref()

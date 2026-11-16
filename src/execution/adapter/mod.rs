@@ -6,4 +6,6 @@ mod outcome_slot;
 mod state;
 
 pub(crate) use control::CommandControl;
-pub(crate) use state::{AdapterState, SessionOwners};
+pub(crate) use state::AdapterState;
+#[cfg(feature = "async")]
+pub(crate) use state::SessionOwners;
