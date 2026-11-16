@@ -2,7 +2,61 @@
 
 [中文用户手册](user_guide.zh_CN.md) · [README](../README.md) · [API documentation](https://docs.rs/qubit-command)
 
-This guide describes `qubit-command` 0.11. It is for Rust applications that run external programs and need explicit policies for process lifetime, output size, cancellation, and diagnostics.
+This guide describes `qubit-command` 0.12. It is for Rust applications that run external programs and need explicit policies for process lifetime, output size, cancellation, resource ownership, and diagnostics.
+
+## Managed Execution for Service Work
+
+Use the managed API when a service needs bounded command admission, process-tree lifetime management, and an explicit resource-settlement result. The example below creates one `OperationManager`, attaches one `CommandExecutor`, and collects a repository status command:
+
+```toml
+[dependencies]
+qubit-command = "^0.12"
+qubit-operation = "^0.3"
+```
+
+```rust
+use qubit_command::{Command, CommandExecutionConfig, CommandExecutor, CommandRunOptions, CommandRunner, ManagedCommandRunnerApi};
+use qubit_operation::{ManagerOptions, OperationManager};
+
+let manager = OperationManager::new(ManagerOptions::default())?;
+let executor = CommandExecutor::new(manager, CommandExecutionConfig::default())?;
+let output = CommandRunner::without_timeout()
+    .run_managed(&executor, Command::new("git").args(&["status", "--short"]), CommandRunOptions::new())?;
+println!("{}", output.stdout_lossy_text());
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The default executor bounds active commands to 4, queued commands to 64, waiters to 64, queued owned input to 16 MiB, and retained diagnostics to 64. `max_active` must be nonzero. These are executor-local limits; configure the shared `OperationManager` separately for application-wide operation limits.
+
+Managed execution defaults to `ProcessTreePolicy::Managed`, independently of timeout and cancellation options. Select `ProcessTreePolicy::DirectChild` only when the application intentionally manages the direct child alone. This policy applies to managed execution; the older `CommandRunner::run` and `run_with` path remains available with its existing lifecycle contract.
+
+### Observe outcome and settlement separately
+
+Use `CommandExecutor::submit` or `submit_in` when the caller must distinguish the typed operation result from resource cleanup. `wait_outcome` consumes the one-shot outcome; `wait_settlement` observes the later stable cleanup report. A successful outcome does not itself prove that every helper or owned file has been released. The [collect example](../examples/managed_collect.rs) starts in a parent `OperationScope`, moves its handle to the async view, awaits the outcome, then checks settlement separately. Never block a finite synchronous worker while it waits for dependent work that needs the same worker pool.
+
+The synchronous and asynchronous handles share one outcome receiver: convert with `into_async` or `into_sync` before taking the result. For resource-bearing operations, keep the handle or a read-only observer until settlement is known. `SettlementStatus::RecoveryRequired` means the report contains recovery work; retain its recovery handles and apply the application's recovery policy instead of treating the outcome as full cleanup.
+
+### Stream a command with a session
+
+Enable the crate's `async` feature to use `start_session`. A session exposes stdin, stdout, and stderr as independent byte endpoints. Read stdout and stderr concurrently so a full pipe cannot block the other stream; close stdin explicitly to send EOF. After collecting the operation outcome, drop the endpoints and then wait for settlement. The [session example](../examples/managed_session.rs) demonstrates this order using the runtime-independent `qubit-io` traits.
+
+If the caller drops one output endpoint early, the session switches that stream to discard-and-drain behavior and the result may be incomplete. `flush` only means bytes were accepted by the endpoint's pipe writer; it does not mean the child consumed them. `BrokenPipe` is an I/O fact to handle independently from the operation's primary outcome.
+
+### Pass owned files explicitly
+
+`CommandResourceRunOptions` transfers `File` handles to a managed run. An stdin file starts at its current cursor; the library does not seek it implicitly. Each stdout/stderr sink must choose `FileSinkPolicy::Preserve` or `FileSinkPolicy::Truncate`. Truncation is an observable side effect and occurs only after command and resource capacity have been reserved. Identity conflicts are checked using opened handles, so equal paths are neither a lease nor the authority token. See the [owned-file example](../examples/managed_file.rs).
+
+Wait for settlement before deleting an external temporary directory that contains a file still used by the operation. Once settlement confirms release, the application remains responsible for its own directory cleanup.
+
+### Shut down without guessing
+
+`CommandExecutor::request_shutdown` stops new executor admission and returns a durable shutdown observer. Use `wait_for(Duration::ZERO)` to inspect an immediate snapshot. `ShutdownWait::Pending` is not failure: retain that same handle and continue with `wait` or another bounded `wait_for`. Do not infer release from elapsed time or a fixed sleep. The [shutdown example](../examples/managed_shutdown.rs) keeps an stdin-gated session active, confirms the child has consumed input by reading its response, observes `Pending`, then closes stdin and releases endpoints before continuing to observe shutdown. It also matches `SettlementStatus::RecoveryRequired` and reports retained recovery handles.
+
+On Windows, the existing helper-cancellation limitation still applies: successful cancellation does not prove a helper has stopped, and the runner does not promise a hard wall-clock return deadline. See the [Windows cancellation status](windows-cancellation-status.md).
+
+### Executable examples
+
+Run the examples from the repository with `cargo run --features async --example managed_collect` (replace the example name with `managed_session`, `managed_shutdown`, or `managed_file`). They use only the public API; the session endpoint example requires the `async` feature. See the [0.12 migration guide](migration-0.12.zh_CN.md) before moving existing call sites.
 
 ## What This Crate Solves
 
