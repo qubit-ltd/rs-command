@@ -7,7 +7,9 @@ mod scheduler;
 pub use backend::Backend;
 pub use facts::FactSink;
 pub use files::{FilePreparationFailure, PreparedFiles, ResourceInput};
+pub(crate) use files::PreparedSink;
 pub use request::{ActivatedRequest, ExecutionSnapshot, IoPathSnapshot, Request, RequestOptions};
 pub use scheduler::{
     CapacityFailure, EnqueueFailure, Reservation, ScheduledJob, Scheduler, StopPort,
 };
+pub(crate) use scheduler::ReservationLease;
