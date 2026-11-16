@@ -34,8 +34,14 @@ pub trait RecoveryOwner: Send + Sync {
     /// This is domain evidence for the external settlement report. Upstream
     /// resource-scope cleanup records remain in the manager's final report and
     /// must not be copied here. Owners without a known resource effect return
-    /// the empty default; they must not invent resource identities.
-    fn effect_evidence(&self, _operation_id: qubit_operation::OperationId) -> RecoveryEffectEvidence {
+    /// the empty default; they must not invent resource identities. Producers
+    /// should retain at most 64 effects and report omitted records through
+    /// `effects_total` and `effect_overflow`; the adapter enforces the same
+    /// bound at the settlement boundary.
+    fn effect_evidence(
+        &self,
+        _operation_id: qubit_operation::OperationId,
+    ) -> RecoveryEffectEvidence {
         RecoveryEffectEvidence::default()
     }
 

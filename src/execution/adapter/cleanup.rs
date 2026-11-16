@@ -7,6 +7,8 @@ use std::sync::{
     mpsc::{Receiver, SyncSender, sync_channel},
 };
 
+const MAX_RECOVERY_EFFECTS: usize = 64;
+
 pub(crate) struct RecoveryItem {
     pub owner: Box<dyn RecoveryOwner>,
     pub control: Arc<CommandControl>,
@@ -88,6 +90,26 @@ fn recovery_settlement(
     id: OperationId,
     effect_evidence: RecoveryEffectEvidence,
 ) -> SettlementReport {
+    let observed_total = effect_evidence.effects_total.max(
+        effect_evidence
+            .effects
+            .len()
+            .saturating_add(effect_evidence.effect_overflow),
+    );
+    let omitted_by_adapter = effect_evidence
+        .effects
+        .len()
+        .saturating_sub(MAX_RECOVERY_EFFECTS);
+    let retained_effects: Vec<_> = effect_evidence
+        .effects
+        .into_iter()
+        .take(MAX_RECOVERY_EFFECTS)
+        .collect();
+    let effects_total = observed_total.max(retained_effects.len());
+    let effect_overflow = effect_evidence
+        .effect_overflow
+        .saturating_add(omitted_by_adapter)
+        .max(effects_total.saturating_sub(retained_effects.len()));
     SettlementReport {
         operation_id: id,
         status: SettlementStatus::RecoveryRequired,
@@ -109,9 +131,9 @@ fn recovery_settlement(
         recoveries: Arc::from([]),
         recoveries_total: 0,
         recoveries_truncated: false,
-        effects: Arc::from(effect_evidence.effects),
-        effects_total: effect_evidence.effects_total,
-        effect_overflow: effect_evidence.effect_overflow,
+        effects: Arc::from(retained_effects),
+        effects_total,
+        effect_overflow,
         external_settlement: None,
     }
 }
@@ -147,6 +169,7 @@ mod tests {
 
     struct CompleteOwner {
         _lease: Mutex<Option<ReservationLease>>,
+        evidence: RecoveryEffectEvidence,
     }
     impl RecoveryOwner for CompleteOwner {
         fn summary(&self) -> String {
@@ -154,18 +177,9 @@ mod tests {
         }
         fn effect_evidence(
             &self,
-            operation_id: qubit_operation::OperationId,
+            _operation_id: qubit_operation::OperationId,
         ) -> RecoveryEffectEvidence {
-            RecoveryEffectEvidence {
-                effects: vec![EffectRecord {
-                    operation_id,
-                    resource_id: None,
-                    fact: EffectFact::Unknown,
-                    description: DiagnosticSummary::new("owner-held effect evidence"),
-                }],
-                effects_total: 3,
-                effect_overflow: 2,
-            }
+            self.evidence.clone()
         }
         fn retry_cleanup(&self) -> Result<(), RecoveryRetryError> {
             Err(RecoveryRetryError::OwnerAlreadyConsumed)
@@ -214,6 +228,16 @@ mod tests {
             .send(RecoveryItem {
                 owner: Box::new(CompleteOwner {
                     _lease: Mutex::new(Some(lease)),
+                    evidence: RecoveryEffectEvidence {
+                        effects: vec![EffectRecord {
+                            operation_id: id,
+                            resource_id: None,
+                            fact: EffectFact::Unknown,
+                            description: DiagnosticSummary::new("owner-held effect evidence"),
+                        }],
+                        effects_total: 3,
+                        effect_overflow: 2,
+                    },
                 }),
                 control: Arc::clone(&control),
                 id,
@@ -266,5 +290,68 @@ mod tests {
         lease_dropped_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("recovery owner lease drops only after manager settlement");
+    }
+
+    #[test]
+    fn recovery_worker_bounds_owner_effects_and_preserves_overflow() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let _ = operation.wait_outcome().unwrap();
+        let id = operation.id();
+        operation.wait_settlement().unwrap();
+
+        let effects = (0..70)
+            .map(|_| EffectRecord {
+                operation_id: id,
+                resource_id: None,
+                fact: EffectFact::Unknown,
+                description: DiagnosticSummary::new("boundedness evidence"),
+            })
+            .collect();
+        let control = Arc::new(CommandControl::default());
+        assert!(control.bind(id));
+        let observer = Arc::new(OperationObserverSlot::default());
+        observer.set(operation.observer());
+        let recovery = start_recovery_worker(1).unwrap();
+        recovery
+            .send(RecoveryItem {
+                owner: Box::new(CompleteOwner {
+                    _lease: Mutex::new(None),
+                    evidence: RecoveryEffectEvidence {
+                        effects,
+                        effects_total: 2,
+                        effect_overflow: 1,
+                    },
+                }),
+                control: Arc::clone(&control),
+                id,
+                observer,
+            })
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let report = loop {
+            if let Some(report) = OperationControl::snapshot(&*control).settlement {
+                break report;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "recovery report should be published"
+            );
+            std::thread::yield_now();
+        };
+
+        assert_eq!(report.effects.len(), 64);
+        assert_eq!(report.effects_total, 71);
+        assert_eq!(report.effect_overflow, 7);
+        assert_eq!(report.recovery_count, 1);
+        assert!(
+            report
+                .effects
+                .iter()
+                .all(|effect| effect.operation_id == id)
+        );
     }
 }
