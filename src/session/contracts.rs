@@ -38,6 +38,9 @@ pub trait SessionBridge: Send + Sync {
         false
     }
 
+    /// Records a child-side stdin BrokenPipe observed by the process writer.
+    fn record_stdin_broken_pipe(&self) {}
+
     /// Reports whether the aggregate output byte budget requested termination.
     fn output_budget_exceeded(&self) -> bool {
         false
