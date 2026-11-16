@@ -4,7 +4,7 @@ use qubit_operation::OperationScope;
 use std::fs::File;
 use std::io;
 
-use super::identity::validate_files;
+use super::identity::{validate_files, validate_tee_paths};
 use super::prepared_files::{register_files, truncate_sinks};
 
 impl ResourceInput for CommandResourceRunOptions {
@@ -29,7 +29,20 @@ impl ResourceInput for CommandResourceRunOptions {
             all.push(("stderr", file));
         }
         let files: Vec<(&'static str, &File)> = all;
-        if let Err(error) = validate_files(&files) {
+        let tee_paths: Vec<(&'static str, &std::path::Path)> = [
+            options
+                .configured_stdout_file()
+                .map(|path| ("stdout", path)),
+            options
+                .configured_stderr_file()
+                .map(|path| ("stderr", path)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if let Err(error) =
+            validate_files(&files).and_then(|()| validate_tee_paths(&files, &tee_paths))
+        {
             return Err(failure(
                 error,
                 None,
@@ -68,7 +81,7 @@ impl ResourceInput for CommandResourceRunOptions {
                 return Err(failure(error, recovered, Some(raw_input)));
             }
         };
-        if let Err(error) = truncate_sinks(&prepared) {
+        if let Err(error) = truncate_sinks(&prepared, scope) {
             return Err(failure(error, Some(prepared), None));
         }
         Ok(prepared)
@@ -110,5 +123,59 @@ fn restore_input(
 fn _policy_is_exhaustive(policy: FileSinkPolicy) {
     match policy {
         FileSinkPolicy::Preserve | FileSinkPolicy::Truncate => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use qubit_operation::{GroupOptions, ManagerOptions, OperationManager, OperationOptions};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn helper_resource_reference_delays_scope_settlement_until_dropped() {
+        let manager =
+            OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let group = manager
+            .group(GroupOptions { capacity: 2 })
+            .expect("group should start");
+        let (send, receive) = mpsc::sync_channel(1);
+        let input = tempfile::tempfile().expect("stdin file should be created");
+        let mut handle = group
+            .submit(OperationOptions::default(), move |scope| {
+                let prepared = Box::new(CommandResourceRunOptions::new().stdin_file(input))
+                    .prepare_files(&scope)
+                    .expect("stdin should be registered");
+                send.send(
+                    prepared
+                        .stdin
+                        .as_ref()
+                        .expect("stdin owner should exist")
+                        .clone(),
+                )
+                .expect("test should receive retained helper reference");
+                Ok::<_, ()>(())
+            })
+            .expect("operation should be accepted");
+        let helper_reference = receive
+            .recv_timeout(Duration::from_secs(5))
+            .expect("helper reference should arrive");
+        assert!(matches!(
+            handle.wait_outcome(),
+            Ok(qubit_operation::OperationOutcome::Succeeded(()))
+        ));
+        let pending = handle
+            .wait_settlement_for(Duration::from_millis(20))
+            .expect("settlement observation should work");
+        assert!(matches!(
+            pending,
+            qubit_operation::SettlementWait::Pending(_)
+        ));
+        drop(helper_reference);
+        let settled = handle
+            .wait_settlement_for(Duration::from_secs(5))
+            .expect("settlement observation should work");
+        assert!(matches!(settled, qubit_operation::SettlementWait::Ready(_)));
     }
 }

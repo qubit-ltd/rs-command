@@ -1,2 +1,6 @@
-//! File ownership is kept in `ResourceRef`s until the last helper drops its handle.
-//! Cleanup confirmation is published by the lifecycle adapter after those handles drain.
+//! Owned files use the operation scope's default resource lifecycle.
+//!
+//! `OperationScope::reserve_resource` reserves cleanup capacity before preparation has
+//! side effects, and `ResourceReservation::commit` registers each `Mutex<File>` owner.
+//! A helper clones the corresponding `ResourceRef`; the manager cannot settle the
+//! resource until the prepared owner and every helper reference have been dropped.

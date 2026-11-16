@@ -79,20 +79,54 @@ fn build(
     )
 }
 
-pub(super) fn truncate_sinks(prepared: &PreparedFiles) -> io::Result<()> {
-    for sink in [prepared.stdout.as_ref(), prepared.stderr.as_ref()]
-        .into_iter()
-        .flatten()
-    {
+pub(super) fn truncate_sinks(prepared: &PreparedFiles, scope: &OperationScope) -> io::Result<()> {
+    for (name, sink) in [
+        ("stdout", prepared.stdout.as_ref()),
+        ("stderr", prepared.stderr.as_ref()),
+    ] {
+        let Some(sink) = sink else { continue };
         if sink.policy == FileSinkPolicy::Truncate {
             let mut file = sink
                 .file
                 .lock()
                 .map_err(|error| io::Error::other(error.to_string()))?;
-            file.set_len(0)?;
+            if let Err(error) = file.set_len(0) {
+                record_effect(
+                    scope,
+                    sink.file.id(),
+                    qubit_operation::EffectFact::Unknown,
+                    format!("{name} sink truncation could not be confirmed"),
+                );
+                return Err(error);
+            }
+            record_effect(
+                scope,
+                sink.file.id(),
+                qubit_operation::EffectFact::Known,
+                format!("{name} sink truncated"),
+            );
             use std::io::Seek;
             file.rewind()?;
         }
     }
     Ok(())
+}
+
+fn record_effect(
+    scope: &OperationScope,
+    resource_id: qubit_operation::ResourceId,
+    fact: qubit_operation::EffectFact,
+    description: String,
+) {
+    let record = qubit_operation::EffectRecord {
+        operation_id: scope.id(),
+        resource_id: Some(resource_id),
+        fact,
+        description: qubit_operation::DiagnosticSummary::new(&description),
+    };
+    if let Err(error) = scope.record_effect(record) {
+        log::warn!(
+            "file side-effect evidence was not retained ({error:?}); file owner remains registered"
+        );
+    }
 }

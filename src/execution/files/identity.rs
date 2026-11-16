@@ -26,6 +26,52 @@ pub(super) fn validate_files(files: &[(&'static str, &File)]) -> io::Result<()> 
     Ok(())
 }
 
+/// Rejects collisions between owned handles and configured legacy tee paths.
+pub(super) fn validate_tee_paths(
+    files: &[(&'static str, &File)],
+    tee_paths: &[(&'static str, &Path)],
+) -> io::Result<()> {
+    let owned = files
+        .iter()
+        .map(|(name, file)| {
+            let identity = Handle::from_file(file.try_clone()?)?;
+            Ok((*name, identity))
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    for (tee_name, path) in tee_paths {
+        match std::fs::metadata(path) {
+            Ok(metadata) if !metadata.file_type().is_file() => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{tee_name} tee must refer to a regular file"),
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+            _ => {}
+        }
+        let tee_identity = Handle::from_file(open_tee_identity(path)?)?;
+        if owned.iter().any(|(_, identity)| identity == &tee_identity) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{tee_name} tee conflicts with an owned file"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn open_tee_identity(path: &Path) -> io::Result<File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    options.open(path)
+}
+
 /// Resolves a relative path against a captured working directory lexically.
 #[allow(dead_code)]
 pub(super) fn absolute_lexical_path(base: &Path, path: &Path) -> std::path::PathBuf {
