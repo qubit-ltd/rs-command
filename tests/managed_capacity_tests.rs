@@ -16,6 +16,18 @@ struct Stop;
 impl StopPort for Stop {
     fn request_stop(&self, _: StopReason) {}
 }
+struct RecordingStop(Arc<std::sync::Mutex<Vec<StopReason>>>);
+impl StopPort for RecordingStop {
+    fn request_stop(&self, reason: StopReason) {
+        self.0.lock().unwrap().push(reason);
+    }
+}
+struct ChannelStop(mpsc::Sender<StopReason>);
+impl StopPort for ChannelStop {
+    fn request_stop(&self, reason: StopReason) {
+        let _ = self.0.send(reason);
+    }
+}
 struct Counter(AtomicUsize);
 impl Wake for Counter {
     fn wake(self: Arc<Self>) {
@@ -186,30 +198,79 @@ fn enqueue_wakes_blocked_worker_and_close_drains() {
     thread.join().unwrap();
 }
 #[test]
-fn fixed_deadline_rejects_and_expired_queued_job_never_runs() {
+fn fixed_deadline_rejects_and_expired_accepted_job_dispatches_terminal_completion() {
     let s = BoundedScheduler::new(config(1, 1, 1, 8)).unwrap();
+    let scheduler_port: &dyn Scheduler = &s;
     assert_eq!(
-        s.try_reserve_until(0, Some(Instant::now())).unwrap_err(),
+        scheduler_port
+            .try_reserve_until(0, Some(Instant::now()))
+            .unwrap_err(),
         CapacityFailure::DeadlineExpired
     );
     let active = s.try_reserve(0).unwrap();
-    let p = s
+    let p = scheduler_port
         .try_reserve_until(0, Some(Instant::now() + Duration::from_millis(20)))
         .unwrap();
     let ran = Arc::new(AtomicUsize::new(0));
     let count = ran.clone();
+    let stops = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let run_stops = stops.clone();
+    let stop_port = Arc::new(RecordingStop(stops.clone()));
     s.enqueue(
-        job(move |_| {
-            count.fetch_add(1, Ordering::SeqCst);
-        }),
+        ScheduledJob {
+            run: Box::new(move |_| {
+                assert!(run_stops.lock().unwrap().contains(&StopReason::Timeout));
+                count.fetch_add(1, Ordering::SeqCst);
+            }),
+            stop: stop_port,
+        },
         p,
     )
     .unwrap();
     drop(active);
     std::thread::sleep(Duration::from_millis(30));
-    assert!(s.try_next().is_none());
-    assert_eq!(ran.load(Ordering::SeqCst), 0);
-    assert_eq!(s.snapshot().queued, 0);
+    let (expired_job, permit) = s.try_next().unwrap();
+    (expired_job.run)(permit);
+    assert_eq!(stops.lock().unwrap().as_slice(), &[StopReason::Timeout]);
+    assert_eq!(ran.load(Ordering::SeqCst), 1);
+    assert_eq!((s.snapshot().active, s.snapshot().queued), (0, 0));
+}
+
+#[test]
+fn wait_next_requests_timeout_then_dispatches_completion_when_slot_opens() {
+    let s = BoundedScheduler::new(config(1, 1, 1, 8)).unwrap();
+    let active = s.try_reserve(0).unwrap();
+    let scheduler_port: &dyn Scheduler = &s;
+    let p = scheduler_port
+        .try_reserve_until(0, Some(Instant::now() + Duration::from_millis(20)))
+        .unwrap();
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    s.enqueue(
+        ScheduledJob {
+            run: Box::new(move |_| done_tx.send("terminal completion").unwrap()),
+            stop: Arc::new(ChannelStop(stop_tx)),
+        },
+        p,
+    )
+    .unwrap();
+    let worker = s.clone();
+    let thread = std::thread::spawn(move || {
+        let (job, permit) = worker.wait_next().unwrap();
+        (job.run)(permit);
+    });
+
+    assert_eq!(
+        stop_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        StopReason::Timeout
+    );
+    assert!(done_rx.try_recv().is_err());
+    drop(active);
+    assert_eq!(
+        done_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        "terminal completion"
+    );
+    thread.join().unwrap();
 }
 #[test]
 fn close_after_reserve_returns_job_and_permit() {
@@ -222,6 +283,25 @@ fn close_after_reserve_returns_job_and_permit() {
     drop(f);
     assert_eq!(s.snapshot().input_bytes, 0);
     assert_eq!(s.try_reserve(0).unwrap_err(), CapacityFailure::Closed);
+}
+
+#[test]
+fn close_drains_already_accepted_active_and_queued_jobs() {
+    let s = BoundedScheduler::new(config(1, 1, 1, 8)).unwrap();
+    let a = s.try_reserve(0).unwrap();
+    let b = s.try_reserve(0).unwrap();
+    let (tx, rx) = mpsc::channel();
+    let tx_a = tx.clone();
+    s.enqueue(job(move |_| tx_a.send('A').unwrap()), a).unwrap();
+    s.enqueue(job(move |_| tx.send('B').unwrap()), b).unwrap();
+    s.close_admission();
+
+    let (job_a, permit_a) = s.wait_next().unwrap();
+    (job_a.run)(permit_a);
+    let (job_b, permit_b) = s.wait_next().unwrap();
+    (job_b.run)(permit_b);
+    assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec!['A', 'B']);
+    assert!(s.wait_next().is_none());
 }
 
 #[test]

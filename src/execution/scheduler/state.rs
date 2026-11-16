@@ -9,6 +9,7 @@ use crate::execution::{
         CapacityFailure, EnqueueFailure, Reservation, ReservationLease, ScheduledJob, Scheduler,
     },
 };
+use qubit_operation::StopReason;
 use std::{
     collections::HashMap,
     sync::{
@@ -233,20 +234,21 @@ impl BoundedScheduler {
     pub fn try_next(&self) -> Option<(ScheduledJob, Reservation)> {
         loop {
             let mut s = self.0.state.lock().unwrap();
-            let expired = s.workers.jobs.iter().position(|q| {
-                s.records
-                    .get(&q.permit.token)
-                    .and_then(|r| r.deadline)
-                    .is_some_and(|d| Instant::now() >= d)
-            });
-            if let Some(pos) = expired {
-                let q = s.workers.jobs.remove(pos);
+            if let Some(stop) = request_expired_stop(&mut s) {
                 drop(s);
-                drop(q);
+                stop.request_stop(StopReason::Timeout);
                 continue;
             }
             let pos = next_job_position(&s, &self.0.config);
             let mut q = s.workers.jobs.remove(pos?)?;
+            if is_expired(&s, &q) && !q.timeout_requested {
+                q.timeout_requested = true;
+                let stop = Arc::clone(&q.job.stop);
+                s.workers.jobs.insert(pos?, q);
+                drop(s);
+                stop.request_stop(StopReason::Timeout);
+                continue;
+            }
             promote(&mut s, &mut q);
             let wakes = s.waiters.wake_all();
             drop(s);
@@ -315,9 +317,7 @@ fn promote_queued(s: &mut State, config: &CommandExecutionConfig) {
         let next = s
             .records
             .iter()
-            .filter(|(_, r)| {
-                r.kind == Kind::Queued && !r.deadline.is_some_and(|d| Instant::now() >= d)
-            })
+            .filter(|(_, r)| r.kind == Kind::Queued)
             .map(|(token, _)| *token)
             .min();
         let Some(token) = next else { break };
@@ -327,6 +327,22 @@ fn promote_queued(s: &mut State, config: &CommandExecutionConfig) {
             s.active += 1;
         }
     }
+}
+fn is_expired(s: &State, q: &Queued) -> bool {
+    s.records
+        .get(&q.permit.token)
+        .and_then(|r| r.deadline)
+        .is_some_and(|deadline| Instant::now() >= deadline)
+}
+fn request_expired_stop(s: &mut State) -> Option<Arc<dyn crate::execution::StopPort>> {
+    let pos = s
+        .workers
+        .jobs
+        .iter()
+        .position(|q| !q.timeout_requested && is_expired(s, q))?;
+    let q = s.workers.jobs.get_mut(pos)?;
+    q.timeout_requested = true;
+    Some(Arc::clone(&q.job.stop))
 }
 fn notify_capacity(shared: &Arc<Shared>, mut s: std::sync::MutexGuard<'_, State>) {
     let wakes = s.waiters.wake_all();
@@ -347,10 +363,9 @@ fn retain_lease(shared: &Arc<Shared>, token: u64) -> ReservationLease {
 }
 fn next_job_position(s: &State, c: &CommandExecutionConfig) -> Option<usize> {
     s.workers.jobs.iter().position(|q| {
-        s.records.get(&q.permit.token).is_some_and(|r| {
-            !r.deadline.is_some_and(|d| Instant::now() >= d)
-                && (r.kind == Kind::Active || s.active < c.max_active)
-        })
+        s.records
+            .get(&q.permit.token)
+            .is_some_and(|r| r.kind == Kind::Active || s.active < c.max_active)
     })
 }
 pub(super) fn deadline_wait_duration(
@@ -372,6 +387,13 @@ fn promote(s: &mut State, q: &mut Queued) {
 impl Scheduler for BoundedScheduler {
     fn try_reserve(&self, input_bytes: usize) -> Result<Reservation, CapacityFailure> {
         self.reserve(input_bytes, None)
+    }
+    fn try_reserve_until(
+        &self,
+        input_bytes: usize,
+        deadline: Option<Instant>,
+    ) -> Result<Reservation, CapacityFailure> {
+        BoundedScheduler::try_reserve_until(self, input_bytes, deadline)
     }
     fn enqueue(&self, job: ScheduledJob, permit: Reservation) -> Result<(), EnqueueFailure> {
         let mut s = self.0.state.lock().unwrap();
@@ -406,7 +428,11 @@ impl Scheduler for BoundedScheduler {
                 permit,
             });
         }
-        s.workers.jobs.push_back(Queued { job, permit });
+        s.workers.jobs.push_back(Queued {
+            job,
+            permit,
+            timeout_requested: false,
+        });
         drop(s);
         self.0.changed.notify_all();
         Ok(())
@@ -414,21 +440,23 @@ impl Scheduler for BoundedScheduler {
     fn wait_next(&self) -> Option<(ScheduledJob, Reservation)> {
         let mut s = self.0.state.lock().unwrap();
         loop {
-            let expired_pos = s.workers.jobs.iter().position(|q| {
-                s.records
-                    .get(&q.permit.token)
-                    .and_then(|r| r.deadline)
-                    .is_some_and(|d| Instant::now() >= d)
-            });
-            if let Some(pos) = expired_pos {
-                let q = s.workers.jobs.remove(pos);
+            if let Some(stop) = request_expired_stop(&mut s) {
                 drop(s);
-                drop(q);
+                stop.request_stop(StopReason::Timeout);
                 s = self.0.state.lock().unwrap();
                 continue;
             }
             if let Some(pos) = next_job_position(&s, &self.0.config) {
                 let mut q = s.workers.jobs.remove(pos)?;
+                if is_expired(&s, &q) && !q.timeout_requested {
+                    q.timeout_requested = true;
+                    let stop = Arc::clone(&q.job.stop);
+                    s.workers.jobs.insert(pos, q);
+                    drop(s);
+                    stop.request_stop(StopReason::Timeout);
+                    s = self.0.state.lock().unwrap();
+                    continue;
+                }
                 promote(&mut s, &mut q);
                 let wakes = s.waiters.wake_all();
                 drop(s);
@@ -446,6 +474,7 @@ impl Scheduler for BoundedScheduler {
                 .jobs
                 .iter()
                 .filter_map(|q| s.records.get(&q.permit.token).and_then(|r| r.deadline))
+                .filter(|deadline| *deadline > Instant::now())
                 .min();
             if let Some(d) = next_deadline {
                 let now = Instant::now();
