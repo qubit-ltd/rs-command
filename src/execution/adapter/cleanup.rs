@@ -1,6 +1,6 @@
 //! Single bounded worker retains unresolved cleanup owners through handoff.
 use super::CommandControl;
-use crate::execution::contracts::{RecoveryOwner, RecoveryRetryError};
+use crate::execution::contracts::{RecoveryEffectEvidence, RecoveryOwner, RecoveryRetryError};
 use qubit_operation::{OperationId, SettlementReport, SettlementStatus};
 use std::sync::{
     Arc,
@@ -54,6 +54,7 @@ pub(crate) fn start_recovery_worker(capacity: usize) -> Result<RecoverySender, s
 fn recovery_loop(rx: Receiver<RecoveryItem>) {
     while let Ok(item) = rx.recv() {
         let summary = item.owner.summary();
+        let effect_evidence = item.owner.effect_evidence(item.id);
         let mut backoff = std::time::Duration::from_millis(25);
         loop {
             match item.owner.retry_cleanup() {
@@ -69,7 +70,7 @@ fn recovery_loop(rx: Receiver<RecoveryItem>) {
         let _ = item.control.release();
         let _ = item
             .control
-            .settlement(Arc::new(recovery_settlement(item.id)));
+            .settlement(Arc::new(recovery_settlement(item.id, effect_evidence)));
         let observer = item.observer.wait();
         loop {
             match observer.wait_settlement() {
@@ -83,7 +84,10 @@ fn recovery_loop(rx: Receiver<RecoveryItem>) {
         }
     }
 }
-fn recovery_settlement(id: OperationId) -> SettlementReport {
+fn recovery_settlement(
+    id: OperationId,
+    effect_evidence: RecoveryEffectEvidence,
+) -> SettlementReport {
     SettlementReport {
         operation_id: id,
         status: SettlementStatus::RecoveryRequired,
@@ -105,9 +109,9 @@ fn recovery_settlement(id: OperationId) -> SettlementReport {
         recoveries: Arc::from([]),
         recoveries_total: 0,
         recoveries_truncated: false,
-        effects: Arc::from([]),
-        effects_total: 0,
-        effect_overflow: 0,
+        effects: Arc::from(effect_evidence.effects),
+        effects_total: effect_evidence.effects_total,
+        effect_overflow: effect_evidence.effect_overflow,
         external_settlement: None,
     }
 }
@@ -116,8 +120,13 @@ fn recovery_settlement(id: OperationId) -> SettlementReport {
 mod tests {
     use super::{OperationObserverSlot, RecoveryItem, start_recovery_worker};
     use crate::execution::adapter::CommandControl;
-    use crate::execution::contracts::{RecoveryOwner, RecoveryRetryError, ReservationLease};
-    use qubit_operation::{OperationControl, OperationManager, OperationOptions, OperationOutcome};
+    use crate::execution::contracts::{
+        RecoveryEffectEvidence, RecoveryOwner, RecoveryRetryError, ReservationLease,
+    };
+    use qubit_operation::{
+        DiagnosticSummary, EffectFact, EffectRecord, OperationControl, OperationManager,
+        OperationOptions, OperationOutcome,
+    };
     use std::sync::{Arc, Condvar, Mutex, mpsc};
     use std::time::{Duration, Instant};
 
@@ -142,6 +151,21 @@ mod tests {
     impl RecoveryOwner for CompleteOwner {
         fn summary(&self) -> String {
             "test owner".to_owned()
+        }
+        fn effect_evidence(
+            &self,
+            operation_id: qubit_operation::OperationId,
+        ) -> RecoveryEffectEvidence {
+            RecoveryEffectEvidence {
+                effects: vec![EffectRecord {
+                    operation_id,
+                    resource_id: None,
+                    fact: EffectFact::Unknown,
+                    description: DiagnosticSummary::new("owner-held effect evidence"),
+                }],
+                effects_total: 3,
+                effect_overflow: 2,
+            }
         }
         fn retry_cleanup(&self) -> Result<(), RecoveryRetryError> {
             Err(RecoveryRetryError::OwnerAlreadyConsumed)
@@ -204,7 +228,20 @@ mod tests {
             std::thread::yield_now();
         }
         assert!(OperationControl::snapshot(&*control).input_released);
-        assert!(OperationControl::snapshot(&*control).settlement.is_some());
+        let external_report = OperationControl::snapshot(&*control)
+            .settlement
+            .expect("recovery worker publishes external settlement");
+        assert_eq!(external_report.recovery_count, 1);
+        assert_eq!(external_report.effects.len(), 1);
+        assert_eq!(external_report.effects_total, 3);
+        assert_eq!(external_report.effect_overflow, 2);
+        assert_eq!(external_report.effects[0].operation_id, id);
+        assert_eq!(external_report.effects[0].resource_id, None);
+        assert_eq!(external_report.effects[0].fact, EffectFact::Unknown);
+        assert_eq!(
+            external_report.effects[0].description.as_str(),
+            "owner-held effect evidence"
+        );
         assert!(lease_dropped_rx.try_recv().is_err());
         assert!(matches!(
             operation.wait_settlement_for(Duration::ZERO).unwrap(),

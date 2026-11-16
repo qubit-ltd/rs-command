@@ -483,6 +483,34 @@ mod activation_failure_tests {
     }
 
     #[test]
+    fn accepted_activation_failure_settles_and_cannot_bind_in_another_manager() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let prepared = make_state(Arc::clone(&scheduler), permit);
+        scheduler.close_admission();
+
+        let first_manager = OperationManager::new(Default::default()).unwrap();
+        let mut handle = first_manager
+            .try_submit_external(OperationOptions::default(), Arc::clone(&prepared))
+            .unwrap();
+        let outcome = handle.wait_outcome().unwrap();
+        assert!(matches!(outcome, OperationOutcome::ExecutionFailed(_)));
+        let report = handle.wait_settlement().unwrap();
+        assert_eq!(report.status, qubit_operation::SettlementStatus::Released);
+        assert_eq!(report.recovery_count, 0);
+
+        let second_manager = OperationManager::new(Default::default()).unwrap();
+        match second_manager.try_submit_external(OperationOptions::default(), Arc::clone(&prepared))
+        {
+            Err(error) => assert_eq!(
+                error.reason(),
+                qubit_operation::AdmissionError::AlreadyBound
+            ),
+            Ok(_) => panic!("a prepared adapter must not bind through another manager"),
+        }
+    }
+
+    #[test]
     fn bind_failure_becomes_execution_failure_without_activation() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let prepared = Arc::new(FailedBinder(
