@@ -12,3 +12,4 @@ pub use request::{ActivatedRequest, ExecutionSnapshot, IoPathSnapshot, Request, 
 pub use scheduler::{
     CapacityFailure, EnqueueFailure, Reservation, ScheduledJob, Scheduler, StopPort,
 };
+pub(crate) use scheduler::ReservationLease;

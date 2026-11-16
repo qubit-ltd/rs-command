@@ -16,6 +16,7 @@ pub struct Reservation {
     pub(crate) scheduler_id: u64,
     pub(crate) token: u64,
     release: Option<Box<dyn FnOnce(u64) + Send + 'static>>,
+    retain: Arc<dyn Fn(u64) -> ReservationLease + Send + Sync + 'static>,
 }
 impl Reservation {
     /// Creates a uniquely owned permit with its scheduler's nonblocking release hook.
@@ -25,17 +26,24 @@ impl Reservation {
         scheduler_id: u64,
         token: u64,
         release: impl FnOnce(u64) + Send + 'static,
+        retain: impl Fn(u64) -> ReservationLease + Send + Sync + 'static,
     ) -> Self {
         Self {
             scheduler_id,
             token,
             release: Some(Box::new(release)),
+            retain: Arc::new(retain),
         }
     }
 
     /// Reports whether this permit was created by the given scheduler instance.
     pub(crate) fn belongs_to(&self, scheduler_id: u64) -> bool {
         self.scheduler_id == scheduler_id
+    }
+
+    /// Retains active capacity for one process/helper user beyond the permit's lifetime.
+    pub(crate) fn retain(&self) -> ReservationLease {
+        (self.retain)(self.token)
     }
 }
 impl fmt::Debug for Reservation {
@@ -46,6 +54,34 @@ impl fmt::Debug for Reservation {
             .field("token", &self.token)
             .field("active", &self.release.is_some())
             .finish()
+    }
+}
+
+/// Additional active-capacity ownership retained by a process/helper user.
+pub(crate) struct ReservationLease {
+    release: Option<Box<dyn FnOnce() + Send + 'static>>,
+}
+impl ReservationLease {
+    /// Creates a unique lease whose drop reports the user's final capacity release.
+    pub(crate) fn new(release: impl FnOnce() + Send + 'static) -> Self {
+        Self {
+            release: Some(Box::new(release)),
+        }
+    }
+}
+impl fmt::Debug for ReservationLease {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReservationLease")
+            .field("active", &self.release.is_some())
+            .finish()
+    }
+}
+impl Drop for ReservationLease {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            release();
+        }
     }
 }
 impl Drop for Reservation {
@@ -92,7 +128,7 @@ pub trait Scheduler: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::Reservation;
+    use super::{Reservation, ReservationLease};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -100,10 +136,15 @@ mod tests {
     fn dropping_reservation_releases_its_token_once() {
         let releases = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&releases);
-        let permit = Reservation::new(7, 41, move |token| {
-            assert_eq!(token, 41);
-            observed.fetch_add(1, Ordering::SeqCst);
-        });
+        let permit = Reservation::new(
+            7,
+            41,
+            move |token| {
+                assert_eq!(token, 41);
+                observed.fetch_add(1, Ordering::SeqCst);
+            },
+            |_| ReservationLease::new(|| {}),
+        );
         assert!(permit.belongs_to(7));
         assert!(!permit.belongs_to(8));
         assert_eq!(releases.load(Ordering::SeqCst), 0);
@@ -111,5 +152,30 @@ mod tests {
         assert_eq!(releases.load(Ordering::SeqCst), 0);
         drop(activated_owner);
         assert_eq!(releases.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn retained_lease_outlives_reservation() {
+        let releases = Arc::new(AtomicUsize::new(0));
+        let owner_release = Arc::clone(&releases);
+        let lease_release = Arc::clone(&releases);
+        let permit = Reservation::new(
+            7,
+            42,
+            move |_| {
+                owner_release.fetch_add(1, Ordering::SeqCst);
+            },
+            move |_| {
+                let lease_release = Arc::clone(&lease_release);
+                ReservationLease::new(move || {
+                    lease_release.fetch_add(1, Ordering::SeqCst);
+                })
+            },
+        );
+        let helper = permit.retain();
+        drop(permit);
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
+        drop(helper);
+        assert_eq!(releases.load(Ordering::SeqCst), 2);
     }
 }
