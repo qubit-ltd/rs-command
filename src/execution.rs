@@ -162,6 +162,20 @@ pub trait CommandExecutorApi {
     > + Send
     + 'a;
     #[cfg(feature = "async")]
+    fn submit_async(
+        &self,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandRunOptions,
+    ) -> Result<AsyncCommandOperation, CommandSubmitFailure>;
+    #[cfg(feature = "async")]
+    fn submit_async_resources(
+        &self,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandResourceRunOptions,
+    ) -> Result<AsyncCommandOperation, CommandResourceSubmitFailure>;
+    #[cfg(feature = "async")]
     fn submit_async_in(
         &self,
         scope: &qubit_operation::OperationScope,
