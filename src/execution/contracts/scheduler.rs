@@ -8,6 +8,7 @@ pub enum CapacityFailure {
     ActiveFull,
     QueueFull,
     InputBytesExceeded,
+    DeadlineExpired,
     Closed,
 }
 /// Exclusive scheduler permit. Its one-shot release callback runs on drop, including
