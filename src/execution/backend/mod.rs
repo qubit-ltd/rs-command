@@ -6,6 +6,6 @@ mod start_gate;
 
 pub(crate) use process_backend::ProcessBackend;
 pub(crate) use process_backend::{ManagedFileSet, ManagedSink};
-pub(crate) use reaper::{Reaper, ReaperOwner};
+pub(crate) use reaper::{Reaper, ReaperObserver, ReaperOwner};
 pub(crate) use resource_owner::ResourceOwner;
 pub(crate) use start_gate::{StartGate, StartPermit};

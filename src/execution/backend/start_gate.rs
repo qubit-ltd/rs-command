@@ -15,6 +15,7 @@ struct State {
     stopped: bool,
     authorized: bool,
     external_cancellation: Option<CommandCancellation>,
+    reason: Option<StopReason>,
 }
 
 #[derive(Debug)]
@@ -24,6 +25,15 @@ impl StartGate {
     /// Returns a permit only when no stop request has won the start race.
     pub(crate) fn authorize(&self) -> Option<StartPermit> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state
+            .external_cancellation
+            .as_ref()
+            .is_some_and(CommandCancellation::is_cancelled)
+        {
+            state.stopped = true;
+            state.reason = Some(StopReason::UserCancelled);
+            self.cancellation.cancel();
+        }
         if state.stopped || state.authorized {
             return None;
         }
@@ -32,10 +42,11 @@ impl StartGate {
     }
 
     /// Records stop without waiting for the authorized system call to finish.
-    pub(crate) fn request_stop(&self) -> bool {
+    pub(crate) fn request_stop(&self, reason: StopReason) -> bool {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let won_before_start = !state.authorized;
         state.stopped = true;
+        state.reason.get_or_insert(reason);
         self.cancellation.cancel();
         if let Some(cancellation) = &state.external_cancellation {
             cancellation.cancel();
@@ -45,6 +56,17 @@ impl StartGate {
 
     pub(crate) fn stop_requested(&self) -> bool {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).stopped
+    }
+
+    pub(crate) fn stop_reason(&self) -> Option<StopReason> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).reason
+    }
+
+    pub(crate) fn authorized(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .authorized
     }
 }
 
@@ -61,13 +83,22 @@ impl StartGate {
             }
         } else {
             state.external_cancellation = cancellation;
+            if state
+                .external_cancellation
+                .as_ref()
+                .is_some_and(CommandCancellation::is_cancelled)
+            {
+                state.stopped = true;
+                state.reason = Some(StopReason::UserCancelled);
+                self.cancellation.cancel();
+            }
         }
     }
 }
 
 impl StopPort for StartGate {
-    fn request_stop(&self, _reason: StopReason) {
-        let _ = Self::request_stop(self);
+    fn request_stop(&self, reason: StopReason) {
+        let _ = Self::request_stop(self, reason);
     }
 }
 
@@ -75,6 +106,7 @@ impl StopPort for StartGate {
 mod tests {
     use super::StartGate;
     use crate::{Command, CommandErrorKind, CommandRunOptions, CommandRunner};
+    use qubit_operation::StopReason;
     use std::fs;
     use std::sync::Arc;
     use std::thread;
@@ -83,7 +115,7 @@ mod tests {
     #[test]
     fn stop_wins_start_gate() {
         let gate = StartGate::default();
-        assert!(gate.request_stop());
+        assert!(gate.request_stop(StopReason::UserCancelled));
         assert!(gate.authorize().is_none());
     }
 
@@ -91,8 +123,27 @@ mod tests {
     fn side_effect_authorization_wins_stop_gate() {
         let gate = StartGate::default();
         assert!(gate.authorize().is_some());
-        assert!(!gate.request_stop());
+        assert!(!gate.request_stop(StopReason::UserCancelled));
         assert!(gate.stop_requested());
+    }
+
+    #[test]
+    fn independent_activations_have_independent_stop_gates() {
+        let first = StartGate::default();
+        let second = StartGate::default();
+        first.request_stop(StopReason::UserCancelled);
+        assert!(first.authorize().is_none());
+        assert!(second.authorize().is_some());
+    }
+
+    #[test]
+    fn external_cancel_before_authorization_prevents_start() {
+        let gate = StartGate::default();
+        let cancellation = crate::CommandCancellation::new();
+        gate.attach_external_cancellation(Some(cancellation.clone()));
+        cancellation.cancel();
+        assert!(gate.authorize().is_none());
+        assert_eq!(gate.stop_reason(), Some(StopReason::UserCancelled));
     }
 
     #[cfg(unix)]
@@ -104,7 +155,7 @@ mod tests {
         let marker_arg = marker.to_string_lossy().into_owned();
         fs::write(&tee, b"keep").unwrap();
         let gate = StartGate::default();
-        gate.request_stop();
+        gate.request_stop(StopReason::UserCancelled);
         let result = CommandRunner::without_timeout().run_with_tree_policy(
             Command::new("sh")
                 .arg("-c")
@@ -116,6 +167,8 @@ mod tests {
                 .tee_stdout_to_file(&tee),
             Some(crate::ProcessTreePolicy::Managed),
             Some(&gate),
+            None,
+            None,
             None,
         );
         assert_eq!(
@@ -145,6 +198,8 @@ mod tests {
                 Some(crate::ProcessTreePolicy::Managed),
                 Some(&run_gate),
                 None,
+                None,
+                None,
             )
         });
         let started = Instant::now();
@@ -156,7 +211,7 @@ mod tests {
             ready_path.exists(),
             "child did not reach its readiness marker"
         );
-        gate.request_stop();
+        gate.request_stop(StopReason::UserCancelled);
         let result = runner.join().expect("runner thread should join");
         assert_eq!(result.unwrap_err().kind(), CommandErrorKind::Cancelled);
     }

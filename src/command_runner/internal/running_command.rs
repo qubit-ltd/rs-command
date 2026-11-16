@@ -25,6 +25,8 @@ use super::wait_policy::next_sleep;
 use crate::CommandCancellation;
 use crate::CommandCleanupFailure;
 use crate::CommandError;
+use crate::execution::backend::{Reaper, ReaperObserver, ReaperOwner};
+use crate::execution::contracts::ReservationLease;
 
 /// Maximum delay before a cancellation-aware wait observes cancellation.
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -46,6 +48,8 @@ pub(in crate::command_runner) struct RunningCommand {
     cancellation_token: Option<CommandCancellation>,
     /// Optional byte budget shared by this command's stdout and stderr.
     total_budget: Option<Arc<TotalOutputBudget>>,
+    capacity_lease: Option<ReservationLease>,
+    reaper_observer: Option<ReaperObserver>,
 }
 
 impl RunningCommand {
@@ -75,6 +79,30 @@ impl RunningCommand {
         cancellation_token: Option<CommandCancellation>,
         total_budget: Option<Arc<TotalOutputBudget>>,
     ) -> Self {
+        Self::new_with_reaper(
+            command_text,
+            child_process,
+            io,
+            started_at,
+            timer,
+            cancellation_token,
+            total_budget,
+            None,
+            None,
+        )
+    }
+
+    pub(in crate::command_runner) fn new_with_reaper(
+        command_text: String,
+        child_process: ManagedChildProcess,
+        io: CommandIo,
+        started_at: MonotonicInstant,
+        timer: Arc<dyn Timer>,
+        cancellation_token: Option<CommandCancellation>,
+        total_budget: Option<Arc<TotalOutputBudget>>,
+        capacity_lease: Option<ReservationLease>,
+        reaper_observer: Option<ReaperObserver>,
+    ) -> Self {
         Self {
             command_text,
             child_process,
@@ -83,6 +111,8 @@ impl RunningCommand {
             timer,
             cancellation_token,
             total_budget,
+            capacity_lease,
+            reaper_observer,
         }
     }
 
@@ -304,7 +334,7 @@ impl RunningCommand {
                     {
                         error = error.with_captured_output(budget.captured_output());
                     }
-                    return Err(self.finish_without_status(error));
+                    return Err(self.handoff_uncertain_owner(error));
                 }
             };
         let status = observed_status.unwrap_or(outcome.status);
@@ -371,6 +401,56 @@ impl RunningCommand {
             .into_primary_error(finished.command_text, Some(Box::new(finished.output)))
             .with_cleanup_failures(outcome.cleanup_failures)
             .with_cleanup_failures(io_cleanup_failures))
+    }
+
+    fn handoff_uncertain_owner(mut self, error: CommandError) -> CommandError {
+        let command_text = self.command_text.clone();
+        let mut child = self.child_process;
+        let io = self.io;
+        io.request_cancel();
+        let lease = self.capacity_lease.take();
+        let observer = self.reaper_observer.take();
+        if let Some(observer) = &observer {
+            observer.mark_pending();
+        }
+        let owner = ReaperOwner::new(move || {
+            loop {
+                match ProcessTerminator::new(&mut child).terminate(None) {
+                    Ok(outcome) => {
+                        io.request_cancel();
+                        while !io.is_finished() {
+                            std::thread::sleep(Duration::from_millis(2));
+                        }
+                        let _ = io.cancel_and_collect(&command_text, outcome.status, || {
+                            Ok::<Duration, TimeError>(Duration::ZERO)
+                        });
+                        drop(lease);
+                        if let Some(observer) = observer {
+                            observer.complete();
+                        }
+                        break;
+                    }
+                    Err(_) => {
+                        io.request_cancel();
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                }
+            }
+        });
+        match Reaper::global() {
+            Ok(reaper) => match reaper.handoff(owner) {
+                Ok(()) => error,
+                Err(owner) => {
+                    owner.run_inline();
+                    error
+                }
+            },
+            Err(source) => {
+                log::error!("failed to start process reaper: {source}");
+                owner.run_inline();
+                error
+            }
+        }
     }
 
     /// Completes a known-exited command by joining all I/O helpers.
@@ -1766,6 +1846,54 @@ mod tests {
             .kill_error(io::Error::other("tree termination failed"))
             .try_wait_results((0..8).map(|_| Ok(None)));
         ManagedChildProcess::new(Box::new(tree), true)
+    }
+
+    #[test]
+    fn termination_uncertainty_hands_child_helpers_and_capacity_to_reaper() {
+        use crate::execution::backend::ReaperObserver;
+        use crate::execution::contracts::ReservationLease;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let direct = ScriptedChild::new("child", raw_child(), Arc::clone(&calls))
+            .kill_error(io::Error::other("first direct kill denied"))
+            .try_wait_results((0..9).map(|_| Ok(None)))
+            .wait_status(status(0));
+        let tree = ScriptedChild::new("tree", Box::new(direct), calls)
+            .kill_error(io::Error::other("first tree kill denied"))
+            .try_wait_results((0..8).map(|_| Ok(None)))
+            .wait_status(status(0));
+        let releases = Arc::new(AtomicUsize::new(0));
+        let released = Arc::clone(&releases);
+        let lease = ReservationLease::new(move || {
+            released.fetch_add(1, Ordering::SeqCst);
+        });
+        let (observer, completed) = ReaperObserver::pair();
+        let started = ManualMonotonicClock::new_shared();
+        let timer = ManualMonotonicClock::new_shared();
+        let command = RunningCommand::new_with_reaper(
+            "reaper test".to_owned(),
+            ManagedChildProcess::new(Box::new(tree), true),
+            CommandIo::new(successful_reader(), joined_stderr_reader(), None),
+            started.now(),
+            timer.new_timer(),
+            None,
+            None,
+            Some(lease),
+            Some(observer.clone()),
+        );
+        let error = match command.resolve_event(RunEvent::Cancelled { status: None }, None) {
+            Ok(_) => panic!("stop remains an error while the reaper completes cleanup"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), CommandErrorKind::Cancelled);
+        assert!(observer.is_pending());
+        assert_eq!(releases.load(Ordering::SeqCst), 0);
+        completed
+            .recv_timeout(Duration::from_secs(3))
+            .expect("reaper should finish the transferred owner");
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
     }
 
     fn running_with_elapsed_failure(child: ManagedChildProcess, io: CommandIo) -> RunningCommand {

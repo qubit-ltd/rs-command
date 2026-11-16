@@ -88,6 +88,15 @@ impl CommandIo {
                 .is_none_or(|writer| writer.is_finished())
     }
 
+    /// Requests every helper to stop while retaining the helper handles.
+    pub(in crate::command_runner) fn request_cancel(&self) {
+        let _ = self.stdout_reader.cancel();
+        let _ = self.stderr_reader.cancel();
+        if let Some(writer) = self.stdin_writer.as_ref() {
+            let _ = writer.cancel();
+        }
+    }
+
     /// Collects completed stdout and stderr results and reports read failures.
     pub(in crate::command_runner) fn poll_read_failure(&mut self) -> bool {
         let stdout_failed = self.stdout_reader.poll_read_failure();

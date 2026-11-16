@@ -48,7 +48,9 @@ use crate::OutputStream;
 use crate::ProcessTreePolicy;
 use crate::command_run_options_parts::CommandRunOptionsParts;
 use crate::execution::backend::ManagedFileSet;
+use crate::execution::backend::ReaperObserver;
 use crate::execution::backend::StartGate;
+use crate::execution::contracts::ReservationLease;
 
 /// Marker used when a configured working directory is redacted from
 /// diagnostics.
@@ -519,7 +521,7 @@ impl CommandRunner {
         command: Command,
         options: CommandRunOptions,
     ) -> Result<CommandOutput, CommandError> {
-        self.run_with_tree_policy(command, options, None, None, None)
+        self.run_with_tree_policy(command, options, None, None, None, None, None)
     }
 
     /// Runs a command with an explicit process-tree policy for managed callers.
@@ -530,6 +532,8 @@ impl CommandRunner {
         managed_policy: Option<ProcessTreePolicy>,
         start_gate: Option<&StartGate>,
         prepared_files: Option<ManagedFileSet>,
+        capacity_lease: Option<ReservationLease>,
+        reaper_observer: Option<ReaperObserver>,
     ) -> Result<CommandOutput, CommandError> {
         #[cfg(not(any(unix, windows)))]
         if managed_policy == Some(ProcessTreePolicy::Managed) {
@@ -680,7 +684,7 @@ impl CommandRunner {
         }
 
         let (child_process, command_io) = starting_command.finish();
-        let finished = RunningCommand::new(
+        let finished = RunningCommand::new_with_reaper(
             command_text,
             child_process,
             command_io,
@@ -688,6 +692,8 @@ impl CommandRunner {
             Arc::clone(&self.timer),
             cancellation,
             total_budget,
+            capacity_lease,
+            reaper_observer,
         )
         .wait_for_completion(self.timeout)?;
         let FinishedCommand {
