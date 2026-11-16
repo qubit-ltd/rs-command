@@ -1,76 +1,51 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::collections::VecDeque;
 use std::io;
 use std::sync::Condvar;
 use std::sync::Mutex;
 use std::task::Waker;
 
+use super::channel_state::ChannelState;
+use super::output_budget::OutputBudget;
 use crate::session::contracts::SessionStreamPolicy;
 
+/// Maximum number of bytes buffered by one managed stream.
 pub(crate) const CHANNEL_CAPACITY: usize = 64 * 1024;
+/// Maximum number of bytes accepted or returned by one channel operation.
 pub(crate) const MAX_BLOCK: usize = 16 * 1024;
 
-struct State {
-    bytes: VecDeque<u8>,
-    writer_closed: bool,
-    stop_writes: bool,
-    reader_gone: bool,
-    incomplete: bool,
-    broken_pipe: bool,
-    read_waker: Option<Waker>,
-    write_waker: Option<Waker>,
-    policy: SessionStreamPolicy,
-    budget: Option<std::sync::Arc<OutputBudget>>,
-}
-
-struct BudgetState {
-    observed: u64,
-    exceeded: bool,
-}
-
-pub(crate) struct OutputBudget {
-    limit: u64,
-    state: Mutex<BudgetState>,
-}
-
-impl OutputBudget {
-    pub(crate) fn new(limit: u64) -> Self {
-        Self {
-            limit,
-            state: Mutex::new(BudgetState {
-                observed: 0,
-                exceeded: limit == 0,
-            }),
-        }
-    }
-
-    pub(crate) fn exceeded(&self) -> bool {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).exceeded
-    }
-
-    pub(crate) fn observed(&self) -> u64 {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).observed
-    }
-
-    pub(crate) fn limit(&self) -> u64 {
-        self.limit
-    }
-}
-
+/// Bounded byte queue shared by one producer and one consumer.
 pub(crate) struct ByteChannel {
-    state: Mutex<State>,
+    /// Queue state and lifecycle flags protected from concurrent access.
+    state: Mutex<ChannelState>,
+    /// Wakes blocking readers and writers after queue state changes.
     changed: Condvar,
+    /// Test-only signal that a writer reached the capacity wait.
     #[cfg(test)]
     wait_entered: (Mutex<usize>, Condvar),
 }
 
 impl ByteChannel {
+    /// Creates an empty channel with bounded backpressure.
     pub(crate) fn new() -> Self {
         Self::with_policy(SessionStreamPolicy::Backpressure, None)
     }
 
+    /// Creates an empty channel using the selected output policy.
+    ///
+    /// # Parameters
+    ///
+    /// * `policy` - Behavior when the bounded output queue fills.
+    /// * `budget` - Optional aggregate limit shared by related output streams.
     pub(crate) fn with_policy(policy: SessionStreamPolicy, budget: Option<std::sync::Arc<OutputBudget>>) -> Self {
         Self {
-            state: Mutex::new(State {
+            state: Mutex::new(ChannelState {
                 bytes: VecDeque::new(),
                 writer_closed: false,
                 stop_writes: false,
@@ -88,14 +63,18 @@ impl ByteChannel {
         }
     }
 
+    /// Signals test observers that a blocking writer reached its wait.
     #[cfg(test)]
+
     fn note_wait(&self) {
         let (lock, condition) = &self.wait_entered;
         *lock.lock().unwrap_or_else(|e| e.into_inner()) += 1;
         condition.notify_all();
     }
 
+    /// Waits until a writer reports reaching the capacity wait.
     #[cfg(test)]
+
     pub(crate) fn wait_until_blocked(&self) {
         let (lock, condition) = &self.wait_entered;
         let mut count = lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -104,6 +83,12 @@ impl ByteChannel {
         }
     }
 
+    /// Writes a bounded chunk without blocking the async executor.
+    ///
+    /// # Parameters
+    ///
+    /// * `cx` - Task context used to register when capacity is unavailable.
+    /// * `input` - Bytes offered to the channel, limited to `MAX_BLOCK`.
     pub(crate) fn poll_write(
         &self,
         cx: &mut std::task::Context<'_>,
@@ -197,6 +182,12 @@ impl ByteChannel {
         Poll::Ready(Ok(n))
     }
 
+    /// Reads currently available bytes without blocking the async executor.
+    ///
+    /// # Parameters
+    ///
+    /// * `cx` - Task context used to register when no bytes are available.
+    /// * `output` - Buffer receiving the next available bytes.
     pub(crate) fn poll_read(
         &self,
         cx: &mut std::task::Context<'_>,
@@ -229,6 +220,7 @@ impl ByteChannel {
         }
     }
 
+    /// Marks the producer closed and wakes a waiting consumer.
     pub(crate) fn close_writer(&self) {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         s.writer_closed = true;
@@ -238,6 +230,7 @@ impl ByteChannel {
         wake(waker);
     }
 
+    /// Marks the consumer gone, discards queued data, and wakes producers.
     pub(crate) fn drop_reader(&self) {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         s.reader_gone = true;
@@ -249,6 +242,7 @@ impl ByteChannel {
         wake(waker);
     }
 
+    /// Stops future output while retaining bytes already queued.
     pub(crate) fn stop_output(&self) {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         s.stop_writes = true;
@@ -262,17 +256,25 @@ impl ByteChannel {
         wake(reader_waker);
     }
 
+    /// Reports whether bytes were discarded before delivery.
     pub(crate) fn incomplete(&self) -> bool {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).incomplete
     }
+    /// Reports whether the producer observed a dropped consumer.
     pub(crate) fn broken_pipe(&self) -> bool {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).broken_pipe
     }
 
+    /// Records a child-side broken-pipe observation.
     pub(crate) fn record_broken_pipe(&self) {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).broken_pipe = true;
     }
 
+    /// Blocks until bytes arrive or the channel closes, then reads a chunk.
+    ///
+    /// # Parameters
+    ///
+    /// * `out` - Buffer receiving the next available bytes.
     pub(crate) fn blocking_read(&self, out: &mut [u8]) -> io::Result<usize> {
         if out.is_empty() {
             return Ok(0);
@@ -295,6 +297,11 @@ impl ByteChannel {
         Ok(n)
     }
 
+    /// Writes all bytes, waiting for bounded queue capacity as needed.
+    ///
+    /// # Parameters
+    ///
+    /// * `bytes` - Process output to publish to the session consumer.
     pub(crate) fn blocking_write(&self, bytes: &[u8]) -> io::Result<()> {
         let mut total_offset = 0;
         for chunk in bytes.chunks(MAX_BLOCK) {
@@ -393,11 +400,22 @@ impl ByteChannel {
     }
 }
 
+/// Replaces a registered task waker when it points to another task.
+///
+/// # Parameters
+///
+/// * `slot` - Waker slot protected by the channel state lock.
+/// * `w` - Task waker to register.
 fn register(slot: &mut Option<Waker>, w: &Waker) {
     if slot.as_ref().is_none_or(|old| !old.will_wake(w)) {
         *slot = Some(w.clone());
     }
 }
+/// Wakes a task after releasing the channel state lock.
+///
+/// # Parameters
+///
+/// * `w` - Optional task waker removed from a channel state slot.
 fn wake(w: Option<Waker>) {
     if let Some(w) = w {
         w.wake();
@@ -412,7 +430,11 @@ mod tests {
 
     use qubit_io::AsyncInput;
 
-    use super::*;
+    use super::ByteChannel;
+    use super::CHANNEL_CAPACITY;
+    use super::MAX_BLOCK;
+    use super::channel_state::ChannelState;
+    use super::output_budget::OutputBudget;
     use crate::session::channel::SessionChannels;
     use crate::session::contracts::SessionBridge;
     use crate::session::contracts::SessionStreamPolicy;
@@ -426,7 +448,7 @@ mod tests {
         }
     }
     #[test]
-    fn capacity_blocking_and_writer_wake() {
+    fn test_capacity_blocking_and_writer_wake() {
         let c = ByteChannel::new();
         let counter = Arc::new(CountWake(AtomicUsize::new(0)));
         let waker = std::task::Waker::from(counter.clone());
@@ -452,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn block_limit_eof_drain_and_zero_length() {
+    fn test_block_limit_eof_drain_and_zero_length() {
         let c = ByteChannel::new();
         let counter = Arc::new(CountWake(AtomicUsize::new(0)));
         let waker = std::task::Waker::from(counter.clone());
@@ -486,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn dropping_reader_marks_loss_and_broken_pipe() {
+    fn test_dropping_reader_marks_loss_and_broken_pipe() {
         let c = ByteChannel::new();
         let counter = Arc::new(CountWake(AtomicUsize::new(0)));
         let waker = std::task::Waker::from(counter.clone());
@@ -504,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_reader_is_woken_and_streams_are_independent() {
+    fn test_pending_reader_is_woken_and_streams_are_independent() {
         let stdout = Arc::new(ByteChannel::new());
         let stderr = Arc::new(ByteChannel::new());
         let counter = Arc::new(CountWake(AtomicUsize::new(0)));
@@ -527,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn blocking_worker_and_async_endpoint_share_ordered_bytes() {
+    fn test_blocking_worker_and_async_endpoint_share_ordered_bytes() {
         let c = Arc::new(ByteChannel::new());
         let producer = c.clone();
         let thread = std::thread::spawn(move || producer.blocking_write(b"one-two-three").unwrap());
@@ -548,7 +570,7 @@ mod tests {
     }
 
     #[test]
-    fn discard_policy_keeps_draining_and_marks_stream_incomplete() {
+    fn test_discard_policy_keeps_draining_and_marks_stream_incomplete() {
         let c = Arc::new(ByteChannel::with_policy(SessionStreamPolicy::Discard, None));
         let payload = vec![3; CHANNEL_CAPACITY + MAX_BLOCK];
         let producer = c.clone();
@@ -575,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_budget_is_shared_sticky_and_drains_after_limit() {
+    fn test_aggregate_budget_is_shared_sticky_and_drains_after_limit() {
         let mut channels = SessionChannels::with_policy(SessionStreamPolicy::TerminateAfterBytes(5));
         channels.bridge.write_stdout(b"abc").unwrap();
         channels.bridge.write_stderr(b"def").unwrap();
@@ -608,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn full_budgeted_channel_discards_after_threshold_without_blocking() {
+    fn test_full_budgeted_channel_discards_after_threshold_without_blocking() {
         let channels = SessionChannels::with_policy(SessionStreamPolicy::TerminateAfterBytes(CHANNEL_CAPACITY as u64));
         let bridge = channels.bridge.clone();
         bridge.write_stdout(&vec![5; CHANNEL_CAPACITY]).unwrap();
@@ -628,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn same_full_stream_discards_and_counts_until_aggregate_limit() {
+    fn test_same_full_stream_discards_and_counts_until_aggregate_limit() {
         let channels =
             SessionChannels::with_policy(SessionStreamPolicy::TerminateAfterBytes(CHANNEL_CAPACITY as u64 + 100));
         let bridge = channels.bridge.clone();
@@ -648,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn bridge_reports_stdin_broken_pipe_separately() {
+    fn test_bridge_reports_stdin_broken_pipe_separately() {
         let channels = SessionChannels::new();
         drop(channels.stdin_reader);
         let counter = Arc::new(CountWake(AtomicUsize::new(0)));
@@ -661,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn bridge_records_os_side_stdin_broken_pipe() {
+    fn test_bridge_records_os_side_stdin_broken_pipe() {
         let channels = SessionChannels::new();
         assert!(!channels.bridge.stdin_broken_pipe());
         channels.bridge.record_stdin_broken_pipe();
@@ -669,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn dropped_output_reader_still_trips_aggregate_budget() {
+    fn test_dropped_output_reader_still_trips_aggregate_budget() {
         let channels = SessionChannels::with_policy(SessionStreamPolicy::TerminateAfterBytes(10));
         let bridge = channels.bridge.clone();
         drop(channels.stdout);
@@ -681,7 +703,7 @@ mod tests {
     }
 
     #[test]
-    fn output_stop_wakes_writer_and_preserves_buffered_output() {
+    fn test_output_stop_wakes_writer_and_preserves_buffered_output() {
         use qubit_io::AsyncInput;
 
         let mut channels = SessionChannels::new();
@@ -727,7 +749,7 @@ mod tests {
     }
 
     #[test]
-    fn reader_poll_and_producer_race_never_loses_wakeup() {
+    fn test_reader_poll_and_producer_race_never_loses_wakeup() {
         use std::sync::Barrier;
         for _ in 0..64 {
             let c = Arc::new(ByteChannel::new());

@@ -1,3 +1,10 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 #![cfg(feature = "async")]
 
 use std::io;
@@ -24,16 +31,16 @@ impl qubit_command::session::contracts::SessionBridge for BridgeDefaults {
 }
 
 #[test]
-fn public_stream_types_implement_qubit_io_traits() {
-    fn input<T: AsyncInput<Item = u8>>() {}
-    fn output<T: AsyncOutput<Item = u8> + AsyncClose>() {}
+fn test_public_stream_types_implement_qubit_io_traits() {
+    fn test_input<T: AsyncInput<Item = u8>>() {}
+    fn test_output<T: AsyncOutput<Item = u8> + AsyncClose>() {}
     input::<CommandStdout>();
     input::<CommandStderr>();
     output::<CommandStdin>();
 }
 
 #[test]
-fn bridge_status_contract_defaults_to_no_reported_stream_failure() {
+fn test_bridge_status_contract_defaults_to_no_reported_stream_failure() {
     use qubit_command::session::contracts::SessionBridge;
     let bridge = BridgeDefaults;
     assert!(!bridge.stdout_incomplete());

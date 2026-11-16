@@ -1,3 +1,10 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Read;
@@ -19,7 +26,7 @@ use qubit_operation::OperationOutcome;
 use qubit_operation::ScopeLimits;
 
 #[test]
-fn owned_file_options_keep_current_cursor_and_explicit_policy() {
+fn test_owned_file_options_keep_current_cursor_and_explicit_policy() {
     let mut input = tempfile::tempfile().expect("input file should be created");
     input.write_all(b"prefix-payload").expect("fixture should be written");
     input.seek(SeekFrom::Start(7)).expect("cursor should be positioned");
@@ -49,7 +56,7 @@ fn owned_file_options_keep_current_cursor_and_explicit_policy() {
 }
 
 #[test]
-fn sink_policies_are_explicit_and_distinct() {
+fn test_sink_policies_are_explicit_and_distinct() {
     assert_ne!(FileSinkPolicy::Preserve, FileSinkPolicy::Truncate);
 }
 
@@ -76,7 +83,7 @@ where
 }
 
 #[test]
-fn preparation_preserves_stdin_cursor_and_output_contents_or_truncates_explicitly() {
+fn test_preparation_preserves_stdin_cursor_and_output_contents_or_truncates_explicitly() {
     let mut input = tempfile::tempfile().expect("stdin fixture should be created");
     input
         .write_all(b"before-payload")
@@ -133,7 +140,7 @@ fn preparation_preserves_stdin_cursor_and_output_contents_or_truncates_explicitl
 }
 
 #[test]
-fn resource_reservation_failure_keeps_sink_contents_and_returns_input_owner() {
+fn test_resource_reservation_failure_keeps_sink_contents_and_returns_input_owner() {
     let output = tempfile::NamedTempFile::new().expect("output should be created");
     std::fs::write(output.path(), b"must survive").expect("output should be populated");
     let output_file = OpenOptions::new()
@@ -159,7 +166,7 @@ fn resource_reservation_failure_keeps_sink_contents_and_returns_input_owner() {
 }
 
 #[test]
-fn owned_sink_cannot_alias_a_legacy_tee_path() {
+fn test_owned_sink_cannot_alias_a_legacy_tee_path() {
     let output = tempfile::NamedTempFile::new().expect("output should be created");
     std::fs::write(output.path(), b"must survive").expect("output should be populated");
     let output_file = OpenOptions::new()
@@ -184,7 +191,7 @@ fn owned_sink_cannot_alias_a_legacy_tee_path() {
 }
 
 #[test]
-fn snapshot_directory_resolves_relative_tee_identity() {
+fn test_snapshot_directory_resolves_relative_tee_identity() {
     let snapshot_dir = tempfile::tempdir().expect("snapshot directory should be created");
     let output = tempfile::NamedTempFile::new().expect("owned sink should be created");
     std::fs::write(output.path(), b"must survive").expect("owned sink should be populated");
@@ -220,7 +227,7 @@ fn snapshot_directory_resolves_relative_tee_identity() {
 }
 
 #[test]
-fn partial_truncation_failure_retains_prepared_owners_and_effects() {
+fn test_partial_truncation_failure_retains_prepared_owners_and_effects() {
     let first = tempfile::NamedTempFile::new().expect("first sink should be created");
     std::fs::write(first.path(), b"first data").expect("first sink should be populated");
     let first_file = OpenOptions::new()
@@ -264,7 +271,7 @@ fn partial_truncation_failure_retains_prepared_owners_and_effects() {
 }
 
 #[test]
-fn effect_record_overflow_does_not_prevent_sink_truncation_or_owner_retention() {
+fn test_effect_record_overflow_does_not_prevent_sink_truncation_or_owner_retention() {
     let output = tempfile::NamedTempFile::new().expect("output should be created");
     std::fs::write(output.path(), b"discard me").expect("output should be populated");
     let file = OpenOptions::new()

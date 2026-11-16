@@ -1,3 +1,10 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -6,11 +13,19 @@ use std::task::Poll;
 
 use crate::session::channel::ByteChannel;
 use crate::session::contracts::OutputEndpointState;
+/// Caller-facing standard error endpoint for a managed command session.
 pub struct CommandStderr {
+    /// Async I/O behavior delegated to the underlying bounded channel.
     pub(crate) state: Arc<dyn OutputEndpointState>,
+    /// Channel whose endpoint lifecycle is tied to this value.
     channel: Arc<ByteChannel>,
 }
 impl CommandStderr {
+    /// Creates the endpoint around its shared bounded channel.
+    ///
+    /// # Parameters
+    ///
+    /// * `channel` - Shared byte channel owned by the session worker.
     pub(crate) fn new(channel: Arc<ByteChannel>) -> Self {
         Self {
             state: channel.clone(),
@@ -19,15 +34,31 @@ impl CommandStderr {
     }
 }
 impl Drop for CommandStderr {
+    /// Closes or releases the corresponding channel side when dropped.
     fn drop(&mut self) {
         self.channel.drop_reader();
     }
 }
 impl qubit_io::AsyncInput for CommandStderr {
+    /// Byte value transferred by this endpoint.
     type Item = u8;
+    /// Reports that the endpoint buffers bytes in its bounded channel.
     fn is_buffered(&self) -> bool {
         true
     }
+    /// Reads output into the requested buffer range after validating it.
+    ///
+    /// # Parameters
+    ///
+    /// * `cx` - Task context used when no output is ready.
+    /// * `output` - Destination buffer for child output.
+    /// * `index` - Starting offset of the destination range.
+    /// * `count` - Number of bytes requested in the destination range.
+    ///
+    /// # Safety
+    ///
+    /// The caller must uphold the async input trait requirements for the
+    /// supplied range.
     unsafe fn poll_read_unchecked(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,

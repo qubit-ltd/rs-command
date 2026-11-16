@@ -1,3 +1,10 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::fs::OpenOptions;
 use std::io::Seek;
 use std::io::SeekFrom;
@@ -56,4 +63,12 @@ pub fn run() {
 #[allow(dead_code)]
 fn main() {
     run();
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_managed_file_example_runs() {
+        super::run();
+    }
 }

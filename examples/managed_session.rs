@@ -1,3 +1,10 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -107,4 +114,12 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
 #[allow(dead_code)]
 fn main() {
     run();
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_managed_session_example_runs() {
+        super::run();
+    }
 }

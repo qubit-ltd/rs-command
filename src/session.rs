@@ -1,3 +1,10 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 //! Managed command session and stream endpoint contracts.
 pub mod channel;
 pub mod contracts;
@@ -13,9 +20,13 @@ pub mod endpoints;
 #[cfg(feature = "async")]
 #[allow(dead_code)]
 pub struct CommandSession {
+    /// Managed operation whose outcome and settlement belong to this session.
     pub(crate) operation: Option<crate::CommandOperation>,
+    /// Input endpoint retained until taken or the session is dropped.
     pub(crate) stdin: Option<CommandStdin>,
+    /// Standard-output endpoint retained until taken or the session is dropped.
     pub(crate) stdout: Option<CommandStdout>,
+    /// Standard-error endpoint retained until taken or the session is dropped.
     pub(crate) stderr: Option<CommandStderr>,
 }
 

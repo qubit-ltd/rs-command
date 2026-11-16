@@ -1,10 +1,17 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use qubit_command::CommandExecutionConfig;
 use qubit_command::CommandResourceRunOptions;
 use qubit_command::CommandRunOptions;
 use qubit_command::ProcessTreePolicy;
 
 #[test]
-fn managed_defaults_are_bounded() {
+fn test_managed_defaults_are_bounded() {
     let config = CommandExecutionConfig::default();
     assert_eq!(config.max_active, 4);
     assert_eq!(config.max_queued, 64);
@@ -15,7 +22,7 @@ fn managed_defaults_are_bounded() {
 }
 
 #[test]
-fn zero_active_rejected_and_zero_queue_is_valid() {
+fn test_zero_active_rejected_and_zero_queue_is_valid() {
     let config = CommandExecutionConfig {
         max_active: 0,
         ..CommandExecutionConfig::default()
@@ -30,8 +37,8 @@ fn zero_active_rejected_and_zero_queue_is_valid() {
 }
 
 #[test]
-fn options_preserve_clone_and_managed_default() {
-    fn assert_clone<T: Clone>() {}
+fn test_options_preserve_clone_and_managed_default() {
+    fn test_assert_clone<T: Clone>() {}
     assert_clone::<CommandRunOptions>();
     let options = CommandRunOptions::default();
     assert_eq!(options.process_tree_policy(), ProcessTreePolicy::Managed);
@@ -44,7 +51,7 @@ fn options_preserve_clone_and_managed_default() {
 }
 
 #[test]
-fn pure_config_and_import_do_not_start_service_threads() {
+fn test_pure_config_and_import_do_not_start_service_threads() {
     let before = std::thread::available_parallelism().unwrap();
     let config = CommandExecutionConfig::default();
     assert!(config.validate().is_ok());
@@ -53,7 +60,7 @@ fn pure_config_and_import_do_not_start_service_threads() {
 }
 
 #[test]
-fn owned_options_are_consumed_by_value() {
+fn test_owned_options_are_consumed_by_value() {
     fn consume(options: qubit_command::CommandResourceRunOptions) -> usize {
         std::mem::size_of_val(&options)
     }
@@ -62,7 +69,7 @@ fn owned_options_are_consumed_by_value() {
 }
 
 #[test]
-fn snapshot_submission_failure_retains_diagnostic() {
+fn test_snapshot_submission_failure_retains_diagnostic() {
     use qubit_command::CommandSubmitFailureReason;
     use qubit_command::SnapshotFailure;
     let reason = CommandSubmitFailureReason::Snapshot(SnapshotFailure {
@@ -74,7 +81,7 @@ fn snapshot_submission_failure_retains_diagnostic() {
 }
 
 #[test]
-fn owned_output_sink_requires_and_retains_policy() {
+fn test_owned_output_sink_requires_and_retains_policy() {
     use qubit_command::CommandResourceRunOptions;
     use qubit_command::FileSinkPolicy;
     let sink = tempfile::tempfile().expect("create temporary sink");

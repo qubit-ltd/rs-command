@@ -171,8 +171,11 @@ pub enum CommandErrorReason {
         /// Exit codes configured as successful.
         expected: Vec<i32>,
     },
-    /// The operation manager rejected or could not observe a managed command.
-    ManagedOperationFailed { diagnostic: String },
+    /// The operation manager rejected the command or lost its observation.
+    ManagedOperationFailed {
+        /// Redacted summary of the managed-operation failure.
+        diagnostic: String,
+    },
 }
 
 impl fmt::Debug for CommandErrorReason {

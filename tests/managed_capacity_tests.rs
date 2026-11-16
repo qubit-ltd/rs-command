@@ -1,3 +1,10 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
@@ -111,7 +118,7 @@ fn job(f: impl FnOnce(qubit_command::execution::Reservation) + Send + 'static) -
 }
 
 #[test]
-fn capacity_bounds_and_raii_release() {
+fn test_capacity_bounds_and_raii_release() {
     let s = BoundedScheduler::new(config(4, 64, 64, 1024)).unwrap();
     let mut permits = Vec::new();
     for _ in 0..68 {
@@ -125,7 +132,7 @@ fn capacity_bounds_and_raii_release() {
     assert_eq!((x.active, x.queued, x.input_bytes), (4, 63, 67));
 }
 #[test]
-fn zero_queue_only_admits_active_slots() {
+fn test_zero_queue_only_admits_active_slots() {
     let s = BoundedScheduler::new(config(1, 0, 0, 9)).unwrap();
     let p = s.try_reserve(9).unwrap();
     assert_eq!(s.try_reserve(0).unwrap_err(), CapacityFailure::ActiveFull);
@@ -133,7 +140,7 @@ fn zero_queue_only_admits_active_slots() {
     assert!(s.try_reserve(0).is_ok());
 }
 #[test]
-fn input_bytes_precede_slots_and_are_in_capacity_wait_predicate() {
+fn test_input_bytes_precede_slots_and_are_in_capacity_wait_predicate() {
     let s = BoundedScheduler::new(config(1, 2, 2, 2)).unwrap();
     let p = s.try_reserve(2).unwrap();
     assert_eq!(s.try_reserve(1).unwrap_err(), CapacityFailure::InputBytesExceeded);
@@ -144,7 +151,7 @@ fn input_bytes_precede_slots_and_are_in_capacity_wait_predicate() {
     assert!(rx.recv_timeout(Duration::from_secs(1)).unwrap());
 }
 #[test]
-fn waiter_registration_cancel_and_release_are_race_safe() {
+fn test_waiter_registration_cancel_and_release_are_race_safe() {
     let s = BoundedScheduler::new(config(1, 0, 2, 8)).unwrap();
     let p = s.try_reserve(0).unwrap();
     let counter = Arc::new(Counter(AtomicUsize::new(0)));
@@ -157,7 +164,7 @@ fn waiter_registration_cancel_and_release_are_race_safe() {
     assert!(s.register_waiter_if_full(0, &w).unwrap().is_none());
 }
 #[test]
-fn foreign_permit_with_colliding_token_is_rejected_and_returned() {
+fn test_foreign_permit_with_colliding_token_is_rejected_and_returned() {
     let a = BoundedScheduler::new(config(1, 1, 1, 9)).unwrap();
     let b = BoundedScheduler::new(config(1, 1, 1, 9)).unwrap();
     let own_active = a.try_reserve(1).unwrap();
@@ -180,7 +187,7 @@ fn foreign_permit_with_colliding_token_is_rejected_and_returned() {
     drop(origin_active);
 }
 #[test]
-fn multi_job_queue_promotes_only_after_active_release() {
+fn test_multi_job_queue_promotes_only_after_active_release() {
     let s = BoundedScheduler::new(config(1, 2, 1, 8)).unwrap();
     let first = s.try_reserve(0).unwrap();
     let second = s.try_reserve(0).unwrap();
@@ -200,7 +207,7 @@ fn multi_job_queue_promotes_only_after_active_release() {
     assert_eq!(s.snapshot().queued, 0);
 }
 #[test]
-fn queued_reservation_dispatches_before_later_submission_after_release() {
+fn test_queued_reservation_dispatches_before_later_submission_after_release() {
     let s = BoundedScheduler::new(config(1, 2, 1, 8)).unwrap();
     let a = s.try_reserve(0).unwrap();
     let b = s.try_reserve(0).unwrap();
@@ -223,7 +230,7 @@ fn queued_reservation_dispatches_before_later_submission_after_release() {
     assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec!['A', 'B', 'C']);
 }
 #[test]
-fn enqueue_wakes_blocked_worker_and_close_drains() {
+fn test_enqueue_wakes_blocked_worker_and_close_drains() {
     let s = BoundedScheduler::new(config(1, 1, 1, 8)).unwrap();
     let worker = s.clone();
     let (tx, rx) = mpsc::channel();
@@ -239,7 +246,7 @@ fn enqueue_wakes_blocked_worker_and_close_drains() {
     thread.join().unwrap();
 }
 #[test]
-fn manual_clock_deadline_rejects_and_expired_accepted_job_dispatches_completion() {
+fn test_manual_clock_deadline_rejects_and_expired_accepted_job_dispatches_completion() {
     let s = BoundedScheduler::new(config(1, 1, 1, 8)).unwrap();
     let clock = ManualClock::new();
     let expired_context = clock.context(0);
@@ -277,7 +284,7 @@ fn manual_clock_deadline_rejects_and_expired_accepted_job_dispatches_completion(
 }
 
 #[test]
-fn capacity_wait_rechecks_inherited_manual_clock_domain() {
+fn test_capacity_wait_rechecks_inherited_manual_clock_domain() {
     let s = BoundedScheduler::new(config(1, 0, 1, 8)).unwrap();
     let active = s.try_reserve(0).unwrap();
     let clock = ManualClock::new();
@@ -300,7 +307,7 @@ fn capacity_wait_rechecks_inherited_manual_clock_domain() {
 }
 
 #[test]
-fn wait_next_requests_timeout_then_dispatches_completion_when_slot_opens() {
+fn test_wait_next_requests_timeout_then_dispatches_completion_when_slot_opens() {
     let s = BoundedScheduler::new(config(1, 1, 1, 8)).unwrap();
     let active = s.try_reserve(0).unwrap();
     let clock = ManualClock::new();
@@ -337,7 +344,7 @@ fn wait_next_requests_timeout_then_dispatches_completion_when_slot_opens() {
 }
 
 #[test]
-fn concurrent_workers_wait_for_timeout_stop_callback_to_return() {
+fn test_concurrent_workers_wait_for_timeout_stop_callback_to_return() {
     let s = BoundedScheduler::new(config(2, 3, 2, 8)).unwrap();
     let active_a = s.try_reserve(0).unwrap();
     let active_b = s.try_reserve(0).unwrap();
@@ -400,7 +407,7 @@ fn concurrent_workers_wait_for_timeout_stop_callback_to_return() {
     second.join().unwrap();
 }
 #[test]
-fn close_after_reserve_returns_job_and_permit() {
+fn test_close_after_reserve_returns_job_and_permit() {
     let s = BoundedScheduler::new(config(1, 1, 1, 9)).unwrap();
     let p = s.try_reserve(3).unwrap();
     s.close_admission();
@@ -413,7 +420,7 @@ fn close_after_reserve_returns_job_and_permit() {
 }
 
 #[test]
-fn close_drains_already_accepted_active_and_queued_jobs() {
+fn test_close_drains_already_accepted_active_and_queued_jobs() {
     let s = BoundedScheduler::new(config(1, 1, 1, 8)).unwrap();
     let a = s.try_reserve(0).unwrap();
     let b = s.try_reserve(0).unwrap();
@@ -432,7 +439,7 @@ fn close_drains_already_accepted_active_and_queued_jobs() {
 }
 
 #[test]
-fn blocking_waiters_share_the_configured_waiter_limit() {
+fn test_blocking_waiters_share_the_configured_waiter_limit() {
     let scheduler = BoundedScheduler::new(config(1, 0, 1, 8)).unwrap();
     let permit = scheduler.try_reserve(0).unwrap();
     let waiting = scheduler.clone();

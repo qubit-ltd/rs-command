@@ -39,6 +39,7 @@ pub struct CommandRunOptions {
     stdout_file: Option<PathBuf>,
     /// Optional per-run stderr tee path.
     stderr_file: Option<PathBuf>,
+    /// Process-tree policy used by managed execution.
     process_tree_policy: ProcessTreePolicy,
 }
 
@@ -71,12 +72,24 @@ impl CommandRunOptions {
     }
 
     /// Returns the selected managed process tree policy.
+    ///
+    /// # Returns
+    ///
+    /// The process-tree policy configured for this run.
     #[inline]
     pub fn process_tree_policy(&self) -> ProcessTreePolicy {
         self.process_tree_policy
     }
 
     /// Selects the process tree policy for managed execution.
+    ///
+    /// # Parameters
+    ///
+    /// * `policy` - Policy applied to the launched process tree.
+    ///
+    /// # Returns
+    ///
+    /// Updated options carrying the selected policy.
     #[inline]
     pub fn with_process_tree_policy(mut self, policy: ProcessTreePolicy) -> Self {
         self.process_tree_policy = policy;

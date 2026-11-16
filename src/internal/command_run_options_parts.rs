@@ -21,5 +21,6 @@ pub(crate) struct CommandRunOptionsParts {
     pub(crate) stdout_file: Option<PathBuf>,
     /// Optional stderr tee path transferred to the output helper.
     pub(crate) stderr_file: Option<PathBuf>,
+    /// Process-tree policy transferred to the command runner.
     pub(crate) process_tree_policy: ProcessTreePolicy,
 }

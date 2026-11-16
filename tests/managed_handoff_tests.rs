@@ -1,3 +1,10 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 #![cfg(unix)]
 
 use std::io::Seek;
@@ -14,7 +21,7 @@ use qubit_operation::OperationManager;
 use qubit_operation::OperationOutcome;
 
 #[test]
-fn stdin_file_is_consumed_before_manager_reports_resource_cleanup() {
+fn test_stdin_file_is_consumed_before_manager_reports_resource_cleanup() {
     let mut stdin = tempfile::tempfile().expect("stdin fixture should be created");
     stdin
         .write_all(b"handoff payload\n")

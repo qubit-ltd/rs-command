@@ -1,3 +1,10 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 #![cfg(feature = "async")]
 
 use std::future::poll_fn;
@@ -59,7 +66,7 @@ async fn read_all(reader: &mut (impl AsyncInput<Item = u8> + Unpin)) -> std::io:
 
 #[cfg(unix)]
 #[test]
-fn managed_session_returns_endpoints_and_streams_both_pipes() {
+fn test_managed_session_returns_endpoints_and_streams_both_pipes() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
     let runner = CommandRunner::new(Duration::from_secs(5));
@@ -117,7 +124,7 @@ fn managed_session_returns_endpoints_and_streams_both_pipes() {
 
 #[cfg(unix)]
 #[test]
-fn managed_session_applies_runner_total_output_budget() {
+fn test_managed_session_applies_runner_total_output_budget() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
     let runner = CommandRunner::without_timeout().max_total_output_bytes(8);
@@ -152,7 +159,7 @@ fn managed_session_applies_runner_total_output_budget() {
 
 #[cfg(unix)]
 #[test]
-fn dropping_session_requests_stop_and_preserves_observable_settlement() {
+fn test_dropping_session_requests_stop_and_preserves_observable_settlement() {
     use qubit_operation::SettlementWait;
     use qubit_operation::ShutdownMode;
     use qubit_operation::StopReason;

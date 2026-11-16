@@ -1,3 +1,10 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 #[cfg(feature = "async")]
 use std::future::Future;
 #[cfg(feature = "async")]
@@ -30,7 +37,7 @@ use qubit_operation::OperationOutcome;
 use qubit_operation::SettlementStatus;
 
 #[test]
-fn managed_submit_runs_through_operation_manager() {
+fn test_managed_submit_runs_through_operation_manager() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
     let mut operation = executor
@@ -49,7 +56,7 @@ fn managed_submit_runs_through_operation_manager() {
 }
 
 #[test]
-fn owned_preparation_failure_retains_and_reports_recovery() {
+fn test_owned_preparation_failure_retains_and_reports_recovery() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
     use std::io::Write;
@@ -89,7 +96,7 @@ fn owned_preparation_failure_retains_and_reports_recovery() {
 }
 
 #[test]
-fn executor_shutdown_rejection_returns_owned_options() {
+fn test_executor_shutdown_rejection_returns_owned_options() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
     let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Drain);
@@ -110,7 +117,7 @@ fn executor_shutdown_rejection_returns_owned_options() {
 }
 
 #[test]
-fn executor_shutdown_isolated_to_its_group() {
+fn test_executor_shutdown_isolated_to_its_group() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let first = CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).unwrap();
     let second = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
@@ -127,7 +134,7 @@ fn executor_shutdown_isolated_to_its_group() {
 
 #[cfg(unix)]
 #[test]
-fn shutdown_drain_returns_pending_then_completed_report() {
+fn test_shutdown_drain_returns_pending_then_completed_report() {
     use qubit_operation::ShutdownMode;
     use qubit_operation::ShutdownWait;
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
@@ -155,7 +162,7 @@ fn shutdown_drain_returns_pending_then_completed_report() {
 
 #[cfg(all(feature = "async", unix))]
 #[test]
-fn async_wait_future_is_lazy_and_cancelled_waiter_is_removed() {
+fn test_async_wait_future_is_lazy_and_cancelled_waiter_is_removed() {
     struct ThreadWake(thread::Thread);
     impl Wake for ThreadWake {
         fn wake(self: Arc<Self>) {
