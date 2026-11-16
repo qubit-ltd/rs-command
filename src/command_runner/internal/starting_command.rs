@@ -219,6 +219,7 @@ impl<'a> StartingCommand<'a> {
         };
         observer.mark_pending();
         if let Some(bridge) = &self.session_bridge {
+            bridge.request_output_stop();
             bridge.close_stdin();
         }
         let command = self.command.to_owned();
@@ -235,6 +236,7 @@ impl<'a> StartingCommand<'a> {
             let mut terminated = false;
             loop {
                 if let Some(bridge) = &cleanup_bridge {
+                    bridge.request_output_stop();
                     bridge.close_stdin();
                 }
                 if let Some(reader) = stdout_reader.as_ref() {
@@ -427,6 +429,73 @@ mod tests {
                 .count()
                 >= 2
         );
+    }
+
+    #[cfg(feature = "async")]
+    #[test]
+    fn managed_startup_abort_wakes_full_session_output_writer() {
+        use std::time::Duration;
+
+        use super::super::captured_output::CapturedOutput;
+        use super::super::io_cancellation::IoCancellation;
+        use super::super::output_reader::OutputReader;
+        use crate::execution::backend::ReaperObserver;
+        use crate::session::channel::SessionChannels;
+        use crate::session::contracts::SessionBridge;
+
+        let mut channels = SessionChannels::new();
+        let bridge: Arc<dyn SessionBridge> = channels.bridge.clone();
+        let chunk = vec![0x5a; 16 * 1024];
+        for _ in 0..4 {
+            bridge
+                .write_stdout(&chunk)
+                .expect("buffer should accept one complete channel capacity");
+        }
+        let writer_bridge = Arc::clone(&bridge);
+        let reader = OutputReader::new(
+            std::thread::spawn(move || {
+                writer_bridge
+                    .write_stdout(b"blocked startup output")
+                    .expect("managed startup abort should wake the blocked writer");
+                Ok(CapturedOutput::default())
+            }),
+            IoCancellation::pair()
+                .expect("reader cancellation should initialize")
+                .0,
+        );
+        channels.bridge.wait_for_stdout_writer_for_test();
+
+        let (observer, completed) = ReaperObserver::pair();
+        let mut guard = StartingCommand::new_managed(
+            "redacted",
+            ManagedChildProcess::new(raw_child(), false),
+            None,
+            Some(observer),
+            Some(bridge.clone()),
+        );
+        guard.set_stdout_reader(reader);
+        let _error = guard.abort_managed(CommandError::from_reason(
+            "redacted",
+            CommandErrorReason::TimeFailed {
+                source: TimeError::InstantOverflow,
+            },
+            None,
+        ));
+
+        let completed_without_endpoint_drop =
+            completed.recv_timeout(Duration::from_millis(150)).is_ok();
+        if !completed_without_endpoint_drop {
+            // Release the owner even after a regression so the test never strands a reaper worker.
+            bridge.request_output_stop();
+            completed
+                .recv_timeout(Duration::from_secs(2))
+                .expect("test cleanup should release the blocked writer");
+        }
+        assert!(
+            completed_without_endpoint_drop,
+            "startup abort must stop session output before waiting for helpers"
+        );
+        assert!(bridge.stdout_incomplete());
     }
 
     #[test]
