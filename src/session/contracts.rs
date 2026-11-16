@@ -42,6 +42,16 @@ pub trait SessionBridge: Send + Sync {
     fn output_budget_exceeded(&self) -> bool {
         false
     }
+
+    /// Returns the configured aggregate stdout and stderr observation limit.
+    fn output_budget_limit(&self) -> Option<u64> {
+        None
+    }
+
+    /// Returns the number of stdout and stderr bytes observed against the aggregate limit.
+    fn output_bytes_observed(&self) -> u64 {
+        0
+    }
 }
 
 /// State contract delegated to by the async stdin endpoint.
