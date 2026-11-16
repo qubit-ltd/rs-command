@@ -65,6 +65,7 @@ impl PreparedCommand {
         default_working_directory: Option<&Path>,
         stdout_file_path: Option<&Path>,
         stderr_file_path: Option<&Path>,
+        session_stdin: bool,
     ) -> Result<Self, CommandError> {
         let command_text = command.display_command(redaction_policy);
         let mut process_command = ProcessCommand::new(command.program());
@@ -93,6 +94,21 @@ impl PreparedCommand {
             stderr_file_path,
             &mut process_command,
         )?;
+        if session_stdin && stdin_file.is_some() {
+            return Err(CommandError::from_reason(
+                &command_text,
+                crate::CommandErrorReason::WriteInputFailed {
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "session stdin cannot be combined with a stdin file",
+                    ),
+                },
+                None,
+            ));
+        }
+        if session_stdin {
+            process_command.stdin(Stdio::piped());
+        }
 
         Ok(Self {
             command_text,

@@ -27,6 +27,7 @@ use crate::CommandCleanupFailure;
 use crate::CommandError;
 use crate::CommandOutput;
 use crate::OutputStream;
+use crate::session::contracts::SessionBridge;
 
 /// Maximum time spent confirming that a helper stopped after cancellation
 /// itself failed.
@@ -44,6 +45,8 @@ pub(in crate::command_runner) struct CommandIo {
     stderr_reader: OutputReader,
     /// Optional writer thread feeding stdin.
     stdin_writer: OptionalStdinWriter,
+    /// Bridge whose close operation wakes a blocked session stdin reader.
+    session_bridge: Option<std::sync::Arc<dyn SessionBridge>>,
 }
 
 impl CommandIo {
@@ -68,7 +71,16 @@ impl CommandIo {
             stdout_reader,
             stderr_reader,
             stdin_writer,
+            session_bridge: None,
         }
+    }
+
+    pub(in crate::command_runner) fn with_session_bridge(
+        mut self,
+        bridge: Option<std::sync::Arc<dyn SessionBridge>>,
+    ) -> Self {
+        self.session_bridge = bridge;
+        self
     }
 
     /// Returns whether all helper threads have finished.
@@ -90,6 +102,9 @@ impl CommandIo {
 
     /// Requests every helper to stop while retaining the helper handles.
     pub(in crate::command_runner) fn request_cancel(&self) {
+        if let Some(bridge) = &self.session_bridge {
+            bridge.close_stdin();
+        }
         let _ = self.stdout_reader.cancel();
         let _ = self.stderr_reader.cancel();
         if let Some(writer) = self.stdin_writer.as_ref() {
@@ -182,6 +197,7 @@ impl CommandIo {
             stdout_reader,
             stderr_reader,
             stdin_writer,
+            ..
         } = self;
         finish_helpers(
             command,
@@ -240,6 +256,7 @@ impl CommandIo {
             stdout_reader,
             stderr_reader,
             stdin_writer,
+            ..
         } = self;
         cancel_and_join_started_helpers(
             command,

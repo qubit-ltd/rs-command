@@ -35,6 +35,15 @@ pub trait RecoveryOwner: Send + Sync {
     /// owner handed responsibility back to the upstream scope lifecycle; it does not claim that
     /// operating-system resources have already been released.
     fn retry_cleanup(&self) -> Result<(), RecoveryRetryError>;
+
+    /// Reports whether the transferred cleanup responsibility has completed.
+    ///
+    /// This reports completion of the owner's handoff only. Adapters must still wait for any
+    /// upstream operation/resource settlement required to prove release before removing the
+    /// owner and its retained capacity lease.
+    fn is_complete(&self) -> bool {
+        false
+    }
 }
 
 /// Bounded, redacted reason that a recovery cleanup attempt could not be handed off.

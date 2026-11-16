@@ -108,12 +108,111 @@ impl StopPort for StartGate {
 #[cfg(test)]
 mod tests {
     use super::StartGate;
+    use crate::session::contracts::SessionBridge;
     use crate::{Command, CommandErrorKind, CommandRunOptions, CommandRunner};
     use qubit_operation::StopReason;
     use std::fs;
+    use std::io::{self, Cursor, Read};
     use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::task::Waker;
     use std::thread;
     use std::time::{Duration, Instant};
+
+    struct ManualContextClock {
+        domain: qubit_operation::ClockDomainId,
+        ticks: Arc<AtomicU64>,
+    }
+
+    impl qubit_operation::ClockSource for ManualContextClock {
+        fn now(&self) -> qubit_operation::MonotonicTime {
+            qubit_operation::MonotonicTime::new(self.domain, self.ticks.load(Ordering::SeqCst))
+        }
+
+        fn register_deadline(
+            &self,
+            _at: qubit_operation::MonotonicTime,
+            _wake: Waker,
+        ) -> Box<dyn qubit_operation::TimerRegistration> {
+            struct NoopRegistration;
+            impl qubit_operation::TimerRegistration for NoopRegistration {
+                fn cancel(self: Box<Self>) {}
+            }
+            Box::new(NoopRegistration)
+        }
+    }
+
+    struct RecordingBridge {
+        stdin: Mutex<Cursor<Vec<u8>>>,
+        stdout: Mutex<Vec<u8>>,
+        stderr: Mutex<Vec<u8>>,
+        closed: AtomicBool,
+        broken_pipe: AtomicBool,
+        output_limit: Option<u64>,
+        observed_output: AtomicU64,
+    }
+
+    impl RecordingBridge {
+        fn new(stdin: &[u8], output_limit: Option<u64>) -> Self {
+            Self {
+                stdin: Mutex::new(Cursor::new(stdin.to_vec())),
+                stdout: Mutex::new(Vec::new()),
+                stderr: Mutex::new(Vec::new()),
+                closed: AtomicBool::new(false),
+                broken_pipe: AtomicBool::new(false),
+                output_limit,
+                observed_output: AtomicU64::new(0),
+            }
+        }
+
+        fn record(&self, output: &Mutex<Vec<u8>>, bytes: &[u8]) {
+            output.lock().unwrap().extend_from_slice(bytes);
+            self.observed_output
+                .fetch_add(bytes.len() as u64, Ordering::SeqCst);
+        }
+    }
+
+    impl SessionBridge for RecordingBridge {
+        fn read_stdin(&self, buffer: &mut [u8]) -> io::Result<usize> {
+            self.stdin.lock().unwrap().read(buffer)
+        }
+
+        fn write_stdout(&self, bytes: &[u8]) -> io::Result<()> {
+            self.record(&self.stdout, bytes);
+            Ok(())
+        }
+
+        fn write_stderr(&self, bytes: &[u8]) -> io::Result<()> {
+            self.record(&self.stderr, bytes);
+            Ok(())
+        }
+
+        fn close_stdin(&self) {
+            self.closed.store(true, Ordering::SeqCst);
+        }
+
+        fn stdin_broken_pipe(&self) -> bool {
+            self.broken_pipe.load(Ordering::SeqCst)
+        }
+
+        fn record_stdin_broken_pipe(&self) {
+            self.broken_pipe.store(true, Ordering::SeqCst);
+        }
+
+        fn output_budget_exceeded(&self) -> bool {
+            self.output_limit
+                .is_some_and(|limit| self.observed_output.load(Ordering::SeqCst) > limit)
+        }
+
+        fn output_budget_limit(&self) -> Option<u64> {
+            self.output_limit
+        }
+
+        fn output_bytes_observed(&self) -> u64 {
+            self.observed_output.load(Ordering::SeqCst)
+        }
+    }
 
     #[test]
     fn stop_wins_start_gate() {
@@ -151,6 +250,115 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn session_bridge_moves_stdin_and_both_output_streams() {
+        let bridge = Arc::new(RecordingBridge::new(b"from-session\n", None));
+        let gate = StartGate::default();
+        let output = CommandRunner::without_timeout()
+            .run_with_tree_policy(
+                Command::new("sh")
+                    .arg("-c")
+                    .arg("read value; printf '%s' \"$value\"; printf 'stderr' >&2"),
+                CommandRunOptions::new().cancellation(gate.cancellation()),
+                Some(crate::ProcessTreePolicy::Managed),
+                Some(&gate),
+                None,
+                None,
+                None,
+                Some(Arc::clone(&bridge) as Arc<dyn SessionBridge>),
+                None,
+            )
+            .expect("session command should complete");
+
+        assert_eq!(output.stdout(), b"from-session");
+        assert_eq!(bridge.stdout.lock().unwrap().as_slice(), b"from-session");
+        assert_eq!(bridge.stderr.lock().unwrap().as_slice(), b"stderr");
+        assert!(bridge.closed.load(Ordering::SeqCst));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_output_budget_stops_child_with_configured_and_observed_counts() {
+        let bridge = Arc::new(RecordingBridge::new(b"", Some(2)));
+        let gate = StartGate::default();
+        let error = CommandRunner::without_timeout()
+            .run_with_tree_policy(
+                Command::new("sh")
+                    .arg("-c")
+                    .arg("printf abc; exec sleep 30"),
+                CommandRunOptions::new().cancellation(gate.cancellation()),
+                Some(crate::ProcessTreePolicy::Managed),
+                Some(&gate),
+                None,
+                None,
+                None,
+                Some(Arc::clone(&bridge) as Arc<dyn SessionBridge>),
+                None,
+            )
+            .expect_err("aggregate session limit should stop the child");
+
+        assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
+        assert!(matches!(
+            error.reason(),
+            crate::CommandErrorReason::OutputLimitExceeded {
+                limit: 2,
+                observed: 3
+            }
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn active_command_observes_inherited_operation_deadline() {
+        let directory = tempfile::tempdir().unwrap();
+        let ready = directory.path().join("deadline-active");
+        let ready_arg = ready.to_string_lossy().into_owned();
+        let domain = qubit_operation::ClockDomainId::new_unique();
+        let ticks = Arc::new(AtomicU64::new(0));
+        let clock: Arc<dyn qubit_operation::ClockSource> = Arc::new(ManualContextClock {
+            domain,
+            ticks: Arc::clone(&ticks),
+        });
+        let context = qubit_operation::OperationContext::new(qubit_operation::ContextOptions {
+            clock: Some(clock),
+            deadline: Some(qubit_operation::Deadline::at(
+                qubit_operation::MonotonicTime::new(domain, 1),
+            )),
+            budget: None,
+        })
+        .unwrap();
+        let gate = Arc::new(StartGate::default());
+        let run_gate = Arc::clone(&gate);
+        let runner_context = context.clone();
+        let runner = thread::spawn(move || {
+            CommandRunner::without_timeout().run_with_tree_policy(
+                Command::new("sh")
+                    .arg("-c")
+                    .arg("touch \"$1\"; exec sleep 30")
+                    .arg("managed-test")
+                    .arg(&ready_arg),
+                CommandRunOptions::new().cancellation(run_gate.cancellation()),
+                Some(crate::ProcessTreePolicy::Managed),
+                Some(&run_gate),
+                None,
+                None,
+                None,
+                None,
+                Some(runner_context),
+            )
+        });
+        let started = Instant::now();
+        while !ready.exists() && started.elapsed() < Duration::from_secs(5) {
+            thread::yield_now();
+        }
+        assert!(ready.exists(), "child did not reach its active marker");
+        ticks.store(1, Ordering::SeqCst);
+        let error = runner.join().unwrap().unwrap_err();
+        assert_eq!(error.kind(), CommandErrorKind::Cancelled);
+        assert_eq!(context.stop_reason(), Some(StopReason::Timeout));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn stop_before_commit_does_not_spawn_or_truncate() {
         let directory = tempfile::tempdir().unwrap();
         let marker = directory.path().join("spawned");
@@ -170,6 +378,8 @@ mod tests {
                 .tee_stdout_to_file(&tee),
             Some(crate::ProcessTreePolicy::Managed),
             Some(&gate),
+            None,
+            None,
             None,
             None,
             None,
@@ -200,6 +410,8 @@ mod tests {
                 CommandRunOptions::new().cancellation(run_gate.cancellation()),
                 Some(crate::ProcessTreePolicy::Managed),
                 Some(&run_gate),
+                None,
+                None,
                 None,
                 None,
                 None,

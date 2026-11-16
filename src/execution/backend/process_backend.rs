@@ -37,31 +37,32 @@ impl RecoveryOwner for PreparationRecoveryOwner {
         // and removes this accepted recovery owner from its store.
         Ok(())
     }
+
+    fn is_complete(&self) -> bool {
+        // This is only the owner handoff state. T6 must continue retaining this owner (and its
+        // capacity lease) until the upstream scope report is observed; only that report proves
+        // the partial resource cleanup outcome.
+        self.retained
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_none()
+    }
 }
 
-fn schedule_recovery_transfer(sink: Arc<dyn FactSink>, owner: Box<dyn RecoveryOwner>, retry: u32) {
-    let task = crate::execution::backend::ReaperOwner::new(move || {
+fn schedule_recovery_transfer(sink: Arc<dyn FactSink>, mut owner: Box<dyn RecoveryOwner>) {
+    // Keep the rejected owner in this bounded per-operation frame. Its reservation remains held,
+    // and the backend worker retries only the nonblocking store transfer; it never runs cleanup.
+    // The scheduler's active-operation bound therefore also bounds these retained frames.
+    let mut retry = 0_u32;
+    loop {
         match sink.retain_recovery_owner(owner) {
-            Ok(()) => {}
+            Ok(()) => return,
             Err(failure) => {
-                log::warn!(
-                    "recovery store rejected owner ({}); retrying on bounded reaper",
-                    failure.reason as u8
-                );
+                owner = failure.owner;
                 let backoff_ms = 25_u64.saturating_mul(1_u64 << retry.min(6));
                 std::thread::sleep(Duration::from_millis(backoff_ms));
-                schedule_recovery_transfer(sink, failure.owner, retry.saturating_add(1));
+                retry = retry.saturating_add(1);
             }
-        }
-    });
-    match crate::execution::backend::Reaper::global() {
-        Ok(reaper) => match reaper.handoff(task) {
-            Ok(()) => {}
-            Err(task) => task.run_inline(),
-        },
-        Err(error) => {
-            log::error!("could not initialize recovery worker: {error}");
-            task.run_inline();
         }
     }
 }
@@ -149,7 +150,14 @@ impl Backend for ProcessBackend {
         } else {
             options
         };
-        if !stop.authorized() && stop.authorize().is_none() {
+        if request
+            .deadline
+            .as_ref()
+            .is_some_and(qubit_operation::OperationContext::is_expired)
+        {
+            stop.request_stop(StopReason::Timeout);
+        }
+        if stop.authorize().is_none() {
             if let Err(error) =
                 sink.publish_outcome(OperationOutcome::Stopped(qubit_operation::StopReport {
                     reason: stop.stop_reason().unwrap_or(StopReason::UserCancelled),
@@ -165,6 +173,30 @@ impl Backend for ProcessBackend {
             }
             if let Err(error) = sink.publish_settlement(Arc::new(released_report(operation_id))) {
                 log::error!("failed to publish pre-start settlement: {error:?}");
+            }
+            return;
+        }
+        if request
+            .deadline
+            .as_ref()
+            .is_some_and(qubit_operation::OperationContext::is_expired)
+        {
+            stop.request_stop(StopReason::Timeout);
+            if let Err(error) =
+                sink.publish_outcome(OperationOutcome::Stopped(qubit_operation::StopReport {
+                    reason: StopReason::Timeout,
+                    accepted_at: None,
+                }))
+            {
+                log::error!("failed to publish expired-deadline outcome: {error:?}");
+            }
+            drop(session_bridge);
+            drop(scope);
+            if let Err(error) = sink.confirm_input_release() {
+                log::error!("failed to publish expired-deadline input release: {error:?}");
+            }
+            if let Err(error) = sink.publish_settlement(Arc::new(released_report(operation_id))) {
+                log::error!("failed to publish expired-deadline settlement: {error:?}");
             }
             return;
         }
@@ -188,15 +220,15 @@ impl Backend for ProcessBackend {
                             retained: Mutex::new(Some((failure, scope))),
                             capacity_lease: Mutex::new(Some(capacity_lease)),
                         });
-                        if let Err(rejected) = sink.retain_recovery_owner(owner) {
-                            log::warn!(
-                                "recovery store rejected owner ({}); handing it to bounded reaper",
-                                rejected.reason as u8
-                            );
-                            schedule_recovery_transfer(Arc::clone(&sink), rejected.owner, 0);
-                        }
                         if let Err(error) = sink.publish_outcome(OperationOutcome::Failed(error)) {
                             log::error!("failed to publish preparation failure outcome: {error:?}");
+                        }
+                        if let Err(rejected) = sink.retain_recovery_owner(owner) {
+                            log::warn!(
+                                "recovery store rejected owner ({}); retaining it in the bounded active frame",
+                                rejected.reason as u8
+                            );
+                            schedule_recovery_transfer(Arc::clone(&sink), rejected.owner);
                         }
                         drop(session_bridge);
                         drop(reservation);
@@ -207,7 +239,8 @@ impl Backend for ProcessBackend {
         };
         let options = normalize_tee_paths(options, &request.snapshot.working_directory);
         let capacity_lease = reservation.retain();
-        let (reaper_observer, reaper_completion) = ReaperObserver::pair();
+        let (reaper_observer, reaper_completion) =
+            ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink));
         let output = match prepared_files {
             Ok(files) => request.runner.run_with_tree_policy(
                 request.command,
@@ -217,20 +250,29 @@ impl Backend for ProcessBackend {
                 files,
                 Some(capacity_lease),
                 Some(reaper_observer.clone()),
+                session_bridge.clone(),
+                request.deadline.clone(),
             ),
             Err(error) => Err(error),
         };
-        if reaper_observer.is_pending() && reaper_completion.recv().is_err() {
-            log::error!("process reaper completion channel disconnected");
-        }
+        let deferred_owner = reaper_observer.take_deferred_recovery_owner();
+        let mut recovery_transferred = reaper_observer.recovery_was_transferred();
         let outcome = match output {
             Ok(output) => OperationOutcome::Succeeded(output),
-            Err(error) => match stop.stop_reason().or_else(|| {
-                original_cancellation
-                    .as_ref()
-                    .filter(|cancellation| cancellation.is_cancelled())
-                    .map(|_| StopReason::UserCancelled)
-            }) {
+            Err(error) => match stop
+                .stop_reason()
+                .or_else(|| {
+                    original_cancellation
+                        .as_ref()
+                        .filter(|cancellation| cancellation.is_cancelled())
+                        .map(|_| StopReason::UserCancelled)
+                })
+                .or_else(|| {
+                    request
+                        .deadline
+                        .as_ref()
+                        .and_then(|context| context.stop_reason())
+                }) {
                 Some(reason) => OperationOutcome::Stopped(qubit_operation::StopReport {
                     reason,
                     accepted_at: None,
@@ -241,8 +283,24 @@ impl Backend for ProcessBackend {
         if let Err(error) = sink.publish_outcome(outcome) {
             log::error!("failed to publish command outcome: {error:?}");
         }
+        if let Some(owner) = deferred_owner {
+            schedule_recovery_transfer(Arc::clone(&sink), owner);
+            recovery_transferred = true;
+        }
+        if reaper_observer.is_pending()
+            && !recovery_transferred
+            && reaper_completion.recv().is_err()
+        {
+            log::error!("process reaper completion channel disconnected");
+        }
         drop(session_bridge);
         drop(scope);
+        if recovery_transferred {
+            // T6 owns release and RecoveryRequired settlement after the retained child/helper
+            // recovery owner completes. Publishing either fact here would claim cleanup early.
+            drop(reservation);
+            return;
+        }
         if let Err(error) = sink.confirm_input_release() {
             log::error!("failed to publish command input release: {error:?}");
         }

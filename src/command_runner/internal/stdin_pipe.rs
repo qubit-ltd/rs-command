@@ -19,6 +19,7 @@ use super::stdin_writer::OptionalStdinWriter;
 use super::stdin_writer::StdinWriter;
 use crate::CommandError;
 use crate::CommandErrorReason;
+use crate::session::contracts::SessionBridge;
 
 /// Starts a helper thread that writes configured stdin bytes.
 ///
@@ -43,6 +44,92 @@ pub(in crate::command_runner) fn write_stdin_bytes(
     stdin_bytes: Option<Vec<u8>>,
 ) -> Result<OptionalStdinWriter, CommandError> {
     write_stdin_bytes_with(command, child, stdin_bytes, spawn_stdin_writer)
+}
+
+/// Starts the stdin writer for a managed session, draining queued bridge bytes
+/// after any configured prefix and closing the child pipe when the session closes.
+pub(in crate::command_runner) fn write_stdin_session(
+    command: &str,
+    child: &mut dyn ChildWrapper,
+    stdin_bytes: Option<Vec<u8>>,
+    bridge: Option<std::sync::Arc<dyn SessionBridge>>,
+) -> Result<OptionalStdinWriter, CommandError> {
+    if bridge.is_none() {
+        return write_stdin_bytes(command, child, stdin_bytes);
+    }
+    let stdin = child.stdin().take().ok_or_else(|| {
+        CommandError::from_reason(
+            command,
+            CommandErrorReason::WriteInputFailed {
+                source: io::Error::other("stdin pipe was not created"),
+            },
+            None,
+        )
+    })?;
+    prepare_stdin_pipe(&stdin).map_err(|source| {
+        CommandError::from_reason(
+            command,
+            CommandErrorReason::WriteInputFailed { source },
+            None,
+        )
+    })?;
+    let (cancellation, token) = IoCancellation::pair().map_err(|source| {
+        CommandError::from_reason(
+            command,
+            CommandErrorReason::StartInputThreadFailed { source },
+            None,
+        )
+    })?;
+    let bridge = bridge.expect("checked above");
+    let bytes = stdin_bytes.unwrap_or_default();
+    let writer = thread::Builder::new()
+        .name("qubit-command-session-stdin".to_owned())
+        .spawn(move || write_session_stdin(stdin, &bytes, bridge, token))
+        .map(|join| Some(StdinWriter::new(join, cancellation)));
+    map_stdin_thread_result(command, writer)
+}
+
+fn write_session_stdin(
+    mut stdin: ChildStdin,
+    prefix: &[u8],
+    bridge: std::sync::Arc<dyn SessionBridge>,
+    token: IoCancellationToken,
+) -> io::Result<()> {
+    if let Err(error) = write_stdin_until_cancelled(&mut stdin, prefix, &token) {
+        if error.kind() == io::ErrorKind::BrokenPipe {
+            bridge.record_stdin_broken_pipe();
+        }
+        bridge.close_stdin();
+        return Err(error);
+    }
+    let mut buffer = [0_u8; 8192];
+    loop {
+        if token.is_cancelled() {
+            bridge.close_stdin();
+            return Ok(());
+        }
+        match bridge.read_stdin(&mut buffer) {
+            Ok(0) => {
+                bridge.close_stdin();
+                return Ok(());
+            }
+            Ok(count) => {
+                if let Err(error) =
+                    write_stdin_until_cancelled(&mut stdin, &buffer[..count], &token)
+                {
+                    if error.kind() == io::ErrorKind::BrokenPipe {
+                        bridge.record_stdin_broken_pipe();
+                    }
+                    bridge.close_stdin();
+                    return Err(error);
+                }
+            }
+            Err(error) => {
+                bridge.close_stdin();
+                return Err(error);
+            }
+        }
+    }
 }
 
 /// Takes the child stdin pipe and starts a writer through the supplied spawn
@@ -133,7 +220,7 @@ fn spawn_stdin_writer(
 ) -> io::Result<JoinHandle<io::Result<()>>> {
     thread::Builder::new()
         .name("qubit-command-stdin-writer".to_owned())
-        .spawn(move || write_stdin_until_cancelled(&mut stdin, &bytes, token))
+        .spawn(move || write_stdin_until_cancelled(&mut stdin, &bytes, &token))
 }
 
 /// Maps stdin worker thread creation to a command error.
@@ -231,7 +318,7 @@ pub(in crate::command_runner) fn join_stdin_writer(
 pub(super) fn write_stdin_until_cancelled<W: PollableStdin>(
     stdin: &mut W,
     bytes: &[u8],
-    cancellation: IoCancellationToken,
+    cancellation: &IoCancellationToken,
 ) -> io::Result<()> {
     let mut offset = 0;
     while offset < bytes.len() {

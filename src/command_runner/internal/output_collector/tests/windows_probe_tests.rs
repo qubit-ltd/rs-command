@@ -1093,7 +1093,7 @@ fn run_stdin_probe() {
             let result = write_stdin_until_cancelled(
                 &mut StdinWriteEntry(writer, worker_events.clone(), Arc::clone(&token.cancelled)),
                 &[0x42; 16 * 1024],
-                token,
+                &token,
             );
             let _ = worker_events.send(ProbeEvent::WorkerDone(Instant::now()));
             result

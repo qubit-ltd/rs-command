@@ -10,6 +10,7 @@ use std::sync::Arc;
 use super::output_tee::OutputTee;
 use super::total_output_budget::TotalOutputBudget;
 use crate::OutputStream;
+use crate::session::contracts::SessionBridge;
 
 /// Output capture options moved into a reader thread.
 pub(in crate::command_runner) struct OutputCaptureOptions {
@@ -17,6 +18,8 @@ pub(in crate::command_runner) struct OutputCaptureOptions {
     pub(in crate::command_runner) max_bytes: Option<usize>,
     /// Optional writer receiving a streaming copy.
     pub(in crate::command_runner) tee: Option<OutputTee>,
+    /// Optional streaming bridge and the output endpoint this reader feeds.
+    pub(in crate::command_runner) session_bridge: Option<(Arc<dyn SessionBridge>, OutputStream)>,
     /// Optional shared stdout/stderr byte budget.
     pub(in crate::command_runner) total_budget: Option<Arc<TotalOutputBudget>>,
     /// Output stream charged to the aggregate budget.
@@ -42,6 +45,7 @@ impl OutputCaptureOptions {
         Self {
             max_bytes,
             tee,
+            session_bridge: None,
             total_budget: None,
             total_budget_stream: None,
             transfer_budget_after_join: false,
@@ -77,6 +81,15 @@ impl OutputCaptureOptions {
         self.total_budget = Some(budget);
         self.total_budget_stream = Some(stream);
         self.transfer_budget_after_join = true;
+        self
+    }
+
+    pub(in crate::command_runner) fn with_session_bridge(
+        mut self,
+        bridge: Arc<dyn SessionBridge>,
+        stream: OutputStream,
+    ) -> Self {
+        self.session_bridge = Some((bridge, stream));
         self
     }
 }

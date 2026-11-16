@@ -9,6 +9,7 @@ use std::fmt;
 
 mod managed;
 pub use managed::ManagedCommandRunnerApi;
+use qubit_operation::OperationContext;
 use std::io;
 use std::io::{Seek, SeekFrom};
 use std::path::Path;
@@ -34,7 +35,7 @@ use internal::prepared_command::PreparedCommand;
 use internal::process_launcher::spawn_child;
 use internal::running_command::RunningCommand;
 use internal::starting_command::StartingCommand;
-use internal::stdin_pipe::write_stdin_bytes;
+use internal::stdin_pipe::write_stdin_session;
 use internal::total_output_budget::TotalOutputBudget;
 
 use crate::Command;
@@ -51,6 +52,7 @@ use crate::execution::backend::ReaperObserver;
 use crate::execution::backend::StartGate;
 use crate::execution::contracts::PreparedFiles;
 use crate::execution::contracts::ReservationLease;
+use crate::session::contracts::SessionBridge;
 
 /// Marker used when a configured working directory is redacted from
 /// diagnostics.
@@ -521,7 +523,7 @@ impl CommandRunner {
         command: Command,
         options: CommandRunOptions,
     ) -> Result<CommandOutput, CommandError> {
-        self.run_with_tree_policy(command, options, None, None, None, None, None)
+        self.run_with_tree_policy(command, options, None, None, None, None, None, None, None)
     }
 
     /// Runs a command with an explicit process-tree policy for managed callers.
@@ -534,6 +536,8 @@ impl CommandRunner {
         prepared_files: Option<PreparedFiles>,
         capacity_lease: Option<ReservationLease>,
         reaper_observer: Option<ReaperObserver>,
+        session_bridge: Option<Arc<dyn SessionBridge>>,
+        operation_context: Option<OperationContext>,
     ) -> Result<CommandOutput, CommandError> {
         #[cfg(not(any(unix, windows)))]
         if managed_policy == Some(ProcessTreePolicy::Managed) {
@@ -559,6 +563,7 @@ impl CommandRunner {
             cancellation.as_ref(),
             stdout_file.as_deref(),
             stderr_file.as_deref(),
+            session_bridge.is_some(),
         )?;
         if cancellation
             .as_ref()
@@ -586,6 +591,16 @@ impl CommandRunner {
             },
             None => None,
         };
+        if let Some(context) = operation_context.as_ref()
+            && context.is_expired()
+        {
+            context.request_stop(qubit_operation::StopReason::Timeout);
+            return Err(CommandError::from_reason(
+                prepared.command_text,
+                CommandErrorReason::CancelledBeforeStart,
+                None,
+            ));
+        }
         let command_diagnostic = prepared.command_text.clone();
         let mut committed = prepared.commit()?;
         if let Some(files) = prepared_files.as_ref() {
@@ -621,11 +636,15 @@ impl CommandRunner {
             .map(Arc::new);
         let started_at = self.timer.clock().now();
 
-        let stdin_writer =
-            match write_stdin_bytes(&command_text, starting_command.child_process(), stdin_bytes) {
-                Ok(value) => value,
-                Err(error) => return Err(starting_command.abort(error)),
-            };
+        let stdin_writer = match write_stdin_session(
+            &command_text,
+            starting_command.child_process(),
+            stdin_bytes,
+            session_bridge.clone(),
+        ) {
+            Ok(value) => value,
+            Err(error) => return Err(starting_command.abort(error)),
+        };
         starting_command.set_stdin_writer(stdin_writer);
 
         let stdout = match take_output_pipe(&command_text, OutputStream::Stdout, || {
@@ -642,10 +661,13 @@ impl CommandRunner {
         };
         let stdout_reader = match start_output_reader(&command_text, OutputStream::Stdout, || {
             read_output_stream(stdout, {
-                let options = OutputCaptureOptions::new(
+                let mut options = OutputCaptureOptions::new(
                     self.max_stdout_bytes,
                     stdout_tee.map(FileTee::into_output_tee),
                 );
+                if let Some(bridge) = session_bridge.as_ref() {
+                    options = options.with_session_bridge(Arc::clone(bridge), OutputStream::Stdout);
+                }
                 if let Some(budget) = total_budget.as_ref() {
                     options.with_total_budget(Arc::clone(budget), OutputStream::Stdout)
                 } else {
@@ -659,10 +681,13 @@ impl CommandRunner {
         starting_command.set_stdout_reader(stdout_reader);
         let stderr_reader = match start_output_reader(&command_text, OutputStream::Stderr, || {
             read_output_stream(stderr, {
-                let options = OutputCaptureOptions::new(
+                let mut options = OutputCaptureOptions::new(
                     self.max_stderr_bytes,
                     stderr_tee.map(FileTee::into_output_tee),
                 );
+                if let Some(bridge) = session_bridge.as_ref() {
+                    options = options.with_session_bridge(Arc::clone(bridge), OutputStream::Stderr);
+                }
                 if let Some(budget) = total_budget.as_ref() {
                     options.with_total_budget(Arc::clone(budget), OutputStream::Stderr)
                 } else {
@@ -684,6 +709,7 @@ impl CommandRunner {
         }
 
         let (child_process, command_io) = starting_command.finish();
+        let command_io = command_io.with_session_bridge(session_bridge.clone());
         let finished = RunningCommand::new_with_reaper(
             command_text,
             child_process,
@@ -694,6 +720,8 @@ impl CommandRunner {
             total_budget,
             capacity_lease,
             reaper_observer,
+            session_bridge,
+            operation_context,
         )
         .wait_for_completion(self.timeout)?;
         let FinishedCommand {
@@ -1174,6 +1202,7 @@ impl CommandRunner {
         cancellation: Option<&CommandCancellation>,
         stdout_file: Option<&Path>,
         stderr_file: Option<&Path>,
+        session_stdin: bool,
     ) -> Result<PreparedCommand, CommandError> {
         if cancellation.is_some_and(CommandCancellation::is_cancelled) {
             return Err(CommandError::from_reason(
@@ -1188,6 +1217,7 @@ impl CommandRunner {
             self.working_directory.as_deref(),
             stdout_file,
             stderr_file,
+            session_stdin,
         )
     }
 }
