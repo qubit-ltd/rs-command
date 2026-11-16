@@ -113,7 +113,7 @@ impl super::contracts::SessionBridge for Bridge {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "async"))]
 impl Bridge {
     pub(crate) fn wait_for_stdout_writer_for_test(&self) {
         self.output.wait_until_blocked();
