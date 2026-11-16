@@ -7,7 +7,7 @@
 // =============================================================================
 use std::fmt;
 
-mod managed;
+mod managed_command_runner_api;
 use std::io;
 use std::io::Seek;
 use std::io::SeekFrom;
@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub use managed::ManagedCommandRunnerApi;
+pub use managed_command_runner_api::ManagedCommandRunnerApi;
 use qubit_clock::StdTimer;
 use qubit_clock::Timer;
 use qubit_operation::OperationContext;
@@ -24,6 +24,7 @@ use qubit_redact::RedactionPolicy;
 use qubit_redact::Redactor;
 
 mod internal;
+mod run_tree_policy;
 use internal::committed_command::CommittedCommand;
 use internal::error_mapping::output_pipe_error;
 use internal::error_mapping::spawn_failed;
@@ -35,10 +36,11 @@ use internal::output_reader::OutputReader;
 use internal::prepared_command::PreparedCommand;
 use internal::process_launcher::spawn_child;
 use internal::running_command::RunningCommand;
-use internal::running_command::RunningCommandResources;
+use internal::running_command_resources::RunningCommandResources;
 use internal::starting_command::StartingCommand;
 use internal::stdin_pipe::write_stdin_session;
 use internal::total_output_budget::TotalOutputBudget;
+use run_tree_policy::RunTreePolicy;
 
 use crate::Command;
 use crate::CommandCancellation;
@@ -55,17 +57,6 @@ use crate::execution::backend::StartGate;
 use crate::execution::contracts::PreparedFiles;
 use crate::execution::contracts::ReservationLease;
 use crate::session::contracts::SessionBridge;
-
-#[derive(Default)]
-pub(crate) struct RunTreePolicy<'a> {
-    pub(crate) managed_policy: Option<ProcessTreePolicy>,
-    pub(crate) start_gate: Option<&'a StartGate>,
-    pub(crate) prepared_files: Option<PreparedFiles>,
-    pub(crate) capacity_lease: Option<ReservationLease>,
-    pub(crate) reaper_observer: Option<ReaperObserver>,
-    pub(crate) session_bridge: Option<Arc<dyn SessionBridge>>,
-    pub(crate) operation_context: Option<OperationContext>,
-}
 
 /// Marker used when a configured working directory is redacted from
 /// diagnostics.
@@ -113,6 +104,21 @@ fn start_output_reader(
     })
 }
 
+/// Validates owned file resources and rejects aliases between stdin and output.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used in any validation error.
+/// * `files` - Prepared handles for stdin, stdout, and stderr.
+/// * `prepared` - Command configuration containing path-based tees.
+///
+/// # Returns
+///
+/// `Ok(())` when the resources can be used together.
+///
+/// # Errors
+///
+/// Returns a write-output error when resources conflict or cannot be cloned.
 fn validate_prepared_files(
     command: &str,
     files: &PreparedFiles,
@@ -134,37 +140,52 @@ fn validate_prepared_files(
     let stdin = files
         .stdin
         .as_ref()
-        .map(|resource| resource.lock().unwrap_or_else(|e| e.into_inner()).try_clone())
+        .map(|resource| {
+            resource
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .try_clone()
+        })
         .transpose()
-        .map_err(|source| owned_file_error(command, OutputStream::Stdout, "<owned stdin>", source))?;
+        .map_err(|source| {
+            owned_file_error(command, OutputStream::Stdout, "<owned stdin>", source)
+        })?;
     let stdout = files
         .stdout
         .as_ref()
-        .map(|sink| sink.file.lock().unwrap_or_else(|e| e.into_inner()).try_clone())
+        .map(|sink| {
+            sink.file
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .try_clone()
+        })
         .transpose()
-        .map_err(|source| owned_file_error(command, OutputStream::Stdout, "<owned stdout>", source))?;
+        .map_err(|source| {
+            owned_file_error(command, OutputStream::Stdout, "<owned stdout>", source)
+        })?;
     let stderr = files
         .stderr
         .as_ref()
-        .map(|sink| sink.file.lock().unwrap_or_else(|e| e.into_inner()).try_clone())
+        .map(|sink| {
+            sink.file
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .try_clone()
+        })
         .transpose()
-        .map_err(|source| owned_file_error(command, OutputStream::Stderr, "<owned stderr>", source))?;
+        .map_err(|source| {
+            owned_file_error(command, OutputStream::Stderr, "<owned stderr>", source)
+        })?;
     let handle = |file: &std::fs::File| same_file::Handle::from_file(file.try_clone()?);
-    let stdin_handle = stdin
-        .as_ref()
-        .map(handle)
-        .transpose()
-        .map_err(|source| owned_file_error(command, OutputStream::Stdout, "<owned stdin>", source))?;
-    let stdout_handle = stdout
-        .as_ref()
-        .map(handle)
-        .transpose()
-        .map_err(|source| owned_file_error(command, OutputStream::Stdout, "<owned stdout>", source))?;
-    let stderr_handle = stderr
-        .as_ref()
-        .map(handle)
-        .transpose()
-        .map_err(|source| owned_file_error(command, OutputStream::Stderr, "<owned stderr>", source))?;
+    let stdin_handle = stdin.as_ref().map(handle).transpose().map_err(|source| {
+        owned_file_error(command, OutputStream::Stdout, "<owned stdin>", source)
+    })?;
+    let stdout_handle = stdout.as_ref().map(handle).transpose().map_err(|source| {
+        owned_file_error(command, OutputStream::Stdout, "<owned stdout>", source)
+    })?;
+    let stderr_handle = stderr.as_ref().map(handle).transpose().map_err(|source| {
+        owned_file_error(command, OutputStream::Stderr, "<owned stderr>", source)
+    })?;
     if stdin_handle
         .as_ref()
         .zip(stdout_handle.as_ref())
@@ -202,6 +223,21 @@ fn validate_prepared_files(
     Ok(())
 }
 
+/// Installs prepared stdin and output sinks on the committed child command.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used in I/O errors.
+/// * `files` - Prepared file resources to install.
+/// * `committed` - Spawn-ready command whose standard streams are configured.
+///
+/// # Returns
+///
+/// `Ok(())` after all configured resources are installed.
+///
+/// # Errors
+///
+/// Returns an error if a sink cannot be cloned or configured.
 fn apply_prepared_files(
     command: &str,
     files: &PreparedFiles,
@@ -212,8 +248,12 @@ fn apply_prepared_files(
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .try_clone()
-            .map_err(|source| owned_file_error(command, OutputStream::Stdout, "<owned stdin>", source))?;
-        committed.process_command.stdin(std::process::Stdio::from(file));
+            .map_err(|source| {
+                owned_file_error(command, OutputStream::Stdout, "<owned stdin>", source)
+            })?;
+        committed
+            .process_command
+            .stdin(std::process::Stdio::from(file));
     }
     if let Some(sink) = files.stdout.as_ref() {
         committed.stdout_tee = Some(owned_sink(command, OutputStream::Stdout, sink)?);
@@ -224,6 +264,21 @@ fn apply_prepared_files(
     Ok(())
 }
 
+/// Creates a tee writer for an executor-owned output sink.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used in any write error.
+/// * `stream` - Output stream receiving the tee.
+/// * `sink` - Shared file handle and append/truncate policy.
+///
+/// # Returns
+///
+/// A tee targeting the prepared file.
+///
+/// # Errors
+///
+/// Returns a write-output error if cloning or truncating the file fails.
 fn owned_sink(
     command: &str,
     stream: OutputStream,
@@ -245,7 +300,24 @@ fn owned_sink(
     Ok(FileTee::new(file, std::path::PathBuf::from("<owned sink>")))
 }
 
-fn owned_file_error(command: &str, stream: OutputStream, path: &str, source: io::Error) -> CommandError {
+/// Builds a stream-specific command error for an owned-file operation.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text associated with the failure.
+/// * `stream` - Stream whose file operation failed.
+/// * `path` - Safe diagnostic label for the file.
+/// * `source` - Underlying operating-system error.
+///
+/// # Returns
+///
+/// A command error classified as a failed output write.
+fn owned_file_error(
+    command: &str,
+    stream: OutputStream,
+    path: &str,
+    source: io::Error,
+) -> CommandError {
     CommandError::from_reason(
         command,
         CommandErrorReason::WriteOutputFailed {
@@ -270,8 +342,8 @@ mod tests {
     #[test]
     fn test_take_output_pipe_reports_each_missing_stream() {
         for stream in [OutputStream::Stdout, OutputStream::Stderr] {
-            let error =
-                take_output_pipe::<u8>("command", stream, || None).expect_err("missing output pipe should be reported");
+            let error = take_output_pipe::<u8>("command", stream, || None)
+                .expect_err("missing output pipe should be reported");
 
             assert_eq!(error.kind(), CommandErrorKind::ReadOutputFailed);
             assert!(matches!(
@@ -400,7 +472,10 @@ impl fmt::Debug for CommandRunner {
             .field("success_exit_codes", &self.success_exit_codes)
             .field("disable_logging", &self.disable_logging)
             .field("fail_on_output_truncation", &self.fail_on_output_truncation)
-            .field("diagnostic_redaction_policy", &self.diagnostic_redaction_policy)
+            .field(
+                "diagnostic_redaction_policy",
+                &self.diagnostic_redaction_policy,
+            )
             .field("max_stdout_bytes", &self.max_stdout_bytes)
             .field("max_stderr_bytes", &self.max_stderr_bytes)
             .field("max_total_output_bytes", &self.max_total_output_bytes)
@@ -504,7 +579,11 @@ impl CommandRunner {
     /// cancellation handle has already been requested before command
     /// preparation, and maps all process, I/O, and timeout failures as
     /// described by [`CommandRunner::run`].
-    pub fn run_with(&self, command: Command, options: CommandRunOptions) -> Result<CommandOutput, CommandError> {
+    pub fn run_with(
+        &self,
+        command: Command,
+        options: CommandRunOptions,
+    ) -> Result<CommandOutput, CommandError> {
         self.run_with_tree_policy(command, options, RunTreePolicy::default())
     }
 
@@ -550,7 +629,10 @@ impl CommandRunner {
             stderr_file.as_deref(),
             session_bridge.is_some(),
         )?;
-        if cancellation.as_ref().is_some_and(CommandCancellation::is_cancelled) {
+        if cancellation
+            .as_ref()
+            .is_some_and(CommandCancellation::is_cancelled)
+        {
             return Err(CommandError::from_reason(
                 prepared.command_text,
                 CommandErrorReason::CancelledBeforeStart,
@@ -602,7 +684,9 @@ impl CommandRunner {
 
         let manage_process_tree = managed_policy == Some(ProcessTreePolicy::Managed)
             || (managed_policy != Some(ProcessTreePolicy::DirectChild)
-                && (self.timeout.is_some() || cancellation.is_some() || self.max_total_output_bytes.is_some()));
+                && (self.timeout.is_some()
+                    || cancellation.is_some()
+                    || self.max_total_output_bytes.is_some()));
         let child_process = match spawn_child(process_command, manage_process_tree) {
             Ok(child_process) => child_process,
             Err(source) => return Err(spawn_failed(&command_text, source)),
@@ -616,7 +700,9 @@ impl CommandRunner {
         );
         let total_budget = self
             .max_total_output_bytes
-            .map(|limit| TotalOutputBudget::new(limit, self.max_stdout_bytes, self.max_stderr_bytes))
+            .map(|limit| {
+                TotalOutputBudget::new(limit, self.max_stdout_bytes, self.max_stderr_bytes)
+            })
             .map(Arc::new);
         let started_at = self.timer.clock().now();
 
@@ -645,8 +731,10 @@ impl CommandRunner {
         };
         let stdout_reader = match start_output_reader(&command_text, OutputStream::Stdout, || {
             read_output_stream(stdout, {
-                let mut options =
-                    OutputCaptureOptions::new(self.max_stdout_bytes, stdout_tee.map(FileTee::into_output_tee));
+                let mut options = OutputCaptureOptions::new(
+                    self.max_stdout_bytes,
+                    stdout_tee.map(FileTee::into_output_tee),
+                );
                 if let Some(bridge) = session_bridge.as_ref() {
                     options = options.with_session_bridge(Arc::clone(bridge), OutputStream::Stdout);
                 }
@@ -663,8 +751,10 @@ impl CommandRunner {
         starting_command.set_stdout_reader(stdout_reader);
         let stderr_reader = match start_output_reader(&command_text, OutputStream::Stderr, || {
             read_output_stream(stderr, {
-                let mut options =
-                    OutputCaptureOptions::new(self.max_stderr_bytes, stderr_tee.map(FileTee::into_output_tee));
+                let mut options = OutputCaptureOptions::new(
+                    self.max_stderr_bytes,
+                    stderr_tee.map(FileTee::into_output_tee),
+                );
                 if let Some(bridge) = session_bridge.as_ref() {
                     options = options.with_session_bridge(Arc::clone(bridge), OutputStream::Stderr);
                 }
@@ -680,8 +770,11 @@ impl CommandRunner {
         };
         starting_command.set_stderr_reader(stderr_reader);
         if let Err(source) = self.timer.clock().now().duration_since(started_at) {
-            let error =
-                CommandError::from_reason(command_text.clone(), CommandErrorReason::TimeFailed { source }, None);
+            let error = CommandError::from_reason(
+                command_text.clone(),
+                CommandErrorReason::TimeFailed { source },
+                None,
+            );
             return Err(starting_command.abort_managed(error));
         }
 
@@ -706,13 +799,18 @@ impl CommandRunner {
             },
         )
         .wait_for_completion(self.timeout)?;
-        let FinishedCommand { command_text, output } = finished;
+        let FinishedCommand {
+            command_text,
+            output,
+        } = finished;
 
         if output
             .exit_code()
             .is_some_and(|exit_code| self.success_exit_codes.contains(&exit_code))
         {
-            if self.fail_on_output_truncation && (output.stdout_truncated() || output.stderr_truncated()) {
+            if self.fail_on_output_truncation
+                && (output.stdout_truncated() || output.stderr_truncated())
+            {
                 if !self.disable_logging {
                     log::debug!(
                         "Finished command `{}` with truncated output in {:?}.",
@@ -727,12 +825,20 @@ impl CommandRunner {
                 ));
             }
             if !self.disable_logging {
-                log::debug!("Finished command `{}` in {:?}.", command_text, output.elapsed());
+                log::debug!(
+                    "Finished command `{}` in {:?}.",
+                    command_text,
+                    output.elapsed()
+                );
             }
             Ok(output)
         } else {
             if !self.disable_logging {
-                log::debug!("Command `{}` exited with code {:?}.", command_text, output.exit_code());
+                log::debug!(
+                    "Command `{}` exited with code {:?}.",
+                    command_text,
+                    output.exit_code()
+                );
             }
             Err(CommandError::from_reason(
                 command_text,

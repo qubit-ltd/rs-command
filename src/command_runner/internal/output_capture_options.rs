@@ -84,6 +84,16 @@ impl OutputCaptureOptions {
         self
     }
 
+    /// Connects this reader to a streaming session endpoint.
+    ///
+    /// # Parameters
+    ///
+    /// * `bridge` - Session bridge receiving bytes read from this stream.
+    /// * `stream` - Output endpoint associated with the reader.
+    ///
+    /// # Returns
+    ///
+    /// Capture options configured to forward bytes to the session.
     pub(in crate::command_runner) fn with_session_bridge(
         mut self,
         bridge: Arc<dyn SessionBridge>,
