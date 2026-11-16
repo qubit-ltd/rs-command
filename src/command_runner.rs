@@ -47,9 +47,9 @@ use crate::FileSinkPolicy;
 use crate::OutputStream;
 use crate::ProcessTreePolicy;
 use crate::command_run_options_parts::CommandRunOptionsParts;
-use crate::execution::backend::ManagedFileSet;
 use crate::execution::backend::ReaperObserver;
 use crate::execution::backend::StartGate;
+use crate::execution::contracts::PreparedFiles;
 use crate::execution::contracts::ReservationLease;
 
 /// Marker used when a configured working directory is redacted from
@@ -100,7 +100,7 @@ fn start_output_reader(
 
 fn validate_prepared_files(
     command: &str,
-    files: &ManagedFileSet,
+    files: &PreparedFiles,
     prepared: &PreparedCommand,
 ) -> Result<(), CommandError> {
     if (files.stdout.is_some() || files.stderr.is_some())
@@ -204,7 +204,7 @@ fn validate_prepared_files(
 
 fn apply_prepared_files(
     command: &str,
-    files: &ManagedFileSet,
+    files: &PreparedFiles,
     committed: &mut CommittedCommand,
 ) -> Result<(), CommandError> {
     if let Some(stdin) = files.stdin.as_ref() {
@@ -231,7 +231,7 @@ fn apply_prepared_files(
 fn owned_sink(
     command: &str,
     stream: OutputStream,
-    sink: &crate::execution::backend::ManagedSink,
+    sink: &crate::execution::contracts::PreparedSink,
 ) -> Result<FileTee, CommandError> {
     use std::io::Write;
     let mut file = sink
@@ -531,7 +531,7 @@ impl CommandRunner {
         options: CommandRunOptions,
         managed_policy: Option<ProcessTreePolicy>,
         start_gate: Option<&StartGate>,
-        prepared_files: Option<ManagedFileSet>,
+        prepared_files: Option<PreparedFiles>,
         capacity_lease: Option<ReservationLease>,
         reaper_observer: Option<ReaperObserver>,
     ) -> Result<CommandOutput, CommandError> {

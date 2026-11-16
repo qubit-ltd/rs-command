@@ -34,8 +34,11 @@ impl StartGate {
             state.reason = Some(StopReason::UserCancelled);
             self.cancellation.cancel();
         }
-        if state.stopped || state.authorized {
+        if state.stopped {
             return None;
+        }
+        if state.authorized {
+            return Some(StartPermit(()));
         }
         state.authorized = true;
         Some(StartPermit(()))

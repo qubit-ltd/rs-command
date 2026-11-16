@@ -14,7 +14,8 @@ pub mod files;
 pub mod scheduler;
 pub use contracts::{
     ActivatedRequest, Backend, CapacityFailure, EnqueueFailure, FactSink, FilePreparationFailure,
-    PreparedFiles, Request, Reservation, ResourceInput, ScheduledJob, Scheduler, StopPort,
+    PreparedFiles, RecoveryOwner, RecoveryPublishError, RecoveryPublishFailure, RecoveryRetryError,
+    Request, Reservation, ResourceInput, ScheduledJob, Scheduler, StopPort,
 };
 
 /// Synchronous command operation handle.

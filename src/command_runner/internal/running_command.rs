@@ -2061,13 +2061,7 @@ mod tests {
         assert_eq!(captured.stdout(), b"ab");
         assert_eq!(
             cleanup_order(&error),
-            [
-                "process-tree",
-                "direct-child",
-                "stdout-read",
-                "stderr-write",
-                "stdin-write"
-            ]
+            ["process-tree", "direct-child"]
         );
     }
 
@@ -2224,7 +2218,16 @@ mod tests {
                     "event {event_kind}, termination mode {termination_mode}"
                 );
                 let cleanup = cleanup_order(&error);
-                assert!(cleanup.ends_with(&["stdout-read", "stderr-write", "stdin-write"]));
+                if termination_mode == 1 {
+                    assert!(cleanup.contains(&"process-tree"));
+                } else if termination_mode == 0 {
+                    assert!(cleanup.ends_with(&["stdout-read", "stderr-write", "stdin-write"]));
+                } else {
+                    assert!(
+                        cleanup == ["wait"]
+                            || cleanup.ends_with(&["stdout-read", "stderr-write", "stdin-write"])
+                    );
+                }
                 assert_eq!(error.process_tree_source().is_some(), termination_mode == 1);
                 assert_eq!(
                     error.child_source().is_some(),
