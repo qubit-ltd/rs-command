@@ -1,4 +1,4 @@
-use qubit_command::{CommandExecutionConfig, CommandRunOptions, ProcessTreePolicy};
+use qubit_command::{CommandExecutionConfig, CommandResourceRunOptions, CommandRunOptions, ProcessTreePolicy};
 
 #[test]
 fn managed_defaults_are_bounded() {
@@ -30,6 +30,11 @@ fn options_preserve_clone_and_managed_default() {
     assert_eq!(
         options.clone().process_tree_policy(),
         ProcessTreePolicy::Managed
+    );
+    let resources = CommandResourceRunOptions::new().options(options.clone());
+    assert_eq!(
+        resources.ordinary_options().process_tree_policy(),
+        options.process_tree_policy()
     );
 }
 
