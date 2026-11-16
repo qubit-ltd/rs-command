@@ -344,7 +344,14 @@ impl Scheduler for BoundedScheduler {
                 permit,
             });
         }
-        if !permit.belongs_to(self.0.id) || !s.records.contains_key(&permit.token) {
+        if !permit.belongs_to(self.0.id) {
+            return Err(EnqueueFailure {
+                reason: CapacityFailure::ForeignReservation,
+                job,
+                permit,
+            });
+        }
+        if !s.records.contains_key(&permit.token) {
             return Err(EnqueueFailure {
                 reason: CapacityFailure::Closed,
                 job,

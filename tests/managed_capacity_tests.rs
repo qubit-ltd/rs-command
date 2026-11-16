@@ -94,15 +94,36 @@ fn waiter_registration_cancel_and_release_are_race_safe() {
 fn foreign_permit_with_colliding_token_is_rejected_and_returned() {
     let a = BoundedScheduler::new(config(1, 1, 1, 9)).unwrap();
     let b = BoundedScheduler::new(config(1, 1, 1, 9)).unwrap();
-    let own = a.try_reserve(1).unwrap();
-    let foreign = b.try_reserve(2).unwrap();
+    let own_active = a.try_reserve(1).unwrap();
+    let own_queued = a.try_reserve(2).unwrap();
+    let origin_active = b.try_reserve(3).unwrap();
+    let foreign = b.try_reserve(4).unwrap();
     let failure = a.enqueue(job(drop), foreign).unwrap_err();
-    assert_eq!(failure.reason, CapacityFailure::Closed);
-    assert_eq!(a.snapshot().input_bytes, 1);
-    assert_eq!(b.snapshot().input_bytes, 2);
+    assert_eq!(failure.reason, CapacityFailure::ForeignReservation);
+    let a_before = a.snapshot();
+    let b_before = b.snapshot();
+    assert_eq!(
+        (a_before.active, a_before.queued, a_before.input_bytes),
+        (1, 1, 3)
+    );
+    assert_eq!(
+        (b_before.active, b_before.queued, b_before.input_bytes),
+        (1, 1, 7)
+    );
     drop(failure);
-    drop(own);
-    assert_eq!(b.snapshot().input_bytes, 0);
+    let a_after = a.snapshot();
+    let b_after = b.snapshot();
+    assert_eq!(
+        (a_after.active, a_after.queued, a_after.input_bytes),
+        (1, 1, 3)
+    );
+    assert_eq!(
+        (b_after.active, b_after.queued, b_after.input_bytes),
+        (1, 0, 3)
+    );
+    drop(own_queued);
+    drop(own_active);
+    drop(origin_active);
 }
 #[test]
 fn multi_job_queue_promotes_only_after_active_release() {
