@@ -76,7 +76,8 @@ pub(crate) fn test_supervisor_failures(test_name: &str) {
 
 fn supervisor_probe() {
     let control = control_dir();
-    wait_for_file(&control.join(START_FILE), Duration::from_secs(5)).expect("supervisor should release probe worker");
+    wait_for_file(&control.join(START_FILE), Duration::from_secs(5))
+        .expect("supervisor should release probe worker");
     let mode = std::env::var(PROBE_MODE_ENV).expect("probe mode should be set");
     if mode != "not-ready" {
         atomic_write(&control.join(READY_FILE), b"ready").expect("probe should publish readiness");
@@ -113,10 +114,17 @@ fn supervisor_probe() {
 fn exercise_probe(test_name: &str, control: &Path, fixture: &Path, mode: &str) {
     let _ = fs::remove_file(control.join(READY_FILE));
     let _ = fs::remove_file(control.join(DESCENDANT_PID_FILE));
-    let mut command =
-        ProcessCommand::new(std::env::current_exe().expect("integration test executable should be available"));
+    let mut command = ProcessCommand::new(
+        std::env::current_exe().expect("integration test executable should be available"),
+    );
     command
-        .args(["--exact", test_name, "--quiet", "--nocapture", "--test-threads=1"])
+        .args([
+            "--exact",
+            test_name,
+            "--quiet",
+            "--nocapture",
+            "--test-threads=1",
+        ])
         .env(ROLE_ENV, "probe")
         .env(PROBE_MODE_ENV, mode)
         .env(CONTROL_ENV, control)
@@ -124,7 +132,9 @@ fn exercise_probe(test_name: &str, control: &Path, fixture: &Path, mode: &str) {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     configure_supervisor(&mut command);
-    let mut child = command.spawn().expect("supervisor probe worker should start");
+    let mut child = command
+        .spawn()
+        .expect("supervisor probe worker should start");
     let mut boundary = SupervisorBoundary::assign(&child);
     atomic_write(&control.join(START_FILE), b"start").expect("probe worker should be released");
     match mode {
@@ -132,14 +142,22 @@ fn exercise_probe(test_name: &str, control: &Path, fixture: &Path, mode: &str) {
             assert!(wait_for_file(&control.join(READY_FILE), Duration::from_millis(200)).is_err());
             boundary.terminate();
             let status = child.wait().expect("watchdog should reap unready worker");
-            assert!(!status.success(), "unready worker must not pass its self-test");
+            assert!(
+                !status.success(),
+                "unready worker must not pass its self-test"
+            );
             wait_for_boundary_empty(&boundary, Duration::from_secs(5))
                 .expect("unready worker boundary should be empty after cleanup");
         }
         "hang" => {
             wait_for_file(&control.join(READY_FILE), Duration::from_secs(5))
                 .expect("hanging worker should reach readiness");
-            assert!(child.try_wait().expect("probe exit should be observable").is_none());
+            assert!(
+                child
+                    .try_wait()
+                    .expect("probe exit should be observable")
+                    .is_none()
+            );
             boundary.terminate();
             let status = child.wait().expect("watchdog should reap hanging worker");
             assert!(!status.success(), "watchdog-terminated worker must fail");
@@ -150,13 +168,22 @@ fn exercise_probe(test_name: &str, control: &Path, fixture: &Path, mode: &str) {
             wait_for_file(&control.join(READY_FILE), Duration::from_secs(5))
                 .expect("failing worker should publish readiness first");
             let status = child.wait().expect("failed worker should be reaped");
-            assert!(!status.success(), "injected worker failure must be observed");
-            assert!(boundary.is_empty().expect("failed worker should leave no child"));
+            assert!(
+                !status.success(),
+                "injected worker failure must be observed"
+            );
+            assert!(
+                boundary
+                    .is_empty()
+                    .expect("failed worker should leave no child")
+            );
         }
         "residual" => {
             wait_for_file(&control.join(READY_FILE), Duration::from_secs(5))
                 .expect("residual worker should publish readiness");
-            let status = child.wait().expect("residual worker should return normally");
+            let status = child
+                .wait()
+                .expect("residual worker should return normally");
             assert!(status.success(), "residual worker should return normally");
             let direct_identity = identify_active(read_pid(&control.join(DIRECT_PID_FILE)))
                 .expect("residual direct process should remain active after worker exit");
@@ -164,12 +191,16 @@ fn exercise_probe(test_name: &str, control: &Path, fixture: &Path, mode: &str) {
                 .expect("residual descendant must remain active after worker exit");
             #[cfg(unix)]
             assert!(
-                boundary.is_empty().expect("worker process group should be observable"),
+                boundary
+                    .is_empty()
+                    .expect("worker process group should be observable"),
                 "a process in its own group should escape the worker-group boundary"
             );
             #[cfg(windows)]
             assert!(
-                !boundary.is_empty().expect("worker Job Object should be observable"),
+                !boundary
+                    .is_empty()
+                    .expect("worker Job Object should be observable"),
                 "a child should remain within the worker Job Object"
             );
             #[cfg(unix)]
@@ -194,10 +225,17 @@ fn supervise(test_name: &str, stream: Stream) {
         .tempdir()
         .expect("supervisor control directory should be created");
     let fixture = compile_fixture(control.path());
-    let mut worker =
-        ProcessCommand::new(std::env::current_exe().expect("integration test executable should be available"));
+    let mut worker = ProcessCommand::new(
+        std::env::current_exe().expect("integration test executable should be available"),
+    );
     worker
-        .args(["--exact", test_name, "--quiet", "--nocapture", "--test-threads=1"])
+        .args([
+            "--exact",
+            test_name,
+            "--quiet",
+            "--nocapture",
+            "--test-threads=1",
+        ])
         .env(ROLE_ENV, "worker")
         .env(CONTROL_ENV, control.path())
         .env(STREAM_ENV, stream.name())
@@ -207,7 +245,8 @@ fn supervise(test_name: &str, stream: Stream) {
     configure_supervisor(&mut worker);
     let mut worker = worker.spawn().expect("supervised worker should start");
     let mut boundary = SupervisorBoundary::assign(&worker);
-    atomic_write(&control.path().join(START_FILE), b"start").expect("supervisor should release the worker");
+    atomic_write(&control.path().join(START_FILE), b"start")
+        .expect("supervisor should release the worker");
 
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -221,7 +260,9 @@ fn supervise(test_name: &str, stream: Stream) {
                     boundary.terminate();
                     wait_for_boundary_empty(&boundary, Duration::from_secs(5))
                         .expect("supervisor should terminate leftover worker process tree");
-                    panic!("worker exited with a live process in its independent supervisor boundary");
+                    panic!(
+                        "worker exited with a live process in its independent supervisor boundary"
+                    );
                 }
                 assert!(status.success(), "supervised worker failed: {status}");
                 assert!(
@@ -319,7 +360,9 @@ fn worker(_test_name: &str, stream: Stream) {
     wait_for_file(&control.join(START_FILE), Duration::from_secs(5))
         .expect("supervisor should release worker before its readiness deadline");
 
-    let control_string = control.to_str().expect("control directory path should be valid UTF-8");
+    let control_string = control
+        .to_str()
+        .expect("control directory path should be valid UTF-8");
     let fixture = std::env::var(FIXTURE_ENV).expect("supervisor should provide compiled fixture");
     let command = Command::new(&fixture)
         .args(&["command"])
@@ -327,29 +370,36 @@ fn worker(_test_name: &str, stream: Stream) {
         .env(STREAM_ENV, stream.name());
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     thread::spawn(move || {
-        let result = CommandRunner::without_timeout().max_total_output_bytes(8).run(command);
+        let result = CommandRunner::without_timeout()
+            .max_total_output_bytes(8)
+            .run(command);
         let _ = result_tx.send(result);
     });
     if let Err(error) = wait_for_file(&control.join(READY_FILE), Duration::from_secs(5)) {
-        atomic_write(&control.join(ABORT_FILE), b"abort").expect("abort gate should open on setup failure");
+        atomic_write(&control.join(ABORT_FILE), b"abort")
+            .expect("abort gate should open on setup failure");
         let _ = result_rx.recv_timeout(Duration::from_secs(5));
         panic!("process fixture did not become ready: {error}");
     }
     let direct_pid = read_pid(&control.join(DIRECT_PID_FILE));
     let descendant_pid = read_pid(&control.join(DESCENDANT_PID_FILE));
-    let direct_identity =
-        identify_active(direct_pid).expect("direct child identity must be active before output is released");
-    let descendant_identity =
-        identify_active(descendant_pid).expect("ready descendant identity must be active before output is released");
+    let direct_identity = identify_active(direct_pid)
+        .expect("direct child identity must be active before output is released");
+    let descendant_identity = identify_active(descendant_pid)
+        .expect("ready descendant identity must be active before output is released");
     atomic_write(&control.join(EMIT_FILE), b"emit").expect("worker should release output gate");
     let runner_result = result_rx
         .recv_timeout(Duration::from_secs(5))
         .expect("runner should return after its independent output budget is exceeded");
-    let runner_error = runner_result.expect_err("a live process tree must exceed the output budget");
+    let runner_error =
+        runner_result.expect_err("a live process tree must exceed the output budget");
     assert_eq!(runner_error.kind(), CommandErrorKind::OutputLimitExceeded);
     assert!(matches!(
         runner_error.reason(),
-        CommandErrorReason::OutputLimitExceeded { limit: 8, observed: 9 }
+        CommandErrorReason::OutputLimitExceeded {
+            limit: 8,
+            observed: 9
+        }
     ));
     assert!(runner_error.output().is_none());
     let captured = runner_error
@@ -463,7 +513,10 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 fn read_pid(path: &Path) -> u32 {
     let value = fs::read_to_string(path).expect("fixture should publish process identity");
-    value.trim().parse().expect("published PID should be numeric")
+    value
+        .trim()
+        .parse()
+        .expect("published PID should be numeric")
 }
 
 fn wait_for_file(path: &Path, timeout: Duration) -> Result<(), String> {
@@ -474,7 +527,10 @@ fn wait_for_file(path: &Path, timeout: Duration) -> Result<(), String> {
         }
         thread::sleep(Duration::from_millis(5));
     }
-    Err(format!("{} was not published within {timeout:?}", path.display()))
+    Err(format!(
+        "{} was not published within {timeout:?}",
+        path.display()
+    ))
 }
 
 #[cfg(unix)]
@@ -519,7 +575,10 @@ fn wait_until_stopped(identity: &ProcessIdentity, timeout: Duration) -> Result<(
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(format!("process {} remained active after {timeout:?}", identity.pid));
+            return Err(format!(
+                "process {} remained active after {timeout:?}",
+                identity.pid
+            ));
         }
         thread::sleep(Duration::from_millis(10));
     }
@@ -547,7 +606,9 @@ fn process_snapshot(pid: u32) -> Result<(ProcessState, String), String> {
             .rsplit_once(')')
             .map(|(_, fields)| fields.split_whitespace().collect::<Vec<_>>())
             .ok_or_else(|| format!("parse process state for PID {pid}"))?;
-        let state = *fields.first().ok_or_else(|| format!("parse state for PID {pid}"))?;
+        let state = *fields
+            .first()
+            .ok_or_else(|| format!("parse state for PID {pid}"))?;
         let start_time = fields
             .get(19)
             .ok_or_else(|| format!("parse start time for PID {pid}"))?
@@ -575,7 +636,9 @@ fn process_snapshot(pid: u32) -> Result<(ProcessState, String), String> {
             .args(["-o", "lstart=", "-p", &pid.to_string()])
             .output()
             .map_err(|error| format!("query process start time {pid}: {error}"))?;
-        let start_time = String::from_utf8_lossy(&start_output.stdout).trim().to_owned();
+        let start_time = String::from_utf8_lossy(&start_output.stdout)
+            .trim()
+            .to_owned();
         Ok((
             if state.starts_with('Z') {
                 ProcessState::Stopped
@@ -658,7 +721,10 @@ fn wait_until_stopped(identity: &ProcessIdentity, timeout: Duration) -> Result<(
     let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX - 1);
     match unsafe { WaitForSingleObject(identity.handle.as_raw_handle(), millis) } {
         WAIT_OBJECT_0 => Ok(()),
-        WAIT_TIMEOUT => Err(format!("process {} remained active after {timeout:?}", identity.pid)),
+        WAIT_TIMEOUT => Err(format!(
+            "process {} remained active after {timeout:?}",
+            identity.pid
+        )),
         code => Err(format!("wait for process {} returned {code}", identity.pid)),
     }
 }
@@ -675,7 +741,9 @@ impl SupervisorBoundary {
     fn is_empty(&self) -> Result<bool, String> {
         #[cfg(target_os = "linux")]
         {
-            for entry in fs::read_dir("/proc").map_err(|error| format!("list process table: {error}"))? {
+            for entry in
+                fs::read_dir("/proc").map_err(|error| format!("list process table: {error}"))?
+            {
                 let entry = entry.map_err(|error| format!("read process table entry: {error}"))?;
                 let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
                     continue;
@@ -793,7 +861,8 @@ impl WindowsSupervisorJob {
         }
         #[link(name = "kernel32")]
         unsafe extern "system" {
-            fn CreateJobObjectW(attributes: *const std::ffi::c_void, name: *const u16) -> RawHandle;
+            fn CreateJobObjectW(attributes: *const std::ffi::c_void, name: *const u16)
+            -> RawHandle;
             fn SetInformationJobObject(
                 job: RawHandle,
                 class: i32,
@@ -846,9 +915,12 @@ impl WindowsSupervisorJob {
                 std::mem::size_of::<ExtendedLimitInformation>() as u32,
             )
         };
-        assert_ne!(set, 0, "configure supervisor Job Object: Windows error {}", unsafe {
-            GetLastError()
-        });
+        assert_ne!(
+            set,
+            0,
+            "configure supervisor Job Object: Windows error {}",
+            unsafe { GetLastError() }
+        );
         let assigned = unsafe { AssignProcessToJobObject(raw, worker.as_raw_handle()) };
         assert_ne!(
             assigned,
@@ -886,7 +958,10 @@ impl WindowsSupervisorJob {
             ) -> i32;
             fn GetLastError() -> u32;
         }
-        let handle = self.0.as_ref().expect("supervisor Job Object should be open");
+        let handle = self
+            .0
+            .as_ref()
+            .expect("supervisor Job Object should be open");
         let mut accounting = BasicAccountingInformation {
             total_user_time: 0,
             total_kernel_time: 0,
@@ -907,9 +982,10 @@ impl WindowsSupervisorJob {
             )
         };
         if queried == 0 {
-            return Err(format!("query supervisor Job Object: Windows error {}", unsafe {
-                GetLastError()
-            }));
+            return Err(format!(
+                "query supervisor Job Object: Windows error {}",
+                unsafe { GetLastError() }
+            ));
         }
         Ok(accounting.active_processes == 0)
     }
@@ -923,11 +999,17 @@ impl WindowsSupervisorJob {
             fn TerminateJobObject(job: RawHandle, exit_code: u32) -> i32;
             fn GetLastError() -> u32;
         }
-        let handle = self.0.as_ref().expect("supervisor Job Object should be open");
+        let handle = self
+            .0
+            .as_ref()
+            .expect("supervisor Job Object should be open");
         let result = unsafe { TerminateJobObject(handle.as_raw_handle(), 1) };
-        assert_ne!(result, 0, "terminate supervisor Job Object: Windows error {}", unsafe {
-            GetLastError()
-        });
+        assert_ne!(
+            result,
+            0,
+            "terminate supervisor Job Object: Windows error {}",
+            unsafe { GetLastError() }
+        );
     }
 }
 
@@ -938,7 +1020,9 @@ fn wait_for_boundary_empty(boundary: &SupervisorBoundary, timeout: Duration) -> 
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(format!("supervisor process boundary remained active for {timeout:?}"));
+            return Err(format!(
+                "supervisor process boundary remained active for {timeout:?}"
+            ));
         }
         thread::sleep(Duration::from_millis(10));
     }

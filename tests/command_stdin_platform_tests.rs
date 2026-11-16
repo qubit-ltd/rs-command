@@ -35,7 +35,8 @@ fn test_stdin_platform_helper() {
     };
     let directory = std::env::var_os(HELPER_DIR).expect("helper directory should be supplied");
     let directory = std::path::PathBuf::from(directory);
-    fs::write(directory.join("pid"), std::process::id().to_string()).expect("helper pid should be recorded");
+    fs::write(directory.join("pid"), std::process::id().to_string())
+        .expect("helper pid should be recorded");
     match mode.as_str() {
         "receive" => {
             let mut bytes = Vec::new();
@@ -43,7 +44,8 @@ fn test_stdin_platform_helper() {
                 .read_to_end(&mut bytes)
                 .expect("stdin should reach EOF");
             let summary = format!("{}:{}", bytes.len(), checksum(&bytes));
-            fs::write(directory.join("result"), summary).expect("receive summary should be written");
+            fs::write(directory.join("result"), summary)
+                .expect("receive summary should be written");
         }
         "hold" => {
             fs::write(directory.join("ready"), b"ready").expect("ready marker should be written");
@@ -58,7 +60,8 @@ fn test_stdin_platform_helper() {
                 thread::sleep(Duration::from_millis(10));
             }
             if directory.join("release").exists() {
-                fs::write(directory.join("ready"), b"ready").expect("ready marker should be written");
+                fs::write(directory.join("ready"), b"ready")
+                    .expect("ready marker should be written");
                 loop {
                     thread::park_timeout(Duration::from_secs(60));
                 }
@@ -68,7 +71,8 @@ fn test_stdin_platform_helper() {
             let mut first = [0];
             let _ = std::io::stdin().read(&mut first);
             fs::write(directory.join("first-byte"), first).expect("first byte should be recorded");
-            fs::write(directory.join("ack"), b"ack").expect("early-exit acknowledgement should be written");
+            fs::write(directory.join("ack"), b"ack")
+                .expect("early-exit acknowledgement should be written");
             if mode == "early-7" {
                 std::process::exit(7);
             }
@@ -81,7 +85,13 @@ fn test_stdin_platform_helper() {
 fn test_stdin_receive_transmits_non_constant_data_and_eof() {
     let directory = tempdir().expect("temporary directory should be created");
     let data = payload(256 * 1024 + 137);
-    let result = run_helper("receive", directory.path(), data.clone(), Duration::from_secs(8), None);
+    let result = run_helper(
+        "receive",
+        directory.path(),
+        data.clone(),
+        Duration::from_secs(8),
+        None,
+    );
     let output = result.expect("receive helper should finish successfully");
     assert_eq!(output.exit_code(), Some(0));
     let expected = format!("{}:{}", data.len(), checksum(&data));
@@ -108,7 +118,11 @@ fn test_stdin_hold_is_cancelled_within_watchdog() {
         );
         let _ = sender.send(result);
     });
-    wait_for_file(&directory.path().join("ready"), &directory.path().join("pid"), WATCHDOG);
+    wait_for_file(
+        &directory.path().join("ready"),
+        &directory.path().join("pid"),
+        WATCHDOG,
+    );
     cancellation.cancel();
     let result = receive_with_watchdog(receiver, &directory.path().join("pid"));
     worker.join().expect("runner thread should not panic");
@@ -141,7 +155,11 @@ fn test_stdin_hold_times_out_within_watchdog() {
         );
         let _ = sender.send(result);
     });
-    let ready = wait_for_file_result(&directory.path().join("ready"), &directory.path().join("pid"), WATCHDOG);
+    let ready = wait_for_file_result(
+        &directory.path().join("ready"),
+        &directory.path().join("pid"),
+        WATCHDOG,
+    );
     let waiter_ready = ready && clock.wait_for_waiters(1, WATCHDOG);
     if waiter_ready {
         clock.advance(timeout).expect("manual time should advance");
@@ -155,7 +173,10 @@ fn test_stdin_hold_times_out_within_watchdog() {
     );
     worker.join().expect("runner thread should not panic");
     assert!(ready, "hold helper did not become ready before watchdog");
-    assert!(waiter_ready, "timeout waiter did not register before watchdog");
+    assert!(
+        waiter_ready,
+        "timeout waiter did not register before watchdog"
+    );
     let error = result.expect_err("hold helper should time out");
     assert_eq!(error.kind(), CommandErrorKind::TimedOut);
     assert!(
@@ -186,10 +207,18 @@ fn test_stdin_delayed_ready_does_not_consume_timeout() {
         let _ = sender.send(result);
     });
 
-    let gate_seen = wait_for_file_result(&directory.path().join("gate"), &directory.path().join("pid"), WATCHDOG);
+    let gate_seen = wait_for_file_result(
+        &directory.path().join("gate"),
+        &directory.path().join("pid"),
+        WATCHDOG,
+    );
     let remained_running = gate_seen && receiver.recv_timeout(Duration::from_millis(400)).is_err();
     let _ = fs::write(directory.path().join("release"), b"release");
-    let ready = wait_for_file_result(&directory.path().join("ready"), &directory.path().join("pid"), WATCHDOG);
+    let ready = wait_for_file_result(
+        &directory.path().join("ready"),
+        &directory.path().join("pid"),
+        WATCHDOG,
+    );
     let waiter_ready = ready && clock.wait_for_waiters(1, WATCHDOG);
     if waiter_ready {
         clock.advance(timeout).expect("manual time should advance");
@@ -203,9 +232,15 @@ fn test_stdin_delayed_ready_does_not_consume_timeout() {
     );
     worker.join().expect("runner thread should not panic");
     assert!(gate_seen, "gate helper did not enter before watchdog");
-    assert!(remained_running, "runner returned during delayed helper startup");
+    assert!(
+        remained_running,
+        "runner returned during delayed helper startup"
+    );
     assert!(ready, "gate helper did not become ready before watchdog");
-    assert!(waiter_ready, "timeout waiter did not register before watchdog");
+    assert!(
+        waiter_ready,
+        "timeout waiter did not register before watchdog"
+    );
     let error = result.expect_err("gate helper should time out");
     assert_eq!(error.kind(), CommandErrorKind::TimedOut);
     assert!(
@@ -222,7 +257,13 @@ fn test_stdin_early_exit_does_not_mask_exit_status_with_broken_pipe() {
         let directory_path = directory.path().to_path_buf();
         let mode = mode.to_owned();
         let worker = thread::spawn(move || {
-            let result = run_helper(&mode, &directory_path, payload(8 * 1024 * 1024), WATCHDOG, None);
+            let result = run_helper(
+                &mode,
+                &directory_path,
+                payload(8 * 1024 * 1024),
+                WATCHDOG,
+                None,
+            );
             let _ = sender.send(result);
         });
         let result = receive_with_watchdog(receiver, &directory.path().join("pid"));
@@ -241,7 +282,8 @@ fn test_stdin_early_exit_does_not_mask_exit_status_with_broken_pipe() {
                 assert_eq!(output.exit_code(), Some(0));
             }
             7 => {
-                let error = result.expect_err("nonzero exit should remain visible after broken pipe");
+                let error =
+                    result.expect_err("nonzero exit should remain visible after broken pipe");
                 assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
                 assert_eq!(error.exit_code(), Some(7));
                 assert!(error.cleanup_failures().is_empty());
@@ -270,7 +312,9 @@ fn run_helper_with_runner(
     cancellation: Option<CommandCancellation>,
 ) -> Result<qubit_command::CommandOutput, qubit_command::CommandError> {
     let executable = std::env::current_exe().expect("test executable path should be available");
-    let executable = executable.to_str().expect("test executable path should be UTF-8");
+    let executable = executable
+        .to_str()
+        .expect("test executable path should be UTF-8");
     let mut command = Command::new(executable);
     command = command
         .arg("--exact")
@@ -280,7 +324,9 @@ fn run_helper_with_runner(
         .env(HELPER_MARKER, mode)
         .env(
             HELPER_DIR,
-            directory.to_str().expect("temporary directory path should be UTF-8"),
+            directory
+                .to_str()
+                .expect("temporary directory path should be UTF-8"),
         )
         .stdin_bytes(bytes);
     let options = cancellation.map_or_else(CommandRunOptions::new, |token| {
@@ -308,7 +354,11 @@ fn wait_for_file(path: &std::path::Path, pid_path: &std::path::Path, timeout: Du
     }
 }
 
-fn wait_for_file_result(path: &std::path::Path, pid_path: &std::path::Path, timeout: Duration) -> bool {
+fn wait_for_file_result(
+    path: &std::path::Path,
+    pid_path: &std::path::Path,
+    timeout: Duration,
+) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if path.exists() {
@@ -336,14 +386,17 @@ fn receive_with_rescue<T>(
             cancellation.cancel();
             let _ = clock.advance(timeout);
             terminate_helper(pid_path);
-            receiver
-                .recv_timeout(WATCHDOG)
-                .unwrap_or_else(|_| panic!("runner did not finish after rescue; initial wait error: {error}"))
+            receiver.recv_timeout(WATCHDOG).unwrap_or_else(|_| {
+                panic!("runner did not finish after rescue; initial wait error: {error}")
+            })
         }
     }
 }
 
-fn receive_with_watchdog<T>(receiver: std::sync::mpsc::Receiver<T>, pid_path: &std::path::Path) -> T {
+fn receive_with_watchdog<T>(
+    receiver: std::sync::mpsc::Receiver<T>,
+    pid_path: &std::path::Path,
+) -> T {
     match receiver.recv_timeout(WATCHDOG) {
         Ok(result) => result,
         Err(error) => {
@@ -362,6 +415,8 @@ fn terminate_helper(pid_path: &std::path::Path) {
         .args(["/F", "/PID", pid.trim()])
         .status();
     #[cfg(unix)]
-    let status = ProcessCommand::new("kill").args(["-KILL", pid.trim()]).status();
+    let status = ProcessCommand::new("kill")
+        .args(["-KILL", pid.trim()])
+        .status();
     let _ = status;
 }

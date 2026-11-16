@@ -1,6 +1,6 @@
 //! Owned file handoff contracts.
-use crate::resource_run_options::FileSinkPolicy;
 use super::ExecutionSnapshot;
+use crate::resource_run_options::FileSinkPolicy;
 use qubit_operation::{OperationScope, ResourceRef};
 use std::fs::File;
 use std::sync::Mutex;

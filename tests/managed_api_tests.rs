@@ -1,4 +1,6 @@
-use qubit_command::{CommandExecutionConfig, CommandResourceRunOptions, CommandRunOptions, ProcessTreePolicy};
+use qubit_command::{
+    CommandExecutionConfig, CommandResourceRunOptions, CommandRunOptions, ProcessTreePolicy,
+};
 
 #[test]
 fn managed_defaults_are_bounded() {
