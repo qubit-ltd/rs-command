@@ -1,214 +1,31 @@
-//! Dedicated bounded workers that retain uncertain process/helper ownership.
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
+
 use std::io;
 use std::sync::OnceLock;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::sync::mpsc::SyncSender;
-use std::sync::mpsc::TrySendError;
 use std::sync::mpsc::sync_channel;
 use std::thread;
 
-use crate::execution::contracts::FactSink;
-use crate::execution::contracts::RecoveryEffectEvidence;
-use crate::execution::contracts::RecoveryOwner;
+use super::internal::ReaperOwner;
 
-type Cleanup = Box<dyn FnOnce() + Send + 'static>;
-
-pub(crate) struct ReaperOwner(Option<Cleanup>);
-
-pub(crate) struct DeferredReaperOwner {
-    owner: std::sync::Mutex<Option<ReaperOwner>>,
-    observer: ReaperObserver,
-}
-
-impl DeferredReaperOwner {
-    pub(crate) fn new(owner: ReaperOwner, observer: ReaperObserver) -> Self {
-        Self {
-            owner: std::sync::Mutex::new(Some(owner)),
-            observer,
-        }
-    }
-}
-
-impl RecoveryOwner for DeferredReaperOwner {
-    fn summary(&self) -> String {
-        "managed child and I/O helpers awaiting bounded reaper capacity".to_owned()
-    }
-
-    fn effect_evidence(&self, operation_id: qubit_operation::OperationId) -> RecoveryEffectEvidence {
-        if self.observer.is_complete() || !self.observer.is_pending() {
-            return RecoveryEffectEvidence::default();
-        }
-        let queued = self.owner.lock().unwrap_or_else(|error| error.into_inner()).is_none();
-        let description = if queued {
-            "managed process/helper cleanup is pending in reaper"
-        } else {
-            "managed process/helper cleanup awaits reaper handoff"
-        };
-        RecoveryEffectEvidence {
-            effects: vec![qubit_operation::EffectRecord {
-                operation_id,
-                resource_id: None,
-                fact: qubit_operation::EffectFact::Unknown,
-                description: qubit_operation::DiagnosticSummary::new(description),
-            }],
-            effects_total: 1,
-            effect_overflow: 0,
-        }
-    }
-
-    fn retry_cleanup(&self) -> Result<(), crate::execution::contracts::RecoveryRetryError> {
-        let mut slot = self.owner.lock().unwrap_or_else(|error| error.into_inner());
-        let Some(owner) = slot.take() else {
-            return if self.observer.is_complete() {
-                Ok(())
-            } else {
-                Err(crate::execution::contracts::RecoveryRetryError::CleanupHandoffUnavailable)
-            };
-        };
-        let result = match Reaper::global() {
-            Ok(reaper) => reaper.handoff(owner),
-            Err(_) => Err(owner),
-        };
-        match result {
-            Ok(()) => Ok(()),
-            Err(owner) => {
-                *slot = Some(owner);
-                Err(crate::execution::contracts::RecoveryRetryError::CleanupHandoffUnavailable)
-            }
-        }
-    }
-
-    fn is_complete(&self) -> bool {
-        self.observer.is_complete()
-    }
-}
-
-impl std::fmt::Debug for ReaperOwner {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("ReaperOwner").finish_non_exhaustive()
-    }
-}
-
-impl ReaperOwner {
-    pub(crate) fn new(cleanup: impl FnOnce() + Send + 'static) -> Self {
-        Self(Some(Box::new(cleanup)))
-    }
-
-    fn reap(mut self) {
-        if let Some(cleanup) = self.0.take() {
-            cleanup();
-        }
-    }
-
-    pub(crate) fn run_inline(self) {
-        self.reap();
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct ReaperObserver {
-    pending: std::sync::Arc<AtomicBool>,
-    completed: std::sync::Arc<AtomicBool>,
-    recovery_transferred: std::sync::Arc<AtomicBool>,
-    completion_sender: std::sync::Arc<std::sync::Mutex<Option<SyncSender<()>>>>,
-    recovery_sink: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<dyn FactSink>>>>,
-    deferred_owner: std::sync::Arc<std::sync::Mutex<Option<Box<dyn RecoveryOwner>>>>,
-}
-
-impl ReaperObserver {
-    pub(crate) fn pair() -> (Self, std::sync::mpsc::Receiver<()>) {
-        let (sender, receiver) = sync_channel(1);
-        (
-            Self {
-                pending: std::sync::Arc::new(AtomicBool::new(false)),
-                completed: std::sync::Arc::new(AtomicBool::new(false)),
-                recovery_transferred: std::sync::Arc::new(AtomicBool::new(false)),
-                completion_sender: std::sync::Arc::new(std::sync::Mutex::new(Some(sender))),
-                recovery_sink: std::sync::Arc::new(std::sync::Mutex::new(None)),
-                deferred_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            },
-            receiver,
-        )
-    }
-
-    pub(crate) fn pair_with_recovery_sink(sink: std::sync::Arc<dyn FactSink>) -> (Self, std::sync::mpsc::Receiver<()>) {
-        let (observer, receiver) = Self::pair();
-        *observer.recovery_sink.lock().unwrap_or_else(|error| error.into_inner()) = Some(sink);
-        (observer, receiver)
-    }
-
-    pub(crate) fn recovery_sink(&self) -> Option<std::sync::Arc<dyn FactSink>> {
-        self.recovery_sink
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone()
-    }
-
-    pub(crate) fn defer_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) {
-        *self.deferred_owner.lock().unwrap_or_else(|error| error.into_inner()) = Some(owner);
-    }
-
-    pub(crate) fn retain_or_defer_reaper_owner(&self, owner: ReaperOwner) {
-        let recovery_owner: Box<dyn RecoveryOwner> = Box::new(DeferredReaperOwner::new(owner, self.clone()));
-        if let Some(sink) = self.recovery_sink() {
-            match sink.retain_recovery_owner(recovery_owner) {
-                Ok(()) => self.mark_recovery_transferred(),
-                Err(failure) => self.defer_recovery_owner(failure.owner),
-            }
-        } else {
-            self.defer_recovery_owner(recovery_owner);
-        }
-    }
-
-    pub(crate) fn take_deferred_recovery_owner(&self) -> Option<Box<dyn RecoveryOwner>> {
-        self.deferred_owner
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
-    }
-
-    pub(crate) fn is_complete(&self) -> bool {
-        self.completed.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn mark_recovery_transferred(&self) {
-        self.recovery_transferred.store(true, Ordering::Release);
-    }
-
-    pub(crate) fn recovery_was_transferred(&self) -> bool {
-        self.recovery_transferred.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn mark_pending(&self) {
-        self.pending.store(true, Ordering::Release);
-    }
-
-    pub(crate) fn is_pending(&self) -> bool {
-        self.pending.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn complete(&self) {
-        self.completed.store(true, Ordering::Release);
-        if let Some(sender) = self
-            .completion_sender
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
-        {
-            let _ = sender.send(());
-        }
-    }
-}
-
+/// Represents the reaper state or contract used by managed command execution.
 pub(crate) struct Reaper {
+    /// Stores the sender value used by this execution component.
     sender: SyncSender<ReaperOwner>,
+    /// Stores the overflow sender value used by this execution component.
     overflow_sender: SyncSender<ReaperOwner>,
 }
 
 static REAPER: OnceLock<Result<Reaper, String>> = OnceLock::new();
 
 impl Reaper {
+    /// Stores the initialize value used by this execution component.
     fn initialize() -> io::Result<Self> {
         const WORKERS: usize = 4;
         const CAPACITY: usize = 32;
@@ -240,6 +57,7 @@ impl Reaper {
         })
     }
 
+    /// Stores the global value used by this execution component.
     pub(crate) fn global() -> io::Result<&'static Self> {
         match REAPER.get_or_init(|| Self::initialize().map_err(|error| error.to_string())) {
             Ok(reaper) => Ok(reaper),
@@ -247,6 +65,10 @@ impl Reaper {
         }
     }
 
+    /// Stores the handoff value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `owner`: Supplies the owner value used by this operation.
     pub(crate) fn handoff(&self, owner: ReaperOwner) -> Result<(), ReaperOwner> {
         match self.sender.try_send(owner) {
             Ok(()) => Ok(()),
@@ -279,7 +101,7 @@ mod tests {
     use crate::execution::contracts::RecoveryOwner;
 
     #[test]
-    fn deferred_process_owner_reports_bounded_unknown_effect_while_cleanup_is_pending() {
+    fn test_deferred_process_owner_reports_bounded_unknown_effect_while_cleanup_is_pending() {
         let (observer, completed) = ReaperObserver::pair();
         observer.mark_pending();
         let (cleanup_tx, cleanup_rx) = std::sync::mpsc::channel();
@@ -333,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn bounded_reaper_executes_transferred_owner_before_completion_signal() {
+    fn test_bounded_reaper_executes_transferred_owner_before_completion_signal() {
         let reaper = Reaper::global().expect("reaper workers should start");
         let released = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&released);
@@ -352,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    fn full_primary_queue_returns_owner_to_bounded_overflow_queue_without_blocking() {
+    fn test_full_primary_queue_returns_owner_to_bounded_overflow_queue_without_blocking() {
         let (sender, primary) = sync_channel(1);
         let (overflow_sender, overflow) = sync_channel(1);
         let reaper = Reaper {
@@ -378,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn both_full_queues_return_owner_for_retry_after_capacity_drains() {
+    fn test_both_full_queues_return_owner_for_retry_after_capacity_drains() {
         let (sender, primary) = sync_channel(1);
         let (overflow_sender, _overflow) = sync_channel(1);
         let reaper = Reaper {

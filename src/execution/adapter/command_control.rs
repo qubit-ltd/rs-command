@@ -17,25 +17,18 @@ use qubit_operation::SettlementReport;
 use qubit_operation::StopReason;
 use qubit_operation::StopReport;
 
+use super::internal::State;
 use crate::CommandError;
 use crate::CommandOutput;
 
+/// Represents the command control state or contract used by managed command
+/// execution.
 pub(crate) struct CommandControl {
+    /// Stores the state value used by this execution component.
     state: Mutex<State>,
 }
-struct State {
-    id: Option<OperationId>,
-    phase: ExecutionPhase,
-    stop: Option<StopReport>,
-    outcome: Option<OperationOutcome<CommandOutput, CommandError>>,
-    summary: Option<ChildOutcomeSummary>,
-    release: Option<ChildRelease>,
-    settlement: Option<Arc<SettlementReport>>,
-    outcome_wakers: Vec<Waker>,
-    release_wakers: Vec<Waker>,
-    settlement_wakers: Vec<Waker>,
-}
 impl Default for CommandControl {
+    /// Performs the default step in the managed command execution lifecycle.
     fn default() -> Self {
         Self {
             state: Mutex::new(State {
@@ -54,9 +47,15 @@ impl Default for CommandControl {
     }
 }
 impl CommandControl {
+    /// Performs the operation id step in the managed command execution
+    /// lifecycle.
     pub(crate) fn operation_id(&self) -> Option<OperationId> {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).id
     }
+    /// Stores the bind value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `id`: Supplies the id value used by this operation.
     pub(crate) fn bind(&self, id: OperationId) -> bool {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.id.is_some() {
@@ -66,9 +65,15 @@ impl CommandControl {
         state.phase = ExecutionPhase::Queued;
         true
     }
+    /// Performs the running step in the managed command execution lifecycle.
     pub(crate) fn running(&self) {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).phase = ExecutionPhase::Running;
     }
+    /// Performs the publish outcome step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `outcome`: Supplies the outcome value used by this operation.
     pub(crate) fn publish_outcome(&self, outcome: OperationOutcome<CommandOutput, CommandError>) -> bool {
         let wakers = {
             let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -102,6 +107,7 @@ impl CommandControl {
         }
         true
     }
+    /// Performs the release step in the managed command execution lifecycle.
     pub(crate) fn release(&self) -> bool {
         let wakes = {
             let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -120,6 +126,10 @@ impl CommandControl {
         }
         true
     }
+    /// Stores the settlement value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `report`: Supplies the report value used by this operation.
     pub(crate) fn settlement(&self, report: Arc<SettlementReport>) -> bool {
         let wakes = {
             let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -134,6 +144,10 @@ impl CommandControl {
         }
         true
     }
+    /// Performs the take step in the managed command execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `cx`: Supplies the cx value used by this operation.
     pub(crate) fn take(&self, cx: &mut Context<'_>) -> Poll<OperationOutcome<CommandOutput, CommandError>> {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(out) = s.outcome.take() {
@@ -146,6 +160,10 @@ impl CommandControl {
     }
 }
 impl OperationControl for CommandControl {
+    /// Stores the request stop value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `reason`: Supplies the reason value used by this operation.
     fn request_stop(&self, reason: StopReason) {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if s.stop.is_none() {
@@ -155,6 +173,7 @@ impl OperationControl for CommandControl {
             });
         }
     }
+    /// Performs the snapshot step in the managed command execution lifecycle.
     fn snapshot(&self) -> ChildSnapshot {
         let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         ChildSnapshot {
@@ -166,6 +185,10 @@ impl OperationControl for CommandControl {
             settlement: s.settlement.clone(),
         }
     }
+    /// Stores the poll outcome value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `cx`: Supplies the cx value used by this operation.
     fn poll_outcome(&self, cx: &mut Context<'_>) -> Poll<ChildOutcomeSummary> {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(x) = &s.summary {
@@ -176,6 +199,10 @@ impl OperationControl for CommandControl {
         }
         Poll::Pending
     }
+    /// Stores the poll release value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `cx`: Supplies the cx value used by this operation.
     fn poll_release(&self, cx: &mut Context<'_>) -> Poll<ChildRelease> {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(x) = &s.release {
@@ -186,6 +213,10 @@ impl OperationControl for CommandControl {
         }
         Poll::Pending
     }
+    /// Stores the poll settlement value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `cx`: Supplies the cx value used by this operation.
     fn poll_settlement(&self, cx: &mut Context<'_>) -> Poll<Arc<SettlementReport>> {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(x) = &s.settlement {

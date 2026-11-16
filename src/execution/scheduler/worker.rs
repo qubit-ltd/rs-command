@@ -1,14 +1,12 @@
-use std::collections::VecDeque;
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 
-use crate::execution::contracts::ScheduledJob;
-
-pub(super) struct Queued {
-    pub job: ScheduledJob,
-    pub permit: crate::execution::Reservation,
-    pub timeout_requested: bool,
-    pub timeout_pending: bool,
-}
-#[derive(Default)]
-pub(super) struct WorkerQueue {
-    pub jobs: VecDeque<Queued>,
-}
+mod queued;
+mod worker_queue;
+pub(super) use queued::Queued;
+pub(super) use worker_queue::WorkerQueue;

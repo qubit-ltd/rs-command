@@ -1,11 +1,13 @@
 //! Bounded admission and dispatch for managed command work.
-mod reservation;
-mod state;
-mod waiter;
+mod bounded_scheduler;
+mod internal;
+mod kind;
+mod scheduler_snapshot;
+mod waiters;
 mod worker;
 
-pub use state::BoundedScheduler;
-pub use state::SchedulerSnapshot;
+pub use bounded_scheduler::BoundedScheduler;
+pub use scheduler_snapshot::SchedulerSnapshot;
 
 #[cfg(test)]
 mod tests {
@@ -15,7 +17,7 @@ mod tests {
     use std::task::Wake;
     use std::task::Waker;
 
-    use super::*;
+    use super::BoundedScheduler;
     use crate::execution::CommandExecutionConfig;
     use crate::execution::Scheduler;
     struct CountWake(AtomicUsize);

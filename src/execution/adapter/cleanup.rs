@@ -4,45 +4,22 @@ use std::sync::mpsc::Receiver;
 use std::sync::mpsc::SyncSender;
 use std::sync::mpsc::sync_channel;
 
-use qubit_operation::OperationId;
 use qubit_operation::SettlementReport;
 use qubit_operation::SettlementStatus;
 
 use super::CommandControl;
+use super::OperationObserverSlot;
+use super::RecoveryItem;
 use crate::execution::contracts::RecoveryEffectEvidence;
 use crate::execution::contracts::RecoveryOwner;
 use crate::execution::contracts::RecoveryRetryError;
 
 const MAX_RECOVERY_EFFECTS: usize = 64;
 
-pub(crate) struct RecoveryItem {
-    pub owner: Box<dyn RecoveryOwner>,
-    pub control: Arc<CommandControl>,
-    pub id: OperationId,
-    pub observer: Arc<OperationObserverSlot>,
-}
-pub(crate) type RecoverySender = SyncSender<RecoveryItem>;
-
-#[derive(Default)]
-pub(crate) struct OperationObserverSlot {
-    observer: std::sync::Mutex<Option<qubit_operation::OperationObserver>>,
-    available: std::sync::Condvar,
-}
-impl OperationObserverSlot {
-    pub(crate) fn set(&self, observer: qubit_operation::OperationObserver) {
-        *self.observer.lock().unwrap_or_else(|error| error.into_inner()) = Some(observer);
-        self.available.notify_all();
-    }
-
-    fn wait(&self) -> qubit_operation::OperationObserver {
-        let mut observer = self.observer.lock().unwrap_or_else(|error| error.into_inner());
-        while observer.is_none() {
-            observer = self.available.wait(observer).unwrap_or_else(|error| error.into_inner());
-        }
-        observer.as_ref().expect("observer is set").clone()
-    }
-}
-
+/// Stores the start recovery worker value used by this execution component.
+///
+/// # Parameters
+/// * `capacity`: Supplies the capacity value used by this operation.
 pub(crate) fn start_recovery_worker(capacity: usize) -> Result<RecoverySender, std::io::Error> {
     let (tx, rx) = sync_channel::<RecoveryItem>(capacity.max(1));
     std::thread::Builder::new()
@@ -50,6 +27,10 @@ pub(crate) fn start_recovery_worker(capacity: usize) -> Result<RecoverySender, s
         .spawn(move || recovery_loop(rx))?;
     Ok(tx)
 }
+/// Stores the recovery loop value used by this execution component.
+///
+/// # Parameters
+/// * `rx`: Supplies the rx value used by this operation.
 fn recovery_loop(rx: Receiver<RecoveryItem>) {
     while let Ok(item) = rx.recv() {
         let summary = item.owner.summary();
@@ -83,6 +64,13 @@ fn recovery_loop(rx: Receiver<RecoveryItem>) {
         }
     }
 }
+/// Performs the recovery settlement step in the managed command execution
+/// lifecycle.
+///
+/// # Parameters
+/// * `id`: Supplies the id value used by this operation.
+/// * `effect_evidence`: Supplies the effect evidence value used by this
+///   operation.
 fn recovery_settlement(id: OperationId, mut effect_evidence: RecoveryEffectEvidence) -> SettlementReport {
     for effect in &mut effect_evidence.effects {
         effect.operation_id = id;

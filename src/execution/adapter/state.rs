@@ -28,37 +28,76 @@ use crate::execution::contracts::StopPort;
 /// explicitly recoverable until activation transfers them to the domain
 /// scheduler.
 pub(crate) struct AdapterState {
+    /// Stores the owned value used by this execution component.
     owned: Mutex<OwnedInputs>,
+    /// Stores the scheduler value used by this execution component.
     scheduler: Arc<dyn crate::execution::Scheduler>,
+    /// Stores the backend value used by this execution component.
     backend: Arc<dyn Backend>,
+    /// Stores the process backend value used by this execution component.
     process_backend: Arc<ProcessBackend>,
+    /// Stores the control value used by this execution component.
     control: Arc<CommandControl>,
+    /// Stores the stop value used by this execution component.
     stop: Mutex<Option<Arc<dyn StopPort>>>,
+    /// Stores the recovery value used by this execution component.
     recovery: super::cleanup::RecoverySender,
+    /// Stores the observer value used by this execution component.
     observer: Arc<super::cleanup::OperationObserverSlot>,
+    /// Stores the session bridge value used by this execution component.
     session_bridge: Option<Arc<dyn crate::session::contracts::SessionBridge>>,
+    /// Describes the item case handled by managed command execution.
     #[cfg(feature = "async")]
     session_keepalive: Option<SessionOwners>,
 }
+/// Represents the owned inputs state or contract used by managed command
+/// execution.
 struct OwnedInputs {
+    /// Stores the request value used by this execution component.
     request: Option<Request>,
+    /// Stores the reservation value used by this execution component.
     reservation: Option<Reservation>,
+    /// Stores the phase value used by this execution component.
     phase: AdapterPhase,
 }
+/// Represents the adapter phase state or contract used by managed command
+/// execution.
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum AdapterPhase {
+    /// Describes the prepared case handled by managed command execution.
     Prepared,
+    /// Describes the activated case handled by managed command execution.
     Activated,
+    /// Describes the abandoned case handled by managed command execution.
     Abandoned,
+    /// Describes the activation failed case handled by managed command
+    /// execution.
     ActivationFailed,
 }
+/// Represents the session owners state or contract used by managed command
+/// execution.
 #[cfg(feature = "async")]
 pub(crate) struct SessionOwners {
+    /// Stores the  stdin value used by this execution component.
     pub(crate) _stdin: crate::session::channel::ChannelReader,
+    /// Stores the  stdout value used by this execution component.
     pub(crate) _stdout: crate::session::channel::ChannelWriter,
+    /// Stores the  stderr value used by this execution component.
     pub(crate) _stderr: crate::session::channel::ChannelWriter,
 }
 impl AdapterState {
+    /// Performs the new step in the managed command execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `request`: Supplies the request value used by this operation.
+    /// * `reservation`: Supplies the reservation value used by this operation.
+    /// * `scheduler`: Supplies the scheduler value used by this operation.
+    /// * `backend`: Supplies the backend value used by this operation.
+    /// * `process_backend`: Supplies the process backend value used by this
+    ///   operation.
+    /// * `recovery`: Supplies the recovery value used by this operation.
+    /// * `session_bridge`: Supplies the session bridge value used by this
+    ///   operation.
     pub(crate) fn new(
         request: Request,
         reservation: Reservation,
@@ -86,19 +125,34 @@ impl AdapterState {
             session_keepalive: None,
         }
     }
+    /// Stores the keep session alive value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `owners`: Supplies the owners value used by this operation.
     #[cfg(feature = "async")]
     pub(crate) fn keep_session_alive(mut self, owners: SessionOwners) -> Self {
         self.session_keepalive = Some(owners);
         self
     }
+    /// Performs the restore step in the managed command execution lifecycle.
     pub(crate) fn restore(&self) -> Option<Request> {
         self.owned.lock().unwrap_or_else(|e| e.into_inner()).request.take()
     }
+    /// Stores the set operation observer value used by this execution
+    /// component.
+    ///
+    /// # Parameters
+    /// * `observer`: Supplies the observer value used by this operation.
     pub(crate) fn set_operation_observer(&self, observer: qubit_operation::OperationObserver) {
         self.observer.set(observer);
     }
 }
 impl FactSink for AdapterState {
+    /// Performs the publish outcome step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `outcome`: Supplies the outcome value used by this operation.
     fn publish_outcome(
         &self,
         outcome: OperationOutcome<CommandOutput, CommandError>,
@@ -109,6 +163,7 @@ impl FactSink for AdapterState {
             Err(crate::execution::contracts::FactPublishError::DuplicateOutcome)
         }
     }
+    /// Stores the confirm input release value used by this execution component.
     fn confirm_input_release(&self) -> Result<(), crate::execution::contracts::FactPublishError> {
         if self.control.release() {
             Ok(())
@@ -116,6 +171,11 @@ impl FactSink for AdapterState {
             Err(crate::execution::contracts::FactPublishError::DuplicateRelease)
         }
     }
+    /// Performs the publish settlement step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `report`: Supplies the report value used by this operation.
     fn publish_settlement(
         &self,
         report: Arc<SettlementReport>,
@@ -131,6 +191,11 @@ impl FactSink for AdapterState {
             }
         }
     }
+    /// Performs the retain recovery owner step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `owner`: Supplies the owner value used by this operation.
     fn retain_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) -> Result<(), RecoveryPublishFailure> {
         let Some(id) = self.control.operation_id() else {
             return Err(RecoveryPublishFailure {
@@ -158,6 +223,10 @@ impl FactSink for AdapterState {
     }
 }
 impl PreparedExternalOperation<CommandOutput, CommandError> for AdapterState {
+    /// Stores the bind value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `id`: Supplies the id value used by this operation.
     fn bind(&self, id: OperationId) -> Result<(), ExternalBindError> {
         if self.control.bind(id) {
             Ok(())
@@ -165,6 +234,11 @@ impl PreparedExternalOperation<CommandOutput, CommandError> for AdapterState {
             Err(ExternalBindError::AlreadyBound)
         }
     }
+    /// Stores the activate value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `self`: Supplies the self value used by this operation.
+    /// * `scope`: Supplies the scope value used by this operation.
     fn activate(self: Arc<Self>, scope: OperationScope) -> Result<(), ExecutionFailure> {
         let operation_id = scope.id();
         let make_failure = |message: &str| ExecutionFailure {
@@ -253,6 +327,10 @@ impl PreparedExternalOperation<CommandOutput, CommandError> for AdapterState {
             }
         }
     }
+    /// Stores the abandon value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `self`: Supplies the self value used by this operation.
     fn abandon(self: Arc<Self>) {
         let abandoned = {
             let mut owned = self.owned.lock().unwrap_or_else(|e| e.into_inner());
@@ -273,10 +351,19 @@ impl PreparedExternalOperation<CommandOutput, CommandError> for AdapterState {
             let _ = self.control.settlement(Arc::new(released_report(id)));
         }
     }
+    /// Performs the poll take outcome step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `cx`: Supplies the cx value used by this operation.
     fn poll_take_outcome(&self, cx: &mut Context<'_>) -> Poll<OperationOutcome<CommandOutput, CommandError>> {
         self.control.take(cx)
     }
 }
+/// Stores the released report value used by this execution component.
+///
+/// # Parameters
+/// * `id`: Supplies the id value used by this operation.
 fn released_report(id: OperationId) -> SettlementReport {
     SettlementReport {
         operation_id: id,
@@ -306,21 +393,38 @@ fn released_report(id: OperationId) -> SettlementReport {
     }
 }
 impl qubit_operation::OperationControl for AdapterState {
+    /// Stores the request stop value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `reason`: Supplies the reason value used by this operation.
     fn request_stop(&self, reason: qubit_operation::StopReason) {
         self.control.request_stop(reason);
         if let Some(stop) = self.stop.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             stop.request_stop(reason)
         }
     }
+    /// Stores the snapshot value used by this execution component.
     fn snapshot(&self) -> qubit_operation::ChildSnapshot {
         qubit_operation::OperationControl::snapshot(&*self.control)
     }
+    /// Stores the poll outcome value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `cx`: Supplies the cx value used by this operation.
     fn poll_outcome(&self, cx: &mut Context<'_>) -> Poll<qubit_operation::ChildOutcomeSummary> {
         qubit_operation::OperationControl::poll_outcome(&*self.control, cx)
     }
+    /// Stores the poll release value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `cx`: Supplies the cx value used by this operation.
     fn poll_release(&self, cx: &mut Context<'_>) -> Poll<qubit_operation::ChildRelease> {
         qubit_operation::OperationControl::poll_release(&*self.control, cx)
     }
+    /// Stores the poll settlement value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `cx`: Supplies the cx value used by this operation.
     fn poll_settlement(&self, cx: &mut Context<'_>) -> Poll<Arc<SettlementReport>> {
         qubit_operation::OperationControl::poll_settlement(&*self.control, cx)
     }

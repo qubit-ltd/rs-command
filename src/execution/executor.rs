@@ -1,3 +1,11 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
+
 use std::sync::Arc;
 
 use qubit_operation::GroupOptions;
@@ -6,6 +14,15 @@ use qubit_operation::OperationManager;
 use qubit_operation::OperationOptions;
 use qubit_operation::OperationScope;
 
+use super::AsyncCommandOperation;
+use super::CommandExecutionConfig;
+use super::CommandExecutorApi;
+use super::CommandExecutorCreateError;
+use super::CommandOperation;
+use super::CommandResourceSubmitFailure;
+use super::CommandSubmitFailure;
+use super::CommandSubmitFailureReason;
+use super::SnapshotFailure;
 use super::adapter::AdapterState;
 use super::backend::ProcessBackend;
 use super::contracts::ExecutionSnapshot;
@@ -13,12 +30,15 @@ use super::contracts::IoPathSnapshot;
 use super::contracts::Request;
 use super::contracts::RequestOptions;
 use super::scheduler::BoundedScheduler;
-use super::*;
 use crate::Command;
 use crate::CommandResourceRunOptions;
 use crate::CommandRunOptions;
 use crate::CommandRunner;
 
+/// Stores the session channels value used by this execution component.
+///
+/// # Parameters
+/// * `runner`: Supplies the runner value used by this operation.
 #[cfg(feature = "async")]
 fn session_channels(runner: &CommandRunner) -> crate::session::channel::SessionChannels {
     match runner.configured_max_total_output_bytes() {
@@ -29,15 +49,24 @@ fn session_channels(runner: &CommandRunner) -> crate::session::channel::SessionC
     }
 }
 
+/// Represents the async submission context state or contract used by managed
+/// command execution.
 #[cfg(feature = "async")]
 struct AsyncSubmissionContext {
+    /// Stores the bridge value used by this execution component.
     bridge: Option<Arc<dyn crate::session::contracts::SessionBridge>>,
+    /// Stores the keepalive value used by this execution component.
     keepalive: Option<super::adapter::SessionOwners>,
+    /// Stores the deadline value used by this execution component.
     deadline: Option<OperationContext>,
 }
 
 #[cfg(feature = "async")]
 impl AsyncSubmissionContext {
+    /// Stores the plain value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `deadline`: Supplies the deadline value used by this operation.
     fn plain(deadline: Option<OperationContext>) -> Self {
         Self {
             bridge: None,
@@ -48,15 +77,25 @@ impl AsyncSubmissionContext {
 }
 
 impl CommandExecutor {
+    /// Stores the scheduler snapshot value used by this execution component.
     pub fn scheduler_snapshot(&self) -> super::scheduler::SchedulerSnapshot {
         self.scheduler.snapshot()
     }
     /// Stops new local reservations and returns a manager handle for observing
     /// group shutdown.
+    ///
+    /// # Parameters
+    /// * `mode`: Supplies the mode value used by this operation.
     pub fn request_shutdown(&self, mode: qubit_operation::ShutdownMode) -> qubit_operation::ShutdownHandle {
         self.scheduler.close_admission();
         self.group.request_shutdown(mode)
     }
+    /// Performs the submit step in the managed command execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
     pub fn submit(
         &self,
         runner: CommandRunner,
@@ -65,6 +104,13 @@ impl CommandExecutor {
     ) -> Result<CommandOperation, CommandSubmitFailure> {
         self.submit_in_manager(&self.manager, runner, command, options, None)
     }
+    /// Performs the submit resources step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
     pub fn submit_resources(
         &self,
         runner: CommandRunner,
@@ -73,6 +119,13 @@ impl CommandExecutor {
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
         self.submit_resources_manager(&self.manager, runner, command, options, None)
     }
+    /// Performs the submit async step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
     #[cfg(feature = "async")]
     pub fn submit_async(
         &self,
@@ -88,6 +141,13 @@ impl CommandExecutor {
             AsyncSubmissionContext::plain(None),
         )
     }
+    /// Performs the submit async resources step in the managed command
+    /// execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
     #[cfg(feature = "async")]
     pub fn submit_async_resources(
         &self,
@@ -103,6 +163,14 @@ impl CommandExecutor {
             AsyncSubmissionContext::plain(None),
         )
     }
+    /// Performs the submit async in step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `scope`: Supplies the scope value used by this operation.
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
     #[cfg(feature = "async")]
     pub fn submit_async_in(
         &self,
@@ -130,6 +198,14 @@ impl CommandExecutor {
             AsyncSubmissionContext::plain(Some(scope.context())),
         )
     }
+    /// Performs the submit async resources in step in the managed command
+    /// execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `scope`: Supplies the scope value used by this operation.
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
     #[cfg(feature = "async")]
     pub fn submit_async_resources_in(
         &self,
@@ -157,6 +233,13 @@ impl CommandExecutor {
             AsyncSubmissionContext::plain(Some(scope.context())),
         )
     }
+    /// Performs the submit in step in the managed command execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `scope`: Supplies the scope value used by this operation.
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
     pub fn submit_in(
         &self,
         scope: &OperationScope,
@@ -177,6 +260,14 @@ impl CommandExecutor {
         };
         self.submit_in_manager(&manager, runner, command, options, Some(scope.context()))
     }
+    /// Performs the submit resources in step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `scope`: Supplies the scope value used by this operation.
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
     pub fn submit_resources_in(
         &self,
         scope: &OperationScope,
@@ -197,6 +288,15 @@ impl CommandExecutor {
         };
         self.submit_resources_manager(&manager, runner, command, options, Some(scope.context()))
     }
+    /// Performs the submit in manager step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `manager`: Supplies the manager value used by this operation.
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
+    /// * `deadline`: Supplies the deadline value used by this operation.
     fn submit_in_manager(
         &self,
         manager: &OperationManager,
@@ -269,6 +369,15 @@ impl CommandExecutor {
             }
         }
     }
+    /// Performs the submit resources manager step in the managed command
+    /// execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `manager`: Supplies the manager value used by this operation.
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
+    /// * `deadline`: Supplies the deadline value used by this operation.
     fn submit_resources_manager(
         &self,
         manager: &OperationManager,
@@ -341,6 +450,16 @@ impl CommandExecutor {
             }
         }
     }
+    /// Performs the submit async in manager step in the managed command
+    /// execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `manager`: Supplies the manager value used by this operation.
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `request_options`: Supplies the request options value used by this
+    ///   operation.
+    /// * `context`: Supplies the context value used by this operation.
     #[cfg(feature = "async")]
     fn submit_async_in_manager(
         &self,
@@ -431,6 +550,13 @@ impl CommandExecutor {
             }
         }
     }
+    /// Performs the start session managed step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
     #[cfg(feature = "async")]
     pub(crate) fn start_session_managed(
         &self,
@@ -440,6 +566,14 @@ impl CommandExecutor {
     ) -> Result<crate::session::CommandSession, CommandError> {
         self.start_session_managed_in_manager(&self.manager, runner, command, options, None)
     }
+    /// Performs the start session managed in step in the managed command
+    /// execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `scope`: Supplies the scope value used by this operation.
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
     #[cfg(feature = "async")]
     pub(crate) fn start_session_managed_in(
         &self,
@@ -454,6 +588,13 @@ impl CommandExecutor {
             .map_err(|e| managed_failure(format!("group binding failed: {e}")))?;
         self.start_session_managed_in_manager(&manager, runner, command, options, Some(scope.context()))
     }
+    /// Performs the start session resources managed step in the managed command
+    /// execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
     #[cfg(feature = "async")]
     pub(crate) fn start_session_resources_managed(
         &self,
@@ -463,6 +604,14 @@ impl CommandExecutor {
     ) -> Result<crate::session::CommandSession, CommandError> {
         self.start_session_resources_managed_in_manager(&self.manager, runner, command, options, None)
     }
+    /// Performs the start session resources managed in step in the managed
+    /// command execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `scope`: Supplies the scope value used by this operation.
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
     #[cfg(feature = "async")]
     pub(crate) fn start_session_resources_managed_in(
         &self,
@@ -477,6 +626,15 @@ impl CommandExecutor {
             .map_err(|e| managed_failure(format!("group binding failed: {e}")))?;
         self.start_session_resources_managed_in_manager(&manager, runner, command, options, Some(scope.context()))
     }
+    /// Performs the start session managed in manager step in the managed
+    /// command execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `manager`: Supplies the manager value used by this operation.
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
+    /// * `deadline`: Supplies the deadline value used by this operation.
     #[cfg(feature = "async")]
     fn start_session_managed_in_manager(
         &self,
@@ -520,6 +678,15 @@ impl CommandExecutor {
             stderr: Some(stderr),
         })
     }
+    /// Performs the start session resources managed in manager step in the
+    /// managed command execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `manager`: Supplies the manager value used by this operation.
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
+    /// * `deadline`: Supplies the deadline value used by this operation.
     #[cfg(feature = "async")]
     fn start_session_resources_managed_in_manager(
         &self,
@@ -563,6 +730,15 @@ impl CommandExecutor {
             stderr: Some(stderr),
         })
     }
+    /// Performs the submit async resources manager step in the managed command
+    /// execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `manager`: Supplies the manager value used by this operation.
+    /// * `runner`: Supplies the runner value used by this operation.
+    /// * `command`: Supplies the command value used by this operation.
+    /// * `options`: Supplies the options value used by this operation.
+    /// * `context`: Supplies the context value used by this operation.
     #[cfg(feature = "async")]
     fn submit_async_resources_manager(
         &self,
@@ -651,6 +827,10 @@ impl CommandExecutor {
         }
     }
 }
+/// Stores the resource bytes value used by this execution component.
+///
+/// # Parameters
+/// * `options`: Supplies the options value used by this operation.
 fn resource_bytes(options: &RequestOptions) -> usize {
     match options {
         RequestOptions::Standard(_) => 0,
@@ -670,6 +850,10 @@ fn resource_bytes(options: &RequestOptions) -> usize {
         }),
     }
 }
+/// Stores the resource option bytes value used by this execution component.
+///
+/// # Parameters
+/// * `options`: Supplies the options value used by this operation.
 fn resource_option_bytes(options: &CommandResourceRunOptions) -> usize {
     [
         options
@@ -691,6 +875,13 @@ fn resource_option_bytes(options: &CommandResourceRunOptions) -> usize {
         sum.saturating_add(usize::try_from(n).unwrap_or(usize::MAX))
     })
 }
+/// Performs the retry wait step in the managed command execution lifecycle.
+///
+/// # Parameters
+/// * `reason`: Supplies the reason value used by this operation.
+/// * `scheduler`: Supplies the scheduler value used by this operation.
+/// * `bytes`: Supplies the bytes value used by this operation.
+/// * `deadline`: Supplies the deadline value used by this operation.
 fn retry_wait(
     reason: &CommandSubmitFailureReason,
     scheduler: &BoundedScheduler,
@@ -711,6 +902,12 @@ fn retry_wait(
         _ => false,
     }
 }
+/// Performs the deadline failure step in the managed command execution
+/// lifecycle.
+///
+/// # Parameters
+/// * `reason`: Supplies the reason value used by this operation.
+/// * `deadline`: Supplies the deadline value used by this operation.
 fn deadline_failure(reason: CommandSubmitFailureReason, deadline: &OperationContext) -> CommandSubmitFailureReason {
     if deadline.is_expired() {
         CommandSubmitFailureReason::Capacity(CapacityFailure::DeadlineExpired)
@@ -718,6 +915,10 @@ fn deadline_failure(reason: CommandSubmitFailureReason, deadline: &OperationCont
         reason
     }
 }
+/// Stores the async capacity retry value used by this execution component.
+///
+/// # Parameters
+/// * `reason`: Supplies the reason value used by this operation.
 #[cfg(feature = "async")]
 fn async_capacity_retry(reason: &CommandSubmitFailureReason) -> bool {
     matches!(
@@ -725,6 +926,10 @@ fn async_capacity_retry(reason: &CommandSubmitFailureReason) -> bool {
         CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull | CapacityFailure::QueueFull)
     )
 }
+/// Stores the retryable async value used by this execution component.
+///
+/// # Parameters
+/// * `reason`: Supplies the reason value used by this operation.
 #[cfg(feature = "async")]
 fn retryable_async(reason: &CommandSubmitFailureReason) -> bool {
     async_capacity_retry(reason)
@@ -733,15 +938,27 @@ fn retryable_async(reason: &CommandSubmitFailureReason) -> bool {
             CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy)
         )
 }
+/// Represents the capacity wait state or contract used by managed command
+/// execution.
 #[cfg(feature = "async")]
 struct CapacityWait {
+    /// Stores the scheduler value used by this execution component.
     scheduler: BoundedScheduler,
+    /// Stores the bytes value used by this execution component.
     bytes: usize,
+    /// Stores the waiter value used by this execution component.
     waiter: Option<u64>,
 }
 #[cfg(feature = "async")]
 impl std::future::Future for CapacityWait {
+    /// Represents the output state or contract used by managed command
+    /// execution.
     type Output = bool;
+    /// Performs the poll step in the managed command execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `self`: Supplies the self value used by this operation.
+    /// * `cx`: Supplies the cx value used by this operation.
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<bool> {
         if let Some(id) = self.waiter.take() {
             self.scheduler.cancel_waiter(id);
@@ -759,12 +976,20 @@ impl std::future::Future for CapacityWait {
 }
 #[cfg(feature = "async")]
 impl Drop for CapacityWait {
+    /// Performs the drop step in the managed command execution lifecycle.
     fn drop(&mut self) {
         if let Some(id) = self.waiter.take() {
             self.scheduler.cancel_waiter(id)
         }
     }
 }
+/// Performs the wait capacity async step in the managed command execution
+/// lifecycle.
+///
+/// # Parameters
+/// * `scheduler`: Supplies the scheduler value used by this operation.
+/// * `bytes`: Supplies the bytes value used by this operation.
+/// * `context`: Supplies the context value used by this operation.
 #[cfg(feature = "async")]
 async fn wait_capacity_async(scheduler: BoundedScheduler, bytes: usize, context: Option<OperationContext>) -> bool {
     let mut capacity = Box::pin(CapacityWait {
@@ -796,6 +1021,14 @@ async fn wait_capacity_async(scheduler: BoundedScheduler, bytes: usize, context:
     }
 }
 
+/// Performs the wait retryable async step in the managed command execution
+/// lifecycle.
+///
+/// # Parameters
+/// * `scheduler`: Supplies the scheduler value used by this operation.
+/// * `bytes`: Supplies the bytes value used by this operation.
+/// * `reason`: Supplies the reason value used by this operation.
+/// * `context`: Supplies the context value used by this operation.
 #[cfg(feature = "async")]
 async fn wait_retryable_async(
     scheduler: BoundedScheduler,
@@ -815,16 +1048,23 @@ async fn wait_retryable_async(
     }
 }
 
+/// Represents the retry timer message state or contract used by managed command
+/// execution.
 #[cfg(feature = "async")]
 struct RetryTimerMessage {
+    /// Stores the due value used by this execution component.
     due: std::time::Instant,
+    /// Stores the waker value used by this execution component.
     waker: std::task::Waker,
+    /// Stores the ready value used by this execution component.
     ready: Arc<std::sync::atomic::AtomicBool>,
+    /// Stores the cancelled value used by this execution component.
     cancelled: Arc<std::sync::atomic::AtomicBool>,
 }
 #[cfg(feature = "async")]
 static RETRY_TIMER: std::sync::OnceLock<Option<std::sync::mpsc::SyncSender<RetryTimerMessage>>> =
     std::sync::OnceLock::new();
+/// Stores the retry timer value used by this execution component.
 #[cfg(feature = "async")]
 fn retry_timer() -> Option<&'static std::sync::mpsc::SyncSender<RetryTimerMessage>> {
     RETRY_TIMER
@@ -866,14 +1106,20 @@ fn retry_timer() -> Option<&'static std::sync::mpsc::SyncSender<RetryTimerMessag
         })
         .as_ref()
 }
+/// Represents the retry delay state or contract used by managed command
+/// execution.
 #[cfg(feature = "async")]
 struct RetryDelay {
+    /// Stores the ready value used by this execution component.
     ready: Arc<std::sync::atomic::AtomicBool>,
+    /// Stores the cancelled value used by this execution component.
     cancelled: Arc<std::sync::atomic::AtomicBool>,
+    /// Stores the scheduled value used by this execution component.
     scheduled: bool,
 }
 #[cfg(feature = "async")]
 impl RetryDelay {
+    /// Performs the new step in the managed command execution lifecycle.
     fn new() -> Self {
         Self {
             ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -884,7 +1130,14 @@ impl RetryDelay {
 }
 #[cfg(feature = "async")]
 impl std::future::Future for RetryDelay {
+    /// Represents the output state or contract used by managed command
+    /// execution.
     type Output = bool;
+    /// Performs the poll step in the managed command execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `self`: Supplies the self value used by this operation.
+    /// * `cx`: Supplies the cx value used by this operation.
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<bool> {
         if self.ready.load(std::sync::atomic::Ordering::Acquire) {
             return std::task::Poll::Ready(true);
@@ -912,10 +1165,15 @@ impl std::future::Future for RetryDelay {
 }
 #[cfg(feature = "async")]
 impl Drop for RetryDelay {
+    /// Performs the drop step in the managed command execution lifecycle.
     fn drop(&mut self) {
         self.cancelled.store(true, std::sync::atomic::Ordering::Release)
     }
 }
+/// Stores the wait retry tick value used by this execution component.
+///
+/// # Parameters
+/// * `context`: Supplies the context value used by this operation.
 #[cfg(feature = "async")]
 async fn wait_retry_tick(context: Option<OperationContext>) -> bool {
     let mut delay = Box::pin(RetryDelay::new());
@@ -942,6 +1200,10 @@ async fn wait_retry_tick(context: Option<OperationContext>) -> bool {
         delay.await
     }
 }
+/// Stores the managed failure value used by this execution component.
+///
+/// # Parameters
+/// * `message`: Supplies the message value used by this operation.
 #[cfg(feature = "async")]
 fn managed_failure(message: String) -> CommandError {
     CommandError::from_reason(
@@ -950,6 +1212,12 @@ fn managed_failure(message: String) -> CommandError {
         None,
     )
 }
+/// Performs the make request step in the managed command execution lifecycle.
+///
+/// # Parameters
+/// * `runner`: Supplies the runner value used by this operation.
+/// * `command`: Supplies the command value used by this operation.
+/// * `options`: Supplies the options value used by this operation.
 fn make_request(
     runner: CommandRunner,
     command: Command,
@@ -997,6 +1265,12 @@ fn make_request(
 }
 
 impl CommandExecutorApi for CommandExecutor {
+    /// Performs the submit step in the managed command execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `r`: Supplies the r value used by this operation.
+    /// * `c`: Supplies the c value used by this operation.
+    /// * `o`: Supplies the o value used by this operation.
     fn submit(
         &self,
         r: CommandRunner,
@@ -1005,6 +1279,13 @@ impl CommandExecutorApi for CommandExecutor {
     ) -> Result<CommandOperation, CommandSubmitFailure> {
         CommandExecutor::submit(self, r, c, o)
     }
+    /// Performs the submit resources step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `r`: Supplies the r value used by this operation.
+    /// * `c`: Supplies the c value used by this operation.
+    /// * `o`: Supplies the o value used by this operation.
     fn submit_resources(
         &self,
         r: CommandRunner,
@@ -1013,6 +1294,13 @@ impl CommandExecutorApi for CommandExecutor {
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
         CommandExecutor::submit_resources(self, r, c, o)
     }
+    /// Performs the submit in step in the managed command execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `s`: Supplies the s value used by this operation.
+    /// * `r`: Supplies the r value used by this operation.
+    /// * `c`: Supplies the c value used by this operation.
+    /// * `o`: Supplies the o value used by this operation.
     fn submit_in(
         &self,
         s: &OperationScope,
@@ -1022,6 +1310,14 @@ impl CommandExecutorApi for CommandExecutor {
     ) -> Result<CommandOperation, CommandSubmitFailure> {
         CommandExecutor::submit_in(self, s, r, c, o)
     }
+    /// Performs the submit resources in step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `s`: Supplies the s value used by this operation.
+    /// * `r`: Supplies the r value used by this operation.
+    /// * `c`: Supplies the c value used by this operation.
+    /// * `o`: Supplies the o value used by this operation.
     fn submit_resources_in(
         &self,
         s: &OperationScope,
@@ -1031,6 +1327,14 @@ impl CommandExecutorApi for CommandExecutor {
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
         CommandExecutor::submit_resources_in(self, s, r, c, o)
     }
+    /// Performs the submit wait blocking in step in the managed command
+    /// execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `s`: Supplies the s value used by this operation.
+    /// * `r`: Supplies the r value used by this operation.
+    /// * `c`: Supplies the c value used by this operation.
+    /// * `o`: Supplies the o value used by this operation.
     fn submit_wait_blocking_in(
         &self,
         s: &OperationScope,
@@ -1065,6 +1369,13 @@ impl CommandExecutorApi for CommandExecutor {
             }
         }
     }
+    /// Performs the submit wait blocking step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `r`: Supplies the r value used by this operation.
+    /// * `c`: Supplies the c value used by this operation.
+    /// * `o`: Supplies the o value used by this operation.
     fn submit_wait_blocking(
         &self,
         mut r: CommandRunner,
@@ -1097,6 +1408,13 @@ impl CommandExecutorApi for CommandExecutor {
             }
         }
     }
+    /// Performs the submit wait resources blocking step in the managed command
+    /// execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `r`: Supplies the r value used by this operation.
+    /// * `c`: Supplies the c value used by this operation.
+    /// * `o`: Supplies the o value used by this operation.
     fn submit_wait_resources_blocking(
         &self,
         mut r: CommandRunner,
@@ -1130,6 +1448,14 @@ impl CommandExecutorApi for CommandExecutor {
             }
         }
     }
+    /// Performs the submit wait resources blocking in step in the managed
+    /// command execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `s`: Supplies the s value used by this operation.
+    /// * `r`: Supplies the r value used by this operation.
+    /// * `c`: Supplies the c value used by this operation.
+    /// * `o`: Supplies the o value used by this operation.
     fn submit_wait_resources_blocking_in(
         &self,
         s: &OperationScope,
@@ -1165,6 +1491,13 @@ impl CommandExecutorApi for CommandExecutor {
             }
         }
     }
+    /// Performs the submit wait step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `r`: Supplies the r value used by this operation.
+    /// * `c`: Supplies the c value used by this operation.
+    /// * `o`: Supplies the o value used by this operation.
     #[cfg(feature = "async")]
     async fn submit_wait(
         &self,
@@ -1206,6 +1539,13 @@ impl CommandExecutorApi for CommandExecutor {
             }
         }
     }
+    /// Performs the submit wait resources step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `r`: Supplies the r value used by this operation.
+    /// * `c`: Supplies the c value used by this operation.
+    /// * `o`: Supplies the o value used by this operation.
     #[cfg(feature = "async")]
     async fn submit_wait_resources(
         &self,
@@ -1248,6 +1588,14 @@ impl CommandExecutorApi for CommandExecutor {
             }
         }
     }
+    /// Performs the submit wait resources in step in the managed command
+    /// execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `s`: Supplies the s value used by this operation.
+    /// * `r`: Supplies the r value used by this operation.
+    /// * `c`: Supplies the c value used by this operation.
+    /// * `o`: Supplies the o value used by this operation.
     #[cfg(feature = "async")]
     async fn submit_wait_resources_in<'a>(
         &'a self,
@@ -1294,6 +1642,13 @@ impl CommandExecutorApi for CommandExecutor {
             }
         }
     }
+    /// Performs the submit async step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `r`: Supplies the r value used by this operation.
+    /// * `c`: Supplies the c value used by this operation.
+    /// * `o`: Supplies the o value used by this operation.
     #[cfg(feature = "async")]
     fn submit_async(
         &self,
@@ -1303,6 +1658,13 @@ impl CommandExecutorApi for CommandExecutor {
     ) -> Result<super::AsyncCommandOperation, CommandSubmitFailure> {
         CommandExecutor::submit_async(self, r, c, o)
     }
+    /// Performs the submit async resources step in the managed command
+    /// execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `r`: Supplies the r value used by this operation.
+    /// * `c`: Supplies the c value used by this operation.
+    /// * `o`: Supplies the o value used by this operation.
     #[cfg(feature = "async")]
     fn submit_async_resources(
         &self,
@@ -1312,6 +1674,14 @@ impl CommandExecutorApi for CommandExecutor {
     ) -> Result<super::AsyncCommandOperation, CommandResourceSubmitFailure> {
         CommandExecutor::submit_async_resources(self, r, c, o)
     }
+    /// Performs the submit async in step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `s`: Supplies the s value used by this operation.
+    /// * `r`: Supplies the r value used by this operation.
+    /// * `c`: Supplies the c value used by this operation.
+    /// * `o`: Supplies the o value used by this operation.
     #[cfg(feature = "async")]
     fn submit_async_in(
         &self,
@@ -1322,6 +1692,14 @@ impl CommandExecutorApi for CommandExecutor {
     ) -> Result<super::AsyncCommandOperation, CommandSubmitFailure> {
         CommandExecutor::submit_async_in(self, s, r, c, o)
     }
+    /// Performs the submit async resources in step in the managed command
+    /// execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `s`: Supplies the s value used by this operation.
+    /// * `r`: Supplies the r value used by this operation.
+    /// * `c`: Supplies the c value used by this operation.
+    /// * `o`: Supplies the o value used by this operation.
     #[cfg(feature = "async")]
     fn submit_async_resources_in(
         &self,
@@ -1332,6 +1710,14 @@ impl CommandExecutorApi for CommandExecutor {
     ) -> Result<super::AsyncCommandOperation, CommandResourceSubmitFailure> {
         CommandExecutor::submit_async_resources_in(self, s, r, c, o)
     }
+    /// Performs the submit wait in step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `s`: Supplies the s value used by this operation.
+    /// * `r`: Supplies the r value used by this operation.
+    /// * `c`: Supplies the c value used by this operation.
+    /// * `o`: Supplies the o value used by this operation.
     #[cfg(feature = "async")]
     async fn submit_wait_in<'a>(
         &'a self,
@@ -1376,6 +1762,11 @@ impl CommandExecutorApi for CommandExecutor {
         }
     }
 }
+/// Performs the build executor step in the managed command execution lifecycle.
+///
+/// # Parameters
+/// * `manager`: Supplies the manager value used by this operation.
+/// * `config`: Supplies the config value used by this operation.
 pub(crate) fn build_executor(
     manager: OperationManager,
     config: CommandExecutionConfig,
@@ -1420,6 +1811,13 @@ pub(crate) fn build_executor(
     Ok((scheduler, backend, group, recovery, manager_view))
 }
 
+/// Performs the spawn domain workers with step in the managed command execution
+/// lifecycle.
+///
+/// # Parameters
+/// * `scheduler`: Supplies the scheduler value used by this operation.
+/// * `count`: Supplies the count value used by this operation.
+/// * `spawn`: Supplies the spawn value used by this operation.
 fn spawn_domain_workers_with(
     scheduler: &BoundedScheduler,
     count: usize,
@@ -1471,10 +1869,16 @@ mod retry_wait_tests {
 
     struct NoopWake;
     impl Wake for NoopWake {
+        ///
+        /// # Parameters
+        /// * `self`: Supplies the self value used by this operation.
         fn wake(self: Arc<Self>) {}
     }
     struct NoopRegistration;
     impl TimerRegistration for NoopRegistration {
+        ///
+        /// # Parameters
+        /// * `self`: Supplies the self value used by this operation.
         fn cancel(self: Box<Self>) {}
     }
     struct ManualClock {
@@ -1485,13 +1889,17 @@ mod retry_wait_tests {
         fn now(&self) -> MonotonicTime {
             MonotonicTime::new(self.domain, self.ticks.load(Ordering::SeqCst))
         }
+        ///
+        /// # Parameters
+        /// * `_`: Supplies the   value used by this operation.
+        /// * `_`: Supplies the   value used by this operation.
         fn register_deadline(&self, _: MonotonicTime, _: Waker) -> Box<dyn TimerRegistration> {
             Box::new(NoopRegistration)
         }
     }
 
     #[test]
-    fn retry_wait_observes_operation_cancellation() {
+    fn test_retry_wait_observes_operation_cancellation() {
         let context = OperationContext::new(ContextOptions::default()).unwrap();
         let mut retry = Box::pin(wait_retry_tick(Some(context.clone())));
         let waker = Waker::from(Arc::new(NoopWake));
@@ -1502,7 +1910,7 @@ mod retry_wait_tests {
     }
 
     #[test]
-    fn retry_wait_observes_inherited_deadline() {
+    fn test_retry_wait_observes_inherited_deadline() {
         let clock = Arc::new(ManualClock {
             domain: ClockDomainId::new_unique(),
             ticks: AtomicU64::new(0),
@@ -1536,7 +1944,7 @@ mod worker_start_tests {
     use crate::execution::scheduler::BoundedScheduler;
 
     #[test]
-    fn partial_worker_spawn_failure_closes_and_joins_started_workers() {
+    fn test_partial_worker_spawn_failure_closes_and_joins_started_workers() {
         let scheduler = BoundedScheduler::new(CommandExecutionConfig {
             max_active: 1,
             max_queued: 0,

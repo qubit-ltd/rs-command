@@ -8,8 +8,9 @@ use qubit_operation::OperationId;
 use qubit_operation::OperationOutcome;
 use qubit_operation::SettlementReport;
 use qubit_operation::SettlementStatus;
-use qubit_operation::StopReason;
 
+use super::internal::OperationStopPort;
+use super::internal::PreparationRecoveryOwner;
 use crate::CommandError;
 use crate::CommandErrorReason;
 use crate::OutputStream;
@@ -18,44 +19,15 @@ use crate::execution::backend::StartGate;
 use crate::execution::contracts::ActivatedRequest;
 use crate::execution::contracts::Backend;
 use crate::execution::contracts::FactSink;
-use crate::execution::contracts::FilePreparationFailure;
-use crate::execution::contracts::RecoveryOwner;
 use crate::execution::contracts::RequestOptions;
 use crate::execution::contracts::ResourceInput;
 
-struct PreparationRecoveryOwner {
-    retained: Mutex<Option<(FilePreparationFailure, qubit_operation::OperationScope)>>,
-    _capacity_lease: Mutex<Option<crate::execution::contracts::ReservationLease>>,
-}
-
-impl RecoveryOwner for PreparationRecoveryOwner {
-    fn summary(&self) -> String {
-        "command file preparation retained partial resources".to_owned()
-    }
-
-    fn retry_cleanup(&self) -> Result<(), crate::execution::contracts::RecoveryRetryError> {
-        let mut retained = self.retained.lock().unwrap_or_else(|error| error.into_inner());
-        let Some((failure, scope)) = retained.take() else {
-            return Err(crate::execution::contracts::RecoveryRetryError::OwnerAlreadyConsumed);
-        };
-        drop(failure);
-        drop(scope);
-        // Keep the capacity lease alive until T6 observes the upstream scope's final
-        // settlement and removes this accepted recovery owner from its store.
-        Ok(())
-    }
-
-    fn is_complete(&self) -> bool {
-        // This is only the owner handoff state. T6 must continue retaining this owner
-        // (and its capacity lease) until the upstream scope report is observed;
-        // only that report proves the partial resource cleanup outcome.
-        self.retained
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .is_none()
-    }
-}
-
+/// Stores the schedule recovery transfer value used by this execution
+/// component.
+///
+/// # Parameters
+/// * `sink`: Supplies the sink value used by this operation.
+/// * `owner`: Supplies the owner value used by this operation.
 fn schedule_recovery_transfer(sink: Arc<dyn FactSink>, mut owner: Box<dyn RecoveryOwner>) {
     // Keep the rejected owner in this bounded per-operation frame. Its reservation
     // remains held, and the backend worker retries only the nonblocking store
@@ -75,41 +47,27 @@ fn schedule_recovery_transfer(sink: Arc<dyn FactSink>, mut owner: Box<dyn Recove
     }
 }
 
+/// Represents the process backend state or contract used by managed command
+/// execution.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ProcessBackend {
+    /// Stores the gates value used by this execution component.
     gates: Arc<Mutex<HashMap<OperationId, Arc<StartGate>>>>,
 }
 
-struct OperationStopPort {
-    operation_id: OperationId,
-    gate: Arc<StartGate>,
-    gates: std::sync::Weak<Mutex<HashMap<OperationId, Arc<StartGate>>>>,
-}
-
-impl crate::execution::contracts::StopPort for OperationStopPort {
-    fn request_stop(&self, reason: StopReason) {
-        self.gate.request_stop(reason);
-    }
-}
-
-impl Drop for OperationStopPort {
-    fn drop(&mut self) {
-        if let Some(gates) = self.gates.upgrade() {
-            gates
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .remove(&self.operation_id);
-        }
-    }
-}
-
 impl ProcessBackend {
+    /// Performs the new step in the managed command execution lifecycle.
     pub(crate) fn new() -> Self {
         Self {
             gates: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
+    /// Performs the stop port step in the managed command execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `operation_id`: Supplies the operation id value used by this
+    ///   operation.
     pub(crate) fn stop_port(&self, operation_id: OperationId) -> Arc<dyn crate::execution::contracts::StopPort> {
         let gate = Arc::new(StartGate::default());
         self.gates
@@ -125,6 +83,11 @@ impl ProcessBackend {
 }
 
 impl Backend for ProcessBackend {
+    /// Stores the run value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `activated`: Supplies the activated value used by this operation.
+    /// * `sink`: Supplies the sink value used by this operation.
     fn run(&self, activated: ActivatedRequest, sink: Arc<dyn FactSink>) {
         let ActivatedRequest {
             operation_id,
@@ -306,6 +269,12 @@ impl Backend for ProcessBackend {
     }
 }
 
+/// Performs the normalize tee paths step in the managed command execution
+/// lifecycle.
+///
+/// # Parameters
+/// * `options`: Supplies the options value used by this operation.
+/// * `base`: Supplies the base value used by this operation.
 fn normalize_tee_paths(mut options: crate::CommandRunOptions, base: &std::path::Path) -> crate::CommandRunOptions {
     if let Some(path) = options.configured_stdout_file() {
         let absolute = if path.is_absolute() {
@@ -326,6 +295,10 @@ fn normalize_tee_paths(mut options: crate::CommandRunOptions, base: &std::path::
     options
 }
 
+/// Stores the released report value used by this execution component.
+///
+/// # Parameters
+/// * `operation_id`: Supplies the operation id value used by this operation.
 fn released_report(operation_id: OperationId) -> SettlementReport {
     SettlementReport {
         operation_id,

@@ -6,6 +6,8 @@ use same_file::Handle;
 
 /// Checks ordinary-file status and identity using the opened handles
 /// themselves.
+///
+/// # Parameters
 pub(super) fn validate_files(files: &[(&'static str, &File)]) -> io::Result<()> {
     let mut identities = Vec::with_capacity(files.len());
     for (name, file) in files {
@@ -28,6 +30,10 @@ pub(super) fn validate_files(files: &[(&'static str, &File)]) -> io::Result<()> 
 }
 
 /// Rejects collisions between owned handles and configured legacy tee paths.
+///
+/// # Parameters
+/// * `files`: Supplies the files value used by this operation.
+/// * `tee_paths`: Supplies the tee paths value used by this operation.
 pub(super) fn validate_tee_paths(
     files: &[(&'static str, &File)],
     tee_paths: &[(&'static str, &Path)],
@@ -62,6 +68,10 @@ pub(super) fn validate_tee_paths(
     Ok(())
 }
 
+/// Stores the open tee identity value used by this execution component.
+///
+/// # Parameters
+/// * `path`: Supplies the path value used by this operation.
 fn open_tee_identity(path: &Path) -> io::Result<File> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true);
@@ -74,6 +84,10 @@ fn open_tee_identity(path: &Path) -> io::Result<File> {
 }
 
 /// Resolves a relative path against a captured working directory lexically.
+///
+/// # Parameters
+/// * `base`: Captured working directory used as the resolution root.
+/// * `path`: Path to resolve without consulting the filesystem.
 #[allow(dead_code)]
 pub(super) fn absolute_lexical_path(base: &Path, path: &Path) -> std::path::PathBuf {
     if path.is_absolute() {

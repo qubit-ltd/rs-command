@@ -22,6 +22,7 @@ type RegistrationGateSlot = OnceLock<Mutex<Option<RegistrationGate>>>;
 #[cfg(test)]
 static AFTER_FIRST_REGISTRATION: RegistrationGateSlot = OnceLock::new();
 
+/// Stores the registration failure value used by this execution component.
 type RegistrationFailure = (io::Error, Option<PreparedFiles>, [Option<File>; 3]);
 
 #[cfg(test)]
@@ -32,6 +33,15 @@ pub(super) fn gate_after_first_registration(gate: Option<RegistrationGate>) {
         .expect("test registration gate lock should not poison") = gate;
 }
 
+/// Performs the register files step in the managed command execution lifecycle.
+///
+/// # Parameters
+/// * `_scope`: Operation scope that owns all file reservations.
+/// * `reservations`: Mutable list receiving the successfully registered
+///   reservations.
+/// * `stdin`: Optional file used as command input.
+/// * `stdout`: Optional output file and its sink policy.
+/// * `stderr`: Optional error file and its sink policy.
 pub(super) fn register_files(
     _scope: &OperationScope,
     reservations: &mut Vec<qubit_operation::ResourceReservation>,
@@ -86,6 +96,11 @@ pub(super) fn register_files(
     Ok(build(refs, policies))
 }
 
+/// Performs the partial step in the managed command execution lifecycle.
+///
+/// # Parameters
+/// * `refs`: Prepared resource references for the three command streams.
+/// * `policies`: Optional output policies paired with their file references.
 fn partial(
     refs: [Option<ResourceRef<Mutex<File>>>; 3],
     policies: [Option<FileSinkPolicy>; 3],
@@ -97,6 +112,11 @@ fn partial(
     }
 }
 
+/// Performs the build step in the managed command execution lifecycle.
+///
+/// # Parameters
+/// * `refs`: Resource references for stdin, stdout, and stderr.
+/// * `policies`: Output policies paired with stdout and stderr references.
 fn build(mut refs: [Option<ResourceRef<Mutex<File>>>; 3], policies: [Option<FileSinkPolicy>; 3]) -> PreparedFiles {
     PreparedFiles::new(
         refs[0].take(),
@@ -111,6 +131,11 @@ fn build(mut refs: [Option<ResourceRef<Mutex<File>>>; 3], policies: [Option<File
     )
 }
 
+/// Stores the truncate sinks value used by this execution component.
+///
+/// # Parameters
+/// * `prepared`: Registered files whose truncate policies should be applied.
+/// * `scope`: Scope used to record confirmed or uncertain side effects.
 pub(super) fn truncate_sinks(prepared: &PreparedFiles, scope: &OperationScope) -> io::Result<()> {
     for (name, sink) in [
         ("stdout", prepared.stdout.as_ref()),
@@ -141,6 +166,13 @@ pub(super) fn truncate_sinks(prepared: &PreparedFiles, scope: &OperationScope) -
     Ok(())
 }
 
+/// Performs the record effect step in the managed command execution lifecycle.
+///
+/// # Parameters
+/// * `scope`: Scope receiving the side effect evidence.
+/// * `resource_id`: Identity of the affected registered file.
+/// * `fact`: Whether the side effect is known or uncertain.
+/// * `description`: Bounded diagnostic description of the side effect.
 fn record_effect(
     scope: &OperationScope,
     resource_id: qubit_operation::ResourceId,

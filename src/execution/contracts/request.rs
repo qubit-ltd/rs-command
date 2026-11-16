@@ -1,17 +1,21 @@
-//! Submitted request snapshots and activated ownership bundle.
-use std::ffi::OsString;
-use std::path::PathBuf;
-use std::sync::Arc;
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 
+//! Submitted command and frozen execution inputs.
 use qubit_operation::OperationContext;
 use qubit_operation::OperationId;
-use qubit_operation::OperationScope;
 
+use super::ExecutionSnapshot;
 use super::FactSink;
+use super::IoPathSnapshot;
+use super::RequestOptions;
 use super::Reservation;
 use crate::Command;
-use crate::CommandResourceRunOptions;
-use crate::CommandRunOptions;
 use crate::CommandRunner;
 
 /// Submitted command and frozen execution inputs.
@@ -21,11 +25,17 @@ use crate::CommandRunner;
 /// effects, while actual file identity checks and file access remain worker
 /// responsibilities.
 pub struct Request {
+    /// Stores the operation id value used by this execution component.
     pub operation_id: Option<OperationId>,
+    /// Stores the runner value used by this execution component.
     pub runner: CommandRunner,
+    /// Stores the command value used by this execution component.
     pub command: Command,
+    /// Stores the options value used by this execution component.
     pub options: RequestOptions,
+    /// Stores the snapshot value used by this execution component.
     pub snapshot: ExecutionSnapshot,
+    /// Stores the io paths value used by this execution component.
     pub io_paths: IoPathSnapshot,
     /// Inherited operation context used to observe the fixed total deadline in
     /// its clock domain.
@@ -33,6 +43,10 @@ pub struct Request {
 }
 
 impl std::fmt::Debug for Request {
+    /// Stores the fmt value used by this execution component.
+    ///
+    /// # Parameters
+    /// * `formatter`: Supplies the formatter value used by this operation.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("Request")
@@ -45,37 +59,4 @@ impl std::fmt::Debug for Request {
             .field("deadline_configured", &self.deadline.is_some())
             .finish()
     }
-}
-
-/// Immutable working-directory and environment view captured at submission.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct ExecutionSnapshot {
-    pub working_directory: PathBuf,
-    pub environment: Vec<(OsString, Option<OsString>)>,
-}
-
-/// Lexical I/O paths captured with the request; file identity is checked later
-/// by preparation.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct IoPathSnapshot {
-    pub stdin: Option<PathBuf>,
-    pub stdout: Option<PathBuf>,
-    pub stderr: Option<PathBuf>,
-}
-
-/// Either cloneable collection settings or uniquely owned resource settings.
-#[derive(Debug)]
-pub enum RequestOptions {
-    Standard(CommandRunOptions),
-    Resources(CommandResourceRunOptions),
-}
-
-/// Activated request exclusively held by a domain worker.
-pub struct ActivatedRequest {
-    pub operation_id: OperationId,
-    pub scope: OperationScope,
-    pub request: Request,
-    pub reservation: Reservation,
-    pub facts: Arc<dyn FactSink>,
-    pub session_bridge: Option<Arc<dyn crate::session::contracts::SessionBridge>>,
 }

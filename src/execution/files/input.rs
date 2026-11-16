@@ -17,10 +17,23 @@ use crate::resource_run_options::CommandResourceRunOptions;
 use crate::resource_run_options::FileSinkPolicy;
 
 impl ResourceInput for CommandResourceRunOptions {
+    /// Performs the prepare files step in the managed command execution
+    /// lifecycle.
+    ///
+    /// # Parameters
+    /// * `self`: Supplies the self value used by this operation.
+    /// * `scope`: Supplies the scope value used by this operation.
     fn prepare_files(self: Box<Self>, scope: &OperationScope) -> Result<PreparedFiles, FilePreparationFailure> {
         (*self).prepare_with_directory(scope, None)
     }
 
+    /// Performs the prepare files with snapshot step in the managed command
+    /// execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `self`: Supplies the self value used by this operation.
+    /// * `scope`: Supplies the scope value used by this operation.
+    /// * `snapshot`: Supplies the snapshot value used by this operation.
     fn prepare_files_with_snapshot(
         self: Box<Self>,
         scope: &OperationScope,
@@ -31,6 +44,13 @@ impl ResourceInput for CommandResourceRunOptions {
 }
 
 impl CommandResourceRunOptions {
+    /// Performs the prepare with directory step in the managed command
+    /// execution lifecycle.
+    ///
+    /// # Parameters
+    /// * `scope`: Supplies the scope value used by this operation.
+    /// * `working_directory`: Supplies the working directory value used by this
+    ///   operation.
     fn prepare_with_directory(
         self,
         scope: &OperationScope,
@@ -127,6 +147,12 @@ impl CommandResourceRunOptions {
     }
 }
 
+/// Performs the failure step in the managed command execution lifecycle.
+///
+/// # Parameters
+/// * `error`: Supplies the error value used by this operation.
+/// * `prepared`: Supplies the prepared value used by this operation.
+/// * `input`: Supplies the input value used by this operation.
 fn failure(
     error: io::Error,
     prepared: Option<PreparedFiles>,
@@ -139,6 +165,12 @@ fn failure(
     }
 }
 
+/// Performs the restore input step in the managed command execution lifecycle.
+///
+/// # Parameters
+/// * `options`: Supplies the options value used by this operation.
+/// * `stdin`: Supplies the stdin value used by this operation.
+/// * `stdout`: Supplies the stdout value used by this operation.
 fn restore_input(
     options: crate::CommandRunOptions,
     stdin: Option<File>,
@@ -158,6 +190,10 @@ fn restore_input(
     Box::new(restored)
 }
 
+/// Stores the  policy is exhaustive value used by this execution component.
+///
+/// # Parameters
+/// * `policy`: Supplies the policy value used by this operation.
 #[allow(dead_code)]
 fn _policy_is_exhaustive(policy: FileSinkPolicy) {
     match policy {
@@ -175,7 +211,9 @@ mod tests {
     use qubit_operation::OperationManager;
     use qubit_operation::OperationOptions;
 
-    use super::*;
+    use super::ResourceInput;
+    use crate::resource_run_options::CommandResourceRunOptions;
+    use crate::resource_run_options::FileSinkPolicy;
     static PREPARATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]

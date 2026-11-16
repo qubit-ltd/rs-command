@@ -3,25 +3,20 @@ use std::sync::Mutex;
 
 use qubit_operation::StopReason;
 
+use super::internal::StartPermit;
+use super::internal::State;
 use crate::CommandCancellation;
 use crate::execution::contracts::StopPort;
 
+/// Represents the start gate state or contract used by managed command
+/// execution.
 #[derive(Debug, Default)]
 pub(crate) struct StartGate {
+    /// Stores the state value used by this execution component.
     state: Mutex<State>,
+    /// Stores the cancellation value used by this execution component.
     cancellation: CommandCancellation,
 }
-
-#[derive(Debug, Default)]
-struct State {
-    stopped: bool,
-    authorized: bool,
-    external_cancellation: Option<CommandCancellation>,
-    reason: Option<StopReason>,
-}
-
-#[derive(Debug)]
-pub(crate) struct StartPermit(());
 
 impl StartGate {
     /// Returns a permit only when no stop request has won the start race.
@@ -47,6 +42,8 @@ impl StartGate {
     }
 
     /// Records stop without waiting for the authorized system call to finish.
+    ///
+    /// # Parameters
     pub(crate) fn request_stop(&self, reason: StopReason) -> bool {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let won_before_start = !state.authorized;
@@ -64,16 +61,26 @@ impl StartGate {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).stopped
     }
 
+    /// Performs the stop reason step in the managed command execution
+    /// lifecycle.
     pub(crate) fn stop_reason(&self) -> Option<StopReason> {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).reason
     }
 }
 
 impl StartGate {
+    /// Performs the cancellation step in the managed command execution
+    /// lifecycle.
     pub(crate) fn cancellation(&self) -> CommandCancellation {
         self.cancellation.clone()
     }
 
+    /// Stores the attach external cancellation value used by this execution
+    /// component.
+    ///
+    /// # Parameters
+    /// * `cancellation`: Optional external cancellation source attached to this
+    ///   start gate.
     pub(crate) fn attach_external_cancellation(&self, cancellation: Option<CommandCancellation>) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.stopped {
@@ -96,6 +103,10 @@ impl StartGate {
 }
 
 impl StopPort for StartGate {
+    /// Records a stop request unless start authorization has already won.
+    ///
+    /// # Parameters
+    /// * `reason`: Stop reason to retain if this request wins the race.
     fn request_stop(&self, reason: StopReason) {
         let _ = Self::request_stop(self, reason);
     }
@@ -104,9 +115,9 @@ impl StopPort for StartGate {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io;
     use std::io::Cursor;
     use std::io::Read;
-    use std::io::{self};
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::atomic::AtomicBool;
