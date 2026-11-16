@@ -1,6 +1,6 @@
 //! Independent outcome, release, and settlement publication port.
 use crate::{CommandError, CommandOutput};
-use qubit_operation::{OperationOutcome, SettlementReport};
+use qubit_operation::{EffectRecord, OperationOutcome, SettlementReport};
 use std::sync::Arc;
 /// Domain publication port. Implementations reject duplicate publication and keep the three facts independent.
 pub trait FactSink: Send + Sync {
@@ -29,6 +29,16 @@ pub trait RecoveryOwner: Send + Sync {
     /// Returns a redacted, bounded description suitable for recovery diagnostics.
     fn summary(&self) -> String;
 
+    /// Returns bounded, factual effect evidence retained by this owner.
+    ///
+    /// This is domain evidence for the external settlement report. Upstream
+    /// resource-scope cleanup records remain in the manager's final report and
+    /// must not be copied here. Owners without a known resource effect return
+    /// the empty default; they must not invent resource identities.
+    fn effect_evidence(&self, _operation_id: qubit_operation::OperationId) -> RecoveryEffectEvidence {
+        RecoveryEffectEvidence::default()
+    }
+
     /// Performs one bounded cleanup handoff attempt.
     ///
     /// Adapters must invoke this only on a bounded recovery/reaper worker. Success means the
@@ -44,6 +54,17 @@ pub trait RecoveryOwner: Send + Sync {
     fn is_complete(&self) -> bool {
         false
     }
+}
+
+/// Bounded effect evidence carried by a recovery owner into external settlement.
+#[derive(Clone, Debug, Default)]
+pub struct RecoveryEffectEvidence {
+    /// Retained effects with their real operation and resource identities.
+    pub effects: Vec<EffectRecord>,
+    /// Total observed effect records before this bounded list was retained.
+    pub effects_total: usize,
+    /// Records omitted because the owner-specific evidence bound was reached.
+    pub effect_overflow: usize,
 }
 
 /// Bounded, redacted reason that a recovery cleanup attempt could not be handed off.

@@ -6,8 +6,8 @@ mod request;
 mod scheduler;
 pub use backend::Backend;
 pub use facts::{
-    FactPublishError, FactSink, RecoveryOwner, RecoveryPublishError, RecoveryPublishFailure,
-    RecoveryRetryError,
+    FactPublishError, FactSink, RecoveryEffectEvidence, RecoveryOwner, RecoveryPublishError,
+    RecoveryPublishFailure, RecoveryRetryError,
 };
 pub(crate) use files::PreparedSink;
 pub use files::{FilePreparationFailure, PreparedFiles, ResourceInput};
