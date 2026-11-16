@@ -226,7 +226,10 @@ impl CommandExecutor {
             None,
         ));
         match manager.try_submit_external(OperationOptions::default(), Arc::clone(&prepared)) {
-            Ok(handle) => Ok(handle),
+            Ok(handle) => {
+                prepared.set_operation_observer(handle.observer());
+                Ok(handle)
+            }
             Err(error) => {
                 let (reason, _) = error.into_parts();
                 let request = prepared
@@ -301,7 +304,10 @@ impl CommandExecutor {
             None,
         ));
         match manager.try_submit_external(OperationOptions::default(), Arc::clone(&prepared)) {
-            Ok(handle) => Ok(handle),
+            Ok(handle) => {
+                prepared.set_operation_observer(handle.observer());
+                Ok(handle)
+            }
             Err(error) => {
                 let (reason, _) = error.into_parts();
                 let request = prepared
@@ -388,7 +394,10 @@ impl CommandExecutor {
             .as_async()
             .try_submit_external(OperationOptions::default(), Arc::clone(&prepared))
         {
-            Ok(handle) => Ok(handle),
+            Ok(handle) => {
+                prepared.set_operation_observer(handle.observer().as_sync());
+                Ok(handle)
+            }
             Err(error) => {
                 let (reason, _) = error.into_parts();
                 let request = prepared
@@ -625,7 +634,10 @@ impl CommandExecutor {
             .as_async()
             .try_submit_external(OperationOptions::default(), Arc::clone(&prepared))
         {
-            Ok(handle) => Ok(handle),
+            Ok(handle) => {
+                prepared.set_operation_observer(handle.observer().as_sync());
+                Ok(handle)
+            }
             Err(error) => {
                 let (reason, _) = error.into_parts();
                 let request = prepared
@@ -1419,20 +1431,55 @@ pub(crate) fn build_executor(
         .map_err(CommandExecutorCreateError::GroupBinding)?;
     let scheduler = BoundedScheduler::new(config.clone())?;
     let backend = ProcessBackend::new();
-    let recovery = super::adapter::cleanup::start_recovery_worker(config.max_active)
+    let worker_handles =
+        spawn_domain_workers_with(&scheduler, config.max_active, |index, worker| {
+            std::thread::Builder::new()
+                .name(format!("qubit-command-worker-{index}"))
+                .spawn(worker)
+        })
         .map_err(|_| CommandExecutorCreateError::WorkerStartFailed)?;
-    for index in 0..config.max_active {
-        let s = scheduler.clone();
-        std::thread::Builder::new()
-            .name(format!("qubit-command-worker-{index}"))
-            .spawn(move || {
-                while let Some((job, permit)) = s.wait_next() {
-                    (job.run)(permit)
-                }
-            })
-            .map_err(|_| CommandExecutorCreateError::WorkerStartFailed)?;
-    }
+    let recovery = match super::adapter::cleanup::start_recovery_worker(config.max_active) {
+        Ok(recovery) => recovery,
+        Err(_) => {
+            scheduler.close_admission();
+            for worker in worker_handles {
+                let _ = worker.join();
+            }
+            return Err(CommandExecutorCreateError::WorkerStartFailed);
+        }
+    };
+    drop(worker_handles);
     Ok((scheduler, backend, group, recovery, manager_view))
+}
+
+fn spawn_domain_workers_with(
+    scheduler: &BoundedScheduler,
+    count: usize,
+    mut spawn: impl FnMut(
+        usize,
+        Box<dyn FnOnce() + Send + 'static>,
+    ) -> std::io::Result<std::thread::JoinHandle<()>>,
+) -> std::io::Result<Vec<std::thread::JoinHandle<()>>> {
+    let mut workers = Vec::with_capacity(count);
+    for index in 0..count {
+        let worker_scheduler = scheduler.clone();
+        let worker: Box<dyn FnOnce() + Send + 'static> = Box::new(move || {
+            while let Some((job, permit)) = worker_scheduler.wait_next() {
+                (job.run)(permit);
+            }
+        });
+        match spawn(index, worker) {
+            Ok(handle) => workers.push(handle),
+            Err(error) => {
+                scheduler.close_admission();
+                for worker in workers {
+                    let _ = worker.join();
+                }
+                return Err(error);
+            }
+        }
+    }
+    Ok(workers)
 }
 
 #[cfg(all(test, feature = "async"))]
@@ -1501,5 +1548,43 @@ mod retry_wait_tests {
         clock.ticks.store(5, Ordering::SeqCst);
         assert!(matches!(retry.as_mut().poll(&mut cx), Poll::Ready(false)));
         assert_eq!(context.stop_reason(), Some(StopReason::Timeout));
+    }
+}
+
+#[cfg(test)]
+mod worker_start_tests {
+    use super::spawn_domain_workers_with;
+    use crate::{CommandExecutionConfig, execution::scheduler::BoundedScheduler};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::thread;
+
+    #[test]
+    fn partial_worker_spawn_failure_closes_and_joins_started_workers() {
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig {
+            max_active: 1,
+            max_queued: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let exited = Arc::new(AtomicUsize::new(0));
+        let worker_exited = Arc::clone(&exited);
+        let result = spawn_domain_workers_with(&scheduler, 2, move |index, worker| {
+            if index == 1 {
+                return Err(std::io::Error::other("injected worker startup failure"));
+            }
+            let worker_exited = Arc::clone(&worker_exited);
+            thread::Builder::new().spawn(move || {
+                worker();
+                worker_exited.fetch_add(1, Ordering::SeqCst);
+            })
+        });
+
+        assert!(result.is_err());
+        assert_eq!(exited.load(Ordering::SeqCst), 1);
+        assert_eq!(scheduler.snapshot().active, 0);
+        assert_eq!(scheduler.snapshot().queued, 0);
     }
 }

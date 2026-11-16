@@ -37,11 +37,11 @@ fn managed_submit_runs_through_operation_manager() {
 fn owned_preparation_failure_retains_and_reports_recovery() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
-    let file = tempfile::tempfile().unwrap();
-    let output = file.try_clone().unwrap();
-    let options = CommandResourceRunOptions::new()
-        .stdin_file(file)
-        .stdout_sink(output, FileSinkPolicy::Preserve);
+    use std::io::Write;
+    let file = tempfile::NamedTempFile::new().unwrap();
+    file.as_file().write_all(b"preserve this").unwrap();
+    let output = std::fs::File::open(file.path()).unwrap();
+    let options = CommandResourceRunOptions::new().stdout_sink(output, FileSinkPolicy::Truncate);
     let mut operation = executor
         .submit_resources(
             CommandRunner::new(Duration::from_secs(5)),
@@ -60,11 +60,23 @@ fn owned_preparation_failure_retains_and_reports_recovery() {
         .expect("adapter settlement is retained by manager");
     assert_eq!(external.status, SettlementStatus::RecoveryRequired);
     assert_eq!(external.recovery_count, 1);
-    assert_eq!(external.effects_total, 1);
-    assert!(
-        external.recoveries_truncated,
-        "opaque owner is retained even when public recovery-handle detail cannot be materialized"
+    assert_eq!(
+        external.effects_total, 0,
+        "scope effects are not copied into the domain report"
     );
+    assert_eq!(external.effects.len(), 0);
+    assert_eq!(
+        external.recoveries_total, 0,
+        "adapter owners are not manager RecoveryHandles"
+    );
+    assert!(!external.recoveries_truncated);
+    assert_eq!(settlement.resource_reports_total, 1);
+    assert_eq!(settlement.effects_total, 1);
+    assert_eq!(
+        settlement.effects[0].fact,
+        qubit_operation::EffectFact::Unknown
+    );
+    assert!(settlement.effects[0].resource_id.is_some());
 }
 
 #[test]
@@ -101,10 +113,34 @@ fn executor_shutdown_isolated_to_its_group() {
             Default::default(),
         )
         .unwrap();
+    let _outcome = operation.wait_outcome().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn shutdown_drain_returns_pending_then_completed_report() {
+    use qubit_operation::{ShutdownMode, ShutdownWait};
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let mut operation = executor
+        .submit(
+            CommandRunner::without_timeout(),
+            Command::new("sh").arg("-c").arg("sleep 0.2"),
+            Default::default(),
+        )
+        .unwrap();
+    let shutdown = executor.request_shutdown(ShutdownMode::Drain);
     assert!(matches!(
-        operation.wait_outcome().unwrap(),
-        OperationOutcome::Succeeded(_)
+        shutdown.wait_for(Duration::ZERO).unwrap(),
+        ShutdownWait::Pending(snapshot) if snapshot.active_operations == 1
     ));
+    let _outcome = operation.wait_outcome().unwrap();
+    operation.wait_settlement().unwrap();
+    let report = match shutdown.wait_for(Duration::from_secs(5)).unwrap() {
+        ShutdownWait::Completed(report) => report,
+        ShutdownWait::Pending(snapshot) => panic!("drained group still pending: {snapshot:?}"),
+    };
+    assert_eq!(report.snapshot.active_operations, 0);
 }
 
 #[cfg(all(feature = "async", unix))]

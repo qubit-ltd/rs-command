@@ -11,8 +11,38 @@ pub(crate) struct RecoveryItem {
     pub owner: Box<dyn RecoveryOwner>,
     pub control: Arc<CommandControl>,
     pub id: OperationId,
+    pub observer: Arc<OperationObserverSlot>,
 }
 pub(crate) type RecoverySender = SyncSender<RecoveryItem>;
+
+#[derive(Default)]
+pub(crate) struct OperationObserverSlot {
+    observer: std::sync::Mutex<Option<qubit_operation::OperationObserver>>,
+    available: std::sync::Condvar,
+}
+impl OperationObserverSlot {
+    pub(crate) fn set(&self, observer: qubit_operation::OperationObserver) {
+        *self
+            .observer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(observer);
+        self.available.notify_all();
+    }
+
+    fn wait(&self) -> qubit_operation::OperationObserver {
+        let mut observer = self
+            .observer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        while observer.is_none() {
+            observer = self
+                .available
+                .wait(observer)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+        observer.as_ref().expect("observer is set").clone()
+    }
+}
 
 pub(crate) fn start_recovery_worker(capacity: usize) -> Result<RecoverySender, std::io::Error> {
     let (tx, rx) = sync_channel::<RecoveryItem>(capacity.max(1));
@@ -35,19 +65,25 @@ fn recovery_loop(rx: Receiver<RecoveryItem>) {
                 }
             }
         }
+        log::debug!("recovery owner handed responsibility upstream: {summary}");
         let _ = item.control.release();
         let _ = item
             .control
-            .settlement(Arc::new(recovery_settlement(item.id, &summary)));
+            .settlement(Arc::new(recovery_settlement(item.id)));
+        let observer = item.observer.wait();
+        loop {
+            match observer.wait_settlement() {
+                Ok(_) => break,
+                Err(error) => {
+                    log::error!("recovery worker could not observe upstream settlement: {error:?}");
+                    std::thread::sleep(backoff);
+                    backoff = (backoff * 2).min(std::time::Duration::from_secs(2));
+                }
+            }
+        }
     }
 }
-fn recovery_settlement(id: OperationId, summary: &str) -> SettlementReport {
-    let effect = qubit_operation::EffectRecord {
-        operation_id: id,
-        resource_id: None,
-        fact: qubit_operation::EffectFact::Unknown,
-        description: qubit_operation::DiagnosticSummary::new(summary),
-    };
+fn recovery_settlement(id: OperationId) -> SettlementReport {
     SettlementReport {
         operation_id: id,
         status: SettlementStatus::RecoveryRequired,
@@ -67,11 +103,131 @@ fn recovery_settlement(id: OperationId, summary: &str) -> SettlementReport {
         transfers_total: 0,
         transfers_truncated: false,
         recoveries: Arc::from([]),
-        recoveries_total: 1,
-        recoveries_truncated: true,
-        effects: Arc::from([effect]),
-        effects_total: 1,
+        recoveries_total: 0,
+        recoveries_truncated: false,
+        effects: Arc::from([]),
+        effects_total: 0,
         effect_overflow: 0,
         external_settlement: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OperationObserverSlot, RecoveryItem, start_recovery_worker};
+    use crate::execution::adapter::CommandControl;
+    use crate::execution::contracts::{RecoveryOwner, RecoveryRetryError, ReservationLease};
+    use qubit_operation::{OperationControl, OperationManager, OperationOptions, OperationOutcome};
+    use std::sync::{Arc, Condvar, Mutex, mpsc};
+    use std::time::{Duration, Instant};
+
+    struct BlockingDrop {
+        started: mpsc::SyncSender<()>,
+        gate: Arc<(Mutex<bool>, Condvar)>,
+    }
+    impl Drop for BlockingDrop {
+        fn drop(&mut self) {
+            let _ = self.started.send(());
+            let (released, changed) = &*self.gate;
+            let mut released = released.lock().unwrap();
+            while !*released {
+                released = changed.wait(released).unwrap();
+            }
+        }
+    }
+
+    struct CompleteOwner {
+        _lease: Mutex<Option<ReservationLease>>,
+    }
+    impl RecoveryOwner for CompleteOwner {
+        fn summary(&self) -> String {
+            "test owner".to_owned()
+        }
+        fn retry_cleanup(&self) -> Result<(), RecoveryRetryError> {
+            Err(RecoveryRetryError::OwnerAlreadyConsumed)
+        }
+        fn is_complete(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn recovery_lease_survives_handoff_until_manager_settlement() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let (drop_started_tx, drop_started_rx) = mpsc::sync_channel(1);
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let cleanup_gate = Arc::clone(&gate);
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let resource = scope
+                    .manage(BlockingDrop {
+                        started: drop_started_tx,
+                        gate: cleanup_gate,
+                    })
+                    .unwrap();
+                drop(resource);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        drop_started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("scope cleanup should reach the gate");
+
+        let id = operation.id();
+        let control = Arc::new(CommandControl::default());
+        assert!(control.bind(id));
+        let (lease_dropped_tx, lease_dropped_rx) = mpsc::sync_channel(1);
+        let lease = ReservationLease::new(move || {
+            let _ = lease_dropped_tx.send(());
+        });
+        let observer = Arc::new(OperationObserverSlot::default());
+        let recovery = start_recovery_worker(1).unwrap();
+        recovery
+            .send(RecoveryItem {
+                owner: Box::new(CompleteOwner {
+                    _lease: Mutex::new(Some(lease)),
+                }),
+                control: Arc::clone(&control),
+                id,
+                observer: Arc::clone(&observer),
+            })
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while OperationControl::snapshot(&*control).settlement.is_none()
+            && Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        assert!(OperationControl::snapshot(&*control).input_released);
+        assert!(OperationControl::snapshot(&*control).settlement.is_some());
+        assert!(lease_dropped_rx.try_recv().is_err());
+        assert!(matches!(
+            operation.wait_settlement_for(Duration::ZERO).unwrap(),
+            qubit_operation::SettlementWait::Pending(_)
+        ));
+        observer.set(operation.observer());
+        assert!(lease_dropped_rx.try_recv().is_err());
+
+        let (released, changed) = &*gate;
+        *released.lock().unwrap() = true;
+        changed.notify_all();
+        let report = match operation
+            .wait_settlement_for(Duration::from_secs(5))
+            .unwrap()
+        {
+            qubit_operation::SettlementWait::Ready(report) => report,
+            qubit_operation::SettlementWait::Pending(_) => {
+                panic!("scope must settle after gate release")
+            }
+        };
+        assert_eq!(report.resource_reports_total, 1);
+        lease_dropped_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("recovery owner lease drops only after manager settlement");
     }
 }

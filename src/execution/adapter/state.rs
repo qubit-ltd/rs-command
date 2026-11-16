@@ -22,6 +22,7 @@ pub(crate) struct AdapterState {
     control: Arc<CommandControl>,
     stop: Mutex<Option<Arc<dyn StopPort>>>,
     recovery: super::cleanup::RecoverySender,
+    observer: Arc<super::cleanup::OperationObserverSlot>,
     session_bridge: Option<Arc<dyn crate::session::contracts::SessionBridge>>,
     #[cfg(feature = "async")]
     session_keepalive: Option<SessionOwners>,
@@ -66,6 +67,7 @@ impl AdapterState {
             control: Arc::new(CommandControl::default()),
             stop: Mutex::new(None),
             recovery,
+            observer: Arc::new(super::cleanup::OperationObserverSlot::default()),
             session_bridge,
             #[cfg(feature = "async")]
             session_keepalive: None,
@@ -82,6 +84,9 @@ impl AdapterState {
             .unwrap_or_else(|e| e.into_inner())
             .request
             .take()
+    }
+    pub(crate) fn set_operation_observer(&self, observer: qubit_operation::OperationObserver) {
+        self.observer.set(observer);
     }
 }
 impl FactSink for AdapterState {
@@ -131,6 +136,7 @@ impl FactSink for AdapterState {
             owner,
             control: Arc::clone(&self.control),
             id,
+            observer: Arc::clone(&self.observer),
         };
         self.recovery.try_send(item).map_err(|error| {
             let owner = match error {
@@ -176,6 +182,11 @@ impl PreparedExternalOperation<CommandOutput, CommandError> for AdapterState {
             }
         };
         let Some(permit) = permit else {
+            let discarded = {
+                let mut owned = self.owned.lock().unwrap_or_else(|e| e.into_inner());
+                (owned.request.take(), owned.reservation.take())
+            };
+            drop(discarded);
             let failure = make_failure("prepared command inputs were unavailable at activation");
             let _ = self
                 .control
@@ -233,9 +244,13 @@ impl PreparedExternalOperation<CommandOutput, CommandError> for AdapterState {
                     permit,
                 } = failure;
                 drop(permit);
-                self.owned.lock().unwrap_or_else(|e| e.into_inner()).phase =
-                    AdapterPhase::ActivationFailed;
+                let discarded = {
+                    let mut owned = self.owned.lock().unwrap_or_else(|e| e.into_inner());
+                    owned.phase = AdapterPhase::ActivationFailed;
+                    (owned.request.take(), owned.reservation.take())
+                };
                 drop(job);
+                drop(discarded);
                 let failure = make_failure("domain scheduler rejected activation");
                 let _ = self
                     .control
@@ -322,5 +337,198 @@ impl qubit_operation::OperationControl for AdapterState {
     }
     fn poll_settlement(&self, cx: &mut Context<'_>) -> Poll<Arc<SettlementReport>> {
         qubit_operation::OperationControl::poll_settlement(&*self.control, cx)
+    }
+}
+
+#[cfg(test)]
+mod activation_failure_tests {
+    use super::{AdapterState, ProcessBackend};
+    use crate::execution::adapter::control::CommandControl;
+    use crate::execution::contracts::{
+        ExecutionSnapshot, IoPathSnapshot, Request, RequestOptions, Scheduler,
+    };
+    use crate::execution::scheduler::BoundedScheduler;
+    use crate::{Command, CommandError, CommandExecutionConfig, CommandOutput, CommandRunner};
+    use qubit_operation::{
+        ExecutionFailure, ExternalBindError, OperationControl, OperationId, OperationManager,
+        OperationOptions, OperationOutcome, OperationScope, PreparedExternalOperation,
+    };
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::task::{Context, Poll};
+
+    struct FailedBinder(AtomicBool, CommandControl);
+    impl OperationControl for FailedBinder {
+        fn request_stop(&self, reason: qubit_operation::StopReason) {
+            OperationControl::request_stop(&self.1, reason)
+        }
+        fn snapshot(&self) -> qubit_operation::ChildSnapshot {
+            OperationControl::snapshot(&self.1)
+        }
+        fn poll_outcome(&self, cx: &mut Context<'_>) -> Poll<qubit_operation::ChildOutcomeSummary> {
+            OperationControl::poll_outcome(&self.1, cx)
+        }
+        fn poll_release(&self, cx: &mut Context<'_>) -> Poll<qubit_operation::ChildRelease> {
+            OperationControl::poll_release(&self.1, cx)
+        }
+        fn poll_settlement(
+            &self,
+            cx: &mut Context<'_>,
+        ) -> Poll<Arc<qubit_operation::SettlementReport>> {
+            OperationControl::poll_settlement(&self.1, cx)
+        }
+    }
+    impl PreparedExternalOperation<CommandOutput, CommandError> for FailedBinder {
+        fn bind(&self, id: OperationId) -> Result<(), ExternalBindError> {
+            Err(ExternalBindError::Failed(ExecutionFailure {
+                operation_id: id,
+                summary: qubit_operation::DiagnosticSummary::new("injected bind failure"),
+                source: None,
+            }))
+        }
+        fn activate(self: Arc<Self>, _: OperationScope) -> Result<(), ExecutionFailure> {
+            panic!("failed bind must not activate")
+        }
+        fn abandon(self: Arc<Self>) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+        fn poll_take_outcome(
+            &self,
+            _: &mut Context<'_>,
+        ) -> Poll<OperationOutcome<CommandOutput, CommandError>> {
+            Poll::Pending
+        }
+    }
+
+    fn request() -> Request {
+        Request {
+            operation_id: None,
+            runner: CommandRunner::without_timeout(),
+            command: Command::new("true"),
+            options: RequestOptions::Standard(Default::default()),
+            snapshot: ExecutionSnapshot {
+                working_directory: std::env::current_dir().unwrap(),
+                environment: Vec::new(),
+            },
+            io_paths: IoPathSnapshot::default(),
+            deadline: None,
+        }
+    }
+
+    fn make_state(
+        scheduler: Arc<BoundedScheduler>,
+        permit: crate::execution::Reservation,
+    ) -> Arc<AdapterState> {
+        let backend = Arc::new(ProcessBackend::new());
+        let recovery = super::super::cleanup::start_recovery_worker(1).unwrap();
+        Arc::new(AdapterState::new(
+            request(),
+            permit,
+            scheduler.clone(),
+            backend.clone(),
+            backend,
+            recovery,
+            None,
+        ))
+    }
+
+    fn drive_activation(state: Arc<AdapterState>) {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut handle = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                state.bind(scope.id()).unwrap();
+                let _ = state.clone().activate(scope);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        assert!(matches!(
+            handle.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        handle.wait_settlement().unwrap();
+    }
+
+    fn scheduler() -> Arc<BoundedScheduler> {
+        Arc::new(
+            BoundedScheduler::new(CommandExecutionConfig {
+                max_active: 1,
+                max_queued: 0,
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn adapter_bind_is_one_shot_and_reports_already_bound() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let state = make_state(scheduler, permit);
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut handle = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                assert!(state.bind(scope.id()).is_ok());
+                assert!(matches!(
+                    state.bind(scope.id()),
+                    Err(ExternalBindError::AlreadyBound)
+                ));
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        assert!(matches!(
+            handle.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        handle.wait_settlement().unwrap();
+    }
+
+    #[test]
+    fn bind_failure_becomes_execution_failure_without_activation() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let prepared = Arc::new(FailedBinder(
+            AtomicBool::new(false),
+            CommandControl::default(),
+        ));
+        let mut handle = manager
+            .try_submit_external(OperationOptions::default(), Arc::clone(&prepared))
+            .unwrap();
+
+        assert!(matches!(
+            handle.wait_outcome().unwrap(),
+            OperationOutcome::ExecutionFailed(_)
+        ));
+        assert!(prepared.0.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn activation_without_permit_drops_request_before_release() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let state = make_state(Arc::clone(&scheduler), permit);
+        state.owned.lock().unwrap().reservation.take();
+
+        drive_activation(Arc::clone(&state));
+
+        assert!(
+            state.restore().is_none(),
+            "request must not survive published release"
+        );
+        assert!(OperationControl::snapshot(&*state).input_released);
+    }
+
+    #[test]
+    fn enqueue_rejection_drops_request_before_release() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let state = make_state(Arc::clone(&scheduler), permit);
+        scheduler.close_admission();
+
+        drive_activation(Arc::clone(&state));
+
+        assert!(
+            state.restore().is_none(),
+            "request must not survive published release"
+        );
+        assert!(OperationControl::snapshot(&*state).input_released);
     }
 }

@@ -98,6 +98,45 @@ fn managed_session_returns_endpoints_and_streams_both_pipes() {
     operation.wait_settlement().unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn dropping_session_requests_stop_and_preserves_observable_settlement() {
+    use qubit_operation::{SettlementWait, ShutdownMode, StopReason};
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let runner = CommandRunner::without_timeout();
+    let session = block_on(runner.start_session(
+        &executor,
+        Command::new("sh").arg("-c").arg("sleep 10"),
+        Default::default(),
+    ))
+    .unwrap();
+    let observer = session.operation().unwrap().observer();
+
+    drop(session);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let stop = loop {
+        if let Some(stop) = observer.snapshot().stop {
+            break stop;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "session drop must request stop"
+        );
+        thread::yield_now();
+    };
+    assert_eq!(stop.reason, StopReason::UserCancelled);
+    let shutdown = executor.request_shutdown(ShutdownMode::Drain);
+    let _ = shutdown.wait_for(Duration::from_secs(5)).unwrap();
+    assert!(matches!(
+        observer
+            .wait_settlement_for(Duration::from_secs(5))
+            .unwrap(),
+        SettlementWait::Ready(_)
+    ));
+}
+
 async fn futures_join<A: std::future::Future, B: std::future::Future>(
     a: A,
     b: B,
