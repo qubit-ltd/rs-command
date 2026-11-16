@@ -1,6 +1,7 @@
-use qubit_command::{
-    CommandExecutionConfig, CommandResourceRunOptions, CommandRunOptions, ProcessTreePolicy,
-};
+use qubit_command::CommandExecutionConfig;
+use qubit_command::CommandResourceRunOptions;
+use qubit_command::CommandRunOptions;
+use qubit_command::ProcessTreePolicy;
 
 #[test]
 fn managed_defaults_are_bounded() {
@@ -15,11 +16,16 @@ fn managed_defaults_are_bounded() {
 
 #[test]
 fn zero_active_rejected_and_zero_queue_is_valid() {
-    let mut config = CommandExecutionConfig::default();
-    config.max_active = 0;
+    let config = CommandExecutionConfig {
+        max_active: 0,
+        ..CommandExecutionConfig::default()
+    };
     assert!(config.validate().is_err());
-    config.max_active = 1;
-    config.max_queued = 0;
+    let config = CommandExecutionConfig {
+        max_active: 1,
+        max_queued: 0,
+        ..CommandExecutionConfig::default()
+    };
     assert!(config.validate().is_ok());
 }
 
@@ -29,10 +35,7 @@ fn options_preserve_clone_and_managed_default() {
     assert_clone::<CommandRunOptions>();
     let options = CommandRunOptions::default();
     assert_eq!(options.process_tree_policy(), ProcessTreePolicy::Managed);
-    assert_eq!(
-        options.clone().process_tree_policy(),
-        ProcessTreePolicy::Managed
-    );
+    assert_eq!(options.clone().process_tree_policy(), ProcessTreePolicy::Managed);
     let resources = CommandResourceRunOptions::new().options(options.clone());
     assert_eq!(
         resources.ordinary_options().process_tree_policy(),
@@ -60,7 +63,8 @@ fn owned_options_are_consumed_by_value() {
 
 #[test]
 fn snapshot_submission_failure_retains_diagnostic() {
-    use qubit_command::{CommandSubmitFailureReason, SnapshotFailure};
+    use qubit_command::CommandSubmitFailureReason;
+    use qubit_command::SnapshotFailure;
     let reason = CommandSubmitFailureReason::Snapshot(SnapshotFailure {
         diagnostic: "working directory could not be captured".to_owned(),
     });
@@ -71,7 +75,8 @@ fn snapshot_submission_failure_retains_diagnostic() {
 
 #[test]
 fn owned_output_sink_requires_and_retains_policy() {
-    use qubit_command::{CommandResourceRunOptions, FileSinkPolicy};
+    use qubit_command::CommandResourceRunOptions;
+    use qubit_command::FileSinkPolicy;
     let sink = tempfile::tempfile().expect("create temporary sink");
     let options = CommandResourceRunOptions::new().stdout_sink(sink, FileSinkPolicy::Preserve);
     assert!(matches!(

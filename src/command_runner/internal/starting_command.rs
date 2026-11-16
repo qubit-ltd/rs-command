@@ -7,6 +7,10 @@
 // =============================================================================
 //! Owns a child process while its I/O helpers are being started.
 
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+
 use process_wrap::std::ChildWrapper;
 
 use super::command_io::CommandIo;
@@ -17,12 +21,11 @@ use super::process_terminator::ProcessTerminator;
 use super::stdin_writer::OptionalStdinWriter;
 use crate::CommandCleanupFailure;
 use crate::CommandError;
-use crate::execution::backend::{Reaper, ReaperObserver, ReaperOwner};
+use crate::execution::backend::Reaper;
+use crate::execution::backend::ReaperObserver;
+use crate::execution::backend::ReaperOwner;
 use crate::execution::contracts::ReservationLease;
 use crate::session::contracts::SessionBridge;
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 
 /// Guards a spawned child until all runner-side I/O helpers are ready.
 ///
@@ -61,10 +64,7 @@ impl<'a> StartingCommand<'a> {
     /// A guard that terminates the child unless initialization finishes.
     #[inline]
     #[cfg(test)]
-    pub(in crate::command_runner) const fn new(
-        command: &'a str,
-        child_process: ManagedChildProcess,
-    ) -> Self {
+    pub(in crate::command_runner) const fn new(command: &'a str, child_process: ManagedChildProcess) -> Self {
         Self {
             command,
             child_process: Some(child_process),
@@ -202,11 +202,9 @@ impl<'a> StartingCommand<'a> {
         primary.with_cleanup_failures(self.cleanup())
     }
 
-    /// Transfers a partially initialized managed process and its helpers to a reaper worker.
-    pub(in crate::command_runner) fn abort_managed(
-        mut self,
-        primary: CommandError,
-    ) -> CommandError {
+    /// Transfers a partially initialized managed process and its helpers to a
+    /// reaper worker.
+    pub(in crate::command_runner) fn abort_managed(mut self, primary: CommandError) -> CommandError {
         let Some(observer) = self.reaper_observer.take() else {
             return self.abort(primary);
         };
@@ -249,15 +247,9 @@ impl<'a> StartingCommand<'a> {
                         }
                     }
                 }
-                let helpers_finished = stdout_reader
-                    .as_ref()
-                    .is_none_or(|helper| helper.is_finished())
-                    && stderr_reader
-                        .as_ref()
-                        .is_none_or(|helper| helper.is_finished())
-                    && stdin_writer
-                        .as_ref()
-                        .is_none_or(|helper| helper.is_finished());
+                let helpers_finished = stdout_reader.as_ref().is_none_or(|helper| helper.is_finished())
+                    && stderr_reader.as_ref().is_none_or(|helper| helper.is_finished())
+                    && stdin_writer.as_ref().is_none_or(|helper| helper.is_finished());
                 if terminated && helpers_finished {
                     break;
                 }
@@ -322,10 +314,7 @@ impl Drop for StartingCommand<'_> {
     /// Reuses explicit cleanup as a fallback during unwinding.
     fn drop(&mut self) {
         for failure in self.cleanup() {
-            log::error!(
-                "Command '{}' failed during startup cleanup: {failure:?}",
-                self.command
-            );
+            log::error!("Command '{}' failed during startup cleanup: {failure:?}", self.command);
         }
     }
 }
@@ -368,20 +357,12 @@ mod tests {
             .spawn()
             .expect("test process should start");
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let direct = super::super::scripted_child::ScriptedChild::new(
-            "child",
-            Box::new(process),
-            Arc::clone(&calls),
-        )
-        .kill_error(io::Error::other("first kill attempt fails"))
-        .delegate_kill_to_inner();
-        let child = super::super::scripted_child::ScriptedChild::new(
-            "tree",
-            Box::new(direct),
-            Arc::clone(&calls),
-        )
-        .kill_error(io::Error::other("first tree kill attempt fails"))
-        .delegate_kill_to_inner();
+        let direct = super::super::scripted_child::ScriptedChild::new("child", Box::new(process), Arc::clone(&calls))
+            .kill_error(io::Error::other("first kill attempt fails"))
+            .delegate_kill_to_inner();
+        let child = super::super::scripted_child::ScriptedChild::new("tree", Box::new(direct), Arc::clone(&calls))
+            .kill_error(io::Error::other("first tree kill attempt fails"))
+            .delegate_kill_to_inner();
         let (observer, completed) = ReaperObserver::pair();
         let released = Arc::new(AtomicBool::new(false));
         let lease_released = Arc::clone(&released);
@@ -444,7 +425,7 @@ mod tests {
         use crate::session::channel::SessionChannels;
         use crate::session::contracts::SessionBridge;
 
-        let mut channels = SessionChannels::new();
+        let channels = SessionChannels::new();
         let bridge: Arc<dyn SessionBridge> = channels.bridge.clone();
         let chunk = vec![0x5a; 16 * 1024];
         for _ in 0..4 {
@@ -460,9 +441,7 @@ mod tests {
                     .expect("managed startup abort should wake the blocked writer");
                 Ok(CapturedOutput::default())
             }),
-            IoCancellation::pair()
-                .expect("reader cancellation should initialize")
-                .0,
+            IoCancellation::pair().expect("reader cancellation should initialize").0,
         );
         channels.bridge.wait_for_stdout_writer_for_test();
 
@@ -483,10 +462,10 @@ mod tests {
             None,
         ));
 
-        let completed_without_endpoint_drop =
-            completed.recv_timeout(Duration::from_millis(150)).is_ok();
+        let completed_without_endpoint_drop = completed.recv_timeout(Duration::from_millis(150)).is_ok();
         if !completed_without_endpoint_drop {
-            // Release the owner even after a regression so the test never strands a reaper worker.
+            // Release the owner even after a regression so the test never strands a reaper
+            // worker.
             bridge.request_output_stop();
             completed
                 .recv_timeout(Duration::from_secs(2))
@@ -502,13 +481,12 @@ mod tests {
     #[test]
     fn test_startup_abort_retains_primary_without_waiting_after_failed_kills() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let direct = ScriptedChild::new("child", raw_child(), Arc::clone(&calls))
-            .kill_error(io::Error::other("child denied"));
+        let direct =
+            ScriptedChild::new("child", raw_child(), Arc::clone(&calls)).kill_error(io::Error::other("child denied"));
         let tree = ScriptedChild::new("tree", Box::new(direct), Arc::clone(&calls))
             .kill_error(io::Error::other("tree denied"))
             .try_wait_results((0..9).map(|_| Ok(None)));
-        let guard =
-            StartingCommand::new("redacted", ManagedChildProcess::new(Box::new(tree), true));
+        let guard = StartingCommand::new("redacted", ManagedChildProcess::new(Box::new(tree), true));
         let primary = CommandError::from_reason(
             "redacted",
             CommandErrorReason::StartOutputThreadFailed {
@@ -528,20 +506,8 @@ mod tests {
         ));
         let calls = calls.lock().expect("calls should be readable");
         assert!(!calls.iter().any(|call| call.ends_with(".wait")));
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|call| call.as_str() == "child.kill")
-                .count(),
-            1
-        );
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|call| call.as_str() == "tree.kill")
-                .count(),
-            1
-        );
+        assert_eq!(calls.iter().filter(|call| call.as_str() == "child.kill").count(), 1);
+        assert_eq!(calls.iter().filter(|call| call.as_str() == "tree.kill").count(), 1);
     }
 
     #[test]
@@ -559,12 +525,10 @@ mod tests {
             let stage = usize::from(with_stdin) + readers;
             let calls = Arc::new(Mutex::new(Vec::new()));
             let tree = ScriptedChild::new("tree", raw_child(), Arc::clone(&calls));
-            let mut guard =
-                StartingCommand::new("redacted", ManagedChildProcess::new(Box::new(tree), true));
+            let mut guard = StartingCommand::new("redacted", ManagedChildProcess::new(Box::new(tree), true));
             let finished = Arc::new(AtomicUsize::new(0));
             if with_stdin {
-                let (cancel, token) =
-                    IoCancellation::pair().expect("stdin cancellation must initialize");
+                let (cancel, token) = IoCancellation::pair().expect("stdin cancellation must initialize");
                 let finished = Arc::clone(&finished);
                 guard.set_stdin_writer(Some(StdinWriter::new(
                     thread::spawn(move || {
@@ -578,8 +542,7 @@ mod tests {
                 )));
             }
             for stream in 0..readers {
-                let (cancel, token) =
-                    IoCancellation::pair().expect("output cancellation must initialize");
+                let (cancel, token) = IoCancellation::pair().expect("output cancellation must initialize");
                 let finished = Arc::clone(&finished);
                 let reader = OutputReader::new(
                     thread::spawn(move || {

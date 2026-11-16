@@ -1,3 +1,5 @@
+#![cfg(feature = "async")]
+
 #[path = "../examples/managed_collect.rs"]
 mod managed_collect;
 #[path = "../examples/managed_file.rs"]
