@@ -13,22 +13,36 @@ pub enum CapacityFailure {
 /// Exclusive scheduler permit. Its one-shot release callback runs on drop, including
 /// when the permit was never activated; moving it into `ActivatedRequest` keeps it held.
 pub struct Reservation {
+    pub(crate) scheduler_id: u64,
     pub(crate) token: u64,
     release: Option<Box<dyn FnOnce(u64) + Send + 'static>>,
 }
 impl Reservation {
     /// Creates a uniquely owned permit with its scheduler's nonblocking release hook.
-    pub(crate) fn new(token: u64, release: impl FnOnce(u64) + Send + 'static) -> Self {
+    ///
+    /// The release callback must be nonblocking and must not panic because it runs from `Drop`.
+    pub(crate) fn new(
+        scheduler_id: u64,
+        token: u64,
+        release: impl FnOnce(u64) + Send + 'static,
+    ) -> Self {
         Self {
+            scheduler_id,
             token,
             release: Some(Box::new(release)),
         }
+    }
+
+    /// Reports whether this permit was created by the given scheduler instance.
+    pub(crate) fn belongs_to(&self, scheduler_id: u64) -> bool {
+        self.scheduler_id == scheduler_id
     }
 }
 impl fmt::Debug for Reservation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Reservation")
+            .field("scheduler_id", &self.scheduler_id)
             .field("token", &self.token)
             .field("active", &self.release.is_some())
             .finish()
@@ -86,10 +100,12 @@ mod tests {
     fn dropping_reservation_releases_its_token_once() {
         let releases = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&releases);
-        let permit = Reservation::new(41, move |token| {
+        let permit = Reservation::new(7, 41, move |token| {
             assert_eq!(token, 41);
             observed.fetch_add(1, Ordering::SeqCst);
         });
+        assert!(permit.belongs_to(7));
+        assert!(!permit.belongs_to(8));
         assert_eq!(releases.load(Ordering::SeqCst), 0);
         let activated_owner = permit;
         assert_eq!(releases.load(Ordering::SeqCst), 0);
