@@ -1,5 +1,6 @@
 //! Owned file handoff contracts.
 use crate::resource_run_options::FileSinkPolicy;
+use super::ExecutionSnapshot;
 use qubit_operation::{OperationScope, ResourceRef};
 use std::fs::File;
 use std::sync::Mutex;
@@ -10,6 +11,18 @@ pub trait ResourceInput: Send {
         self: Box<Self>,
         scope: &OperationScope,
     ) -> Result<PreparedFiles, FilePreparationFailure>;
+
+    /// Prepares files using the immutable submission-time path/environment snapshot.
+    ///
+    /// Implementations with path-based identity checks should override this method. The
+    /// default preserves compatibility for resource inputs that only contain owned handles.
+    fn prepare_files_with_snapshot(
+        self: Box<Self>,
+        scope: &OperationScope,
+        _snapshot: &ExecutionSnapshot,
+    ) -> Result<PreparedFiles, FilePreparationFailure> {
+        self.prepare_files(scope)
+    }
 }
 
 /// One prepared sink with shared write-safe access and its explicit disposition.
