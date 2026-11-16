@@ -1,3 +1,10 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 //! Linearizes cancellation against the first operation with external effects.
 use std::sync::Mutex;
 
@@ -231,14 +238,14 @@ mod tests {
     }
 
     #[test]
-    fn stop_wins_start_gate() {
+    fn test_stop_wins_start_gate() {
         let gate = StartGate::default();
         assert!(gate.request_stop(StopReason::UserCancelled));
         assert!(gate.authorize().is_none());
     }
 
     #[test]
-    fn side_effect_authorization_wins_stop_gate() {
+    fn test_side_effect_authorization_wins_stop_gate() {
         let gate = StartGate::default();
         assert!(gate.authorize().is_some());
         assert!(!gate.request_stop(StopReason::UserCancelled));
@@ -246,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn independent_activations_have_independent_stop_gates() {
+    fn test_independent_activations_have_independent_stop_gates() {
         let first = StartGate::default();
         let second = StartGate::default();
         first.request_stop(StopReason::UserCancelled);
@@ -255,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn external_cancel_before_authorization_prevents_start() {
+    fn test_external_cancel_before_authorization_prevents_start() {
         let gate = StartGate::default();
         let cancellation = crate::CommandCancellation::new();
         gate.attach_external_cancellation(Some(cancellation.clone()));
@@ -266,7 +273,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn session_bridge_moves_stdin_and_both_output_streams() {
+    fn test_session_bridge_moves_stdin_and_both_output_streams() {
         let bridge = Arc::new(RecordingBridge::new(b"from-session\n", None));
         let gate = StartGate::default();
         let output = CommandRunner::without_timeout()
@@ -292,7 +299,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn session_output_budget_stops_child_with_configured_and_observed_counts() {
+    fn test_session_output_budget_stops_child_with_configured_and_observed_counts() {
         let bridge = Arc::new(RecordingBridge::new(b"", Some(2)));
         let gate = StartGate::default();
         let error = CommandRunner::without_timeout()
@@ -317,7 +324,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn active_command_observes_inherited_operation_deadline() {
+    fn test_active_command_observes_inherited_operation_deadline() {
         let directory = tempfile::tempdir().unwrap();
         let ready = directory.path().join("deadline-active");
         let ready_arg = ready.to_string_lossy().into_owned();
@@ -367,7 +374,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn stop_before_commit_does_not_spawn_or_truncate() {
+    fn test_stop_before_commit_does_not_spawn_or_truncate() {
         let directory = tempfile::tempdir().unwrap();
         let marker = directory.path().join("spawned");
         let tee = directory.path().join("tee");
@@ -397,7 +404,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn stop_after_spawn_reaches_child_and_waits_for_runner_cleanup() {
+    fn test_stop_after_spawn_reaches_child_and_waits_for_runner_cleanup() {
         let directory = tempfile::tempdir().unwrap();
         let ready = directory.path().join("ready");
         let ready_arg = ready.to_string_lossy().into_owned();

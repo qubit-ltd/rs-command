@@ -1,3 +1,10 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 //! Bounded admission and dispatch for managed command work.
 mod bounded_scheduler;
 mod internal;
@@ -36,7 +43,7 @@ mod tests {
         }
     }
     #[test]
-    fn reservation_release_wakes_registered_waiter() {
+    fn test_reservation_release_wakes_registered_waiter() {
         let scheduler = BoundedScheduler::new(config()).unwrap();
         let permit = scheduler.try_reserve(2).unwrap();
         let counter = Arc::new(CountWake(AtomicUsize::new(0)));
@@ -47,7 +54,7 @@ mod tests {
         assert_eq!(scheduler.snapshot().input_bytes, 0);
     }
     #[test]
-    fn helper_lease_keeps_active_slot_after_job_permit_drops() {
+    fn test_helper_lease_keeps_active_slot_after_job_permit_drops() {
         let scheduler = BoundedScheduler::new(config()).unwrap();
         let permit = scheduler.try_reserve(0).unwrap();
         let helper = permit.retain();

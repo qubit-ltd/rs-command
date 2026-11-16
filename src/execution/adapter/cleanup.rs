@@ -1,3 +1,10 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 //! Single bounded worker retains unresolved cleanup owners through handoff.
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
@@ -176,7 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_lease_survives_handoff_until_manager_settlement() {
+    fn test_recovery_lease_survives_handoff_until_manager_settlement() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let (drop_started_tx, drop_started_rx) = mpsc::sync_channel(1);
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
@@ -274,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_worker_bounds_owner_effects_and_preserves_overflow() {
+    fn test_recovery_worker_bounds_owner_effects_and_preserves_overflow() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let mut operation = manager
             .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
@@ -335,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_settlement_caps_overflow_to_total_minus_retained() {
+    fn test_recovery_settlement_caps_overflow_to_total_minus_retained() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let mut operation = manager
             .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))

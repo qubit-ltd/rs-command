@@ -53,7 +53,8 @@ pub(in crate::command_runner) struct RunningCommand {
     cancellation_token: Option<CommandCancellation>,
     /// Optional byte budget shared by this command's stdout and stderr.
     total_budget: Option<Arc<TotalOutputBudget>>,
-    /// Managed capacity reservation held until process and helpers are reclaimed.
+    /// Managed capacity reservation held until process and helpers are
+    /// reclaimed.
     capacity_lease: Option<ReservationLease>,
     /// Observer for child ownership transferred to a reaper.
     reaper_observer: Option<ReaperObserver>,
@@ -108,6 +109,20 @@ impl RunningCommand {
         )
     }
 
+    /// Creates a running command that retains managed cleanup resources.
+    ///
+    /// # Parameters
+    ///
+    /// * `command_text` - Redacted command used in diagnostics.
+    /// * `child_process` - Spawned process and its tree-management handle.
+    /// * `io` - Started input and output helpers.
+    /// * `started_at` - Monotonic instant used to measure elapsed time.
+    /// * `timer` - Clock used for timeout and elapsed-time checks.
+    /// * `resources` - Cancellation, budget, session, and recovery ownership.
+    ///
+    /// # Returns
+    ///
+    /// A running command with all managed ownership attached.
     pub(in crate::command_runner) fn new_with_reaper(
         command_text: String,
         child_process: ManagedChildProcess,
@@ -169,11 +184,7 @@ impl RunningCommand {
     fn wait_for_event(&mut self, timeout: Option<Duration>) -> RunEvent {
         let mut timeout_poll_count = 0;
         loop {
-            if let Some((limit, observed)) = self
-                .total_budget
-                .as_ref()
-                .and_then(|budget| budget.exceeded())
-            {
+            if let Some((limit, observed)) = self.total_budget.as_ref().and_then(|budget| budget.exceeded()) {
                 let status = self.child_process.try_wait().ok().flatten();
                 return RunEvent::OutputLimitExceeded {
                     limit,
@@ -195,9 +206,7 @@ impl RunningCommand {
             if let Some(status) = maybe_status {
                 return RunEvent::Exited(status);
             }
-            if let Err(event) =
-                self.check_cancellation_and_wait(None, timeout, &mut timeout_poll_count)
-            {
+            if let Err(event) = self.check_cancellation_and_wait(None, timeout, &mut timeout_poll_count) {
                 return event;
             }
         }
@@ -221,28 +230,18 @@ impl RunningCommand {
                     status: Some(status),
                 };
             }
-            if let Some((limit, observed)) = self
-                .total_budget
-                .as_ref()
-                .and_then(|budget| budget.exceeded())
-            {
+            if let Some((limit, observed)) = self.total_budget.as_ref().and_then(|budget| budget.exceeded()) {
                 return RunEvent::OutputLimitExceeded {
                     limit,
                     observed,
                     status: Some(status),
                 };
             }
-            if let Err(event) =
-                self.check_cancellation_and_wait(Some(status), timeout, &mut timeout_poll_count)
-            {
+            if let Err(event) = self.check_cancellation_and_wait(Some(status), timeout, &mut timeout_poll_count) {
                 return event;
             }
         }
-        if let Some((limit, observed)) = self
-            .total_budget
-            .as_ref()
-            .and_then(|budget| budget.exceeded())
-        {
+        if let Some((limit, observed)) = self.total_budget.as_ref().and_then(|budget| budget.exceeded()) {
             return RunEvent::OutputLimitExceeded {
                 limit,
                 observed,
@@ -257,9 +256,7 @@ impl RunningCommand {
             };
         }
         if self.io.poll_read_failure() {
-            return RunEvent::OutputReadFailed {
-                status: Some(status),
-            };
+            return RunEvent::OutputReadFailed { status: Some(status) };
         }
         RunEvent::Exited(status)
     }
@@ -334,6 +331,13 @@ impl RunningCommand {
         }
     }
 
+    /// Returns the configured session output limit and observed byte count
+    /// when the bridge has exceeded its shared budget.
+    ///
+    /// # Returns
+    ///
+    /// The `(limit, observed)` pair, or `None` when no session limit was
+    /// exceeded.
     fn session_budget_exceeded(&self) -> Option<(u64, u64)> {
         let bridge = self.session_bridge.as_ref()?;
         bridge.output_budget_exceeded().then(|| {
@@ -349,11 +353,7 @@ impl RunningCommand {
     ///
     /// * `event` - Terminal event from process monitoring.
     /// * `timeout` - Optional deadline measured from process start.
-    fn resolve_event(
-        mut self,
-        event: RunEvent,
-        timeout: Option<Duration>,
-    ) -> Result<FinishedCommand, CommandError> {
+    fn resolve_event(mut self, event: RunEvent, timeout: Option<Duration>) -> Result<FinishedCommand, CommandError> {
         let event = match event.into_exit_status() {
             Ok(status) => self.wait_for_io_event(status, timeout),
             Err(reason) => return self.stop_and_finalize(reason),
@@ -377,25 +377,22 @@ impl RunningCommand {
         let observed_status = reason.observed_status();
         let retains_output = reason.retains_termination_output();
         let output_limit = match &reason {
-            StopReason::OutputLimitExceeded {
-                limit, observed, ..
-            } => Some((*limit, *observed)),
+            StopReason::OutputLimitExceeded { limit, observed, .. } => Some((*limit, *observed)),
             _ => None,
         };
         let total_budget = self.total_budget.clone();
-        let outcome =
-            match ProcessTerminator::new(&mut self.child_process).terminate(observed_status) {
-                Ok(outcome) => outcome,
-                Err(failure) => {
-                    let mut error = failure.into_command_error(reason, &self.command_text);
-                    if output_limit.is_some()
-                        && let Some(budget) = total_budget.as_ref()
-                    {
-                        error = error.with_captured_output(budget.captured_output());
-                    }
-                    return Err(self.handoff_uncertain_owner(error));
+        let outcome = match ProcessTerminator::new(&mut self.child_process).terminate(observed_status) {
+            Ok(outcome) => outcome,
+            Err(failure) => {
+                let mut error = failure.into_command_error(reason, &self.command_text);
+                if output_limit.is_some()
+                    && let Some(budget) = total_budget.as_ref()
+                {
+                    error = error.with_captured_output(budget.captured_output());
                 }
-            };
+                return Err(self.handoff_uncertain_owner(error));
+            }
+        };
         let status = observed_status.unwrap_or(outcome.status);
         if !retains_output {
             let error = reason
@@ -413,14 +410,9 @@ impl RunningCommand {
                         .with_cleanup_failures(outcome.cleanup_failures)
                         .with_cleanup_failures(io_cleanup_failures));
                 }
-                if let StopReason::OutputLimitExceeded {
-                    limit, observed, ..
-                } = reason
-                {
+                if let StopReason::OutputLimitExceeded { limit, observed, .. } = reason {
                     let captured = match total_budget.as_ref() {
-                        Some(budget) => {
-                            Some(budget.captured_output_with_joined(error.take_captured_output()))
-                        }
+                        Some(budget) => Some(budget.captured_output_with_joined(error.take_captured_output())),
                         None => error.take_captured_output(),
                     };
                     let mut primary = CommandError::from_reason(
@@ -442,10 +434,7 @@ impl RunningCommand {
                     .with_cleanup_failures(io_cleanup_failures));
             }
         };
-        if let StopReason::OutputLimitExceeded {
-            limit, observed, ..
-        } = reason
-        {
+        if let StopReason::OutputLimitExceeded { limit, observed, .. } = reason {
             let captured = finished.output.into_captured_output();
             return Err(CommandError::from_reason(
                 finished.command_text,
@@ -462,6 +451,15 @@ impl RunningCommand {
             .with_cleanup_failures(io_cleanup_failures))
     }
 
+    /// Transfers uncertain process and helper ownership to the reaper.
+    ///
+    /// # Parameters
+    ///
+    /// * `error` - Primary failure to retain while cleanup continues.
+    ///
+    /// # Returns
+    ///
+    /// The primary error with any immediate cleanup failure attached.
     fn handoff_uncertain_owner(mut self, error: CommandError) -> CommandError {
         let command_text = self.command_text.clone();
         let mut child = self.child_process;
@@ -512,9 +510,7 @@ impl RunningCommand {
                     error
                 }
                 None => {
-                    log::error!(
-                        "reaper unavailable without a managed recovery sink; retaining cleanup inline"
-                    );
+                    log::error!("reaper unavailable without a managed recovery sink; retaining cleanup inline");
                     owner.run_inline();
                     error
                 }
@@ -546,10 +542,7 @@ impl RunningCommand {
         let output = io.collect(&command_text, status, move || {
             timer.clock().now().duration_since(started_at)
         })?;
-        Ok(FinishedCommand {
-            command_text,
-            output,
-        })
+        Ok(FinishedCommand { command_text, output })
     }
 
     /// Completes a terminated command after cancelling and joining I/O helpers.
@@ -570,10 +563,7 @@ impl RunningCommand {
     fn complete_after_termination(
         self,
         status: ExitStatus,
-    ) -> (
-        Result<FinishedCommand, CommandError>,
-        Vec<CommandCleanupFailure>,
-    ) {
+    ) -> (Result<FinishedCommand, CommandError>, Vec<CommandCleanupFailure>) {
         let Self {
             command_text,
             io,
@@ -585,10 +575,7 @@ impl RunningCommand {
             timer.clock().now().duration_since(started_at)
         });
         (
-            output.map(|output| FinishedCommand {
-                command_text,
-                output,
-            }),
+            output.map(|output| FinishedCommand { command_text, output }),
             cleanup_failures,
         )
     }
@@ -782,17 +769,12 @@ mod tests {
             .kill_error(io::Error::other("child termination failed"));
         let tree = ScriptedChild::new("tree", Box::new(direct), calls)
             .kill_error(io::Error::other("tree termination failed"))
-            .try_wait_results(
-                (0..8)
-                    .map(|_| Ok(None))
-                    .chain(std::iter::once(Ok(Some(exit_status)))),
-            );
+            .try_wait_results((0..8).map(|_| Ok(None)).chain(std::iter::once(Ok(Some(exit_status)))));
         ManagedChildProcess::new(Box::new(tree), true)
     }
 
     fn completed_reader(result: Result<CapturedOutput, OutputCaptureError>) -> OutputReader {
-        let (cancellation, token) =
-            IoCancellation::pair().expect("reader cancellation should create");
+        let (cancellation, token) = IoCancellation::pair().expect("reader cancellation should create");
         OutputReader::new(
             thread::spawn(move || {
                 wait_for_cancellation(&token);
@@ -803,8 +785,7 @@ mod tests {
     }
 
     fn completed_writer(result: io::Result<()>) -> StdinWriter {
-        let (cancellation, token) =
-            IoCancellation::pair().expect("writer cancellation should create");
+        let (cancellation, token) = IoCancellation::pair().expect("writer cancellation should create");
         StdinWriter::new(
             thread::spawn(move || {
                 wait_for_cancellation(&token);
@@ -839,12 +820,8 @@ mod tests {
     }
 
     fn immediate_successful_reader() -> OutputReader {
-        let (cancellation, _token) =
-            IoCancellation::pair().expect("reader cancellation should create");
-        OutputReader::new(
-            thread::spawn(|| Ok(CapturedOutput::default())),
-            cancellation,
-        )
+        let (cancellation, _token) = IoCancellation::pair().expect("reader cancellation should create");
+        OutputReader::new(thread::spawn(|| Ok(CapturedOutput::default())), cancellation)
     }
 
     fn failing_stdout() -> OutputReader {
@@ -866,9 +843,7 @@ mod tests {
         CommandIo::new(
             failing_stdout(),
             failing_stderr(),
-            Some(completed_writer(Err(io::Error::other(
-                "stdin write failed",
-            )))),
+            Some(completed_writer(Err(io::Error::other("stdin write failed")))),
         )
     }
 
@@ -1017,11 +992,7 @@ mod tests {
         }
 
         fn release(&self, status: ExitStatus) {
-            *self
-                .state
-                .status
-                .lock()
-                .expect("audit child state should lock") = Some(status);
+            *self.state.status.lock().expect("audit child state should lock") = Some(status);
             self.state.changed.notify_all();
         }
     }
@@ -1038,29 +1009,17 @@ mod tests {
         }
 
         fn start_kill(&mut self) -> io::Result<()> {
-            self.state
-                .events
-                .lock()
-                .expect("events should lock")
-                .push("kill");
+            self.state.events.lock().expect("events should lock").push("kill");
             self.release(status(137));
             Ok(())
         }
 
         fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-            Ok(*self
-                .state
-                .status
-                .lock()
-                .expect("audit child state should lock"))
+            Ok(*self.state.status.lock().expect("audit child state should lock"))
         }
 
         fn wait(&mut self) -> io::Result<ExitStatus> {
-            self.state
-                .events
-                .lock()
-                .expect("events should lock")
-                .push("wait");
+            self.state.events.lock().expect("events should lock").push("wait");
             if let Some(wait_started) = self
                 .state
                 .wait_started
@@ -1070,17 +1029,9 @@ mod tests {
             {
                 let _ = wait_started.send(());
             }
-            let mut status = self
-                .state
-                .status
-                .lock()
-                .expect("audit child state should lock");
+            let mut status = self.state.status.lock().expect("audit child state should lock");
             while status.is_none() {
-                status = self
-                    .state
-                    .changed
-                    .wait(status)
-                    .expect("audit child wait should wake");
+                status = self.state.changed.wait(status).expect("audit child wait should wake");
             }
             Ok(status.expect("released child has an exit status"))
         }
@@ -1132,22 +1083,12 @@ mod tests {
         }
     }
 
-    fn audit_read_failure_reader(
-        sender: mpsc::Sender<Instant>,
-        events: Arc<AuditChildState>,
-    ) -> OutputReader {
-        let (cancellation, _token) =
-            IoCancellation::pair().expect("reader cancellation should create");
+    fn audit_read_failure_reader(sender: mpsc::Sender<Instant>, events: Arc<AuditChildState>) -> OutputReader {
+        let (cancellation, _token) = IoCancellation::pair().expect("reader cancellation should create");
         OutputReader::new(
             thread::spawn(move || {
-                events
-                    .events
-                    .lock()
-                    .expect("events should lock")
-                    .push("reader-failed");
-                sender
-                    .send(Instant::now())
-                    .expect("test should receive reader failure");
+                events.events.lock().expect("events should lock").push("reader-failed");
+                sender.send(Instant::now()).expect("test should receive reader failure");
                 Err(OutputCaptureError::Read {
                     source: io::Error::other("audit stdout read failed"),
                     output: CapturedOutput {
@@ -1195,11 +1136,7 @@ mod tests {
         .expect("fault-injected production reader should start");
         let calls = Arc::new(Mutex::new(Vec::new()));
         let child = ManagedChildProcess::new(
-            Box::new(ScriptedChild::new(
-                "real-child",
-                Box::new(child),
-                Arc::clone(&calls),
-            )),
+            Box::new(ScriptedChild::new("real-child", Box::new(child), Arc::clone(&calls))),
             false,
         );
         let timer: Arc<dyn Timer> = Arc::new(StdTimer::new());
@@ -1308,25 +1245,16 @@ mod tests {
             watchdog_child.release(status(0));
             let _ = clock.advance(Duration::from_secs(5));
         }
-        let runner_result =
-            runner_result.or_else(|| return_rx.recv_timeout(Duration::from_secs(2)).ok());
+        let runner_result = runner_result.or_else(|| return_rx.recv_timeout(Duration::from_secs(2)).ok());
         runner.join().expect("runner thread should join");
-        let (returned_at, result) =
-            runner_result.expect("runner should finish after timer or watchdog release");
+        let (returned_at, result) = runner_result.expect("runner should finish after timer or watchdog release");
         assert!(
             timer_rx.try_recv().is_err(),
             "reader failure should precede timeout polling"
         );
-        let error = expect_error(
-            result,
-            "reader failure should terminate the still-live child",
-        );
+        let error = expect_error(result, "reader failure should terminate the still-live child");
 
-        events
-            .events
-            .lock()
-            .expect("events should lock")
-            .push("returned");
+        events.events.lock().expect("events should lock").push("returned");
         assert_eq!(error.kind(), CommandErrorKind::ReadOutputFailed);
         let capture = error
             .captured_output()
@@ -1352,10 +1280,7 @@ mod tests {
         let (failure_tx, failure_rx) = mpsc::channel();
         let (wait_started_tx, wait_started_rx) = mpsc::channel();
         let (return_tx, return_rx) = mpsc::channel();
-        *events
-            .wait_started
-            .lock()
-            .expect("wait-started signal should lock") = Some(wait_started_tx);
+        *events.wait_started.lock().expect("wait-started signal should lock") = Some(wait_started_tx);
         let watchdog_child = AuditChild::new(Arc::clone(&events));
         let running = running(
             audit_live_child(Arc::clone(&events)),
@@ -1402,10 +1327,7 @@ mod tests {
         let (returned_at, result) = runner_result.expect("reader failure should stop the runner");
         let failure_at = failure_at.expect("reader should fail");
         assert!(wait_started.is_ok(), "runner should enter child wait");
-        let error = expect_error(
-            result,
-            "reader failure should be reported after child exits",
-        );
+        let error = expect_error(result, "reader failure should be reported after child exits");
 
         assert!(returned_at >= failure_at);
         assert!(returned_at.duration_since(started) < Duration::from_secs(2));
@@ -1427,8 +1349,8 @@ mod tests {
 
     #[test]
     fn test_budget_only_timer_live_child_uses_timer() {
-        let child = ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new())))
-            .try_wait_results([Ok(None)]);
+        let child =
+            ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new()))).try_wait_results([Ok(None)]);
         let (timer, at_calls) = failing_timer();
         let result = running_with_budget_and_timer(
             ManagedChildProcess::new(Box::new(child), true),
@@ -1462,8 +1384,8 @@ mod tests {
 
     #[test]
     fn test_active_child_output_budget_precedes_ready_cancellation() {
-        let child = ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new())))
-            .try_wait_results([Ok(None)]);
+        let child =
+            ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new()))).try_wait_results([Ok(None)]);
         let mut command = running_with_budget(
             ManagedChildProcess::new(Box::new(child), true),
             CommandIo::new(successful_reader(), successful_reader(), None),
@@ -1506,10 +1428,7 @@ mod tests {
         assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
         assert!(matches!(
             error.reason(),
-            CommandErrorReason::OutputLimitExceeded {
-                limit: 0,
-                observed: 1
-            }
+            CommandErrorReason::OutputLimitExceeded { limit: 0, observed: 1 }
         ));
     }
 
@@ -1525,9 +1444,7 @@ mod tests {
         cancellation.cancel();
         command.cancellation_token = Some(cancellation);
 
-        assert!(
-            matches!(command.wait_for_event(None), RunEvent::Exited(value) if value.code() == Some(7))
-        );
+        assert!(matches!(command.wait_for_event(None), RunEvent::Exited(value) if value.code() == Some(7)));
     }
 
     #[test]
@@ -1602,10 +1519,7 @@ mod tests {
         )
         .wait_for_completion(None);
 
-        let error = expect_error(
-            result,
-            "budget-only helper monitoring should consult its timer",
-        );
+        let error = expect_error(result, "budget-only helper monitoring should consult its timer");
         assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
         assert_eq!(at_calls.load(Ordering::SeqCst), 1);
     }
@@ -1617,12 +1531,7 @@ mod tests {
         let ready_capacity = buffer.len();
         assert_eq!(
             budget
-                .read_ready(
-                    &mut reader,
-                    &mut buffer,
-                    ready_capacity,
-                    crate::OutputStream::Stdout
-                )
+                .read_ready(&mut reader, &mut buffer, ready_capacity, crate::OutputStream::Stdout)
                 .expect("scripted ready bytes should be read"),
             2,
         );
@@ -1630,22 +1539,13 @@ mod tests {
         budget
     }
 
-    fn budget_with_stdout(
-        limit: u64,
-        maximum: Option<usize>,
-        bytes: &[u8],
-    ) -> Arc<TotalOutputBudget> {
+    fn budget_with_stdout(limit: u64, maximum: Option<usize>, bytes: &[u8]) -> Arc<TotalOutputBudget> {
         let budget = Arc::new(TotalOutputBudget::new(limit, maximum, Some(16)));
         let mut reader = Cursor::new(bytes);
         let mut buffer = [0_u8; 32];
         let ready_capacity = buffer.len();
         budget
-            .read_ready(
-                &mut reader,
-                &mut buffer,
-                ready_capacity,
-                crate::OutputStream::Stdout,
-            )
+            .read_ready(&mut reader, &mut buffer, ready_capacity, crate::OutputStream::Stdout)
             .expect("scripted ready bytes should be read");
         budget
     }
@@ -1773,9 +1673,7 @@ mod tests {
             "stop reason should remain an error after helper cleanup",
         );
         assert_eq!(error.kind(), expected_kind);
-        let captured = error
-            .captured_output()
-            .expect("stop reason should retain output");
+        let captured = error.captured_output().expect("stop reason should retain output");
         assert_eq!(captured.stdout(), expected_stdout);
         assert!(!captured.stdout_complete());
         assert_eq!(captured.stdout_truncated(), expected_truncated);
@@ -1850,11 +1748,7 @@ mod tests {
         let error = expect_error(
             running_with_budget(
                 terminating_child(status(0)),
-                CommandIo::new(
-                    joined_budget_reader(Arc::clone(&budget)),
-                    joined_stderr_reader(),
-                    None,
-                ),
+                CommandIo::new(joined_budget_reader(Arc::clone(&budget)), joined_stderr_reader(), None),
                 Arc::clone(&budget),
             )
             .resolve_event(
@@ -1868,9 +1762,7 @@ mod tests {
             "output budget violation should remain primary after joined collection",
         );
         assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
-        let captured = error
-            .captured_output()
-            .expect("budget error should retain output");
+        let captured = error.captured_output().expect("budget error should retain output");
         assert_eq!(captured.stdout(), b"a");
         assert!(captured.stdout_truncated());
         assert!(!captured.stdout_complete());
@@ -1898,9 +1790,7 @@ mod tests {
             ),
             "timeout should remain primary without a budgeted reader",
         );
-        let captured = error
-            .captured_output()
-            .expect("timeout should retain output metadata");
+        let captured = error.captured_output().expect("timeout should retain output metadata");
         assert!(captured.stdout().is_empty());
         assert!(!captured.stdout_complete());
         assert_eq!(captured.stderr(), b"joined stderr");
@@ -2084,10 +1974,7 @@ mod tests {
         assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
         assert!(matches!(
             error.reason(),
-            CommandErrorReason::OutputLimitExceeded {
-                limit: 1,
-                observed: 2
-            }
+            CommandErrorReason::OutputLimitExceeded { limit: 1, observed: 2 }
         ));
         assert!(
             error.output().is_none(),
@@ -2098,38 +1985,28 @@ mod tests {
             .expect("the consumed prefix must remain available");
         assert_eq!(captured.stdout(), b"ab");
         assert!(!captured.stdout_complete());
-        assert_eq!(
-            cleanup_order(&error),
-            ["stdout-read", "stderr-write", "stdin-write"]
-        );
+        assert_eq!(cleanup_order(&error), ["stdout-read", "stderr-write", "stdin-write"]);
     }
 
     #[test]
     fn test_total_output_limit_remains_primary_when_tree_termination_fails() {
         let error = expect_error(
-            running_with_budget(
-                termination_failure_child(),
-                io_with_failures(),
-                exceeded_total_budget(),
-            )
-            .resolve_event(
-                RunEvent::OutputLimitExceeded {
-                    limit: 1,
-                    observed: 2,
-                    status: None,
-                },
-                None,
-            ),
+            running_with_budget(termination_failure_child(), io_with_failures(), exceeded_total_budget())
+                .resolve_event(
+                    RunEvent::OutputLimitExceeded {
+                        limit: 1,
+                        observed: 2,
+                        status: None,
+                    },
+                    None,
+                ),
             "output budget violation must survive process termination failure",
         );
 
         assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
         assert!(matches!(
             error.reason(),
-            CommandErrorReason::OutputLimitExceeded {
-                limit: 1,
-                observed: 2
-            }
+            CommandErrorReason::OutputLimitExceeded { limit: 1, observed: 2 }
         ));
         let captured = error
             .captured_output()
@@ -2199,18 +2076,10 @@ mod tests {
             assert!(
                 matches!(
                     (error.reason(), expected_reason),
-                    (
-                        CommandErrorReason::TimedOut { .. },
-                        ExpectedReason::TimedOut
-                    ) | (CommandErrorReason::Cancelled, ExpectedReason::Cancelled)
-                        | (
-                            CommandErrorReason::TimeFailed { .. },
-                            ExpectedReason::TimeFailed
-                        )
-                        | (
-                            CommandErrorReason::WaitFailed { .. },
-                            ExpectedReason::WaitFailed
-                        )
+                    (CommandErrorReason::TimedOut { .. }, ExpectedReason::TimedOut)
+                        | (CommandErrorReason::Cancelled, ExpectedReason::Cancelled)
+                        | (CommandErrorReason::TimeFailed { .. }, ExpectedReason::TimeFailed)
+                        | (CommandErrorReason::WaitFailed { .. }, ExpectedReason::WaitFailed)
                 ),
                 "{name}"
             );
@@ -2245,10 +2114,7 @@ mod tests {
                         },
                         CommandErrorKind::TimedOut,
                     ),
-                    1 => (
-                        RunEvent::Cancelled { status: None },
-                        CommandErrorKind::Cancelled,
-                    ),
+                    1 => (RunEvent::Cancelled { status: None }, CommandErrorKind::Cancelled),
                     2 => (
                         RunEvent::WaitFailed(io::Error::other("initial wait failed")),
                         CommandErrorKind::WaitFailed,
@@ -2296,20 +2162,11 @@ mod tests {
                 } else if termination_mode == 0 {
                     assert!(cleanup.ends_with(&["stdout-read", "stderr-write", "stdin-write"]));
                 } else {
-                    assert!(
-                        cleanup == ["wait"]
-                            || cleanup.ends_with(&["stdout-read", "stderr-write", "stdin-write"])
-                    );
+                    assert!(cleanup == ["wait"] || cleanup.ends_with(&["stdout-read", "stderr-write", "stdin-write"]));
                 }
                 assert_eq!(error.process_tree_source().is_some(), termination_mode == 1);
-                assert_eq!(
-                    error.child_source().is_some(),
-                    termination_mode == 1 && event_kind < 4
-                );
-                assert_eq!(
-                    cleanup.contains(&"wait"),
-                    termination_mode == 2 && event_kind < 4
-                );
+                assert_eq!(error.child_source().is_some(), termination_mode == 1 && event_kind < 4);
+                assert_eq!(cleanup.contains(&"wait"), termination_mode == 2 && event_kind < 4);
                 assert_eq!(
                     error.output().is_some(),
                     event_kind >= 4 || (termination_mode == 0 && event_kind < 2)
@@ -2337,11 +2194,7 @@ mod tests {
                 None
             };
             let error = expect_error(
-                running(
-                    terminating_child(status(0)),
-                    CommandIo::new(stdout, stderr, stdin),
-                )
-                .resolve_event(
+                running(terminating_child(status(0)), CommandIo::new(stdout, stderr, stdin)).resolve_event(
                     RunEvent::TimedOut {
                         timeout: Duration::from_secs(2),
                         status: None,

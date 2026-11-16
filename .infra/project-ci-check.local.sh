@@ -13,7 +13,7 @@ cargo test --all-targets --features async
 cargo test --doc --no-default-features
 cargo test --doc --features async
 cargo test --test documentation_examples_tests
-cargo test --features async --test managed_documentation_tests
+cargo test --examples --features async
 cargo test --features async --test managed_handoff_tests
 
 cargo bench --bench command_runner -- silent_command_runner --test

@@ -1,3 +1,10 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::fs::File;
 use std::io;
 use std::path::Path;
@@ -104,7 +111,7 @@ mod tests {
     use super::validate_files;
 
     #[test]
-    fn identity_uses_open_handles_and_detects_cloned_file_aliases() {
+    fn test_identity_uses_open_handles_and_detects_cloned_file_aliases() {
         let file = tempfile::tempfile().expect("temporary file should be created");
         let alias = file.try_clone().expect("file handle should be cloned");
         let error = validate_files(&[("stdin", &file), ("stdout", &alias)])
@@ -113,7 +120,7 @@ mod tests {
     }
 
     #[test]
-    fn identity_rejects_non_regular_handles() {
+    fn test_identity_rejects_non_regular_handles() {
         let directory = File::open(std::env::temp_dir()).expect("temp directory should open");
         let error = validate_files(&[("stdin", &directory)]).expect_err("directories are not valid file streams");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);

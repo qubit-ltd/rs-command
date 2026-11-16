@@ -1,3 +1,10 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::fs::File;
 use std::io;
 use std::path::Path;
@@ -217,7 +224,7 @@ mod tests {
     static PREPARATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
-    fn helper_resource_reference_delays_scope_settlement_until_dropped() {
+    fn test_helper_resource_reference_delays_scope_settlement_until_dropped() {
         let _guard = PREPARATION_TEST_LOCK.lock().expect("test lock should be available");
         let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
         let group = manager.group(GroupOptions { capacity: 2 }).expect("group should start");
@@ -252,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_failure_retains_registered_and_unregistered_file_owners() {
+    fn test_commit_failure_retains_registered_and_unregistered_file_owners() {
         let _guard = PREPARATION_TEST_LOCK.lock().expect("test lock should be available");
         use std::sync::Arc;
         use std::sync::Barrier;

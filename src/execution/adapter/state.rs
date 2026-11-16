@@ -1,3 +1,10 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::task::Context;
@@ -557,7 +564,7 @@ mod activation_failure_tests {
     }
 
     #[test]
-    fn adapter_bind_is_one_shot_and_reports_already_bound() {
+    fn test_adapter_bind_is_one_shot_and_reports_already_bound() {
         let scheduler = scheduler();
         let permit = scheduler.try_reserve(0).unwrap();
         let state = make_state(scheduler, permit);
@@ -577,7 +584,7 @@ mod activation_failure_tests {
     }
 
     #[test]
-    fn accepted_activation_failure_settles_and_cannot_bind_in_another_manager() {
+    fn test_accepted_activation_failure_settles_and_cannot_bind_in_another_manager() {
         let scheduler = scheduler();
         let permit = scheduler.try_reserve(0).unwrap();
         let prepared = make_state(Arc::clone(&scheduler), permit);
@@ -601,7 +608,7 @@ mod activation_failure_tests {
     }
 
     #[test]
-    fn bind_failure_becomes_execution_failure_without_activation() {
+    fn test_bind_failure_becomes_execution_failure_without_activation() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let prepared = Arc::new(FailedBinder(AtomicBool::new(false), CommandControl::default()));
         let mut handle = manager
@@ -616,7 +623,7 @@ mod activation_failure_tests {
     }
 
     #[test]
-    fn activation_without_permit_drops_request_before_release() {
+    fn test_activation_without_permit_drops_request_before_release() {
         let scheduler = scheduler();
         let permit = scheduler.try_reserve(0).unwrap();
         let state = make_state(Arc::clone(&scheduler), permit);
@@ -629,7 +636,7 @@ mod activation_failure_tests {
     }
 
     #[test]
-    fn enqueue_rejection_drops_request_before_release() {
+    fn test_enqueue_rejection_drops_request_before_release() {
         let scheduler = scheduler();
         let permit = scheduler.try_reserve(0).unwrap();
         let state = make_state(Arc::clone(&scheduler), permit);
