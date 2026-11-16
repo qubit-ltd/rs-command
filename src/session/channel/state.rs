@@ -12,6 +12,7 @@ pub(crate) const MAX_BLOCK: usize = 16 * 1024;
 struct State {
     bytes: VecDeque<u8>,
     writer_closed: bool,
+    stop_writes: bool,
     reader_gone: bool,
     incomplete: bool,
     broken_pipe: bool,
@@ -64,6 +65,8 @@ impl OutputBudget {
 pub(crate) struct ByteChannel {
     state: Mutex<State>,
     changed: Condvar,
+    #[cfg(test)]
+    wait_entered: (Mutex<usize>, Condvar),
 }
 
 impl ByteChannel {
@@ -79,6 +82,7 @@ impl ByteChannel {
             state: Mutex::new(State {
                 bytes: VecDeque::new(),
                 writer_closed: false,
+                stop_writes: false,
                 reader_gone: false,
                 incomplete: false,
                 broken_pipe: false,
@@ -88,6 +92,24 @@ impl ByteChannel {
                 budget,
             }),
             changed: Condvar::new(),
+            #[cfg(test)]
+            wait_entered: (Mutex::new(0), Condvar::new()),
+        }
+    }
+
+    #[cfg(test)]
+    fn note_wait(&self) {
+        let (lock, condition) = &self.wait_entered;
+        *lock.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+        condition.notify_all();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn wait_until_blocked(&self) {
+        let (lock, condition) = &self.wait_entered;
+        let mut count = lock.lock().unwrap_or_else(|e| e.into_inner());
+        while *count == 0 {
+            count = condition.wait(count).unwrap_or_else(|e| e.into_inner());
         }
     }
 
@@ -120,6 +142,17 @@ impl ByteChannel {
                 io::ErrorKind::BrokenPipe,
                 "stream is closed",
             )));
+        }
+        if s.stop_writes {
+            s.incomplete = true;
+            if let Some(budget) = s.budget.clone() {
+                let mut b = budget.state.lock().unwrap_or_else(|e| e.into_inner());
+                b.observed = b.observed.saturating_add(input.len() as u64);
+                if b.observed >= budget.limit {
+                    b.exceeded = true;
+                }
+            }
+            return Poll::Ready(Ok(input.len()));
         }
         if s.policy == SessionStreamPolicy::Discard {
             let n = input.len().min(CHANNEL_CAPACITY - s.bytes.len());
@@ -231,6 +264,19 @@ impl ByteChannel {
         wake(waker);
     }
 
+    pub(crate) fn stop_output(&self) {
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        s.stop_writes = true;
+        s.writer_closed = true;
+        s.incomplete = true;
+        let writer_waker = s.write_waker.take();
+        let reader_waker = s.read_waker.take();
+        self.changed.notify_all();
+        drop(s);
+        wake(writer_waker);
+        wake(reader_waker);
+    }
+
     pub(crate) fn incomplete(&self) -> bool {
         self.state
             .lock()
@@ -279,6 +325,19 @@ impl ByteChannel {
             let mut offset = 0;
             while offset < chunk.len() {
                 let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if s.stop_writes {
+                    s.incomplete = true;
+                    if let Some(budget) = s.budget.clone() {
+                        let mut b = budget.state.lock().unwrap_or_else(|e| e.into_inner());
+                        b.observed = b
+                            .observed
+                            .saturating_add((bytes.len() - total_offset) as u64);
+                        if b.observed >= budget.limit {
+                            b.exceeded = true;
+                        }
+                    }
+                    return Ok(());
+                }
                 if s.reader_gone {
                     s.incomplete = true;
                     if let Some(budget) = s.budget.clone() {
@@ -342,8 +401,14 @@ impl ByteChannel {
                     wake(waker);
                     continue;
                 }
-                while s.bytes.len() == CHANNEL_CAPACITY && !s.reader_gone {
+                while s.bytes.len() == CHANNEL_CAPACITY && !s.reader_gone && !s.stop_writes {
+                    #[cfg(test)]
+                    self.note_wait();
                     s = self.changed.wait(s).unwrap_or_else(|e| e.into_inner());
+                }
+                if s.stop_writes {
+                    s.incomplete = true;
+                    return Ok(());
                 }
                 if s.reader_gone {
                     s.incomplete = true;
@@ -667,6 +732,56 @@ mod tests {
         bridge.write_stdout(b"more-than-ten").unwrap();
         assert_eq!(bridge.output_bytes_observed(), 13);
         assert!(bridge.output_budget_exceeded());
+        assert!(bridge.stdout_incomplete());
+    }
+
+    #[test]
+    fn output_stop_wakes_writer_and_preserves_buffered_output() {
+        use qubit_io::AsyncInput;
+
+        let mut channels = SessionChannels::new();
+        let bridge = channels.bridge.clone();
+        bridge.write_stdout(&vec![0x2a; CHANNEL_CAPACITY]).unwrap();
+        let writer_bridge = bridge.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            done_tx
+                .send(writer_bridge.write_stdout(b"blocked write"))
+                .unwrap();
+        });
+        bridge.wait_for_stdout_writer_for_test();
+
+        bridge.request_output_stop();
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("output stop must release a blocked bridge writer")
+            .unwrap();
+        writer.join().unwrap();
+        assert!(bridge.stdout_incomplete());
+
+        bridge.write_stdout(b"discard after stop").unwrap();
+        bridge.write_stderr(b"stderr after stop").unwrap();
+        assert!(bridge.stderr_incomplete());
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = std::task::Waker::from(counter);
+        let mut context = std::task::Context::from_waker(&waker);
+        let mut actual = Vec::new();
+        let mut chunk = vec![0; MAX_BLOCK];
+        while actual.len() < CHANNEL_CAPACITY {
+            let n = match std::pin::Pin::new(&mut channels.stdout)
+                .poll_read(&mut context, &mut chunk)
+            {
+                std::task::Poll::Ready(Ok(n)) => n,
+                other => panic!("buffered output should remain readable: {other:?}"),
+            };
+            assert_ne!(n, 0);
+            actual.extend_from_slice(&chunk[..n]);
+        }
+        assert_eq!(actual, vec![0x2a; CHANNEL_CAPACITY]);
+        assert!(matches!(
+            std::pin::Pin::new(&mut channels.stdout).poll_read(&mut context, &mut chunk),
+            std::task::Poll::Ready(Ok(0))
+        ));
         assert!(bridge.stdout_incomplete());
     }
 

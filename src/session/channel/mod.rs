@@ -82,6 +82,10 @@ impl super::contracts::SessionBridge for Bridge {
     fn close_stdin(&self) {
         self.input.close_writer();
     }
+    fn request_output_stop(&self) {
+        self.output.stop_output();
+        self.error.stop_output();
+    }
     fn stdout_incomplete(&self) -> bool {
         self.output.incomplete()
     }
@@ -106,5 +110,12 @@ impl super::contracts::SessionBridge for Bridge {
         self.output_budget
             .as_ref()
             .map_or(0, |budget| budget.observed())
+    }
+}
+
+#[cfg(test)]
+impl Bridge {
+    pub(crate) fn wait_for_stdout_writer_for_test(&self) {
+        self.output.wait_until_blocked();
     }
 }
