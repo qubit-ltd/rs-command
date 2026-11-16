@@ -50,3 +50,14 @@ fn owned_options_are_consumed_by_value() {
     let options = qubit_command::CommandResourceRunOptions::new();
     assert!(consume(options) > 0);
 }
+
+#[test]
+fn snapshot_submission_failure_retains_diagnostic() {
+    use qubit_command::{CommandSubmitFailureReason, SnapshotFailure};
+    let reason = CommandSubmitFailureReason::Snapshot(SnapshotFailure {
+        diagnostic: "working directory could not be captured".to_owned(),
+    });
+    assert!(
+        matches!(reason, CommandSubmitFailureReason::Snapshot(ref failure) if failure.diagnostic.contains("working directory"))
+    );
+}

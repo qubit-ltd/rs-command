@@ -1,42 +1,60 @@
-//! Managed command runner entry point namespace.
-
-use crate::{
-    Command, CommandError, CommandResourceRunOptions, CommandRunOptions, CommandRunner,
-    CommandSession,
-};
+//! Frozen managed command runner entry points.
+#[cfg(feature = "async")]
+use crate::CommandSession;
+use crate::{Command, CommandError, CommandExecutor, CommandResourceRunOptions, CommandRunOptions};
 use qubit_operation::OperationScope;
 
-/// Frozen managed command runner entry points; implementation is owned by T6.
+/// Managed runner signatures; behavior is implemented by T6.
 pub trait ManagedCommandRunnerApi {
     fn run_managed_in(
         &self,
         scope: &OperationScope,
+        executor: &CommandExecutor,
         command: Command,
         options: CommandRunOptions,
-    ) -> Result<crate::CommandOperation, crate::CommandSubmitFailure>;
-    fn run_resources_managed_in(
+    ) -> Result<crate::CommandOutput, CommandError>;
+
+    fn run_managed_resources_in(
         &self,
         scope: &OperationScope,
+        executor: &CommandExecutor,
         command: Command,
         options: CommandResourceRunOptions,
-    ) -> Result<crate::CommandOperation, crate::CommandResourceSubmitFailure>;
+    ) -> Result<crate::CommandOutput, CommandError>;
+
     #[cfg(feature = "async")]
     fn run_async_in<'a>(
         &'a self,
         scope: &'a OperationScope,
+        executor: &'a CommandExecutor,
         command: Command,
         options: CommandRunOptions,
-    ) -> impl std::future::Future<
-        Output = Result<crate::AsyncCommandOperation, crate::CommandSubmitFailure>,
-    > + Send
-    + 'a;
-    fn start_session_in(
-        &self,
-        scope: &OperationScope,
-        command: Command,
-        options: CommandRunOptions,
-    ) -> Result<CommandSession, CommandError>;
-}
+    ) -> impl std::future::Future<Output = Result<crate::CommandOutput, CommandError>> + Send + 'a;
 
-// Keep imported names in the frozen API module's scope for IDE documentation.
-const _: Option<fn(&CommandRunner)> = None;
+    #[cfg(feature = "async")]
+    fn run_async_resources_in<'a>(
+        &'a self,
+        scope: &'a OperationScope,
+        executor: &'a CommandExecutor,
+        command: Command,
+        options: CommandResourceRunOptions,
+    ) -> impl std::future::Future<Output = Result<crate::CommandOutput, CommandError>> + Send + 'a;
+
+    #[cfg(feature = "async")]
+    fn start_session_in<'a>(
+        &'a self,
+        scope: &'a OperationScope,
+        executor: &'a CommandExecutor,
+        command: Command,
+        options: CommandRunOptions,
+    ) -> impl std::future::Future<Output = Result<CommandSession, CommandError>> + Send + 'a;
+
+    #[cfg(feature = "async")]
+    fn start_session_resources_in<'a>(
+        &'a self,
+        scope: &'a OperationScope,
+        executor: &'a CommandExecutor,
+        command: Command,
+        options: CommandResourceRunOptions,
+    ) -> impl std::future::Future<Output = Result<CommandSession, CommandError>> + Send + 'a;
+}

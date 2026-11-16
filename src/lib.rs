@@ -85,9 +85,11 @@ pub use execution::AsyncCommandOperation;
 pub use execution::{
     CommandExecutionConfig, CommandExecutor, CommandExecutorApi, CommandExecutorCreateError,
     CommandOperation, CommandResourceSubmitFailure, CommandSubmitFailure,
+    CommandSubmitFailureReason, SnapshotFailure,
 };
 pub use process_tree_policy::ProcessTreePolicy;
 pub use resource_run_options::CommandResourceRunOptions;
+#[cfg(feature = "async")]
 pub use session::{CommandSession, CommandSessionApi};
 #[cfg(feature = "async")]
 pub use session::{CommandStderr, CommandStdin, CommandStdout};

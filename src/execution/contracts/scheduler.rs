@@ -1,5 +1,7 @@
 //! Scheduler capacity and transfer contracts.
+use qubit_operation::StopReason;
 use std::fmt;
+use std::sync::Arc;
 /// Reason a reservation could not be obtained.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CapacityFailure {
@@ -20,9 +22,15 @@ impl Reservation {
         Self { token }
     }
 }
+/// Nonblocking stop-request port held by scheduled domain work.
+pub trait StopPort: Send + Sync {
+    fn request_stop(&self, reason: StopReason);
+}
+
 /// Domain task scheduled without borrowing an operation scope.
 pub struct ScheduledJob {
     pub run: Box<dyn FnOnce() + Send + 'static>,
+    pub stop: Arc<dyn StopPort>,
 }
 impl fmt::Debug for ScheduledJob {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

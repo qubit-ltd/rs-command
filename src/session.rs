@@ -4,21 +4,28 @@ pub mod contracts;
 #[cfg(feature = "async")]
 pub use endpoints::{CommandStderr, CommandStdin, CommandStdout};
 pub mod endpoints;
-/// Streaming session handle; dropping it requests command stop.
-#[derive(Debug)]
+
+/// Streaming session owning its operation handle and any untaken endpoints.
+#[cfg(feature = "async")]
+#[allow(dead_code)]
 pub struct CommandSession {
-    _private: (),
+    pub(crate) operation: Option<crate::CommandOperation>,
+    pub(crate) stdin: Option<CommandStdin>,
+    pub(crate) stdout: Option<CommandStdout>,
+    pub(crate) stderr: Option<CommandStderr>,
 }
 
-/// Frozen session endpoint accessors implemented by the session integration.
+/// Frozen session observation and endpoint accessors implemented by T6.
+#[cfg(feature = "async")]
 pub trait CommandSessionApi {
+    /// Borrows the operation handle for lifecycle observation.
+    fn operation(&self) -> Option<&crate::CommandOperation>;
+    /// Takes the operation handle, transferring its unique outcome receiver.
+    fn take_operation(&mut self) -> Option<crate::CommandOperation>;
     /// Takes the session input endpoint, when available.
-    #[cfg(feature = "async")]
     fn take_stdin(&mut self) -> Option<CommandStdin>;
     /// Takes the session stdout endpoint, when available.
-    #[cfg(feature = "async")]
     fn take_stdout(&mut self) -> Option<CommandStdout>;
     /// Takes the session stderr endpoint, when available.
-    #[cfg(feature = "async")]
     fn take_stderr(&mut self) -> Option<CommandStderr>;
 }

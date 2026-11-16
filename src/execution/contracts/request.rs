@@ -1,26 +1,56 @@
-//! Immutable command request payloads and activated ownership bundle.
+//! Submitted request snapshots and activated ownership bundle.
 use super::{FactSink, Reservation};
 use crate::{Command, CommandResourceRunOptions, CommandRunOptions, CommandRunner};
-use qubit_operation::OperationScope;
+use qubit_operation::{OperationId, OperationScope};
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
+
 /// Submitted command and frozen execution inputs.
+///
+/// `operation_id` is absent before upstream binding and set exactly once before activation;
+/// `snapshot` and `io_paths` are captured before admission side effects, while actual file
+/// identity checks and file access remain worker responsibilities.
 #[derive(Debug)]
 pub struct Request {
+    pub operation_id: Option<OperationId>,
     pub runner: CommandRunner,
     pub command: Command,
     pub options: RequestOptions,
+    pub snapshot: ExecutionSnapshot,
+    pub io_paths: IoPathSnapshot,
     pub deadline: Option<Instant>,
 }
+
+/// Immutable working-directory and environment view captured at submission.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ExecutionSnapshot {
+    pub working_directory: PathBuf,
+    pub environment: Vec<(OsString, Option<OsString>)>,
+}
+
+/// Lexical I/O paths captured with the request; file identity is checked later by preparation.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct IoPathSnapshot {
+    pub stdin: Option<PathBuf>,
+    pub stdout: Option<PathBuf>,
+    pub stderr: Option<PathBuf>,
+}
+
 /// Either cloneable collection settings or uniquely owned resource settings.
 #[derive(Debug)]
 pub enum RequestOptions {
     Standard(CommandRunOptions),
     Resources(CommandResourceRunOptions),
 }
+
 /// Activated request exclusively held by a domain worker.
 pub struct ActivatedRequest {
+    pub operation_id: OperationId,
     pub scope: OperationScope,
     pub request: Request,
     pub reservation: Reservation,
-    pub facts: std::sync::Arc<dyn FactSink>,
+    pub facts: Arc<dyn FactSink>,
+    pub session_bridge: Option<Arc<dyn crate::session::contracts::SessionBridge>>,
 }

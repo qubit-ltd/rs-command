@@ -14,7 +14,7 @@ pub mod files;
 pub mod scheduler;
 pub use contracts::{
     ActivatedRequest, Backend, CapacityFailure, EnqueueFailure, FactSink, FilePreparationFailure,
-    PreparedFiles, Request, Reservation, ResourceInput, ScheduledJob, Scheduler,
+    PreparedFiles, Request, Reservation, ResourceInput, ScheduledJob, Scheduler, StopPort,
 };
 
 /// Synchronous command operation handle.
@@ -115,6 +115,52 @@ pub trait CommandExecutorApi {
         command: Command,
         options: CommandRunOptions,
     ) -> Result<CommandOperation, CommandSubmitFailure>;
+    fn submit_wait_blocking(
+        &self,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandRunOptions,
+    ) -> Result<CommandOperation, CommandSubmitFailure>;
+    fn submit_wait_resources_blocking(
+        &self,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandResourceRunOptions,
+    ) -> Result<CommandOperation, CommandResourceSubmitFailure>;
+    fn submit_wait_resources_blocking_in(
+        &self,
+        scope: &qubit_operation::OperationScope,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandResourceRunOptions,
+    ) -> Result<CommandOperation, CommandResourceSubmitFailure>;
+    #[cfg(feature = "async")]
+    fn submit_wait(
+        &self,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandRunOptions,
+    ) -> impl std::future::Future<Output = Result<AsyncCommandOperation, CommandSubmitFailure>> + Send;
+    #[cfg(feature = "async")]
+    fn submit_wait_resources(
+        &self,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandResourceRunOptions,
+    ) -> impl std::future::Future<
+        Output = Result<AsyncCommandOperation, CommandResourceSubmitFailure>,
+    > + Send;
+    #[cfg(feature = "async")]
+    fn submit_wait_resources_in<'a>(
+        &'a self,
+        scope: &'a qubit_operation::OperationScope,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandResourceRunOptions,
+    ) -> impl std::future::Future<
+        Output = Result<AsyncCommandOperation, CommandResourceSubmitFailure>,
+    > + Send
+    + 'a;
     #[cfg(feature = "async")]
     fn submit_async_in(
         &self,
@@ -150,11 +196,16 @@ pub struct CommandSubmitFailure {
     pub reason: CommandSubmitFailureReason,
 }
 /// Input rejection reason.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CommandSubmitFailureReason {
     Capacity(CapacityFailure),
     Admission(qubit_operation::AdmissionError),
-    Snapshot,
+    Snapshot(SnapshotFailure),
+}
+/// Concrete diagnostic retained when submission snapshots cannot be captured.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SnapshotFailure {
+    pub diagnostic: String,
 }
 /// Inputs returned when resource submission is rejected.
 #[derive(Debug)]
