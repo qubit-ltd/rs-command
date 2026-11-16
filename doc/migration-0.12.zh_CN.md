@@ -43,6 +43,8 @@ let options = CommandRunOptions::new()
 
 `CommandExecutor` 的 `submit` 是立即尝试提交，拒绝时返回 `CommandSubmitFailure`，其中保留 runner、command、options 和拒绝原因。资源型提交对应 `CommandResourceSubmitFailure`。若要等待领域容量，可选 `submit_wait_blocking`；启用 `async` 后还可使用 `submit_wait`。等待容量不会延长最初的执行期限。
 
+0.12 的提交失败类型会把可恢复的 `runner`、`command`、资源型 `options` 字段装在 `Box` 中，以限制错误值在 `Result` 中的内存尺寸。字段仍保存完整输入；借用时方法调用会自动解引用，若要取回所有权则使用 `*failure.runner`、`*failure.command` 或 `*failure.options`。`FilePreparationFailure.prepared` 同样是 `Box<PreparedFiles>`，取回时可用 `*failure.prepared`。这是新增 0.12 API 的字段类型调整，不影响 0.11 入口。
+
 ## 有所有权的文件选项
 
 需要把已经打开的文件交给一次 managed run 时，使用 `CommandResourceRunOptions`：
