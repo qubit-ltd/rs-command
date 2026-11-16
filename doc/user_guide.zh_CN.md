@@ -2,7 +2,61 @@
 
 [English user guide](user_guide.md) · [中文 README](../README.zh_CN.md) · [API 文档](https://docs.rs/qubit-command)
 
-本手册针对 `qubit-command` 0.11 版本，面向需要从 Rust 应用运行外部程序，并明确处理进程生命周期、输出大小、取消和诊断边界的开发者。
+本手册介绍 `qubit-command` 0.12，面向需要在 Rust 应用中管理外部进程、限制资源占用并处理取消和清理结果的开发者。
+
+## 面向服务任务的受管执行
+
+当服务需要限制命令并发、管理进程树生命周期，并明确知道资源何时清理完成时，使用受管 API。下面的最小流程为服务创建一个 `OperationManager` 和对应的 `CommandExecutor`，再运行仓库状态检查：
+
+```toml
+[dependencies]
+qubit-command = "^0.12"
+qubit-operation = "^0.3"
+```
+
+```rust
+use qubit_command::{Command, CommandExecutionConfig, CommandExecutor, CommandRunOptions, CommandRunner, ManagedCommandRunnerApi};
+use qubit_operation::{ManagerOptions, OperationManager};
+
+let manager = OperationManager::new(ManagerOptions::default())?;
+let executor = CommandExecutor::new(manager, CommandExecutionConfig::default())?;
+let output = CommandRunner::without_timeout()
+    .run_managed(&executor, Command::new("git").args(&["status", "--short"]), CommandRunOptions::new())?;
+println!("{}", output.stdout_lossy_text());
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+默认配置最多同时运行 4 个命令、排队 64 个命令、等待 64 个容量空位；排队的 owned 输入总量上限为 16 MiB，诊断记录最多保留 64 条。`max_active` 不能设为 0。以上限制属于 executor；应用级 operation 数量限制仍由共享的 `OperationManager` 配置。
+
+受管执行默认使用 `ProcessTreePolicy::Managed`，不依赖是否配置 timeout 或 cancellation。只有在应用明确只管理直接子进程时才选择 `ProcessTreePolicy::DirectChild`。该策略适用于受管入口；旧的 `CommandRunner::run` 和 `run_with` 仍保留原有生命周期契约。
+
+### 分开观察命令结果和资源结算
+
+调用方需要区分命令结果与资源清理时，使用 `CommandExecutor::submit` 或 `submit_in`。`wait_outcome` 取出一次性的命令结果，`wait_settlement` 则等待稳定的清理报告。命令成功不代表 helper 和 owned 文件都已经释放。[collect 示例](../examples/managed_collect.rs)在父 `OperationScope` 中提交操作，把 handle 转到 async 视图，先等 outcome，再单独查看 settlement。不要让有限的同步 worker 阻塞等待依赖同一 worker pool 才能执行的工作。
+
+同步与异步 handle 共用同一个 outcome 接收端；取结果前可通过 `into_async` 或 `into_sync` 转换。涉及资源的操作应保留 handle 或只读 observer，直到确认 settlement。`SettlementStatus::RecoveryRequired` 表示仍有待恢复资源：保留报告中的 recovery handle，并按应用自身的恢复策略处理，不能把它视为清理完成。
+
+### 用 session 流式处理命令
+
+启用 crate 的 `async` feature 后可调用 `start_session`。session 为 stdin、stdout 和 stderr 提供独立字节端点。stdout 与 stderr 应并发读取，避免一个满管道阻塞另一条流；发送完输入后显式关闭 stdin，向子进程传递 EOF。取出 operation outcome 后，释放端点，再等待 settlement。[session 示例](../examples/managed_session.rs)展示了使用不绑定 runtime 的 `qubit-io` trait 完成这套流程。
+
+调用方提前丢弃某个输出端点后，该流会切换为丢弃并继续排空，最终数据可能不完整。`flush` 只表示数据已交给管道写侧，不表示子进程已经读取。`BrokenPipe` 是独立 I/O 事实，应与 operation 的主结果分别处理。
+
+### 显式移交文件资源
+
+`CommandResourceRunOptions` 将 `File` 句柄移交给受管任务。stdin 文件从当前游标处开始读取，库不会隐式 seek。stdout 和 stderr sink 都必须明确选择 `FileSinkPolicy::Preserve` 或 `FileSinkPolicy::Truncate`。只有命令容量和资源预留成功后才会执行截断；截断属于可观察副作用。文件冲突按已打开句柄身份判断，因此相同路径既不是资源租约，也不是授权凭证。详见[owned 文件示例](../examples/managed_file.rs)。
+
+如果 operation 使用的文件位于应用临时目录中，应先等 settlement 确认文件已释放，再删除目录。资源释放后，目录清理仍由应用负责。
+
+### 关闭 executor 时继续观察
+
+`CommandExecutor::request_shutdown` 会停止该 executor 接收新任务，并返回可持续观察的 shutdown handle。使用 `wait_for(Duration::ZERO)` 获取即时快照。若返回 `ShutdownWait::Pending`，这不是失败；保留同一个 handle，继续调用 `wait` 或带期限的 `wait_for`。不要按等待时间或固定 sleep 推断资源已释放。[shutdown 示例](../examples/managed_shutdown.rs)先写入数据并读到子进程回传内容，确认子进程已实际运行；stdin 仍保持开放时观察 `Pending`，接着关闭 stdin、释放端点，再继续观察 shutdown。示例也展示如何处理 `SettlementStatus::RecoveryRequired`。
+
+Windows 上的 helper cancellation 限制仍然适用：取消请求成功并不证明 helper 已停止，runner 也不承诺整个调用有硬墙钟返回期限。参阅 [Windows 取消状态](windows-cancellation-status.zh_CN.md)。
+
+### 可运行示例
+
+在仓库根目录运行 `cargo run --features async --example managed_collect`，将示例名替换为 `managed_session`、`managed_shutdown` 或 `managed_file` 即可运行其他流程。这些示例只使用公开 API；session 端点示例需要 `async` feature。迁移现有调用前请阅读 [0.12 迁移指南](migration-0.12.zh_CN.md)。
 
 ## 本 crate 解决什么问题
 

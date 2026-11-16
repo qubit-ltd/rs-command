@@ -9,7 +9,7 @@
 
 Qubit Command 是一个 Rust 外部进程运行库。当应用不仅需要启动进程，还需要限制输出捕获、定义超时或取消策略、清理进程树，并在错误诊断中隐藏敏感信息时，它可以把这些边界统一成结构化 API。它适合构建工具、服务后台以及其他必须把外部进程作为受控步骤执行的应用。
 
-本文针对 `qubit-command` 0.11 版本，下文说明 crate 与工具链要求。
+本文针对 `qubit-command` 0.12 版本，下文说明 crate 与工具链要求。
 
 ## 安装
 
@@ -17,7 +17,8 @@ crate 名称为 `qubit-command`，要求 Rust 1.94 或更高版本：
 
 ```toml
 [dependencies]
-qubit-command = "0.11"
+qubit-command = "^0.12"
+qubit-operation = "^0.3"
 ```
 
 ## 快速开始
@@ -40,6 +41,22 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 
 结构化形式不会进行 shell 解析。如果确实需要 shell 管道或重定向，请显式使用 `Command::shell(...)`，并由调用方负责验证传入的 shell 命令行。
 
+服务程序需要把进程树回收和操作结算纳入共享管理时，可以使用受管入口：
+
+```rust
+use qubit_command::{Command, CommandExecutionConfig, CommandExecutor, CommandRunOptions, CommandRunner, ManagedCommandRunnerApi};
+use qubit_operation::{ManagerOptions, OperationManager};
+
+let manager = OperationManager::new(ManagerOptions::default())?;
+let executor = CommandExecutor::new(manager, CommandExecutionConfig::default())?;
+let output = CommandRunner::without_timeout()
+    .run_managed(&executor, Command::new("git").args(&["status", "--short"]), CommandRunOptions::new())?;
+println!("{}", output.stdout_lossy_text());
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+受管执行默认使用 `ProcessTreePolicy::Managed`。如果应用需要分别观察命令结果和资源结算，可改用返回 operation handle 的提交入口。完整流程见[面向服务任务的受管执行](doc/user_guide.zh_CN.md#面向服务任务的受管执行)及其[英文版](doc/user_guide.md#managed-execution-for-service-work)。
+
 ## 为什么需要这个项目
 
 启动子进程很简单；但当进程挂起、输出过大、取消后仍有子孙进程持有管道、退出状态不符合预期，或诊断信息可能包含 secret 时，应用必须自行定义清晰的处理策略。Qubit Command 将这些决策集中在 `CommandRunner`，并通过 `CommandOutput` 和 `CommandError` 暴露可观察结果。
@@ -53,6 +70,7 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 - `CommandOutput` 提供退出状态、原始 stdout/stderr 字节、严格或有损 UTF-8 视图、耗时、截断标志和流完整性标志。
 - `CommandError` 区分准备、启动、等待、输出、超时、取消、截断和非预期退出错误。当进程状态和流状态可以可靠组装时，超时、取消、截断、非预期退出、tee 写入、输出读取以及最终 stdin 写入错误会保留 `CommandOutput`；准备、线程启动、时钟和进程控制错误可能不携带输出。
 - `CommandCancellation` 是供应用自己的关闭或终端信号策略使用的一次性句柄。本 crate 不安装信号处理器。
+- `CommandExecutor` 将有界执行接入 operation manager。需要分别处理命令结果和资源结算时使用 `submit`；只需收集执行结果时可用 `run_managed`。可选 `async` feature 提供不绑定特定异步 runtime 的流端点和 session。
 - 配置超时、取消或总输出预算时，runner 会通过 Unix process group 或 Windows Job Object 尝试终止进程树。
 - 在 Windows 上，成功取消 helper I/O 不代表操作已经完成。共享的 100 ms 确认窗口仅在取消请求失败后适用；之后的 join 和整个 run 都没有硬墙钟期限。当前核查状态见[Windows 取消状态](doc/windows-cancellation-status.zh_CN.md)。
 - 默认每个输出流最多在内存中保留 1 MiB。单流内存保留上限本身不会停止排空或 tee 写入；总输出预算、超时、取消或管道读取失败可能中断收集。tee 写入失败可能在读取继续时使 tee 不完整；tee flush 失败则可能在流已排空后使 tee 不完整。

@@ -2,6 +2,8 @@
 
 **状态：unresolved（未解决）。** runner 在取消成功后可能无期限地 join helper。已检查的生产路径和现有探针没有证明：取消成功后发生的阻塞生产 I/O 会使该 join 持续等待。本轮既未证实，也未排除生产挂起，更不证明 Windows 安全。
 
+`qubit-command` 0.12 的受管 API 增加了进程树管理和独立 settlement 报告，但没有改变 helper join 的证据，也没有建立 Windows 上的硬返回期限。`Managed` 进程树策略不代表每个 helper join 都有界；受管命令同样受此限制。应用应检查 settlement 和清理报告；确实需要硬期限时，应通过独立进程边界监督 runner。
+
 ## 契约边界
 
 在 Windows 上，`CancelSynchronousIo` 成功表示取消请求成功，不表示 helper 已停止。runner 在发出取消请求前设定一个共享的 100 ms helper 确认截止时间；只有取消请求失败时才检查该时间，并且不会为每个 helper 重置。请求成功后直接 join，不受该期限约束。100 ms 不是整个 `run()` 调用的硬期限。

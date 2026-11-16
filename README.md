@@ -9,7 +9,7 @@
 
 Qubit Command is a Rust library for running external programs when an application needs more than a bare `std::process::Command`: bounded output capture, a defined timeout or cancellation policy, process-tree cleanup, and typed failures with redacted diagnostics. It is intended for build tools, service workers, and other applications that must turn an external process into a controlled application step.
 
-This README describes `qubit-command` 0.11.
+This README describes `qubit-command` 0.12.
 
 ## Installation
 
@@ -17,7 +17,8 @@ The crate is published as `qubit-command` and requires Rust 1.94 or newer:
 
 ```toml
 [dependencies]
-qubit-command = "0.11"
+qubit-command = "^0.12"
+qubit-operation = "^0.3"
 ```
 
 ## Quick Start
@@ -40,6 +41,22 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 
 The structured form passes arguments without shell parsing. For an intentional shell pipeline or redirection, use `Command::shell(...)` explicitly and treat the shell command line as an input that requires the caller's own validation.
 
+For service code that must keep process-tree cleanup and operation settlement under a shared manager, use the managed entry point:
+
+```rust
+use qubit_command::{Command, CommandExecutionConfig, CommandExecutor, CommandRunOptions, CommandRunner, ManagedCommandRunnerApi};
+use qubit_operation::{ManagerOptions, OperationManager};
+
+let manager = OperationManager::new(ManagerOptions::default())?;
+let executor = CommandExecutor::new(manager, CommandExecutionConfig::default())?;
+let output = CommandRunner::without_timeout()
+    .run_managed(&executor, Command::new("git").args(&["status", "--short"]), CommandRunOptions::new())?;
+println!("{}", output.stdout_lossy_text());
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Managed execution defaults to `ProcessTreePolicy::Managed`. The handle API separates the command outcome from resource settlement when an application needs to observe those stages itself. See the [managed execution guide](doc/user_guide.md#managed-execution-for-service-work) and its [Chinese version](doc/user_guide.zh_CN.md#面向服务任务的受管执行).
+
 ## Why This Project Exists
 
 Launching a child process is easy; defining what happens when it hangs, produces too much output, is cancelled while descendants keep pipes open, exits with an unexpected status, or includes secrets in diagnostics is not. Qubit Command puts those decisions in `CommandRunner` and makes the result observable through `CommandOutput` and `CommandError`.
@@ -53,6 +70,7 @@ The library is useful when the caller needs a repeatable policy around an extern
 - `CommandOutput` exposes exit status, raw stdout/stderr bytes, strict or lossy UTF-8 views, elapsed time, truncation flags, and stream-completion flags.
 - `CommandError` distinguishes preparation, spawn, wait, output, timeout, cancellation, truncation, and unexpected-exit failures. Timeout, cancellation, truncation, unexpected-exit, tee-write, output-read, and final stdin-write errors retain `CommandOutput` when the process status and stream state can be assembled; preparation, thread-start, clock, and process-control errors may not.
 - `CommandCancellation` is a one-shot handle for an application-owned shutdown or terminal-signal policy. The crate does not install signal handlers.
+- `CommandExecutor` adds bounded service execution with operation-manager integration. Use `submit` when the application must inspect outcome and settlement separately, or `run_managed` for collect-style execution. The optional `async` feature adds runtime-independent stream/session endpoints.
 - When timeout, cancellation, or a total output budget is configured, the runner attempts to terminate the process tree using a Unix process group or a Windows Job Object.
 - On Windows, successful helper-I/O cancellation does not establish completion. The shared 100 ms confirmation window applies only after a cancellation request fails; a subsequent join and the whole run have no hard wall-clock bound. See the [current Windows cancellation status](doc/windows-cancellation-status.md).
 - Each output stream is limited to 1 MiB in memory by default. A per-stream retention limit alone does not stop draining or tee writes. A total output budget, timeout, cancellation, or pipe read failure can stop collection. A tee write failure can leave the tee incomplete while draining continues; a tee flush failure can leave it incomplete after the stream was drained.

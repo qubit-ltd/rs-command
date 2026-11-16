@@ -2,6 +2,8 @@
 
 **Status: unresolved.** The runner's successful-cancellation path can join a helper without a deadline. The inspected production paths and available probes do not establish that a successful cancellation is followed by blocking production I/O that keeps this join pending. This review neither confirms nor rules out a production hang, and it does not prove Windows safety.
 
+The `qubit-command` 0.12 managed API adds process-tree ownership and a separate settlement report; it does not change this helper-join evidence or establish a hard return deadline on Windows. A `Managed` process-tree policy must not be read as proof that every helper join is bounded. The same limitation applies to managed commands; inspect settlement and cleanup reports, and use a separate process boundary when the application requires a hard deadline.
+
 ## What the contract says
 
 On Windows, successful `CancelSynchronousIo` means that the cancellation request succeeded; it does not mean the helper has stopped. The runner establishes one shared 100 ms helper-confirmation deadline before cancellation requests. It consults that deadline only when a cancellation request fails, and does not reset it for each helper. A successful request proceeds to join without that deadline. The 100 ms window is not a hard deadline for the whole `run()` call.
