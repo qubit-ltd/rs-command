@@ -161,7 +161,8 @@ fn test_stdin_hold_times_out_within_watchdog() {
     assert_eq!(error.kind(), CommandErrorKind::TimedOut);
     assert!(
         error.cleanup_failures().is_empty(),
-        "normal timeout should not report cleanup failures"
+        "normal timeout should not report cleanup failures: {:?}",
+        error.cleanup_failures()
     );
 }
 
@@ -211,7 +212,8 @@ fn test_stdin_delayed_ready_does_not_consume_timeout() {
     assert_eq!(error.kind(), CommandErrorKind::TimedOut);
     assert!(
         error.cleanup_failures().is_empty(),
-        "normal timeout should not report cleanup failures"
+        "normal timeout should not report cleanup failures: {:?}",
+        error.cleanup_failures()
     );
 }
 
