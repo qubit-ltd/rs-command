@@ -1129,6 +1129,40 @@ mod tests {
     }
 
     #[test]
+    fn test_prepare_rejects_stdin_and_stderr_alias_without_changing_input() {
+        let input = tempfile::NamedTempFile::new().expect("input fixture should be created");
+        std::fs::write(input.path(), b"preserve input").expect("input fixture should be populated");
+        let mut process = ProcessCommand::new("unused-test-program");
+
+        let error = match IoFiles::prepare(
+            "command",
+            CommandStdin::File(input.path().to_path_buf()),
+            None,
+            Some(input.path()),
+            &mut process,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("stdin and stderr cannot share one normalized path"),
+        };
+
+        assert_eq!(error.kind(), CommandErrorKind::InputOutputConflict);
+        assert!(matches!(
+            error.reason(),
+            crate::CommandErrorReason::InputOutputConflict {
+                input_path,
+                output_stream,
+                output_path,
+            } if input_path == input.path()
+                && *output_stream == OutputStream::Stderr
+                && output_path == input.path()
+        ));
+        assert_eq!(
+            std::fs::read(input.path()).expect("conflicting preparation must preserve input"),
+            b"preserve input",
+        );
+    }
+
+    #[test]
     fn test_truncate_output_maps_injected_set_len_failure() {
         let output = tempfile::NamedTempFile::new().expect("output fixture should be created");
         std::fs::write(output.path(), b"preserve-on-failure").expect("output fixture should be populated");
