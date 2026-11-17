@@ -522,6 +522,22 @@ mod tests {
     }
 
     #[cfg(unix)]
+    struct DeadlineExpiresBeforeAuthorization(ClockDomainId, Arc<AtomicUsize>);
+
+    #[cfg(unix)]
+    impl ClockSource for DeadlineExpiresBeforeAuthorization {
+        fn now(&self) -> MonotonicTime {
+            let call = self.1.fetch_add(1, Ordering::SeqCst);
+            let ticks = if call < 2 { 0 } else { 1 };
+            MonotonicTime::new(self.0, ticks)
+        }
+
+        fn register_deadline(&self, _deadline: MonotonicTime, _waker: Waker) -> Box<dyn TimerRegistration> {
+            Box::new(NoopRegistration)
+        }
+    }
+
+    #[cfg(unix)]
     struct NoopRegistration;
 
     #[cfg(unix)]
@@ -929,6 +945,101 @@ mod tests {
             Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
         ));
         assert!(sink.released.load(Ordering::SeqCst));
+        assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_deadline_expiring_after_initial_check_stops_before_spawn_and_releases() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::new());
+        let sink = Arc::new(RecordingSink::default());
+        let reservation_released = Arc::new(AtomicBool::new(false));
+        let lease_created = Arc::new(AtomicBool::new(false));
+        let operation_backend = Arc::clone(&backend);
+        let operation_sink = Arc::clone(&sink);
+        let operation_reservation_released = Arc::clone(&reservation_released);
+        let operation_lease_created = Arc::clone(&lease_created);
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("must-not-start-after-second-deadline-check");
+        let operation_marker = marker.clone();
+        let domain = ClockDomainId::new_unique();
+        let clock_calls = Arc::new(AtomicUsize::new(0));
+        let clock: Arc<dyn ClockSource> =
+            Arc::new(DeadlineExpiresBeforeAuthorization(domain, Arc::clone(&clock_calls)));
+        let deadline = OperationContext::new(ContextOptions {
+            clock: Some(Arc::clone(&clock)),
+            deadline: Some(Deadline::at(MonotonicTime::new(domain, 1))),
+            budget: None,
+        })
+        .unwrap();
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    move |_| operation_reservation_released.store(true, Ordering::SeqCst),
+                    move |_| {
+                        operation_lease_created.store(true, Ordering::SeqCst);
+                        crate::execution::contracts::ReservationLease::new(|| {})
+                    },
+                );
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout(),
+                    command: Command::new("sh")
+                        .arg("-c")
+                        .arg(&format!("touch {}", operation_marker.display())),
+                    options: RequestOptions::Standard(CommandRunOptions::default()),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
+                    },
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: Some(deadline),
+                };
+                operation_backend.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: operation_sink.clone(),
+                        session_bridge: None,
+                    },
+                    operation_sink,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        operation.wait_settlement().unwrap();
+
+        assert!(
+            !marker.exists(),
+            "deadline expiry after authorization must still prevent spawn"
+        );
+        assert_eq!(
+            clock_calls.load(Ordering::SeqCst),
+            3,
+            "the deadline should expire at the second backend check"
+        );
+        assert!(matches!(
+            sink.outcome.lock().unwrap().take(),
+            Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
+        ));
+        assert!(sink.released.load(Ordering::SeqCst));
+        assert!(reservation_released.load(Ordering::SeqCst));
+        assert!(
+            !lease_created.load(Ordering::SeqCst),
+            "pre-start stop should not retain process capacity"
+        );
         assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
     }
 
