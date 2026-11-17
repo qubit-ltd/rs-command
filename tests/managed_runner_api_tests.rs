@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use qubit_command::Command;
 use qubit_command::CommandErrorKind;
+use qubit_command::CommandErrorReason;
 use qubit_command::CommandExecutionConfig;
 use qubit_command::CommandExecutor;
 use qubit_command::CommandResourceRunOptions;
@@ -44,7 +45,8 @@ fn test_sync_managed_runner_methods_capture_output_and_write_owned_sinks() {
     assert_eq!(ordinary.stdout(), b"ordinary");
 
     let mut sink = tempfile::tempfile().unwrap();
-    let resources = CommandResourceRunOptions::new().stdout_sink(sink.try_clone().unwrap(), FileSinkPolicy::Preserve);
+    let resources = CommandResourceRunOptions::new()
+        .stdout_sink(sink.try_clone().unwrap(), FileSinkPolicy::Preserve);
     let output = runner()
         .run_managed_resources(
             &executor,
@@ -112,6 +114,44 @@ fn test_sync_managed_runner_preserves_failed_command_output() {
     assert_eq!(error.output().unwrap().stderr(), b"managed-err");
 }
 
+#[cfg(unix)]
+#[test]
+fn test_scoped_managed_runner_maps_manager_mismatch_for_ordinary_and_resource_calls() {
+    let scope_manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let other_manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let wrong_executor = executor(&other_manager);
+    let result = scope_manager
+        .run(OperationOptions::default(), move |scope| {
+            let ordinary = runner().run_managed_in(
+                &scope,
+                &wrong_executor,
+                Command::new("sh").arg("-c").arg("printf must-not-run"),
+                Default::default(),
+            );
+            let resources = runner().run_managed_resources_in(
+                &scope,
+                &wrong_executor,
+                Command::new("sh").arg("-c").arg("printf must-not-run"),
+                CommandResourceRunOptions::new(),
+            );
+            assert_manager_mismatch(ordinary.unwrap_err());
+            assert_manager_mismatch(resources.unwrap_err());
+            Ok::<_, qubit_command::CommandError>(())
+        })
+        .unwrap();
+    assert!(matches!(result, OperationOutcome::Succeeded(())));
+}
+
+fn assert_manager_mismatch(error: qubit_command::CommandError) {
+    assert_eq!(error.kind(), CommandErrorKind::ManagedOperationFailed);
+    assert!(matches!(
+        error.reason(),
+        CommandErrorReason::ManagedOperationFailed { diagnostic }
+            if diagnostic == "submission rejected: GroupBinding(WrongManager)"
+    ));
+    assert!(error.output().is_none());
+}
+
 #[cfg(all(feature = "async", unix))]
 mod async_tests {
     use std::future::Future;
@@ -173,7 +213,8 @@ mod async_tests {
         assert_eq!(output.stdout(), b"asynchronous");
 
         let mut sink = tempfile::tempfile().unwrap();
-        let options = CommandResourceRunOptions::new().stdout_sink(sink.try_clone().unwrap(), FileSinkPolicy::Preserve);
+        let options = CommandResourceRunOptions::new()
+            .stdout_sink(sink.try_clone().unwrap(), FileSinkPolicy::Preserve);
         let output = block_on(runner().run_async_resources(
             &executor,
             Command::new("sh").arg("-c").arg("printf async-resource"),
@@ -223,12 +264,16 @@ mod async_tests {
                     Command::new("sh").arg("-c").arg("printf async-scoped"),
                     Default::default(),
                 ))?;
-                let resources = block_on(runner().run_async_resources_in(
-                    &scope,
-                    &executor,
-                    Command::new("sh").arg("-c").arg("printf async-resource-scoped"),
-                    CommandResourceRunOptions::new(),
-                ))?;
+                let resources = block_on(
+                    runner().run_async_resources_in(
+                        &scope,
+                        &executor,
+                        Command::new("sh")
+                            .arg("-c")
+                            .arg("printf async-resource-scoped"),
+                        CommandResourceRunOptions::new(),
+                    ),
+                )?;
                 assert_eq!(resources.stdout(), b"async-resource-scoped");
                 Ok::<_, qubit_command::CommandError>(ordinary)
             })
@@ -240,11 +285,42 @@ mod async_tests {
     }
 
     #[test]
+    fn test_scoped_async_managed_runner_maps_manager_mismatch_for_ordinary_and_resource_calls() {
+        let scope_manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let other_manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let wrong_executor = executor(&other_manager);
+        let result = scope_manager
+            .run(OperationOptions::default(), move |scope| {
+                let ordinary = block_on(runner().run_async_in(
+                    &scope,
+                    &wrong_executor,
+                    Command::new("sh").arg("-c").arg("printf must-not-run"),
+                    Default::default(),
+                ));
+                let resources = block_on(runner().run_async_resources_in(
+                    &scope,
+                    &wrong_executor,
+                    Command::new("sh").arg("-c").arg("printf must-not-run"),
+                    CommandResourceRunOptions::new(),
+                ));
+                super::assert_manager_mismatch(ordinary.unwrap_err());
+                super::assert_manager_mismatch(resources.unwrap_err());
+                Ok::<_, qubit_command::CommandError>(())
+            })
+            .unwrap();
+        assert!(matches!(result, OperationOutcome::Succeeded(())));
+    }
+
+    #[test]
     fn test_session_runner_methods_start_root_and_scoped_sessions() {
         let manager = OperationManager::new(ManagerOptions::default()).unwrap();
         let executor = executor(&manager);
         for result in [
-            block_on(runner().start_session(&executor, Command::new("rustc").arg("--version"), Default::default())),
+            block_on(runner().start_session(
+                &executor,
+                Command::new("rustc").arg("--version"),
+                Default::default(),
+            )),
             block_on(runner().start_session_resources(
                 &executor,
                 Command::new("rustc").arg("--version"),
