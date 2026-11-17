@@ -137,31 +137,52 @@ pub(crate) trait OutputEndpointState: Send + Sync {
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
 
     use super::SessionBridge;
 
-    struct DefaultBridge;
+    #[derive(Default)]
+    struct DefaultBridge {
+        stdout: Mutex<Vec<u8>>,
+        stderr: Mutex<Vec<u8>>,
+        stdin_closed: AtomicBool,
+    }
 
     impl SessionBridge for DefaultBridge {
         fn read_stdin(&self, _buffer: &mut [u8]) -> io::Result<usize> {
             Ok(0)
         }
 
-        fn write_stdout(&self, _bytes: &[u8]) -> io::Result<()> {
+        fn write_stdout(&self, bytes: &[u8]) -> io::Result<()> {
+            self.stdout.lock().unwrap().extend_from_slice(bytes);
             Ok(())
         }
 
-        fn write_stderr(&self, _bytes: &[u8]) -> io::Result<()> {
+        fn write_stderr(&self, bytes: &[u8]) -> io::Result<()> {
+            self.stderr.lock().unwrap().extend_from_slice(bytes);
             Ok(())
         }
 
-        fn close_stdin(&self) {}
+        fn close_stdin(&self) {
+            self.stdin_closed.store(true, Ordering::SeqCst);
+        }
     }
 
     #[test]
     fn test_session_bridge_optional_hooks_default_to_no_state_and_noop() {
-        let implementation = DefaultBridge;
+        let implementation = DefaultBridge::default();
         let bridge: &dyn SessionBridge = &implementation;
+
+        let mut stdin = [0; 8];
+        assert_eq!(bridge.read_stdin(&mut stdin).unwrap(), 0);
+        bridge.write_stdout(b"out").unwrap();
+        bridge.write_stderr(b"err").unwrap();
+        bridge.close_stdin();
+        assert_eq!(*implementation.stdout.lock().unwrap(), b"out");
+        assert_eq!(*implementation.stderr.lock().unwrap(), b"err");
+        assert!(implementation.stdin_closed.load(Ordering::SeqCst));
 
         bridge.request_output_stop();
         bridge.record_stdin_broken_pipe();

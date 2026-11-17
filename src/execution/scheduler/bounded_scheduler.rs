@@ -623,3 +623,172 @@ impl Scheduler for BoundedScheduler {
         self.0.changed.notify_all()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::task::Wake;
+    use std::task::Waker;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    use super::BoundedScheduler;
+    use crate::execution::CommandExecutionConfig;
+    use crate::execution::contracts::CapacityFailure;
+    use crate::execution::contracts::Scheduler;
+
+    struct CountWake(AtomicUsize);
+
+    impl Wake for CountWake {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn config(max_queued: usize, max_waiters: usize) -> CommandExecutionConfig {
+        CommandExecutionConfig {
+            max_active: 1,
+            max_queued,
+            max_waiters,
+            max_queued_input_bytes: 8,
+            max_diagnostics: 1,
+        }
+    }
+
+    #[test]
+    fn test_replaced_capacity_waiter_wakes_when_active_reservation_releases() {
+        let scheduler = BoundedScheduler::new(config(0, 1)).unwrap();
+        let permit = scheduler.try_reserve(3).unwrap();
+        let old = Arc::new(CountWake(AtomicUsize::new(0)));
+        let replacement = Arc::new(CountWake(AtomicUsize::new(0)));
+        let old_waker = Waker::from(old.clone());
+        let replacement_waker = Waker::from(replacement.clone());
+        let id = scheduler.register_waiter(Some(&old_waker)).unwrap();
+
+        scheduler.update_waiter(id, &replacement_waker);
+        scheduler.update_waiter(id + 1, &old_waker);
+        drop(permit);
+
+        assert_eq!(old.0.load(Ordering::SeqCst), 0);
+        assert_eq!(replacement.0.load(Ordering::SeqCst), 1);
+        scheduler.cancel_waiter(id);
+        assert_eq!(scheduler.snapshot().waiters, 0);
+        assert_eq!(scheduler.snapshot().active, 0);
+        assert_eq!(scheduler.snapshot().input_bytes, 0);
+    }
+
+    #[test]
+    fn test_waiter_cancellation_and_closed_admission_reject_registrations() {
+        let scheduler = BoundedScheduler::new(config(0, 1)).unwrap();
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = Waker::from(counter.clone());
+
+        assert_eq!(scheduler.register_waiter_if_full(0, &waker), Ok(None));
+        let permit = scheduler.try_reserve(0).unwrap();
+        let id = scheduler
+            .register_waiter_if_full(0, &waker)
+            .unwrap()
+            .unwrap();
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        scheduler.cancel_waiter(id);
+        drop(permit);
+        assert_eq!(counter.0.load(Ordering::SeqCst), 0);
+        assert_eq!(scheduler.snapshot().waiters, 0);
+
+        scheduler.close_admission();
+        assert_eq!(
+            scheduler.register_waiter(None),
+            Err(CapacityFailure::Closed)
+        );
+        assert_eq!(
+            scheduler.register_waiter_if_full(0, &waker),
+            Err(CapacityFailure::Closed)
+        );
+        assert!(!scheduler.wait_for_capacity(0, None));
+    }
+
+    #[test]
+    fn test_blocking_capacity_waiter_is_removed_when_admission_closes() {
+        let scheduler = BoundedScheduler::new(config(0, 1)).unwrap();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let waiting = scheduler.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            done_tx.send(waiting.wait_for_capacity(0, None)).unwrap();
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while scheduler.snapshot().waiters == 0 && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        scheduler.close_admission();
+
+        assert!(!done_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        thread.join().unwrap();
+        assert_eq!(scheduler.snapshot().waiters, 0);
+        drop(permit);
+    }
+
+    #[test]
+    fn test_queued_reservation_promotes_then_releases_capacity_and_bytes() {
+        let scheduler = BoundedScheduler::new(config(1, 1)).unwrap();
+        let active = scheduler.try_reserve(5).unwrap();
+        let queued = scheduler.try_reserve(2).unwrap();
+        assert_eq!(
+            (
+                scheduler.snapshot().active,
+                scheduler.snapshot().queued,
+                scheduler.snapshot().input_bytes,
+            ),
+            (1, 1, 7)
+        );
+
+        drop(active);
+        assert_eq!(
+            (
+                scheduler.snapshot().active,
+                scheduler.snapshot().queued,
+                scheduler.snapshot().input_bytes,
+            ),
+            (1, 0, 2)
+        );
+        drop(queued);
+        assert_eq!(
+            (
+                scheduler.snapshot().active,
+                scheduler.snapshot().queued,
+                scheduler.snapshot().input_bytes,
+            ),
+            (0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn test_reservation_without_inherited_deadline_releases_on_owner_drop() {
+        let scheduler = BoundedScheduler::new(config(0, 1)).unwrap();
+        let reservation = scheduler.try_reserve_until(6, None).unwrap();
+        assert_eq!(
+            (
+                scheduler.snapshot().active,
+                scheduler.snapshot().input_bytes,
+            ),
+            (1, 6)
+        );
+
+        drop(reservation);
+        assert_eq!(
+            (
+                scheduler.snapshot().active,
+                scheduler.snapshot().input_bytes,
+            ),
+            (0, 0)
+        );
+    }
+}
