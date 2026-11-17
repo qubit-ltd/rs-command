@@ -1684,6 +1684,41 @@ mod tests {
         assert!(output.stdout_truncated());
     }
 
+    #[test]
+    fn test_collect_output_joins_both_streams_before_sampling_elapsed_time() {
+        let stdout_done = Arc::new(AtomicBool::new(false));
+        let stdout_marker = Arc::clone(&stdout_done);
+        let stdout = OutputReader::new(
+            thread::spawn(move || {
+                stdout_marker.store(true, Ordering::Release);
+                Ok(captured(b"out", false, true))
+            }),
+            IoCancellation::pair().expect("stdout cancellation should initialize").0,
+        );
+        let stderr_done = Arc::new(AtomicBool::new(false));
+        let stderr_marker = Arc::clone(&stderr_done);
+        let stderr = OutputReader::new(
+            thread::spawn(move || {
+                stderr_marker.store(true, Ordering::Release);
+                Ok(captured(b"err", false, true))
+            }),
+            IoCancellation::pair().expect("stderr cancellation should initialize").0,
+        );
+
+        let output = super::collect_output("command", status(0), || {
+            assert!(stdout_done.load(Ordering::Acquire));
+            assert!(stderr_done.load(Ordering::Acquire));
+            Ok(Duration::from_millis(7))
+        }, stdout, stderr, None)
+        .expect("successful reader threads should be collected");
+
+        assert_eq!(output.stdout(), b"out");
+        assert_eq!(output.stderr(), b"err");
+        assert_eq!(output.elapsed(), Duration::from_millis(7));
+        assert!(output.stdout_complete());
+        assert!(output.stderr_complete());
+    }
+
     #[cfg(windows)]
     mod windows_probe_tests;
 }

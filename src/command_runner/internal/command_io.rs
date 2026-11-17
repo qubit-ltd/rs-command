@@ -864,6 +864,39 @@ mod tests {
     }
 
     #[test]
+    fn test_detached_output_is_an_empty_incomplete_snapshot() {
+        let output = super::detached_output().expect("detached output is represented as a capture");
+
+        assert!(output.bytes.is_empty());
+        assert!(!output.truncated);
+        assert!(!output.complete);
+    }
+
+    #[test]
+    fn test_cancel_and_collect_keeps_empty_incomplete_output_for_detached_reader() {
+        let release = Arc::new(AtomicBool::new(false));
+        let stdout = blocked_reader(&release, "stdout cancellation failed");
+        let stderr = completed_reader(IoCancellation::pair().expect("stderr cancellation should initialize").0);
+        let status = std::process::Command::new("rustc")
+            .arg("--version")
+            .status()
+            .expect("rustc should provide an exit status");
+
+        let (result, failures) = CommandIo::new(stdout, stderr, None).cancel_and_collect(
+            "command",
+            status,
+            || Ok(Duration::ZERO),
+        );
+        release.store(true, Ordering::Release);
+        let output = result.expect("detaching a reader should still produce a command result");
+
+        assert!(output.stdout().is_empty());
+        assert!(!output.stdout_complete());
+        assert_eq!(failures.len(), 1);
+        assert!(matches!(failures[0], CommandCleanupFailure::StdoutCancellation { .. }));
+    }
+
+    #[test]
     fn test_finish_helpers_orders_all_cancellation_failures_by_helper() {
         let stdout = completed_reader(IoCancellation::failing("stdout cancellation failed"));
         let stderr = completed_reader(IoCancellation::failing("stderr cancellation failed"));

@@ -1025,6 +1025,26 @@ mod tests {
         assert!(!output.exists(), "preparation must not create output files");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_commit_rejects_distinct_paths_for_the_same_output_file() {
+        let directory = tempfile::tempdir().expect("directory fixture should be created");
+        let stdout = directory.path().join("stdout");
+        let stderr_alias = directory.path().join("stderr-alias");
+        std::fs::write(&stdout, b"preserve until validation").expect("stdout file should be populated");
+        std::fs::hard_link(&stdout, &stderr_alias).expect("hard link should share the output file identity");
+        let mut process = ProcessCommand::new("unused-test-program");
+        let mut files = IoFiles::prepare("command", CommandStdin::Null, Some(&stdout), Some(&stderr_alias), &mut process)
+            .expect("different normalized output paths should pass preparation");
+
+        let error = files
+            .commit("command", Some(&stdout), Some(&stderr_alias), &mut process)
+            .expect_err("commit must compare opened file identities");
+
+        assert_eq!(error.kind(), CommandErrorKind::OutputFilesConflict);
+        assert_eq!(std::fs::read(&stdout).expect("stdout should remain readable"), b"preserve until validation");
+    }
+
     #[test]
     fn test_commit_maps_missing_output_parent_to_open_output_failure() {
         let directory = tempfile::tempdir().expect("directory fixture should be created");
