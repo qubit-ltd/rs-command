@@ -2502,6 +2502,64 @@ mod command_executor_api_tests {
 
     #[cfg(unix)]
     #[test]
+    fn test_scoped_resource_submission_returns_stdin_when_scope_is_foreign() {
+        use std::io::Read;
+        use std::io::Seek;
+        use std::io::SeekFrom;
+        use std::io::Write;
+
+        let (_manager, executor, runner) = setup();
+        let foreign_manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let mut input = tempfile::tempfile().unwrap();
+        input.write_all(b"foreign-scope-input").unwrap();
+        input.rewind().unwrap();
+        let marker_directory = tempfile::tempdir().unwrap();
+        let marker = marker_directory.path().join("command-ran");
+        let command_marker = marker.clone();
+        let scoped_executor = executor.clone();
+
+        let outcome = foreign_manager
+            .run(qubit_operation::OperationOptions::default(), move |scope| {
+                let failure = match scoped_executor.submit_resources_in(
+                    &scope,
+                    runner,
+                    Command::new("sh")
+                        .arg("-c")
+                        .arg("cat >/dev/null; touch \"$1\"")
+                        .arg("sh")
+                        .arg(command_marker.to_string_lossy().as_ref()),
+                    CommandResourceRunOptions::new().stdin_file(input),
+                ) {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("resource submission with a foreign scope must be rejected"),
+                };
+
+                assert!(matches!(
+                    failure.reason,
+                    super::CommandSubmitFailureReason::GroupBinding(_)
+                ));
+                let mut returned_input = failure
+                    .options
+                    .configured_stdin()
+                    .expect("rejected submission must return its stdin file")
+                    .try_clone()
+                    .expect("returned stdin should remain cloneable");
+                returned_input.seek(SeekFrom::Start(0)).unwrap();
+                let mut bytes = Vec::new();
+                returned_input.read_to_end(&mut bytes).unwrap();
+                assert_eq!(bytes, b"foreign-scope-input");
+                Ok::<_, crate::CommandError>(())
+            })
+            .unwrap();
+
+        assert!(matches!(outcome, OperationOutcome::Succeeded(())));
+        assert!(!marker.exists(), "rejected command must not execute");
+        assert_eq!(executor.scheduler_snapshot().active, 0);
+        assert_eq!(executor.scheduler_snapshot().queued, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_sync_submit_and_blocking_wait_variants_run_and_settle_commands() {
         let (manager, executor, runner) = setup();
         assert_eq!(
