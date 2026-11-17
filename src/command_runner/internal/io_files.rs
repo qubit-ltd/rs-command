@@ -946,12 +946,7 @@ mod tests {
         );
         assert!(files.stdin_file.is_some());
         files
-            .commit(
-                "command",
-                Some(stdout.path()),
-                Some(stderr.path()),
-                &mut process,
-            )
+            .commit("command", Some(stdout.path()), Some(stderr.path()), &mut process)
             .expect("commit should attach stdin and prepare both output tees");
 
         assert_eq!(
@@ -979,10 +974,7 @@ mod tests {
         )
         .expect("byte stdin should prepare");
 
-        assert_eq!(
-            files.stdin_bytes.as_deref(),
-            Some(b"buffered input".as_slice())
-        );
+        assert_eq!(files.stdin_bytes.as_deref(), Some(b"buffered input".as_slice()));
         assert!(files.stdin_file.is_none());
         assert!(files.stdout_tee.is_none());
         assert!(files.stderr_tee.is_none());

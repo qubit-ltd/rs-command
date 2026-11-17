@@ -63,10 +63,7 @@ mod tests {
     struct LegacyInput(Arc<AtomicBool>);
 
     impl ResourceInput for LegacyInput {
-        fn prepare_files(
-            self: Box<Self>,
-            _scope: &OperationScope,
-        ) -> Result<PreparedFiles, FilePreparationFailure> {
+        fn prepare_files(self: Box<Self>, _scope: &OperationScope) -> Result<PreparedFiles, FilePreparationFailure> {
             self.0.store(true, Ordering::SeqCst);
             Ok(PreparedFiles::new(None, None, None))
         }
@@ -92,10 +89,7 @@ mod tests {
             })
             .unwrap();
 
-        assert!(matches!(
-            completion.outcome,
-            OperationOutcome::Succeeded(())
-        ));
+        assert!(matches!(completion.outcome, OperationOutcome::Succeeded(())));
         assert!(prepared_legacy.load(Ordering::SeqCst));
     }
 }

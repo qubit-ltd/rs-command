@@ -74,14 +74,9 @@ mod tests {
         assert!(!debug.contains("callback_executed"));
         assert!(!debug.contains("scheduler_id"));
 
-        let EnqueueFailure {
-            reason,
-            job,
-            permit,
-        } = failure;
+        let EnqueueFailure { reason, job, permit } = failure;
         assert_eq!(reason, CapacityFailure::QueueFull);
-        job.stop
-            .request_stop(qubit_operation::StopReason::UserCancelled);
+        job.stop.request_stop(qubit_operation::StopReason::UserCancelled);
         (job.run)(permit);
         assert!(executed.load(Ordering::SeqCst));
     }

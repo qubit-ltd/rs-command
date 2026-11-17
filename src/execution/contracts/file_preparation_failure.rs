@@ -44,10 +44,7 @@ mod tests {
     struct RetainedInput;
 
     impl ResourceInput for RetainedInput {
-        fn prepare_files(
-            self: Box<Self>,
-            _scope: &OperationScope,
-        ) -> Result<PreparedFiles, FilePreparationFailure> {
+        fn prepare_files(self: Box<Self>, _scope: &OperationScope) -> Result<PreparedFiles, FilePreparationFailure> {
             unreachable!("retained test input is inspected, not prepared")
         }
     }

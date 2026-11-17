@@ -495,18 +495,11 @@ mod tests {
         let output = CommandRunner::without_timeout()
             .working_directory(directory.path())
             .success_exit_codes(&[7])
-            .run(
-                crate::Command::new("sh")
-                    .arg("-c")
-                    .arg("printf '%s' \"$PWD\"; exit 7"),
-            )
+            .run(crate::Command::new("sh").arg("-c").arg("printf '%s' \"$PWD\"; exit 7"))
             .expect("configured nonzero exit code should be successful");
 
         assert_eq!(output.exit_code(), Some(7));
-        assert_eq!(
-            output.stdout(),
-            directory.path().to_string_lossy().as_bytes()
-        );
+        assert_eq!(output.stdout(), directory.path().to_string_lossy().as_bytes());
     }
 
     #[test]

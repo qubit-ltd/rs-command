@@ -460,8 +460,8 @@ mod tests {
             .spawn()
             .expect("test child should spawn");
 
-        let writer = write_stdin_bytes("command", &mut child, None)
-            .expect("absent stdin bytes should not require a worker");
+        let writer =
+            write_stdin_bytes("command", &mut child, None).expect("absent stdin bytes should not require a worker");
         join_stdin_writer("command", writer).expect("an absent worker should join successfully");
         drop(child.stdin.take());
         let output = child

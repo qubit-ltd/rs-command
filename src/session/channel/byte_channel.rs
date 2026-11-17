@@ -1134,10 +1134,7 @@ mod tests {
     #[test]
     fn test_poll_read_caps_each_result_and_preserves_following_bytes() {
         let channel = ByteChannel::new();
-        let bytes = (0..=u8::MAX)
-            .cycle()
-            .take(MAX_BLOCK + 7)
-            .collect::<Vec<_>>();
+        let bytes = (0..=u8::MAX).cycle().take(MAX_BLOCK + 7).collect::<Vec<_>>();
         channel.blocking_write(&bytes).unwrap();
         let counter = Arc::new(CountWake(AtomicUsize::new(0)));
         let waker = std::task::Waker::from(counter);
