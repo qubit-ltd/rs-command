@@ -207,3 +207,65 @@ Markdown 检查器编译。发布包验证必须包含两份 README、两份用�
 - 即使诊断已经脱敏，捕获输出和 tee 文件仍是原始进程数据；保留和访问策略由调用方决定。
 - 超时不包括准备和启动，也不限制不可信或远程文件系统上的任意内核操作。
 - 后续公共生命周期变更必须同步错误契约、流完整性语义、双语指南和本文档。
+
+## Managed 执行架构
+
+Managed API 在同步 `CommandRunner` 之上增加本地接纳、操作观察和恢复能力，
+不替代 runner 的进程与 I/O 契约。`CommandExecutor` 向 `BoundedScheduler` 申请
+reservation，构造 `AdapterState` 并提交给 `OperationManager`。激活前，adapter
+仍可恢复 request 和 reservation；激活后，调度器接管它们。随后
+`ProcessBackend` 准备已拥有的文件，并调用 `run_with_tree_policy`。这些边界可在
+`execution/executor.rs`、`execution/adapter/state.rs` 和
+`execution/backend/process_backend.rs` 中核对。
+
+```mermaid
+stateDiagram-v2
+    [*] --> 接纳
+    接纳 --> 拒绝: 容量 / 已关闭 / deadline
+    接纳 --> 已预留: 获得 reservation
+    已预留 --> Adapter已准备: OperationManager 接受
+    已预留 --> 拒绝: manager 拒绝；恢复 request
+    Adapter已准备 --> 已激活: scheduler 激活
+    Adapter已准备 --> 拒绝: 激活失败 / 放弃
+    已激活 --> 文件准备
+    文件准备 --> 失败待恢复: owned 文件准备失败
+    文件准备 --> 执行中: 文件就绪且启动获准
+    执行中 --> Outcome: 选择并发布进程结果
+    执行中 --> Reaper: 子进程 / helper 清理状态不确定
+    Reaper --> 恢复: 保留或转交所有权
+    恢复 --> Settlement
+    Outcome --> Settlement: 输入已释放且清理已知
+    Outcome --> Pending: 清理仍由恢复流程持有
+    Pending --> 恢复
+    拒绝 --> [*]
+    Settlement --> [*]
+```
+
+接纳拒绝发生在进程执行前，submit failure 保留未接收的 request。资源准备在
+激活后执行；准备失败时所有权已经转移，因此失败路径会保留原始资源输入和
+capacity lease 以供恢复。runner 提交文件资源后，截断及后续启动失败可能产生
+文件系统副作用，见上文 runner 契约。操作 outcome 是一次性结果，不代表进程、
+helper、文件或容量所有权已经结算。`CommandOperation` 调用方需单独观察
+settlement；`RecoveryRequired` settlement 表示仍有待恢复的效果。
+
+| 所有者 | 交接 | 释放条件 |
+| --- | --- | --- |
+| Executor request 与 reservation | Executor 交给已准备的 adapter，激活时再交给 scheduler | 未激活的输入被恢复或丢弃；激活后的 reservation 记录在 owner 与全部 lease 释放后移除 |
+| 子进程与 I/O helper | Runner 交由 `RunningCommand`；清理状态不确定时将 owner 交给 reaper | helper 与子进程 join/reap，或保留的恢复所有权完成；Windows 取消请求成功本身不代表 helper 已释放 |
+| owned stdin/stdout/stderr 文件 | Resource input 交给 `PreparedFiles`，再交给 runner I/O 状态 | 正常结束时关闭；准备失败时保留以供恢复；文件提交可能已改变输出内容 |
+| Reservation owner 与 lease | Reservation owner 为 runner/恢复清理保留 lease | scheduler 记录在 owner 与最后一个 lease 都释放后移除；仅释放操作 owner 时 lease 可能仍有效 |
+| Session 端点 | 提交上下文保持端点存活，`SessionBridge` 将 channel 接到进程 worker | 调用方关闭 stdin writer 以发送 EOF；stdout/stderr 并发 drain；执行和保留的 owner 释放 bridge 与 keepalive 后端点才结算 |
+| Reaper 与 recovery handle | Runner 将不确定的子进程/helper 清理交给 reaper；manager 可保留 recovery owner | Reaper 完成或显式恢复后释放保留 owner；pending 工作仍可观察，不能提前报告已释放 |
+
+旧 `CommandRunner::run` 和 `run_with` 入口仍是同步 API，不提供 executor 接纳、
+operation settlement 或 managed recovery 观察。Managed execution 通过
+`RunTreePolicy` 使用同一个 runner；`CommandRunOptions` 默认选择 managed 进程树策略。
+Session 中，调用方关闭 stdin 端点后子进程可观察到 EOF，同时 stdout 与 stderr
+reader 继续 drain。输出限制仍由 runner 的捕获策略决定；managed
+`max_queued_input_bytes` 是历史命名的预留文件字节估算，不限制内存 stdin 或输出。
+
+`request_shutdown` 先关闭 scheduler 接纳，再请求 manager shutdown。调用方必须在
+返回的 shutdown handle 仍为 pending 时继续观察；单次快照或 sleep 不能证明 worker、
+reaper owner 或恢复效果已经完成。Windows 成功取消同步 I/O 后仍会 join，该 join
+不受失败请求确认窗口限制。生产路径是否可达的调查仍未解决，见
+[Windows cancellation status](windows-cancellation-status.md)。
