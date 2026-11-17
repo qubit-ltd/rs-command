@@ -298,6 +298,66 @@ mod tests {
         assert_eq!(gate.stop_reason(), Some(StopReason::UserCancelled));
     }
 
+    #[test]
+    fn test_new_gate_authorizes_once_and_dropping_permit_does_not_undo_commit() {
+        let gate = StartGate::default();
+        let cancellation = gate.cancellation();
+
+        assert!(!gate.stop_requested());
+        assert_eq!(gate.stop_reason(), None);
+        let permit = gate.authorize().expect("new gate should authorize startup");
+        drop(permit);
+
+        assert!(gate.authorize().is_some());
+        assert!(!gate.request_stop(StopReason::UserCancelled));
+        assert!(cancellation.is_cancelled());
+        assert_eq!(gate.stop_reason(), Some(StopReason::UserCancelled));
+    }
+
+    #[test]
+    fn test_attaching_pre_cancelled_external_token_stops_and_cancels_gate() {
+        let gate = StartGate::default();
+        let gate_cancellation = gate.cancellation();
+        let external = crate::CommandCancellation::new();
+        external.cancel();
+
+        gate.attach_external_cancellation(Some(external.clone()));
+
+        assert!(external.is_cancelled());
+        assert!(gate_cancellation.is_cancelled());
+        assert!(gate.stop_requested());
+        assert_eq!(gate.stop_reason(), Some(StopReason::UserCancelled));
+        assert!(gate.authorize().is_none());
+    }
+
+    #[test]
+    fn test_authorization_and_stop_race_has_one_linearized_winner() {
+        for _ in 0..64 {
+            let gate = Arc::new(StartGate::default());
+            let barrier = Arc::new(std::sync::Barrier::new(3));
+            let authorizing_gate = Arc::clone(&gate);
+            let authorizing_barrier = Arc::clone(&barrier);
+            let authorize = thread::spawn(move || {
+                authorizing_barrier.wait();
+                authorizing_gate.authorize().is_some()
+            });
+            let stopping_gate = Arc::clone(&gate);
+            let stopping_barrier = Arc::clone(&barrier);
+            let stop_won = thread::spawn(move || {
+                stopping_barrier.wait();
+                stopping_gate.request_stop(StopReason::UserCancelled)
+            });
+
+            barrier.wait();
+            let authorized = authorize.join().unwrap();
+            let stop_won_before_authorization = stop_won.join().unwrap();
+
+            assert_eq!(authorized, !stop_won_before_authorization);
+            assert!(gate.stop_requested());
+            assert!(gate.cancellation().is_cancelled());
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_session_bridge_moves_stdin_and_both_output_streams() {
