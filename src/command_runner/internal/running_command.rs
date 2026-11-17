@@ -2020,10 +2020,11 @@ mod tests {
         let (observer, completed) = ReaperObserver::pair();
         let started = ManualMonotonicClock::new_shared();
         let timer = ManualMonotonicClock::new_shared();
+        let (stdout, reader_release) = blocked_unbudgeted_reader();
         let command = RunningCommand::new_with_reaper(
             "reaper test".to_owned(),
             ManagedChildProcess::new(Box::new(tree), true),
-            CommandIo::new(successful_reader(), joined_stderr_reader(), None),
+            CommandIo::new(stdout, joined_stderr_reader(), None),
             started.now(),
             timer.new_timer(),
             RunningCommandResources {
@@ -2041,7 +2042,10 @@ mod tests {
         };
         assert_eq!(error.kind(), CommandErrorKind::Cancelled);
         assert!(observer.is_pending());
+        // Keep the reaper from finishing its I/O join until the lease-retention
+        // assertion is observed. `mark_pending` precedes asynchronous cleanup.
         assert_eq!(releases.load(Ordering::SeqCst), 0);
+        reader_release.release.store(true, Ordering::Release);
         completed
             .recv_timeout(Duration::from_secs(3))
             .expect("reaper should finish the transferred owner");
