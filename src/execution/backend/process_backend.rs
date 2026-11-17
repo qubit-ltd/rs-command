@@ -722,6 +722,64 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn test_successful_child_publishes_output_and_releases_inputs() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::new());
+        let sink = Arc::new(RecordingSink::default());
+        let operation_backend = Arc::clone(&backend);
+        let operation_sink = Arc::clone(&sink);
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout(),
+                    command: Command::new("sh").arg("-c").arg("printf managed-ok"),
+                    options: RequestOptions::Standard(CommandRunOptions::default()),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
+                    },
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: None,
+                };
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    |_| {},
+                    |_| crate::execution::contracts::ReservationLease::new(|| {}),
+                );
+                operation_backend.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: operation_sink.clone(),
+                        session_bridge: None,
+                    },
+                    operation_sink,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        operation.wait_settlement().unwrap();
+        assert!(matches!(
+            sink.outcome.lock().unwrap().take(),
+            Some(OperationOutcome::Succeeded(output)) if output.stdout() == b"managed-ok"
+        ));
+        assert!(sink.released.load(Ordering::SeqCst));
+        assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_preparation_failure_retains_recovery_owner_until_scope_cleanup() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let backend = Arc::new(ProcessBackend::new());
