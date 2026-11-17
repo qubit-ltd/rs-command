@@ -1,9 +1,11 @@
-// ======================================================================//    Copyright (c) 2025 - 2026 Haixing Hu.
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
 //
 //    Licensed under the Apache License, Version 2.0.
-// ======================================================================//! Adapter from activated requests to the established synchronous runner.
+// =============================================================================
+// Adapter from activated requests to the established synchronous runner.
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -364,11 +366,11 @@ mod tests {
     use crate::execution::contracts::FactPublishError;
     use crate::execution::contracts::FactSink;
     use crate::execution::contracts::IoPathSnapshot;
-    use crate::execution::contracts::RecoveryRetryError;
     use crate::execution::contracts::RecoveryEffectEvidence;
     use crate::execution::contracts::RecoveryOwner;
     use crate::execution::contracts::RecoveryPublishError;
     use crate::execution::contracts::RecoveryPublishFailure;
+    use crate::execution::contracts::RecoveryRetryError;
     use crate::execution::contracts::Request;
     use crate::execution::contracts::RequestOptions;
     use crate::execution::contracts::Reservation;
@@ -403,13 +405,9 @@ mod tests {
             Ok(())
         }
 
-        fn retain_recovery_owner(
-            &self,
-            owner: Box<dyn RecoveryOwner>,
-        ) -> Result<(), RecoveryPublishFailure> {
+        fn retain_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) -> Result<(), RecoveryPublishFailure> {
             *self.recovery_owner.lock().unwrap() = Some(owner);
             Ok(())
-        }
         }
     }
 
@@ -544,7 +542,10 @@ mod tests {
             })
             .unwrap();
 
-        assert!(matches!(operation.wait_outcome().unwrap(), OperationOutcome::Succeeded(())));
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
         assert!(!sink.released.load(Ordering::SeqCst));
         assert!(sink.settlement.lock().unwrap().is_none());
         let outcome = sink.outcome.lock().unwrap().take().unwrap();
@@ -564,7 +565,10 @@ mod tests {
         assert!(!owner.is_complete());
         owner.retry_cleanup().unwrap();
         assert!(owner.is_complete());
-        assert_eq!(owner.retry_cleanup().unwrap_err(), RecoveryRetryError::OwnerAlreadyConsumed);
+        assert_eq!(
+            owner.retry_cleanup().unwrap_err(),
+            RecoveryRetryError::OwnerAlreadyConsumed
+        );
         operation.wait_settlement().unwrap();
         assert!(!capacity_released.load(Ordering::SeqCst));
         drop(owner);
