@@ -158,8 +158,11 @@ mod tests {
             .stderr(Stdio::null())
             .spawn()
             .expect("child should spawn");
+        let expected_id = child.id();
         let calls = Arc::new(Mutex::new(Vec::new()));
         let mut scripted = ScriptedChild::new("child", Box::new(child), Arc::clone(&calls));
+
+        assert_eq!(scripted.inner().id(), expected_id);
 
         let status = scripted
             .inner_mut()
