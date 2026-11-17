@@ -299,6 +299,22 @@ mod tests {
     }
 
     #[test]
+    fn test_stop_after_external_cancellation_attachment_propagates_to_token() {
+        let gate = StartGate::default();
+        let gate_cancellation = gate.cancellation();
+        let external = crate::CommandCancellation::new();
+        gate.attach_external_cancellation(Some(external.clone()));
+
+        assert!(!external.is_cancelled());
+        assert!(gate.request_stop(StopReason::Timeout));
+
+        assert!(external.is_cancelled());
+        assert!(gate_cancellation.is_cancelled());
+        assert_eq!(gate.stop_reason(), Some(StopReason::Timeout));
+        assert!(gate.authorize().is_none());
+    }
+
+    #[test]
     fn test_side_effect_authorization_wins_stop_gate() {
         let gate = StartGate::default();
         assert!(gate.authorize().is_some());
