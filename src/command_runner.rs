@@ -325,7 +325,8 @@ mod tests {
     use qubit_operation::OperationOutcome;
     use qubit_operation::OperationScope;
     use qubit_operation::TimerRegistration;
-    use qubit_redact::{RedactionPolicy, Sensitivity};
+    use qubit_redact::RedactionPolicy;
+    use qubit_redact::Sensitivity;
 
     use super::CommandRunner;
     use super::RunTreePolicy;
