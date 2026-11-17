@@ -428,6 +428,75 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_managed_startup_abort_cancels_stderr_and_stdin_helpers_before_releasing_capacity() {
+        use super::super::captured_output::CapturedOutput;
+        use super::super::io_cancellation::IoCancellation;
+        use super::super::output_reader::OutputReader;
+        use super::super::stdin_writer::StdinWriter;
+        use crate::execution::backend::ReaperObserver;
+        use crate::execution::contracts::ReservationLease;
+
+        let (observer, completed) = ReaperObserver::pair();
+        let helpers_finished = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let stderr_finished = Arc::clone(&helpers_finished);
+        let (stderr_cancel, stderr_token) = IoCancellation::pair().expect("stderr cancellation should initialize");
+        let stderr_reader = OutputReader::new(
+            std::thread::spawn(move || {
+                while !stderr_token.is_cancelled() {
+                    std::thread::yield_now();
+                }
+                stderr_finished.fetch_add(1, Ordering::SeqCst);
+                Ok(CapturedOutput::default())
+            }),
+            stderr_cancel,
+        );
+        let stdin_finished = Arc::clone(&helpers_finished);
+        let (stdin_cancel, stdin_token) = IoCancellation::pair().expect("stdin cancellation should initialize");
+        let stdin_writer = StdinWriter::new(
+            std::thread::spawn(move || {
+                while !stdin_token.is_cancelled() {
+                    std::thread::yield_now();
+                }
+                stdin_finished.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }),
+            stdin_cancel,
+        );
+        let capacity_released = Arc::new(AtomicBool::new(false));
+        let released = Arc::clone(&capacity_released);
+        let capacity_lease = ReservationLease::new(move || released.store(true, Ordering::SeqCst));
+        let mut guard = StartingCommand::new_managed(
+            "redacted",
+            ManagedChildProcess::new(raw_child(), false),
+            Some(capacity_lease),
+            Some(observer.clone()),
+            None,
+        );
+        guard.set_stderr_reader(stderr_reader);
+        guard.set_stdin_writer(Some(stdin_writer));
+
+        let error = guard.abort_managed(CommandError::from_reason(
+            "redacted",
+            CommandErrorReason::TimeFailed {
+                source: TimeError::InstantOverflow,
+            },
+            None,
+        ));
+
+        assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
+        assert!(
+            observer.is_pending(),
+            "startup failure should hand ownership to the reaper"
+        );
+        completed
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("reaper should cancel helpers before signaling completion");
+        assert!(observer.is_complete());
+        assert_eq!(helpers_finished.load(Ordering::SeqCst), 2);
+        assert!(capacity_released.load(Ordering::SeqCst));
+    }
+
     #[cfg(feature = "async")]
     #[test]
     fn test_managed_startup_abort_wakes_full_session_output_writer() {
