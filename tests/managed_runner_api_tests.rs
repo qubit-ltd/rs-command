@@ -124,6 +124,7 @@ mod async_tests {
     use std::time::Duration;
 
     use qubit_command::Command;
+    use qubit_command::CommandErrorKind;
     use qubit_command::CommandResourceRunOptions;
     use qubit_command::FileSinkPolicy;
     use qubit_command::ManagedCommandRunnerApi;

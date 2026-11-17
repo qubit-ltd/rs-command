@@ -23,7 +23,7 @@ use crate::execution::contracts::PreparedSink;
 use crate::resource_run_options::FileSinkPolicy;
 
 #[cfg(test)]
-type RegistrationGate = Arc<(Barrier, Barrier)>;
+type RegistrationGate = (qubit_operation::OperationId, Arc<(Barrier, Barrier)>);
 #[cfg(test)]
 type RegistrationGateSlot = OnceLock<Mutex<Option<RegistrationGate>>>;
 #[cfg(test)]
@@ -83,7 +83,9 @@ pub(super) fn register_files(
                         .lock()
                         .expect("test registration gate lock should not poison")
                         .clone();
-                    if let Some(gate) = gate {
+                    if let Some((operation_id, gate)) = gate
+                        && _scope.id() == operation_id
+                    {
                         gate.0.wait();
                         gate.1.wait();
                     }

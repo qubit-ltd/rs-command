@@ -230,11 +230,6 @@ pub(crate) fn check_documents(root: &Path) {
     let harness = tempfile::tempdir_in(parent).expect("create temporary harness");
     fs::create_dir(harness.path().join("tests")).expect("create harness tests directory");
     let dependency_path = package_root.canonicalize().expect("canonicalize package root");
-    let manifest = format!(
-        "[workspace]\n\n[package]\nname = \"documentation-example-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nqubit-command = {{ path = {:?} }}\nqubit-operation = \"^0.3\"\n",
-        dependency_path.to_string_lossy()
-    );
-    fs::write(harness.path().join("Cargo.toml"), manifest).expect("write harness manifest");
     let mut source = String::from("#![allow(unused_imports, unused_variables, dead_code, non_snake_case)]\n");
     for example in examples {
         let (cfg, ignored) = match example.mode.as_str() {
@@ -310,6 +305,24 @@ pub(crate) fn check_documents(root: &Path) {
             root_manifest.display()
         )
     });
+    let operation_manifest = root_metadata["packages"]
+        .as_array()
+        .expect("Cargo metadata packages array")
+        .iter()
+        .find(|package| package["name"] == "qubit-operation")
+        .and_then(|package| package["manifest_path"].as_str())
+        .expect("Cargo metadata contains qubit-operation");
+    let operation_path = Path::new(operation_manifest)
+        .parent()
+        .expect("qubit-operation manifest parent")
+        .canonicalize()
+        .expect("canonicalize qubit-operation path");
+    let manifest = format!(
+        "[workspace]\n\n[package]\nname = \"documentation-example-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nqubit-command = {{ path = {:?} }}\nqubit-operation = {{ path = {:?} }}\n",
+        dependency_path.to_string_lossy(),
+        operation_path.to_string_lossy()
+    );
+    fs::write(harness.path().join("Cargo.toml"), manifest).expect("write harness manifest");
     let harness_manifest = harness.path().join("Cargo.toml");
     let harness_metadata = run(
         "harness metadata --offline",

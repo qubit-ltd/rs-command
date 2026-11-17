@@ -50,9 +50,9 @@ impl Drop for ReservationLease {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
-    use std::sync::Arc;
 
     use super::ReservationLease;
 

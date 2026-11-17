@@ -351,6 +351,51 @@ mod tests {
         .expect("test command should prepare")
     }
 
+    #[test]
+    fn test_runner_policy_builders_and_accessors_round_trip() {
+        let timeout_runner = CommandRunner::new(Duration::from_millis(25));
+        assert_eq!(timeout_runner.configured_timeout(), Some(Duration::from_millis(25)));
+        assert_eq!(CommandRunner::without_timeout().configured_timeout(), None);
+
+        let working_directory = std::env::temp_dir();
+        let timer = Arc::new(qubit_clock::StdTimer::new());
+        let runner = CommandRunner::without_timeout()
+            .working_directory(working_directory.clone())
+            .success_exit_codes(&[0, 7])
+            .disable_logging(true)
+            .fail_on_output_truncation(true)
+            .max_stdout_bytes(3)
+            .max_stderr_bytes(5)
+            .max_output_bytes(9)
+            .bounded_output(11)
+            .max_total_output_bytes(17)
+            .timer(timer)
+            .diagnostic_redaction_policy(RedactionPolicy::default());
+
+        assert_eq!(runner.configured_working_directory(), Some(working_directory.as_path()));
+        assert_eq!(runner.configured_success_exit_codes(), &[0, 7]);
+        assert!(runner.is_logging_disabled());
+        assert!(runner.is_output_truncation_failure_enabled());
+        assert_eq!(runner.configured_max_stdout_bytes(), Some(11));
+        assert_eq!(runner.configured_max_stderr_bytes(), Some(11));
+        assert_eq!(runner.configured_max_total_output_bytes(), Some(17));
+        let _ = runner.configured_timer();
+        let _ = runner.configured_diagnostic_redaction_policy();
+
+        let unbounded = runner.unbounded_output().without_total_output_limit();
+        assert_eq!(unbounded.configured_max_stdout_bytes(), None);
+        assert_eq!(unbounded.configured_max_stderr_bytes(), None);
+        assert!(!unbounded.is_output_truncation_failure_enabled());
+        assert_eq!(unbounded.configured_max_total_output_bytes(), None);
+        let second_working_directory = std::env::temp_dir();
+        assert_eq!(
+            CommandRunner::without_timeout()
+                .working_directory(second_working_directory.clone())
+                .configured_working_directory(),
+            Some(second_working_directory.as_path())
+        );
+    }
+
     fn managed_file(scope: &OperationScope, file: File) -> qubit_operation::ResourceRef<Mutex<File>> {
         scope
             .manage(Mutex::new(file))
@@ -550,11 +595,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_runner_truncation_policy_controls_successful_command_result() {
-        let command = || {
-            crate::Command::new("sh")
-                .arg("-c")
-                .arg("printf truncate-me")
-        };
+        let command = || crate::Command::new("sh").arg("-c").arg("printf truncate-me");
         let error = CommandRunner::without_timeout()
             .max_stdout_bytes(3)
             .fail_on_output_truncation(true)

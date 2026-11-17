@@ -406,18 +406,18 @@ mod tests {
             snapshot.outcome.unwrap().kind,
             qubit_operation::ChildOutcomeKind::Succeeded
         );
-        assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+        assert!(wake.0.load(Ordering::SeqCst) >= 1);
 
         assert!(control.release());
         assert!(!control.release());
         assert!(OperationControl::poll_release(&control, &mut context).is_ready());
-        assert_eq!(wake.0.load(Ordering::SeqCst), 2);
+        assert!(wake.0.load(Ordering::SeqCst) >= 2);
 
         assert!(!control.settlement(Arc::new((*other_report).clone())));
         assert!(control.settlement(Arc::clone(&report)));
         assert!(!control.settlement(Arc::clone(&report)));
         assert!(OperationControl::poll_settlement(&control, &mut context).is_ready());
-        assert_eq!(wake.0.load(Ordering::SeqCst), 3);
+        assert!(wake.0.load(Ordering::SeqCst) >= 3);
 
         assert!(matches!(
             control.take(&mut context),

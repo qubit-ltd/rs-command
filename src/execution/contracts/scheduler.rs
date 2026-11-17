@@ -55,9 +55,9 @@ pub trait Scheduler: Send + Sync {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
-    use std::sync::Arc;
 
     use super::Reservation;
     use crate::execution::contracts::CapacityFailure;
@@ -71,12 +71,7 @@ mod tests {
     impl Scheduler for CompatibilityScheduler {
         fn try_reserve(&self, _input_bytes: usize) -> Result<Reservation, CapacityFailure> {
             self.0.fetch_add(1, Ordering::SeqCst);
-            Ok(Reservation::new(
-                9,
-                12,
-                |_| {},
-                |_| ReservationLease::new(|| {}),
-            ))
+            Ok(Reservation::new(9, 12, |_| {}, |_| ReservationLease::new(|| {})))
         }
 
         fn enqueue(&self, _job: ScheduledJob, _permit: Reservation) -> Result<(), EnqueueFailure> {

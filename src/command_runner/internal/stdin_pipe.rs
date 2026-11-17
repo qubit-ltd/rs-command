@@ -481,10 +481,9 @@ mod tests {
             .spawn()
             .expect("test child should spawn");
 
-        let writer = write_stdin_bytes("command", &mut child, Some(vec![b'x'; 1024 * 1024]))
-            .expect("stdin writer should start");
-        join_stdin_writer("command", writer)
-            .expect("early child stdin closure should be accepted as a broken pipe");
+        let writer =
+            write_stdin_bytes("command", &mut child, Some(vec![b'x'; 1024 * 1024])).expect("stdin writer should start");
+        join_stdin_writer("command", writer).expect("early child stdin closure should be accepted as a broken pipe");
         let status = child.wait().expect("test child should be waitable");
 
         assert!(status.success());

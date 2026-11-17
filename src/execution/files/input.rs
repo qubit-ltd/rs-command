@@ -268,13 +268,13 @@ mod tests {
         let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
         let group = manager.group(GroupOptions { capacity: 4 }).expect("group should start");
         let gate = Arc::new((Barrier::new(2), Barrier::new(2)));
-        super::super::prepared_files::gate_after_first_registration(Some(Arc::clone(&gate)));
-
+        let operation_gate = Arc::clone(&gate);
         let first = tempfile::NamedTempFile::new().expect("first file should be created");
         let second = tempfile::NamedTempFile::new().expect("second file should be created");
         let (send, receive) = mpsc::sync_channel(1);
         let mut handle = group
             .submit(OperationOptions::default(), move |scope| {
+                super::super::prepared_files::gate_after_first_registration(Some((scope.id(), operation_gate)));
                 let failure = Box::new(
                     CommandResourceRunOptions::new()
                         .stdout_sink(

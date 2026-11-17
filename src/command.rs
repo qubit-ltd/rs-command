@@ -742,4 +742,41 @@ mod data_api_tests {
         assert!(command.environment().is_empty());
         assert!(command.removed_environment().is_empty());
     }
+
+    #[test]
+    fn test_os_string_inputs_and_all_stdin_modes_preserve_configuration() {
+        let root = std::env::temp_dir();
+        let input_path = root.join(format!("qubit-command-input-{}", std::process::id()));
+        std::fs::write(&input_path, b"file input").unwrap();
+        let command = Command::new_os(OsString::from("worker"))
+            .arg_os(OsString::from("argument"))
+            .sensitive_arg_os(OsString::from("secret"))
+            .args_os([OsString::from("--flag"), OsString::from("value")])
+            .working_directory(root.clone())
+            .env_os(OsString::from("KEY"), OsString::from("value"))
+            .env_remove_os(OsString::from("OLD_KEY"))
+            .stdin_file(input_path.clone());
+
+        assert_eq!(command.arguments().count(), 4);
+        assert_eq!(command.working_directory_override(), Some(root.as_path()));
+        assert_eq!(
+            command.environment(),
+            [(OsString::from("KEY"), OsString::from("value"))]
+        );
+        assert_eq!(command.removed_environment(), [OsString::from("OLD_KEY")]);
+        assert!(matches!(command.stdin, super::CommandStdin::File(_)));
+
+        let bytes = Command::new("worker").stdin_bytes(Vec::from(&b"bytes"[..]));
+        assert!(matches!(bytes.stdin, super::CommandStdin::Bytes(_)));
+        assert!(matches!(
+            Command::new("worker").stdin_null().stdin,
+            super::CommandStdin::Null
+        ));
+        assert!(matches!(
+            Command::new("worker").stdin_inherit().stdin,
+            super::CommandStdin::Inherit
+        ));
+        assert_eq!(Command::shell("echo safe").arguments().len(), 2);
+        std::fs::remove_file(input_path).unwrap();
+    }
 }

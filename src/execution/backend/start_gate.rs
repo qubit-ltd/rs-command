@@ -259,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn attaching_external_cancellation_after_stop_propagates_existing_stop() {
+    fn test_attaching_external_cancellation_after_stop_propagates_existing_stop() {
         let gate = StartGate::default();
         let external = crate::CommandCancellation::new();
 

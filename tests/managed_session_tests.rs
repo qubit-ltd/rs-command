@@ -160,22 +160,17 @@ fn test_scoped_managed_resource_session_finishes_with_parent_scope() {
     let child_manager = manager.clone();
     let result = manager
         .run(OperationOptions::default(), move |scope| {
-            let executor =
-                CommandExecutor::new(child_manager, CommandExecutionConfig::default()).unwrap();
-            let mut session =
-                block_on(CommandRunner::without_timeout().start_session_resources_in(
-                    &scope,
-                    &executor,
-                    Command::new("sh").arg("-c").arg("cat"),
-                    CommandResourceRunOptions::new(),
-                ))?;
+            let executor = CommandExecutor::new(child_manager, CommandExecutionConfig::default()).unwrap();
+            let mut session = block_on(CommandRunner::without_timeout().start_session_resources_in(
+                &scope,
+                &executor,
+                Command::new("sh").arg("-c").arg("cat"),
+                CommandResourceRunOptions::new(),
+            ))?;
             let mut stdin = session.take_stdin().unwrap();
-            block_on(poll_fn(|cx| {
-                Pin::new(&mut stdin).poll_write(cx, b"scoped resource")
-            }))
-            .expect("session stdin should accept bytes");
-            block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx)))
-                .expect("session stdin should close");
+            block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_write(cx, b"scoped resource")))
+                .expect("session stdin should accept bytes");
+            block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).expect("session stdin should close");
             drop(stdin);
 
             let mut stdout = session.take_stdout().unwrap();
