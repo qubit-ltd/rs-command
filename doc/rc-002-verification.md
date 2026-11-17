@@ -4,7 +4,23 @@
 
 <a id="current-summary"></a>
 
-## Latest evidence summary / 最新证据摘要 (2026-11-08)
+## Latest evidence summary / 最新证据摘要 (2026-11-17)
+
+### Implementation-stage bounded audit at SHA `e8c7e8a0fc2a4da33b85ab98d172f9aca1112fa8` (2026-11-17)
+
+This audit ran on Linux x86_64 with Rust `1.94.0`. A targeted `git diff --exit-code fa506a6fb75bc6bcfd3537c5be54b4cda911815e -- <production cancellation/cleanup, output, stdin, Windows probe, workflow, and identity-gate paths>` exited 0. Targeted source reads and `rg -n` searches covered `command_io.rs`, `output_collector.rs`, `stdin_pipe.rs`, `io_cancellation.rs`, `io_cancellation_token.rs`, `cancel.rs`, `windows_cancel_interleaving_tests.rs`, `windows_probe_tests.rs`, the Windows workflow, and both PowerShell identity scripts. Both `command -v pwsh` and `command -v powershell` exited 1. The Windows test filters and PowerShell gate were not run; this host has no Windows runtime.
+
+The source confirms that Windows cancellation publishes the token before `CancelSynchronousIo`; successful cancellation proceeds to an unbounded output-reader or stdin-writer join, while the shared 100 ms confirmation window is used only when cancellation fails. The output reader can synchronously write a production regular-file tee after checking cancellation, and stdin checks cancellation before readiness/write. These control-flow gaps do not establish a schedule where successful cancellation is followed by blocked production I/O that keeps cleanup join pending. The current production probe still records `original_io_return_is_subsequent_io=false`, `production_join_pending_witness=false`, `source_writer_manually_released=true`, and `watchdog_released=false`; its separate watchdog self-test cannot supply that missing same-trace causal chain.
+
+RC-006 therefore remains **unresolved**. No conditional repair was triggered, and no production code or probe was changed. This audit does not establish Windows safety. It is tied only to the recorded source SHA and Linux environment; historical Windows runs remain attributed to their own SHAs.
+
+### 本阶段源码有界核查（源码 SHA `e8c7e8a0fc2a4da33b85ab98d172f9aca1112fa8`，2026-11-17）
+
+本次核查在 Linux x86_64、Rust `1.94.0` 环境进行。针对生产取消/收尾、输出、stdin、Windows 探针、workflow 和身份门禁路径执行定向源码比较，命令退出码为 0。源码阅读和 `rg -n` 检查覆盖 `command_io.rs`、`output_collector.rs`、`stdin_pipe.rs`、`io_cancellation.rs`、`io_cancellation_token.rs`、`cancel.rs`、`windows_cancel_interleaving_tests.rs`、`windows_probe_tests.rs`、Windows workflow 及两份 PowerShell 身份脚本。`command -v pwsh` 和 `command -v powershell` 均退出码为 1；本机没有 Windows runtime，因此未运行 Windows 测试过滤器和 PowerShell 门禁。
+
+源码确认 Windows 取消先发布 token，再调用 `CancelSynchronousIo`；取消成功后进入无界的 output-reader 或 stdin-writer join，共享的 100 ms 确认窗口只用于取消失败分支。output reader 检查取消状态后仍可能同步写生产用普通文件 tee；stdin 在 readiness/write 前检查取消状态。这些控制流间隙并未建立“取消成功后发生阻塞生产 I/O，导致 cleanup join 挂起”的时序。当前生产探针仍记录 `original_io_return_is_subsequent_io=false`、`production_join_pending_witness=false`、`source_writer_manually_released=true`、`watchdog_released=false`；独立 watchdog 自测不能补足同一 trace 中缺失的因果链。
+
+因此 RC-006 仍为 **unresolved（未解决）**。没有触发条件性修复，也未修改生产代码或探针。本次核查不证明 Windows 安全；结论仅适用于记录的源码 SHA 与 Linux 环境，历史 Windows 运行仍只归属于各自 SHA。
 
 ### CMD-REV-002 bounded follow-up after CMD-REV-001 (source SHA `dee876b`) (2026-11-08)
 

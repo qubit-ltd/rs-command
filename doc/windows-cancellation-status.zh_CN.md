@@ -10,6 +10,19 @@
 
 调用方应保留主错误及其 `cleanup_failures()`，并在把保留输出视为完整内容前检查 `stdout_complete()` 和 `stderr_complete()`。必须保证硬返回期限的应用应通过独立进程边界监督 runner；runner 的 timeout 不提供该保证。
 
+## 当前实现源码有界核查（源码 SHA `e8c7e8a0fc2a4da33b85ab98d172f9aca1112fa8`，2026-11-17）
+
+本次核查在 Linux x86_64、Rust `1.94.0` 环境进行。针对生产取消/收尾、输出、stdin、Windows 探针、workflow 和身份门禁路径，与评审基线 `fa506a6fb75bc6bcfd3537c5be54b4cda911815e` 执行源码比较，退出码为 0。系统未安装 `pwsh` 或 `powershell`（两条 `command -v` 均退出码为 1）。本 SHA 未运行 Windows runtime 测试、PowerShell 身份门禁，也未生成新的 Windows trace。
+
+| 事件 | 源码观察 | 证据边界 |
+| --- | --- | --- |
+| 取消与 join | Windows `IoCancellation::cancel` 先发布取消标记，再调用 `CancelSynchronousIo`。收尾先请求取消 stdout、stderr 和 stdin helper，再分别完成它们。取消请求成功时直接进入对应 join；仅取消请求失败后才检查共享的 100 ms 确认期限。 | 成功取消后的 join 没有期限，但仅凭控制流不能证明它会持续挂起。 |
+| 输出读取与 tee | reader 保留一次成功读取返回的字节、检查取消状态，随后仍可能同步写 tee。生产 tee 是普通 `File`；EOF 后可能执行 `flush`。 | 源码存在检查与 I/O 之间的调度窗口，但没有同一次运行的证据证明成功取消后接着发生阻塞生产 I/O 并导致生产 join 挂起。 |
+| Stdin | helper 在每轮 readiness/write 前检查取消状态；Windows readiness 检查的是取消 token。 | 未建立生产可达的“取消成功后接着阻塞写入”时序。 |
+| 探针与 watchdog | 生产探针记录 `original_io_return_is_subsequent_io=false`、`production_join_pending_witness=false`、`source_writer_manually_released=true` 和 `watchdog_released=false`。阻塞管道 watchdog 自测属于另一条 trace。 | 现有证据没有在同一条 trace 中连接取消成功、后续阻塞生产 I/O、等待中的 cleanup join、独立 watchdog 释放以及 helper/进程回收。 |
+
+**结论：** 没有发现新的生产可达交错假设，因此不触发条件性生产修复。RC-006 仍为 **unresolved（未解决）**：疑点既未证实也未排除，本次源码核查不证明 Windows 安全。未修改生产代码或探针。
+
 ## 源码 SHA `76fda78d3c4e8961a21193f749bf1228b50929a4` 的证据
 
 本次有界源码审阅运行于 Linux x86_64，Rust 版本为 `1.94.0`。相对所记录 SHA 对生产代码、探针、workflow 和身份门禁文件执行源码比较，退出码为 0，未发现差异。系统没有 `pwsh` 或 `powershell`；已安装的 Windows GNU 编译目标不能提供 Windows 运行环境。本 SHA 未运行 Windows 测试、PowerShell 门禁，也没有生成新的 Windows trace。

@@ -10,6 +10,19 @@ On Windows, successful `CancelSynchronousIo` means that the cancellation request
 
 Callers should preserve the primary error and its `cleanup_failures()`, then check `stdout_complete()` and `stderr_complete()` before treating retained output as complete. Applications that require a hard return deadline should supervise the runner in a separate process boundary; the runner's timeout does not provide that guarantee.
 
+## Current implementation source audit at SHA `e8c7e8a0fc2a4da33b85ab98d172f9aca1112fa8` (2026-11-17)
+
+This bounded audit ran on Linux x86_64 with Rust `1.94.0`. A targeted source comparison against the review baseline `fa506a6fb75bc6bcfd3537c5be54b4cda911815e` exited 0 for the production cancellation/cleanup, output, stdin, Windows probe, workflow, and identity-gate paths. Neither `pwsh` nor `powershell` is installed (each `command -v` exited 1). No Windows runtime test, PowerShell identity gate, or new Windows trace was run for this SHA.
+
+| Event | Source observation | Evidence limit |
+| --- | --- | --- |
+| Cancellation and join | Windows `IoCancellation::cancel` publishes the cancellation flag before calling `CancelSynchronousIo`. Cleanup requests cancellation for stdout, stderr, and stdin before finishing helpers. A successful request proceeds directly to the corresponding join; the shared 100 ms confirmation deadline is consulted only after a failed cancellation request. | The successful-cancel join is unbounded, but source control flow alone does not show that it remains pending. |
+| Output read and tee | The reader retains bytes returned by a completed read, checks cancellation, and can then synchronously write to the tee. The production tee is a regular `File`; EOF can lead to `flush`. | A check-to-I/O scheduling gap exists, but no same-run evidence shows successful cancellation followed by blocked production I/O and a pending production join. |
+| Stdin | The helper checks cancellation before each readiness/write cycle. On Windows, readiness checks the cancellation token. | No production-reachable sequence of successful cancellation followed by a blocked write was established. |
+| Probe and watchdog | The production probe records `original_io_return_is_subsequent_io=false`, `production_join_pending_witness=false`, `source_writer_manually_released=true`, and `watchdog_released=false`. The blocked-pipe watchdog self-test is a separate trace. | Existing evidence does not connect successful cancellation, subsequent blocked production I/O, a pending cleanup join, independent watchdog release, and helper/process recovery in one trace. |
+
+**Decision:** no new production-reachable interleaving hypothesis was found, so no conditional production repair was triggered. RC-006 remains **unresolved**: the concern is neither confirmed nor excluded, and this source audit does not establish Windows safety. No production code or probe was changed.
+
 ## Evidence at source SHA `76fda78d3c4e8961a21193f749bf1228b50929a4`
 
 This bounded source review ran on Linux x86_64 with Rust `1.94.0`. The source comparison against the recorded SHA exited 0 with no changes in the inspected production, probe, workflow, or identity-gate paths. `pwsh` and `powershell` are unavailable; an installed Windows GNU target does not provide a Windows runtime. No Windows test, PowerShell gate, or new Windows trace was run for this SHA.
