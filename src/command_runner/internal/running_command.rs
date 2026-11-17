@@ -676,6 +676,7 @@ mod tests {
     use crate::CommandErrorKind;
     use crate::CommandErrorReason;
     use crate::OutputStream;
+    use crate::execution::contracts::ReservationLease;
     #[cfg(feature = "async")]
     use crate::session::channel::SessionChannels;
     #[cfg(feature = "async")]
@@ -1648,6 +1649,48 @@ mod tests {
     }
 
     #[test]
+    fn test_timeout_monitor_clock_domain_failure_cleans_up_resources() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let child = ScriptedChild::new("child", raw_child(), Arc::clone(&calls)).try_wait_results([Ok(None)]);
+        let started_clock = ManualMonotonicClock::new_shared();
+        let timer_clock = ManualMonotonicClock::new_shared();
+        let releases = Arc::new(AtomicUsize::new(0));
+        let released = Arc::clone(&releases);
+
+        let result = RunningCommand::new_with_reaper(
+            "clock domain failure".to_owned(),
+            ManagedChildProcess::new(Box::new(child), true),
+            CommandIo::new(successful_reader(), successful_reader(), None),
+            started_clock.now(),
+            timer_clock.new_timer(),
+            RunningCommandResources {
+                cancellation_token: None,
+                total_budget: None,
+                capacity_lease: Some(ReservationLease::new(move || {
+                    released.fetch_add(1, Ordering::SeqCst);
+                })),
+                reaper_observer: None,
+                session_bridge: None,
+                operation_context: None,
+            },
+        )
+        .wait_for_completion(Some(Duration::from_secs(1)));
+
+        let error = expect_error(result, "a foreign timer clock should fail timeout monitoring");
+        assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::TimeFailed {
+                source: TimeError::ClockDomainMismatch { .. }
+            }
+        ));
+        assert!(error.output().is_none());
+        assert!(error.cleanup_failures().is_empty());
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
+        assert!(calls.lock().unwrap().iter().any(|call| call == "child.kill"));
+    }
+
+    #[test]
     fn test_budget_only_timer_after_exit_uses_timer() {
         let child = ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new())))
             .try_wait_results([Ok(Some(status(0)))]);
@@ -1977,10 +2020,11 @@ mod tests {
         let (observer, completed) = ReaperObserver::pair();
         let started = ManualMonotonicClock::new_shared();
         let timer = ManualMonotonicClock::new_shared();
+        let (stdout, reader_release) = blocked_unbudgeted_reader();
         let command = RunningCommand::new_with_reaper(
             "reaper test".to_owned(),
             ManagedChildProcess::new(Box::new(tree), true),
-            CommandIo::new(successful_reader(), joined_stderr_reader(), None),
+            CommandIo::new(stdout, joined_stderr_reader(), None),
             started.now(),
             timer.new_timer(),
             RunningCommandResources {
@@ -1998,7 +2042,10 @@ mod tests {
         };
         assert_eq!(error.kind(), CommandErrorKind::Cancelled);
         assert!(observer.is_pending());
+        // Keep the reaper from finishing its I/O join until the lease-retention
+        // assertion is observed. `mark_pending` precedes asynchronous cleanup.
         assert_eq!(releases.load(Ordering::SeqCst), 0);
+        reader_release.release.store(true, Ordering::Release);
         completed
             .recv_timeout(Duration::from_secs(3))
             .expect("reaper should finish the transferred owner");

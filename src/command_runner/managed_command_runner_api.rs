@@ -1025,6 +1025,52 @@ mod tests {
         }
 
         #[test]
+        fn test_scoped_async_runner_maps_closed_executor_rejection() {
+            let (manager, executor, runner) = setup();
+            let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
+            let scoped_executor = executor.clone();
+            let scoped_runner = runner.clone();
+
+            let outcome = block_on(manager.as_async().run(
+                qubit_operation::OperationOptions::default(),
+                move |scope| async move {
+                    let ordinary = scoped_runner
+                        .run_async_in(
+                            &scope,
+                            &scoped_executor,
+                            Command::new("must-not-spawn-after-scoped-async-shutdown"),
+                            Default::default(),
+                        )
+                        .await
+                        .expect_err("closed executor should reject a scoped async request");
+                    let resources = scoped_runner
+                        .run_async_resources_in(
+                            &scope,
+                            &scoped_executor,
+                            Command::new("must-not-spawn-after-scoped-async-shutdown"),
+                            CommandResourceRunOptions::new(),
+                        )
+                        .await
+                        .expect_err("closed executor should reject a scoped async resource request");
+
+                    for error in [ordinary, resources] {
+                        assert_eq!(error.kind(), crate::CommandErrorKind::ManagedOperationFailed);
+                        assert!(matches!(
+                            error.reason(),
+                            crate::CommandErrorReason::ManagedOperationFailed { diagnostic }
+                                if diagnostic.starts_with("submission rejected:")
+                        ));
+                        assert!(error.output().is_none());
+                    }
+                    Ok::<_, std::convert::Infallible>(())
+                },
+            ))
+            .expect("parent operation should complete");
+
+            assert!(matches!(outcome, OperationOutcome::Succeeded(())));
+        }
+
+        #[test]
         fn test_async_runner_methods_collect_root_and_scoped_results_and_sessions() {
             let (manager, executor, runner) = setup();
             let root = block_on(runner.run_async(

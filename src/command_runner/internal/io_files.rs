@@ -1165,6 +1165,46 @@ mod tests {
     }
 
     #[test]
+    fn test_prepare_rejects_relative_stdin_and_absolute_stdout_alias() {
+        let working_directory = std::env::current_dir().expect("working directory should be available");
+        let directory = tempfile::tempdir_in(&working_directory).expect("relative path fixture should be created");
+        let input = directory.path().join("shared-input-output");
+        std::fs::write(&input, b"preserve relative input").expect("input fixture should be populated");
+        let relative_input = input
+            .strip_prefix(&working_directory)
+            .expect("fixture path should be under the current directory")
+            .to_path_buf();
+        let mut process = ProcessCommand::new("unused-test-program");
+
+        let error = match IoFiles::prepare(
+            "command",
+            CommandStdin::File(relative_input.clone()),
+            Some(&input),
+            None,
+            &mut process,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("relative stdin and its absolute stdout path must be recognized as one file"),
+        };
+
+        assert_eq!(error.kind(), CommandErrorKind::InputOutputConflict);
+        assert!(matches!(
+            error.reason(),
+            crate::CommandErrorReason::InputOutputConflict {
+                input_path,
+                output_stream,
+                output_path,
+            } if input_path == &relative_input
+                && *output_stream == OutputStream::Stdout
+                && output_path == &input
+        ));
+        assert_eq!(
+            std::fs::read(&input).expect("conflicting relative input must remain readable"),
+            b"preserve relative input",
+        );
+    }
+
+    #[test]
     fn test_truncate_output_maps_injected_set_len_failure() {
         let output = tempfile::NamedTempFile::new().expect("output fixture should be created");
         std::fs::write(output.path(), b"preserve-on-failure").expect("output fixture should be populated");

@@ -786,6 +786,20 @@ mod data_api_tests {
     }
 
     #[test]
+    fn test_environment_updates_are_reflected_in_command_diagnostics() {
+        let command = Command::new("worker")
+            .env("MODE", "old")
+            .env_remove("LEGACY")
+            .env("MODE", "fast");
+
+        let diagnostic = command.display_command(&qubit_redact::RedactionPolicy::default());
+
+        assert!(diagnostic.contains("MODE=fast"), "{diagnostic}");
+        assert!(!diagnostic.contains("MODE=old"), "{diagnostic}");
+        assert!(diagnostic.contains("LEGACY"), "{diagnostic}");
+    }
+
+    #[test]
     fn test_os_string_inputs_and_all_stdin_modes_preserve_configuration() {
         let input_file = tempfile::NamedTempFile::new().unwrap();
         let root = input_file.path().parent().unwrap();

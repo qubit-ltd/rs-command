@@ -626,13 +626,25 @@ impl Scheduler for BoundedScheduler {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
+    use std::task::Context;
+    use std::task::Poll;
     use std::task::Wake;
     use std::task::Waker;
     use std::time::Duration;
     use std::time::Instant;
+
+    use qubit_operation::ClockDomainId;
+    use qubit_operation::ClockSource;
+    use qubit_operation::ContextOptions;
+    use qubit_operation::Deadline;
+    use qubit_operation::MonotonicTime;
+    use qubit_operation::OperationContext;
+    use qubit_operation::TimerRegistration;
 
     use super::BoundedScheduler;
     use crate::execution::CommandExecutionConfig;
@@ -641,6 +653,27 @@ mod tests {
     use crate::execution::contracts::Scheduler;
 
     struct CountWake(AtomicUsize);
+
+    struct ManualDeadlineClock {
+        domain: ClockDomainId,
+        ticks: AtomicU64,
+    }
+
+    impl ClockSource for ManualDeadlineClock {
+        fn now(&self) -> MonotonicTime {
+            MonotonicTime::new(self.domain, self.ticks.load(Ordering::SeqCst))
+        }
+
+        fn register_deadline(&self, _deadline: MonotonicTime, _waker: Waker) -> Box<dyn TimerRegistration> {
+            Box::new(NoopRegistration)
+        }
+    }
+
+    struct NoopRegistration;
+
+    impl TimerRegistration for NoopRegistration {
+        fn cancel(self: Box<Self>) {}
+    }
 
     impl Wake for CountWake {
         fn wake(self: Arc<Self>) {
@@ -805,6 +838,65 @@ mod tests {
         scheduler.close_admission();
         assert_eq!(scheduler.try_reserve(0).unwrap_err(), CapacityFailure::Closed);
         drop((active, queued));
+    }
+
+    #[test]
+    fn test_enqueue_deadline_rejection_returns_job_and_reservation() {
+        use std::sync::atomic::AtomicBool;
+
+        let scheduler = BoundedScheduler::new(config(1, 1)).unwrap();
+        let clock = Arc::new(ManualDeadlineClock {
+            domain: ClockDomainId::new_unique(),
+            ticks: AtomicU64::new(0),
+        });
+        let context = OperationContext::new(ContextOptions {
+            clock: Some(Arc::clone(&clock) as Arc<dyn ClockSource>),
+            deadline: Some(Deadline::at(MonotonicTime::new(clock.domain, 5))),
+            budget: None,
+        })
+        .unwrap();
+        let mut deadline_signal = Box::pin(context.deadline_signal().expect("context should have a deadline"));
+        let waker = Waker::noop().clone();
+        let mut task_context = Context::from_waker(&waker);
+        assert!(deadline_signal.as_mut().poll(&mut task_context).is_pending());
+        let permit = scheduler
+            .try_reserve_until(3, Some(context))
+            .expect("reservation should succeed before its deadline");
+        let invoked = Arc::new(AtomicBool::new(false));
+        let callback_invoked = Arc::clone(&invoked);
+        let job = ScheduledJob {
+            run: Box::new(move |_| {
+                callback_invoked.store(true, Ordering::SeqCst);
+            }),
+            stop: Arc::new(NoopStop),
+        };
+
+        clock.ticks.store(5, Ordering::SeqCst);
+        assert!(matches!(
+            deadline_signal.as_mut().poll(&mut task_context),
+            Poll::Ready(())
+        ));
+        let failure = scheduler
+            .enqueue(job, permit)
+            .expect_err("expired reservation should be rejected during enqueue");
+
+        assert_eq!(failure.reason, CapacityFailure::DeadlineExpired);
+        assert!(!invoked.load(Ordering::SeqCst));
+        assert_eq!(
+            (
+                scheduler.snapshot().active,
+                scheduler.snapshot().queued,
+                scheduler.snapshot().input_bytes
+            ),
+            (1, 0, 3),
+            "enqueue rejection must return the reservation with its accounted input bytes",
+        );
+        (failure.job.run)(failure.permit);
+        assert!(
+            invoked.load(Ordering::SeqCst),
+            "rejected enqueue must return the original job"
+        );
+        assert_eq!((scheduler.snapshot().active, scheduler.snapshot().input_bytes), (0, 0));
     }
 
     #[test]
