@@ -34,10 +34,9 @@ pub trait CommandExecutorApi {
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandSubmitFailure`] for capacity refusal (active/queue full, input-byte excess,
-    /// closed admission, or expired scoped deadline), manager admission failure, scope binding failure,
-    /// or snapshot failure. Waiting methods retry only active/queue-full capacity and manager-busy
-    /// failures. The failure returns runner, command, and options.
+    /// Returns [`CommandSubmitFailure`] when request snapshot creation fails, executor capacity is full
+    /// or closed, or operation-manager admission is denied. The failure carries the runner, command,
+    /// and options.
     fn submit(
         &self,
         runner: CommandRunner,
@@ -58,11 +57,10 @@ pub trait CommandExecutorApi {
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandResourceSubmitFailure`] for capacity refusal (active/queue full, input-byte
-    /// excess, closed admission, or expired scoped deadline), manager admission failure, scope binding
-    /// failure, or snapshot failure. Waiting methods retry only active/queue-full capacity and manager-
-    /// busy failures. The failure returns runner, command, options, and still-owned file handles for
-    /// rejected admission.
+    /// Returns [`CommandResourceSubmitFailure`] when request snapshot creation fails, the estimated
+    /// file bytes exceed the configured budget, executor capacity is full or closed, or operation-
+    /// manager admission is denied. The failure carries the runner and command; its options retain the
+    /// owned file handles on rejected admission.
     fn submit_resources(
         &self,
         runner: CommandRunner,
@@ -82,10 +80,10 @@ pub trait CommandExecutorApi {
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandSubmitFailure`] for capacity refusal (active/queue full, input-byte excess,
-    /// closed admission, or expired scoped deadline), manager admission failure, scope binding failure,
-    /// or snapshot failure. Waiting methods retry only active/queue-full capacity and manager-busy
-    /// failures. The failure returns runner, command, and options.
+    /// Returns [`CommandSubmitFailure`] when request snapshot creation fails, executor capacity is full
+    /// or closed, or operation-manager admission is denied. Scoped variants can also fail to bind the
+    /// operation group or reach the scope deadline. The failure carries the runner, command, and
+    /// options.
     fn submit_in(
         &self,
         scope: &qubit_operation::OperationScope,
@@ -109,11 +107,11 @@ pub trait CommandExecutorApi {
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandResourceSubmitFailure`] for capacity refusal (active/queue full, input-byte
-    /// excess, closed admission, or expired scoped deadline), manager admission failure, scope binding
-    /// failure, or snapshot failure. Waiting methods retry only active/queue-full capacity and manager-
-    /// busy failures. The failure returns runner, command, options, and still-owned file handles for
-    /// rejected admission.
+    /// Returns [`CommandResourceSubmitFailure`] when request snapshot creation fails, the estimated
+    /// file bytes exceed the configured budget, executor capacity is full or closed, or operation-
+    /// manager admission is denied. Scoped variants can also fail to bind the operation group or reach
+    /// the scope deadline. The failure carries the runner and command; its options retain the owned
+    /// file handles on rejected admission.
     fn submit_resources_in(
         &self,
         scope: &qubit_operation::OperationScope,
@@ -136,10 +134,11 @@ pub trait CommandExecutorApi {
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandSubmitFailure`] for capacity refusal (active/queue full, input-byte excess,
-    /// closed admission, or expired scoped deadline), manager admission failure, scope binding failure,
-    /// or snapshot failure. Waiting methods retry only active/queue-full capacity and manager-busy
-    /// failures. The failure returns runner, command, and options.
+    /// Returns [`CommandSubmitFailure`] when request snapshot creation fails, executor capacity is full
+    /// or closed, or operation-manager admission is denied. Scoped variants can also fail to bind the
+    /// operation group or reach the scope deadline. A waiting variant can also fail when waiter
+    /// registration is full, the scope is stopped, or its deadline expires. The failure carries the
+    /// runner, command, and options.
     fn submit_wait_blocking_in(
         &self,
         scope: &qubit_operation::OperationScope,
@@ -160,10 +159,9 @@ pub trait CommandExecutorApi {
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandSubmitFailure`] for capacity refusal (active/queue full, input-byte excess,
-    /// closed admission, or expired scoped deadline), manager admission failure, scope binding failure,
-    /// or snapshot failure. Waiting methods retry only active/queue-full capacity and manager-busy
-    /// failures. The failure returns runner, command, and options.
+    /// Returns [`CommandSubmitFailure`] when request snapshot creation fails, executor capacity is full
+    /// or closed, or operation-manager admission is denied. A waiting variant can also fail when waiter
+    /// registration is full. The failure carries the runner, command, and options.
     fn submit_wait_blocking(
         &self,
         runner: CommandRunner,
@@ -187,11 +185,11 @@ pub trait CommandExecutorApi {
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandResourceSubmitFailure`] for capacity refusal (active/queue full, input-byte
-    /// excess, closed admission, or expired scoped deadline), manager admission failure, scope binding
-    /// failure, or snapshot failure. Waiting methods retry only active/queue-full capacity and manager-
-    /// busy failures. The failure returns runner, command, options, and still-owned file handles for
-    /// rejected admission.
+    /// Returns [`CommandResourceSubmitFailure`] when request snapshot creation fails, the estimated
+    /// file bytes exceed the configured budget, executor capacity is full or closed, or operation-
+    /// manager admission is denied. A waiting variant can also fail when waiter registration is full.
+    /// The failure carries the runner and command; its options retain the owned file handles on
+    /// rejected admission. Requests over budget are rejected immediately rather than retried.
     fn submit_wait_resources_blocking(
         &self,
         runner: CommandRunner,
@@ -217,11 +215,13 @@ pub trait CommandExecutorApi {
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandResourceSubmitFailure`] for capacity refusal (active/queue full, input-byte
-    /// excess, closed admission, or expired scoped deadline), manager admission failure, scope binding
-    /// failure, or snapshot failure. Waiting methods retry only active/queue-full capacity and manager-
-    /// busy failures. The failure returns runner, command, options, and still-owned file handles for
-    /// rejected admission.
+    /// Returns [`CommandResourceSubmitFailure`] when request snapshot creation fails, the estimated
+    /// file bytes exceed the configured budget, executor capacity is full or closed, or operation-
+    /// manager admission is denied. Scoped variants can also fail to bind the operation group or reach
+    /// the scope deadline. A waiting variant can also fail when waiter registration is full, the scope
+    /// is stopped, or its deadline expires. The failure carries the runner and command; its options
+    /// retain the owned file handles on rejected admission. Requests over budget are rejected
+    /// immediately rather than retried.
     fn submit_wait_resources_blocking_in(
         &self,
         scope: &qubit_operation::OperationScope,
@@ -242,10 +242,9 @@ pub trait CommandExecutorApi {
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandSubmitFailure`] for capacity refusal (active/queue full, input-byte excess,
-    /// closed admission, or expired scoped deadline), manager admission failure, scope binding failure,
-    /// or snapshot failure. Waiting methods retry only active/queue-full capacity and manager-busy
-    /// failures. The failure returns runner, command, and options.
+    /// Returns [`CommandSubmitFailure`] when request snapshot creation fails, executor capacity is full
+    /// or closed, or operation-manager admission is denied. A waiting variant can also fail when waiter
+    /// registration is full. The failure carries the runner, command, and options.
     #[cfg(feature = "async")]
     fn submit_wait(
         &self,
@@ -270,11 +269,11 @@ pub trait CommandExecutorApi {
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandResourceSubmitFailure`] for capacity refusal (active/queue full, input-byte
-    /// excess, closed admission, or expired scoped deadline), manager admission failure, scope binding
-    /// failure, or snapshot failure. Waiting methods retry only active/queue-full capacity and manager-
-    /// busy failures. The failure returns runner, command, options, and still-owned file handles for
-    /// rejected admission.
+    /// Returns [`CommandResourceSubmitFailure`] when request snapshot creation fails, the estimated
+    /// file bytes exceed the configured budget, executor capacity is full or closed, or operation-
+    /// manager admission is denied. A waiting variant can also fail when waiter registration is full.
+    /// The failure carries the runner and command; its options retain the owned file handles on
+    /// rejected admission. Requests over budget are rejected immediately rather than retried.
     #[cfg(feature = "async")]
     fn submit_wait_resources(
         &self,
@@ -301,11 +300,13 @@ pub trait CommandExecutorApi {
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandResourceSubmitFailure`] for capacity refusal (active/queue full, input-byte
-    /// excess, closed admission, or expired scoped deadline), manager admission failure, scope binding
-    /// failure, or snapshot failure. Waiting methods retry only active/queue-full capacity and manager-
-    /// busy failures. The failure returns runner, command, options, and still-owned file handles for
-    /// rejected admission.
+    /// Returns [`CommandResourceSubmitFailure`] when request snapshot creation fails, the estimated
+    /// file bytes exceed the configured budget, executor capacity is full or closed, or operation-
+    /// manager admission is denied. Scoped variants can also fail to bind the operation group or reach
+    /// the scope deadline. A waiting variant can also fail when waiter registration is full, the scope
+    /// is stopped, or its deadline expires. The failure carries the runner and command; its options
+    /// retain the owned file handles on rejected admission. Requests over budget are rejected
+    /// immediately rather than retried.
     #[cfg(feature = "async")]
     fn submit_wait_resources_in<'a>(
         &'a self,
@@ -325,10 +326,9 @@ pub trait CommandExecutorApi {
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandSubmitFailure`] for capacity refusal (active/queue full, input-byte excess,
-    /// closed admission, or expired scoped deadline), manager admission failure, scope binding failure,
-    /// or snapshot failure. Waiting methods retry only active/queue-full capacity and manager-busy
-    /// failures. The failure returns runner, command, and options.
+    /// Returns [`CommandSubmitFailure`] when request snapshot creation fails, executor capacity is full
+    /// or closed, or operation-manager admission is denied. The failure carries the runner, command,
+    /// and options.
     #[cfg(feature = "async")]
     fn submit_async(
         &self,
@@ -351,11 +351,10 @@ pub trait CommandExecutorApi {
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandResourceSubmitFailure`] for capacity refusal (active/queue full, input-byte
-    /// excess, closed admission, or expired scoped deadline), manager admission failure, scope binding
-    /// failure, or snapshot failure. Waiting methods retry only active/queue-full capacity and manager-
-    /// busy failures. The failure returns runner, command, options, and still-owned file handles for
-    /// rejected admission.
+    /// Returns [`CommandResourceSubmitFailure`] when request snapshot creation fails, the estimated
+    /// file bytes exceed the configured budget, executor capacity is full or closed, or operation-
+    /// manager admission is denied. The failure carries the runner and command; its options retain the
+    /// owned file handles on rejected admission.
     #[cfg(feature = "async")]
     fn submit_async_resources(
         &self,
@@ -376,10 +375,10 @@ pub trait CommandExecutorApi {
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandSubmitFailure`] for capacity refusal (active/queue full, input-byte excess,
-    /// closed admission, or expired scoped deadline), manager admission failure, scope binding failure,
-    /// or snapshot failure. Waiting methods retry only active/queue-full capacity and manager-busy
-    /// failures. The failure returns runner, command, and options.
+    /// Returns [`CommandSubmitFailure`] when request snapshot creation fails, executor capacity is full
+    /// or closed, or operation-manager admission is denied. Scoped variants can also fail to bind the
+    /// operation group or reach the scope deadline. The failure carries the runner, command, and
+    /// options.
     #[cfg(feature = "async")]
     fn submit_async_in(
         &self,
@@ -405,11 +404,11 @@ pub trait CommandExecutorApi {
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandResourceSubmitFailure`] for capacity refusal (active/queue full, input-byte
-    /// excess, closed admission, or expired scoped deadline), manager admission failure, scope binding
-    /// failure, or snapshot failure. Waiting methods retry only active/queue-full capacity and manager-
-    /// busy failures. The failure returns runner, command, options, and still-owned file handles for
-    /// rejected admission.
+    /// Returns [`CommandResourceSubmitFailure`] when request snapshot creation fails, the estimated
+    /// file bytes exceed the configured budget, executor capacity is full or closed, or operation-
+    /// manager admission is denied. Scoped variants can also fail to bind the operation group or reach
+    /// the scope deadline. The failure carries the runner and command; its options retain the owned
+    /// file handles on rejected admission.
     #[cfg(feature = "async")]
     fn submit_async_resources_in(
         &self,
@@ -434,10 +433,11 @@ pub trait CommandExecutorApi {
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandSubmitFailure`] for capacity refusal (active/queue full, input-byte excess,
-    /// closed admission, or expired scoped deadline), manager admission failure, scope binding failure,
-    /// or snapshot failure. Waiting methods retry only active/queue-full capacity and manager-busy
-    /// failures. The failure returns runner, command, and options.
+    /// Returns [`CommandSubmitFailure`] when request snapshot creation fails, executor capacity is full
+    /// or closed, or operation-manager admission is denied. Scoped variants can also fail to bind the
+    /// operation group or reach the scope deadline. A waiting variant can also fail when waiter
+    /// registration is full, the scope is stopped, or its deadline expires. The failure carries the
+    /// runner, command, and options.
     #[cfg(feature = "async")]
     fn submit_wait_in<'a>(
         &'a self,
