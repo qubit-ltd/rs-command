@@ -693,6 +693,9 @@ mod activation_failure_tests {
         assert!(output.exit_status().success());
 
         drop(state);
-        assert!(scheduler.try_reserve(0).is_ok(), "dropping restored state should release its reservation");
+        assert!(
+            scheduler.try_reserve(0).is_ok(),
+            "dropping restored state should release its reservation"
+        );
     }
 }
