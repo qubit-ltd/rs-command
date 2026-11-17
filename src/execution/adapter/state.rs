@@ -670,9 +670,15 @@ mod activation_failure_tests {
             })
             .unwrap();
 
-        assert!(matches!(handle.wait_outcome().unwrap(), OperationOutcome::Succeeded(())));
+        assert!(matches!(
+            handle.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
         handle.wait_settlement().unwrap();
-        assert!(state.restore().is_some(), "a stop request alone must not consume prepared input");
+        assert!(
+            state.restore().is_some(),
+            "a stop request alone must not consume prepared input"
+        );
     }
 
     #[test]

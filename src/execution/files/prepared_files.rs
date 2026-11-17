@@ -295,7 +295,10 @@ mod tests {
             })
             .unwrap();
 
-        assert!(matches!(operation.wait_outcome().unwrap(), OperationOutcome::Succeeded(())));
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
         assert!(operation.wait_settlement().unwrap().all_released());
     }
 
