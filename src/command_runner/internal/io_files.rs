@@ -981,6 +981,85 @@ mod tests {
     }
 
     #[test]
+    fn test_prepare_maps_missing_stdin_to_open_input_failure() {
+        let directory = tempfile::tempdir().expect("directory fixture should be created");
+        let input = directory.path().join("missing-input");
+        let mut process = ProcessCommand::new("unused-test-program");
+
+        let error = IoFiles::prepare(
+            "command",
+            CommandStdin::File(input.clone()),
+            None,
+            None,
+            &mut process,
+        )
+        .err()
+        .expect("a missing stdin path should be rejected");
+
+        assert_eq!(error.kind(), CommandErrorKind::OpenInputFailed);
+        assert!(matches!(
+            error.reason(),
+            crate::CommandErrorReason::OpenInputFailed { path, source }
+                if path == &input && source.kind() == io::ErrorKind::NotFound
+        ));
+    }
+
+    #[test]
+    fn test_prepare_rejects_shared_stdout_and_stderr_path() {
+        let directory = tempfile::tempdir().expect("directory fixture should be created");
+        let output = directory.path().join("shared-output");
+        let mut process = ProcessCommand::new("unused-test-program");
+
+        let error = IoFiles::prepare(
+            "command",
+            CommandStdin::Null,
+            Some(&output),
+            Some(&output),
+            &mut process,
+        )
+        .err()
+        .expect("stdout and stderr cannot share one destination");
+
+        assert_eq!(error.kind(), CommandErrorKind::OutputFilesConflict);
+        assert!(matches!(
+            error.reason(),
+            crate::CommandErrorReason::OutputFilesConflict { stdout_path, stderr_path }
+                if stdout_path == &output && stderr_path == &output
+        ));
+        assert!(!output.exists(), "preparation must not create output files");
+    }
+
+    #[test]
+    fn test_commit_maps_missing_output_parent_to_open_output_failure() {
+        let directory = tempfile::tempdir().expect("directory fixture should be created");
+        let missing_parent_output = directory.path().join("missing-parent").join("output");
+        let mut process = ProcessCommand::new("unused-test-program");
+        let mut files = IoFiles::prepare(
+            "command",
+            CommandStdin::Null,
+            Some(&missing_parent_output),
+            None,
+            &mut process,
+        )
+        .expect("an output under a missing parent is deferred until commit");
+
+        let error = files
+            .commit("command", Some(&missing_parent_output), None, &mut process)
+            .err()
+            .expect("commit cannot create an output whose parent is absent");
+
+        assert_eq!(error.kind(), CommandErrorKind::OpenOutputFailed);
+        assert!(matches!(
+            error.reason(),
+            crate::CommandErrorReason::OpenOutputFailed { stream, path, source }
+                if *stream == OutputStream::Stdout
+                    && path == &missing_parent_output
+                    && source.kind() == io::ErrorKind::NotFound
+        ));
+        assert!(!missing_parent_output.exists());
+    }
+
+    #[test]
     fn test_prepare_rejects_non_regular_paths_and_input_output_aliases() {
         let directory = tempfile::tempdir().expect("directory fixture should be created");
         let mut process = ProcessCommand::new("unused-test-program");
