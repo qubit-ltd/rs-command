@@ -2153,6 +2153,88 @@ mod command_executor_api_tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn trait_submit_entry_points_execute_root_and_scoped_commands() {
+        let (manager, executor, runner) = setup();
+        assert_eq!(
+            output_and_settle(
+                <CommandExecutor as CommandExecutorApi>::submit(
+                    &executor,
+                    runner.clone(),
+                    Command::new("sh").arg("-c").arg("printf trait-submit"),
+                    Default::default(),
+                )
+                .unwrap(),
+            ),
+            b"trait-submit"
+        );
+
+        let mut input = tempfile::tempfile().unwrap();
+        use std::io::Seek;
+        use std::io::Write;
+        input.write_all(b"trait-resource").unwrap();
+        input.rewind().unwrap();
+        assert_eq!(
+            output_and_settle(
+                <CommandExecutor as CommandExecutorApi>::submit_resources(
+                    &executor,
+                    runner.clone(),
+                    Command::new("sh").arg("-c").arg("cat"),
+                    CommandResourceRunOptions::new().stdin_file(input),
+                )
+                .unwrap(),
+            ),
+            b"trait-resource"
+        );
+
+        let scoped_executor = executor.clone();
+        let result = manager
+            .run(qubit_operation::OperationOptions::default(), move |scope| {
+                let direct = output_and_settle(
+                    <CommandExecutor as CommandExecutorApi>::submit_in(
+                        &scoped_executor,
+                        &scope,
+                        runner.clone(),
+                        Command::new("sh").arg("-c").arg("printf trait-submit-in"),
+                        Default::default(),
+                    )
+                    .map_err(|_| crate::CommandError::from_reason(
+                        "trait submit_in",
+                        crate::CommandErrorReason::ManagedOperationFailed {
+                            diagnostic: "scoped trait submission rejected".into(),
+                        },
+                        None,
+                    ))?,
+                );
+                let resources = output_and_settle(
+                    <CommandExecutor as CommandExecutorApi>::submit_resources_in(
+                        &scoped_executor,
+                        &scope,
+                        runner,
+                        Command::new("sh").arg("-c").arg("printf trait-resources-in"),
+                        CommandResourceRunOptions::new(),
+                    )
+                    .map_err(|_| crate::CommandError::from_reason(
+                        "trait submit_resources_in",
+                        crate::CommandErrorReason::ManagedOperationFailed {
+                            diagnostic: "scoped resource trait submission rejected".into(),
+                        },
+                        None,
+                    ))?,
+                );
+                Ok::<_, crate::CommandError>((direct, resources))
+            })
+            .expect("parent operation should complete");
+        match result {
+            OperationOutcome::Succeeded((direct, resources)) => {
+                assert_eq!(direct, b"trait-submit-in");
+                assert_eq!(resources, b"trait-resources-in");
+            }
+            other => panic!("scoped trait submission failed: {other:?}"),
+        }
+    }
+
     #[cfg(all(feature = "async", unix))]
     mod async_tests {
         use std::future::Future;
