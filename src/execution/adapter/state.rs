@@ -1012,6 +1012,45 @@ mod activation_failure_tests {
     }
 
     #[test]
+    fn test_full_recovery_store_returns_bound_owner_to_caller() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let (recovery, _receiver) = std::sync::mpsc::sync_channel::<super::super::RecoveryItem>(0);
+        let backend = Arc::new(ProcessBackend::new());
+        let state = AdapterState::new(request(), permit, scheduler, backend.clone(), backend, recovery, None);
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let id = operation.id();
+        let _ = operation.wait_outcome().unwrap();
+        operation.wait_settlement().unwrap();
+        state.bind(id).unwrap();
+        let dropped = Arc::new(AtomicBool::new(false));
+
+        let failure = crate::execution::contracts::FactSink::retain_recovery_owner(
+            &state,
+            Box::new(DropObservedRecoveryOwner(Arc::clone(&dropped))),
+        )
+        .expect_err("a full recovery store must return the unaccepted owner");
+
+        assert_eq!(
+            failure.reason,
+            crate::execution::contracts::RecoveryPublishError::CapacityExceeded
+        );
+        assert!(
+            !dropped.load(Ordering::SeqCst),
+            "failed publication must preserve owner ownership"
+        );
+        assert_eq!(failure.owner.summary(), "test recovery owner");
+        drop(failure);
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "dropping the returned owner must release it"
+        );
+    }
+
+    #[test]
     fn test_bound_adapter_hands_recovery_owner_to_worker_and_publishes_settlement() {
         let scheduler = scheduler();
         let permit = scheduler.try_reserve(0).unwrap();
