@@ -691,7 +691,7 @@ mod tests {
         #[cfg(windows)]
         {
             use std::os::windows::process::ExitStatusExt;
-            ExitStatus::from_raw(code)
+            ExitStatus::from_raw(u32::try_from(code).expect("test exit code must be nonnegative"))
         }
     }
 

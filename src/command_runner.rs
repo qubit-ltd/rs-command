@@ -692,7 +692,11 @@ mod tests {
             .expect("configured nonzero exit code should be successful");
 
         assert_eq!(output.exit_code(), Some(7));
-        assert_eq!(output.stdout(), directory.path().to_string_lossy().as_bytes());
+        let actual_directory = directory
+            .path()
+            .canonicalize()
+            .expect("working directory should resolve to an absolute path");
+        assert_eq!(output.stdout(), actual_directory.to_string_lossy().as_bytes());
     }
 
     #[cfg(unix)]
