@@ -490,10 +490,7 @@ fn test_runner_rejects_dangling_output_symlink_without_creating_target() {
             ..
         }
     ));
-    assert!(
-        fs::symlink_metadata(&link).is_ok(),
-        "the symlink should remain"
-    );
+    assert!(fs::symlink_metadata(&link).is_ok(), "the symlink should remain");
     assert!(!target.exists(), "the symlink target should not be created");
 }
 
