@@ -50,3 +50,26 @@ impl OutputBudget {
         self.limit
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::OutputBudget;
+
+    #[test]
+    fn test_budget_accessors_recover_observations_after_state_lock_poisoning() {
+        let budget = Arc::new(OutputBudget::new(10));
+        let poisoner = budget.clone();
+        let join = std::thread::spawn(move || {
+            let mut state = poisoner.state.lock().unwrap();
+            state.observed = 4;
+            panic!("simulate a worker panic while updating output accounting");
+        });
+        assert!(join.join().is_err());
+
+        assert_eq!(budget.limit(), 10);
+        assert_eq!(budget.observed(), 4);
+        assert!(!budget.exceeded());
+    }
+}

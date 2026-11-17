@@ -1082,4 +1082,41 @@ mod tests {
             std::task::Poll::Ready(Ok(0))
         ));
     }
+
+    #[test]
+    fn test_exact_budget_boundary_retains_bytes_then_discards_later_output() {
+        let budget = Arc::new(OutputBudget::new(3));
+        let channel = ByteChannel::with_policy(
+            SessionStreamPolicy::TerminateAfterBytes(3),
+            Some(budget.clone()),
+        );
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = std::task::Waker::from(counter);
+        let mut context = std::task::Context::from_waker(&waker);
+        let mut output = [0; 8];
+
+        assert!(matches!(
+            channel.poll_write(&mut context, b"abc"),
+            std::task::Poll::Ready(Ok(3))
+        ));
+        assert_eq!(budget.observed(), 3);
+        assert!(budget.exceeded());
+        assert!(!channel.incomplete());
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Ready(Ok(3))
+        ));
+        assert_eq!(&output[..3], b"abc");
+
+        assert!(matches!(
+            channel.poll_write(&mut context, b"d"),
+            std::task::Poll::Ready(Ok(1))
+        ));
+        assert_eq!(budget.observed(), 4);
+        assert!(channel.incomplete());
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Pending
+        ));
+    }
 }

@@ -159,16 +159,29 @@ mod tests {
     }
 
     #[test]
-    fn test_session_bridge_defaults_report_no_stream_failures_or_budget() {
-        let bridge = DefaultBridge;
+    fn test_session_bridge_optional_hooks_default_to_no_state_and_noop() {
+        let implementation = DefaultBridge;
+        let bridge: &dyn SessionBridge = &implementation;
 
         bridge.request_output_stop();
         bridge.record_stdin_broken_pipe();
+
         assert!(!bridge.stdout_incomplete());
         assert!(!bridge.stderr_incomplete());
         assert!(!bridge.stdin_broken_pipe());
         assert!(!bridge.output_budget_exceeded());
         assert_eq!(bridge.output_budget_limit(), None);
         assert_eq!(bridge.output_bytes_observed(), 0);
+    }
+}
+
+#[cfg(all(test, feature = "async"))]
+mod stream_policy_tests {
+    use super::SessionStreamPolicy;
+
+    #[test]
+    fn test_default_session_stream_policy_preserves_backpressure() {
+        let policy = SessionStreamPolicy::default();
+        assert_eq!(policy, SessionStreamPolicy::Backpressure);
     }
 }
