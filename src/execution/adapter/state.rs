@@ -777,4 +777,65 @@ mod activation_failure_tests {
             "dropping restored state should release its reservation"
         );
     }
+
+    #[test]
+    fn test_fact_sink_rejects_duplicate_and_mismatched_publications() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let state = make_state(scheduler, permit);
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut first_handle = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let mut other_handle = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let id = first_handle.id();
+        let other_id = other_handle.id();
+        let _ = first_handle.wait_outcome().unwrap();
+        first_handle.wait_settlement().unwrap();
+        let _ = other_handle.wait_outcome().unwrap();
+        other_handle.wait_settlement().unwrap();
+
+        state.bind(id).unwrap();
+        let stopped = || {
+            OperationOutcome::Stopped(qubit_operation::StopReport {
+                reason: qubit_operation::StopReason::UserCancelled,
+                accepted_at: None,
+            })
+        };
+        assert_eq!(
+            crate::execution::contracts::FactSink::publish_outcome(&*state, stopped()),
+            Ok(())
+        );
+        assert_eq!(
+            crate::execution::contracts::FactSink::publish_outcome(&*state, stopped()),
+            Err(crate::execution::contracts::FactPublishError::DuplicateOutcome)
+        );
+        assert_eq!(
+            crate::execution::contracts::FactSink::confirm_input_release(&*state),
+            Ok(())
+        );
+        assert_eq!(
+            crate::execution::contracts::FactSink::confirm_input_release(&*state),
+            Err(crate::execution::contracts::FactPublishError::DuplicateRelease)
+        );
+        assert_eq!(
+            crate::execution::contracts::FactSink::publish_settlement(
+                &*state,
+                Arc::new(super::released_report(other_id)),
+            ),
+            Err(crate::execution::contracts::FactPublishError::IdentityMismatch)
+        );
+        let report = Arc::new(super::released_report(id));
+        assert_eq!(
+            crate::execution::contracts::FactSink::publish_settlement(&*state, Arc::clone(&report)),
+            Ok(())
+        );
+        assert_eq!(
+            crate::execution::contracts::FactSink::publish_settlement(&*state, report),
+            Err(crate::execution::contracts::FactPublishError::DuplicateSettlement)
+        );
+        assert_eq!(OperationControl::snapshot(&*state).operation_id, id);
+    }
 }
