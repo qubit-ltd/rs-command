@@ -47,3 +47,25 @@ impl Drop for ReservationLease {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use super::ReservationLease;
+
+    #[test]
+    fn test_debug_reports_active_lease_and_drop_releases_once() {
+        let releases = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&releases);
+        let lease = ReservationLease::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+        });
+
+        assert_eq!(format!("{lease:?}"), "ReservationLease { active: true }");
+        drop(lease);
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
+    }
+}

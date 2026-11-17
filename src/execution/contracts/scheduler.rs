@@ -55,12 +55,50 @@ pub trait Scheduler: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
+    use std::sync::Arc;
 
     use super::Reservation;
+    use crate::execution::contracts::CapacityFailure;
+    use crate::execution::contracts::EnqueueFailure;
     use crate::execution::contracts::ReservationLease;
+    use crate::execution::contracts::ScheduledJob;
+    use crate::execution::contracts::Scheduler;
+
+    struct CompatibilityScheduler(std::sync::atomic::AtomicUsize);
+
+    impl Scheduler for CompatibilityScheduler {
+        fn try_reserve(&self, _input_bytes: usize) -> Result<Reservation, CapacityFailure> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(Reservation::new(
+                9,
+                12,
+                |_| {},
+                |_| ReservationLease::new(|| {}),
+            ))
+        }
+
+        fn enqueue(&self, _job: ScheduledJob, _permit: Reservation) -> Result<(), EnqueueFailure> {
+            unreachable!("enqueue is outside this compatibility test")
+        }
+
+        fn wait_next(&self) -> Option<(ScheduledJob, Reservation)> {
+            None
+        }
+
+        fn close_admission(&self) {}
+    }
+
+    #[test]
+    fn test_default_context_reservation_delegates_to_legacy_scheduler_method() {
+        let scheduler = CompatibilityScheduler(std::sync::atomic::AtomicUsize::new(0));
+
+        let reservation = scheduler.try_reserve_until(23, None).unwrap();
+
+        assert!(reservation.belongs_to(9));
+        assert_eq!(scheduler.0.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn test_dropping_reservation_releases_its_token_once() {
