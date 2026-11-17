@@ -1007,6 +1007,124 @@ mod resource_byte_tests {
         returned_input.read_to_end(&mut contents).unwrap();
         assert_eq!(contents, b"preserved after shutdown");
     }
+
+    #[test]
+    fn test_manager_admission_rejection_restores_standard_and_resource_requests() {
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let executor =
+            CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).unwrap();
+        let _shutdown = executor
+            .group
+            .request_shutdown(qubit_operation::ShutdownMode::Cancel);
+
+        let standard = match executor.submit(
+            CommandRunner::without_timeout(),
+            Command::new("preserved-after-manager-rejection"),
+            Default::default(),
+        ) {
+            Ok(_) => panic!("manager shutdown should reject external operation admission"),
+            Err(failure) => failure,
+        };
+        assert!(matches!(
+            standard.reason,
+            CommandSubmitFailureReason::Admission(_)
+        ));
+        assert_eq!(
+            standard.command.program(),
+            "preserved-after-manager-rejection"
+        );
+
+        let mut input = tempfile::tempfile().unwrap();
+        input
+            .write_all(b"restored after manager rejection")
+            .unwrap();
+        let resource = match executor.submit_resources(
+            CommandRunner::without_timeout(),
+            Command::new("preserved-resource-after-manager-rejection"),
+            CommandResourceRunOptions::new().stdin_file(input),
+        ) {
+            Ok(_) => panic!("manager shutdown should reject resource operation admission"),
+            Err(failure) => failure,
+        };
+        assert!(matches!(
+            resource.reason,
+            CommandSubmitFailureReason::Admission(_)
+        ));
+        assert_eq!(
+            resource.command.program(),
+            "preserved-resource-after-manager-rejection"
+        );
+
+        let mut returned_input = resource
+            .options
+            .configured_stdin()
+            .expect("rejected resource submission should restore its input owner")
+            .try_clone()
+            .unwrap();
+        returned_input.seek(SeekFrom::Start(0)).unwrap();
+        let mut contents = Vec::new();
+        returned_input.read_to_end(&mut contents).unwrap();
+        assert_eq!(contents, b"restored after manager rejection");
+    }
+
+    #[cfg(feature = "async")]
+    #[test]
+    fn test_async_manager_admission_rejection_restores_standard_and_resource_requests() {
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+        let _shutdown = executor
+            .group
+            .request_shutdown(qubit_operation::ShutdownMode::Cancel);
+
+        let standard = match executor.submit_async(
+            CommandRunner::without_timeout(),
+            Command::new("preserved-async-after-manager-rejection"),
+            Default::default(),
+        ) {
+            Ok(_) => panic!("closed group should reject async external operation admission"),
+            Err(failure) => failure,
+        };
+        assert!(matches!(
+            standard.reason,
+            CommandSubmitFailureReason::Admission(_)
+        ));
+        assert_eq!(
+            standard.command.program(),
+            "preserved-async-after-manager-rejection"
+        );
+
+        let mut input = tempfile::tempfile().unwrap();
+        input
+            .write_all(b"restored async resource after manager rejection")
+            .unwrap();
+        let resource = match executor.submit_async_resources(
+            CommandRunner::without_timeout(),
+            Command::new("preserved-async-resource-after-manager-rejection"),
+            CommandResourceRunOptions::new().stdin_file(input),
+        ) {
+            Ok(_) => panic!("closed group should reject async resource admission"),
+            Err(failure) => failure,
+        };
+        assert!(matches!(
+            resource.reason,
+            CommandSubmitFailureReason::Admission(_)
+        ));
+        assert_eq!(
+            resource.command.program(),
+            "preserved-async-resource-after-manager-rejection"
+        );
+
+        let mut returned_input = resource
+            .options
+            .configured_stdin()
+            .expect("rejected async resource submission should restore its input owner")
+            .try_clone()
+            .unwrap();
+        returned_input.seek(SeekFrom::Start(0)).unwrap();
+        let mut contents = Vec::new();
+        returned_input.read_to_end(&mut contents).unwrap();
+        assert_eq!(contents, b"restored async resource after manager rejection");
+    }
 }
 
 /// Performs the retry wait step in the managed command execution lifecycle.
