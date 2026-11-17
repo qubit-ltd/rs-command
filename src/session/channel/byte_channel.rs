@@ -1116,4 +1116,21 @@ mod tests {
             std::task::Poll::Pending
         ));
     }
+
+    #[test]
+    fn test_blocking_write_after_reader_drop_counts_unpublished_output() {
+        let budget = Arc::new(OutputBudget::new(3));
+        let channel = ByteChannel::with_policy(
+            SessionStreamPolicy::TerminateAfterBytes(3),
+            Some(budget.clone()),
+        );
+        channel.drop_reader();
+
+        channel.blocking_write(b"four").unwrap();
+
+        assert_eq!(budget.observed(), 4);
+        assert!(budget.exceeded());
+        assert!(channel.incomplete());
+        assert_eq!(channel.blocking_read(&mut [0; 4]).unwrap(), 0);
+    }
 }

@@ -254,3 +254,56 @@ impl CommandRunOptions {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::path::PathBuf;
+
+    use crate::CommandCancellation;
+    use crate::ProcessTreePolicy;
+
+    use super::CommandRunOptions;
+
+    #[test]
+    fn test_process_tree_policy_defaults_to_managed_and_can_be_overridden() {
+        let defaults = CommandRunOptions::new();
+        assert_eq!(defaults.process_tree_policy(), ProcessTreePolicy::Managed);
+
+        let direct_child = defaults.with_process_tree_policy(ProcessTreePolicy::DirectChild);
+        assert_eq!(
+            direct_child.process_tree_policy(),
+            ProcessTreePolicy::DirectChild
+        );
+    }
+
+    #[test]
+    fn test_debug_reports_configured_state_without_revealing_tee_paths() {
+        let cancellation = CommandCancellation::new();
+        let stdout_path = PathBuf::from("customer/private/stdout.log");
+        let stderr_path = PathBuf::from("customer/private/stderr.log");
+        let options = CommandRunOptions::new()
+            .cancellation(cancellation.clone())
+            .tee_stdout_to_file(stdout_path.clone())
+            .tee_stderr_to_file(stderr_path.clone());
+
+        assert!(
+            options
+                .configured_cancellation()
+                .is_some_and(|handle| !handle.is_cancelled())
+        );
+        assert_eq!(
+            options.configured_stdout_file(),
+            Some(Path::new(&stdout_path))
+        );
+        assert_eq!(
+            options.configured_stderr_file(),
+            Some(Path::new(&stderr_path))
+        );
+        let debug = format!("{options:?}");
+        assert!(debug.contains("cancellation_configured: true"));
+        assert!(debug.contains("stdout_file: Some(\"<redacted path>\")"));
+        assert!(debug.contains("stderr_file: Some(\"<redacted path>\")"));
+        assert!(!debug.contains("customer/private"));
+    }
+}

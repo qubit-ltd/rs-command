@@ -128,3 +128,39 @@ impl CommandResourceRunOptions {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::CommandResourceRunOptions;
+    use crate::CommandRunOptions;
+    use crate::ProcessTreePolicy;
+    use crate::resource_run_options::FileSinkPolicy;
+
+    #[test]
+    fn test_accessors_report_both_owned_sinks_and_ordinary_options() {
+        let stdin = tempfile::tempfile().expect("stdin fixture should be created");
+        let stdout = tempfile::tempfile().expect("stdout fixture should be created");
+        let stderr = tempfile::tempfile().expect("stderr fixture should be created");
+        let command_options =
+            CommandRunOptions::new().with_process_tree_policy(ProcessTreePolicy::DirectChild);
+        let options = CommandResourceRunOptions::new()
+            .options(command_options)
+            .stdin_file(stdin)
+            .stdout_sink(stdout, FileSinkPolicy::Preserve)
+            .stderr_sink(stderr, FileSinkPolicy::Truncate);
+
+        assert!(options.configured_stdin().is_some());
+        assert_eq!(
+            options.configured_stdout().map(|(_, policy)| policy),
+            Some(FileSinkPolicy::Preserve)
+        );
+        assert_eq!(
+            options.configured_stderr().map(|(_, policy)| policy),
+            Some(FileSinkPolicy::Truncate)
+        );
+        assert_eq!(
+            options.ordinary_options().process_tree_policy(),
+            ProcessTreePolicy::DirectChild
+        );
+    }
+}
