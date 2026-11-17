@@ -1174,37 +1174,20 @@ mod session_accessor_tests {
 
     #[test]
     fn test_session_operation_accessor_borrows_then_transfers_handle() {
-        let manager =
-            OperationManager::new(ManagerOptions::default()).expect("manager should start");
-        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default())
-            .expect("executor should start");
+        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).expect("executor should start");
         let runner = CommandRunner::without_timeout();
-        let mut session = block_on(runner.start_session(
-            &executor,
-            Command::new("sh").arg("-c").arg(":"),
-            Default::default(),
-        ))
-        .expect("session should start");
+        let mut session =
+            block_on(runner.start_session(&executor, Command::new("sh").arg("-c").arg(":"), Default::default()))
+                .expect("session should start");
 
         assert!(
             session.operation().is_some(),
             "session should expose its operation by borrow"
         );
-        drop(
-            session
-                .take_stdin()
-                .expect("stdin endpoint should be available"),
-        );
-        drop(
-            session
-                .take_stdout()
-                .expect("stdout endpoint should be available"),
-        );
-        drop(
-            session
-                .take_stderr()
-                .expect("stderr endpoint should be available"),
-        );
+        drop(session.take_stdin().expect("stdin endpoint should be available"));
+        drop(session.take_stdout().expect("stdout endpoint should be available"));
+        drop(session.take_stderr().expect("stderr endpoint should be available"));
         let mut operation = session
             .take_operation()
             .expect("session should transfer its operation handle");
@@ -1213,13 +1196,9 @@ mod session_accessor_tests {
             "taking the handle should clear the borrowed slot"
         );
         assert!(matches!(
-            operation
-                .wait_outcome()
-                .expect("session outcome should be available"),
+            operation.wait_outcome().expect("session outcome should be available"),
             OperationOutcome::Succeeded(_)
         ));
-        operation
-            .wait_settlement()
-            .expect("session operation should settle");
+        operation.wait_settlement().expect("session operation should settle");
     }
 }
