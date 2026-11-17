@@ -76,7 +76,10 @@ fn recovery_loop(rx: Receiver<RecoveryItem>) {
 /// * `id`: Supplies the id value used by this operation.
 /// * `effect_evidence`: Supplies the effect evidence value used by this
 ///   operation.
-fn recovery_settlement(id: OperationId, mut effect_evidence: RecoveryEffectEvidence) -> SettlementReport {
+fn recovery_settlement(
+    id: OperationId,
+    mut effect_evidence: RecoveryEffectEvidence,
+) -> SettlementReport {
     for effect in &mut effect_evidence.effects {
         effect.operation_id = id;
     }
@@ -86,7 +89,11 @@ fn recovery_settlement(id: OperationId, mut effect_evidence: RecoveryEffectEvide
             .len()
             .saturating_add(effect_evidence.effect_overflow),
     );
-    let retained_effects: Vec<_> = effect_evidence.effects.into_iter().take(MAX_RECOVERY_EFFECTS).collect();
+    let retained_effects: Vec<_> = effect_evidence
+        .effects
+        .into_iter()
+        .take(MAX_RECOVERY_EFFECTS)
+        .collect();
     let effects_total = observed_total.max(retained_effects.len());
     // The normalized total covers all producer-reported and adapter-omitted
     // records, so overflow is exactly the portion not retained here.
@@ -169,7 +176,10 @@ mod tests {
         fn summary(&self) -> String {
             "test owner".to_owned()
         }
-        fn effect_evidence(&self, _operation_id: qubit_operation::OperationId) -> RecoveryEffectEvidence {
+        fn effect_evidence(
+            &self,
+            _operation_id: qubit_operation::OperationId,
+        ) -> RecoveryEffectEvidence {
             self.evidence.clone()
         }
         fn retry_cleanup(&self) -> Result<(), RecoveryRetryError> {
@@ -237,7 +247,9 @@ mod tests {
             .unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(5);
-        while OperationControl::snapshot(&*control).settlement.is_none() && Instant::now() < deadline {
+        while OperationControl::snapshot(&*control).settlement.is_none()
+            && Instant::now() < deadline
+        {
             std::thread::yield_now();
         }
         assert!(OperationControl::snapshot(&*control).input_released);
@@ -266,7 +278,10 @@ mod tests {
         let (released, changed) = &*gate;
         *released.lock().unwrap() = true;
         changed.notify_all();
-        let report = match operation.wait_settlement_for(Duration::from_secs(5)).unwrap() {
+        let report = match operation
+            .wait_settlement_for(Duration::from_secs(5))
+            .unwrap()
+        {
             qubit_operation::SettlementWait::Ready(report) => report,
             qubit_operation::SettlementWait::Pending(_) => {
                 panic!("scope must settle after gate release")
@@ -328,7 +343,10 @@ mod tests {
             if let Some(report) = OperationControl::snapshot(&*control).settlement {
                 break report;
             }
-            assert!(Instant::now() < deadline, "recovery report should be published");
+            assert!(
+                Instant::now() < deadline,
+                "recovery report should be published"
+            );
             std::thread::yield_now();
         };
 
@@ -336,7 +354,12 @@ mod tests {
         assert_eq!(report.effects_total, 71);
         assert_eq!(report.effect_overflow, 7);
         assert_eq!(report.recovery_count, 1);
-        assert!(report.effects.iter().all(|effect| effect.operation_id == id));
+        assert!(
+            report
+                .effects
+                .iter()
+                .all(|effect| effect.operation_id == id)
+        );
     }
 
     #[test]

@@ -40,7 +40,8 @@ impl CommandExecutor {
         config: CommandExecutionConfig,
     ) -> Result<Self, CommandExecutorCreateError> {
         config.validate()?;
-        let (scheduler, backend, group, recovery, manager) = executor::build_executor(manager.clone(), config.clone())?;
+        let (scheduler, backend, group, recovery, manager) =
+            executor::build_executor(manager.clone(), config.clone())?;
         Ok(Self {
             manager,
             config,

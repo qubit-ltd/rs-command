@@ -34,7 +34,8 @@ use qubit_operation::ShutdownWait;
 pub fn run() {
     block_on(async {
         let manager = OperationManager::new(ManagerOptions::default()).expect("manager");
-        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).expect("executor");
+        let executor =
+            CommandExecutor::new(manager, CommandExecutionConfig::default()).expect("executor");
         let runner = CommandRunner::without_timeout();
         // Keep stdin open so the process remains active across the zero-time
         // shutdown snapshot. `more` consumes the redirected pipe on Windows.
@@ -91,10 +92,19 @@ pub fn run() {
         let (mut out, err) = std::thread::scope(|threads| {
             let out_reader = threads.spawn(|| block_on(read_all(&mut stdout)));
             let err_reader = threads.spawn(|| block_on(read_all(&mut stderr)));
-            block_on(std::future::poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).expect("close stdin");
+            block_on(std::future::poll_fn(|cx| {
+                Pin::new(&mut stdin).poll_close(cx)
+            }))
+            .expect("close stdin");
             (
-                out_reader.join().expect("stdout reader").expect("stdout read"),
-                err_reader.join().expect("stderr reader").expect("stderr read"),
+                out_reader
+                    .join()
+                    .expect("stdout reader")
+                    .expect("stdout read"),
+                err_reader
+                    .join()
+                    .expect("stderr reader")
+                    .expect("stderr read"),
             )
         });
         let mut output = out_prefix[..out_count].to_vec();

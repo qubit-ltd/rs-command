@@ -89,7 +89,8 @@ impl IoCancellation {
     #[cfg(test)]
     /// # Parameters
     pub(super) fn failing(message: &'static str) -> Self {
-        let (mut cancellation, _token) = Self::pair().expect("test cancellation pair should be created");
+        let (mut cancellation, _token) =
+            Self::pair().expect("test cancellation pair should be created");
         cancellation.test_failure = Some((io::ErrorKind::Other, message));
         cancellation
     }
@@ -98,7 +99,8 @@ impl IoCancellation {
     #[cfg(all(test, windows))]
     /// # Parameters
     pub(super) fn failing_raw_os_error(raw_os_error: i32) -> Self {
-        let (mut cancellation, _token) = Self::pair().expect("test cancellation pair should be created");
+        let (mut cancellation, _token) =
+            Self::pair().expect("test cancellation pair should be created");
         cancellation.test_raw_os_error = Some(raw_os_error);
         cancellation
     }

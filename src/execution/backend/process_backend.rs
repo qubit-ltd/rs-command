@@ -77,7 +77,10 @@ impl ProcessBackend {
     /// # Parameters
     /// * `operation_id`: Supplies the operation id value used by this
     ///   operation.
-    pub(crate) fn stop_port(&self, operation_id: OperationId) -> Arc<dyn crate::execution::contracts::StopPort> {
+    pub(crate) fn stop_port(
+        &self,
+        operation_id: OperationId,
+    ) -> Arc<dyn crate::execution::contracts::StopPort> {
         let gate = Arc::new(StartGate::default());
         self.gates
             .lock()
@@ -135,10 +138,12 @@ impl Backend for ProcessBackend {
             stop.request_stop(StopReason::Timeout);
         }
         if stop.authorize().is_none() {
-            if let Err(error) = sink.publish_outcome(OperationOutcome::Stopped(qubit_operation::StopReport {
-                reason: stop.stop_reason().unwrap_or(StopReason::UserCancelled),
-                accepted_at: None,
-            })) {
+            if let Err(error) =
+                sink.publish_outcome(OperationOutcome::Stopped(qubit_operation::StopReport {
+                    reason: stop.stop_reason().unwrap_or(StopReason::UserCancelled),
+                    accepted_at: None,
+                }))
+            {
                 log::error!("failed to publish pre-start stop outcome: {error:?}");
             }
             drop(session_bridge);
@@ -157,10 +162,12 @@ impl Backend for ProcessBackend {
             .is_some_and(qubit_operation::OperationContext::is_expired)
         {
             stop.request_stop(StopReason::Timeout);
-            if let Err(error) = sink.publish_outcome(OperationOutcome::Stopped(qubit_operation::StopReport {
-                reason: StopReason::Timeout,
-                accepted_at: None,
-            })) {
+            if let Err(error) =
+                sink.publish_outcome(OperationOutcome::Stopped(qubit_operation::StopReport {
+                    reason: StopReason::Timeout,
+                    accepted_at: None,
+                }))
+            {
                 log::error!("failed to publish expired-deadline outcome: {error:?}");
             }
             drop(session_bridge);
@@ -175,42 +182,45 @@ impl Backend for ProcessBackend {
         }
         let prepared_files = match resource_input {
             None => Ok(None),
-            Some(resources) => match resources.prepare_files_with_snapshot(&scope, &request.snapshot) {
-                Ok(files) => Ok(Some(files)),
-                Err(failure) => {
-                    let error = CommandError::from_reason(
-                        "<managed command>",
-                        CommandErrorReason::WriteOutputFailed {
-                            stream: OutputStream::Stdout,
-                            path: std::path::PathBuf::from("<owned resource>"),
-                            source: std::io::Error::other(failure.message.clone()),
-                        },
-                        None,
-                    );
-                    let capacity_lease = reservation.retain();
-                    let owner: Box<dyn RecoveryOwner> = Box::new(PreparationRecoveryOwner {
-                        retained: Mutex::new(Some((failure, scope))),
-                        _capacity_lease: Mutex::new(Some(capacity_lease)),
-                    });
-                    if let Err(error) = sink.publish_outcome(OperationOutcome::Failed(error)) {
-                        log::error!("failed to publish preparation failure outcome: {error:?}");
-                    }
-                    if let Err(rejected) = sink.retain_recovery_owner(owner) {
-                        log::warn!(
-                            "recovery store rejected owner ({}); retaining it in the bounded active frame",
-                            rejected.reason as u8
+            Some(resources) => {
+                match resources.prepare_files_with_snapshot(&scope, &request.snapshot) {
+                    Ok(files) => Ok(Some(files)),
+                    Err(failure) => {
+                        let error = CommandError::from_reason(
+                            "<managed command>",
+                            CommandErrorReason::WriteOutputFailed {
+                                stream: OutputStream::Stdout,
+                                path: std::path::PathBuf::from("<owned resource>"),
+                                source: std::io::Error::other(failure.message.clone()),
+                            },
+                            None,
                         );
-                        schedule_recovery_transfer(Arc::clone(&sink), rejected.owner);
+                        let capacity_lease = reservation.retain();
+                        let owner: Box<dyn RecoveryOwner> = Box::new(PreparationRecoveryOwner {
+                            retained: Mutex::new(Some((failure, scope))),
+                            _capacity_lease: Mutex::new(Some(capacity_lease)),
+                        });
+                        if let Err(error) = sink.publish_outcome(OperationOutcome::Failed(error)) {
+                            log::error!("failed to publish preparation failure outcome: {error:?}");
+                        }
+                        if let Err(rejected) = sink.retain_recovery_owner(owner) {
+                            log::warn!(
+                                "recovery store rejected owner ({}); retaining it in the bounded active frame",
+                                rejected.reason as u8
+                            );
+                            schedule_recovery_transfer(Arc::clone(&sink), rejected.owner);
+                        }
+                        drop(session_bridge);
+                        drop(reservation);
+                        return;
                     }
-                    drop(session_bridge);
-                    drop(reservation);
-                    return;
                 }
-            },
+            }
         };
         let options = normalize_tee_paths(options, &request.snapshot.working_directory);
         let capacity_lease = reservation.retain();
-        let (reaper_observer, reaper_completion) = ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink));
+        let (reaper_observer, reaper_completion) =
+            ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink));
         let output = match prepared_files {
             Ok(files) => request.runner.run_with_tree_policy(
                 request.command,
@@ -239,8 +249,12 @@ impl Backend for ProcessBackend {
                         .filter(|cancellation| cancellation.is_cancelled())
                         .map(|_| StopReason::UserCancelled)
                 })
-                .or_else(|| request.deadline.as_ref().and_then(|context| context.stop_reason()))
-            {
+                .or_else(|| {
+                    request
+                        .deadline
+                        .as_ref()
+                        .and_then(|context| context.stop_reason())
+                }) {
                 Some(reason) => OperationOutcome::Stopped(qubit_operation::StopReport {
                     reason,
                     accepted_at: None,
@@ -255,7 +269,10 @@ impl Backend for ProcessBackend {
             schedule_recovery_transfer(Arc::clone(&sink), owner);
             recovery_transferred = true;
         }
-        if reaper_observer.is_pending() && !recovery_transferred && reaper_completion.recv().is_err() {
+        if reaper_observer.is_pending()
+            && !recovery_transferred
+            && reaper_completion.recv().is_err()
+        {
             log::error!("process reaper completion channel disconnected");
         }
         drop(session_bridge);
@@ -284,7 +301,10 @@ impl Backend for ProcessBackend {
 /// # Parameters
 /// * `options`: Supplies the options value used by this operation.
 /// * `base`: Supplies the base value used by this operation.
-fn normalize_tee_paths(mut options: crate::CommandRunOptions, base: &std::path::Path) -> crate::CommandRunOptions {
+fn normalize_tee_paths(
+    mut options: crate::CommandRunOptions,
+    base: &std::path::Path,
+) -> crate::CommandRunOptions {
     if let Some(path) = options.configured_stdout_file() {
         let absolute = if path.is_absolute() {
             path.to_path_buf()

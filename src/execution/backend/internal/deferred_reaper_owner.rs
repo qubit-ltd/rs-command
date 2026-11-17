@@ -47,11 +47,18 @@ impl RecoveryOwner for DeferredReaperOwner {
     /// # Parameters
     /// * `operation_id`: Supplies the operation id value used by this
     ///   operation.
-    fn effect_evidence(&self, operation_id: qubit_operation::OperationId) -> RecoveryEffectEvidence {
+    fn effect_evidence(
+        &self,
+        operation_id: qubit_operation::OperationId,
+    ) -> RecoveryEffectEvidence {
         if self.observer.is_complete() || !self.observer.is_pending() {
             return RecoveryEffectEvidence::default();
         }
-        let queued = self.owner.lock().unwrap_or_else(|error| error.into_inner()).is_none();
+        let queued = self
+            .owner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_none();
         let description = if queued {
             "managed process/helper cleanup is pending in reaper"
         } else {

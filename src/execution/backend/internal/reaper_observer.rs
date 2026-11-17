@@ -56,9 +56,14 @@ impl ReaperObserver {
     ///
     /// # Parameters
     /// * `sink`: Supplies the sink value used by this operation.
-    pub(crate) fn pair_with_recovery_sink(sink: std::sync::Arc<dyn FactSink>) -> (Self, std::sync::mpsc::Receiver<()>) {
+    pub(crate) fn pair_with_recovery_sink(
+        sink: std::sync::Arc<dyn FactSink>,
+    ) -> (Self, std::sync::mpsc::Receiver<()>) {
         let (observer, receiver) = Self::pair();
-        *observer.recovery_sink.lock().unwrap_or_else(|error| error.into_inner()) = Some(sink);
+        *observer
+            .recovery_sink
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(sink);
         (observer, receiver)
     }
 
@@ -75,7 +80,10 @@ impl ReaperObserver {
     /// # Parameters
     /// * `owner`: Supplies the owner value used by this operation.
     pub(crate) fn defer_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) {
-        *self.deferred_owner.lock().unwrap_or_else(|error| error.into_inner()) = Some(owner);
+        *self
+            .deferred_owner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(owner);
     }
 
     /// Stores the retain or defer reaper owner value used by this execution
@@ -84,7 +92,8 @@ impl ReaperObserver {
     /// # Parameters
     /// * `owner`: Supplies the owner value used by this operation.
     pub(crate) fn retain_or_defer_reaper_owner(&self, owner: ReaperOwner) {
-        let recovery_owner: Box<dyn RecoveryOwner> = Box::new(DeferredReaperOwner::new(owner, self.clone()));
+        let recovery_owner: Box<dyn RecoveryOwner> =
+            Box::new(DeferredReaperOwner::new(owner, self.clone()));
         if let Some(sink) = self.recovery_sink() {
             match sink.retain_recovery_owner(recovery_owner) {
                 Ok(()) => self.mark_recovery_transferred(),

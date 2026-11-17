@@ -23,7 +23,8 @@ pub(crate) struct OperationStopPort {
     /// Stores the gate value used by this execution component.
     pub(in crate::execution::backend) gate: Arc<StartGate>,
     /// Stores the gates value used by this execution component.
-    pub(in crate::execution::backend) gates: std::sync::Weak<Mutex<HashMap<OperationId, Arc<StartGate>>>>,
+    pub(in crate::execution::backend) gates:
+        std::sync::Weak<Mutex<HashMap<OperationId, Arc<StartGate>>>>,
 }
 
 impl crate::execution::contracts::StopPort for OperationStopPort {

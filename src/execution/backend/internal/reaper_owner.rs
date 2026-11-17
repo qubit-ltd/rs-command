@@ -10,7 +10,9 @@
 type Cleanup = Box<dyn FnOnce() + Send + 'static>;
 /// Represents the reaper owner state or contract used by managed command
 /// execution.
-pub(crate) struct ReaperOwner(#[doc = "Cleanup action retained until its owner is safe to release."] Option<Cleanup>);
+pub(crate) struct ReaperOwner(
+    #[doc = "Cleanup action retained until its owner is safe to release."] Option<Cleanup>,
+);
 
 impl std::fmt::Debug for ReaperOwner {
     /// Stores the fmt value used by this execution component.
@@ -18,7 +20,9 @@ impl std::fmt::Debug for ReaperOwner {
     /// # Parameters
     /// * `formatter`: Supplies the formatter value used by this operation.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("ReaperOwner").finish_non_exhaustive()
+        formatter
+            .debug_struct("ReaperOwner")
+            .finish_non_exhaustive()
     }
 }
 

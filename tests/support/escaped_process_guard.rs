@@ -21,7 +21,10 @@ pub(crate) struct EscapedProcessGuard {
 
 impl EscapedProcessGuard {
     pub(crate) fn new(pid_path: PathBuf) -> Self {
-        Self { pid_path, armed: true }
+        Self {
+            pid_path,
+            armed: true,
+        }
     }
 
     pub(crate) fn wait_until_recorded(&self, timeout: Duration) {
@@ -97,7 +100,9 @@ impl EscapedProcessGuard {
             }
             thread::sleep(Duration::from_millis(10));
         }
-        Err(format!("escaped descendant {pid} still exists after 1 second"))
+        Err(format!(
+            "escaped descendant {pid} still exists after 1 second"
+        ))
     }
 }
 
@@ -120,8 +125,14 @@ mod tests {
 
     #[test]
     fn test_terminate_disarms_guard_after_success() {
-        let pid_path = std::env::temp_dir().join(format!("qubit-escaped-process-guard-{}.pid", std::process::id()));
-        let mut child = Command::new("sleep").arg("10").spawn().expect("sleep should start");
+        let pid_path = std::env::temp_dir().join(format!(
+            "qubit-escaped-process-guard-{}.pid",
+            std::process::id()
+        ));
+        let mut child = Command::new("sleep")
+            .arg("10")
+            .spawn()
+            .expect("sleep should start");
         let child_pid = child.id();
         fs::write(&pid_path, child_pid.to_string()).expect("PID file should be written");
         let waiter = thread::spawn(move || child.wait().expect("sleep should be reaped"));
@@ -135,8 +146,10 @@ mod tests {
 
     #[test]
     fn test_wait_until_recorded_ignores_empty_pid_file() {
-        let pid_path =
-            std::env::temp_dir().join(format!("qubit-escaped-process-guard-empty-{}.pid", std::process::id()));
+        let pid_path = std::env::temp_dir().join(format!(
+            "qubit-escaped-process-guard-empty-{}.pid",
+            std::process::id()
+        ));
         fs::write(&pid_path, "").expect("empty PID file should be written");
         let path_for_writer = pid_path.clone();
         thread::spawn(move || {

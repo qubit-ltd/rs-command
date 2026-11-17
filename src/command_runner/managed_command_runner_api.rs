@@ -721,7 +721,9 @@ fn collect(mut handle: crate::CommandOperation) -> Result<crate::CommandOutput, 
 ///
 /// Returns an error if the outcome cannot be read.
 #[cfg(feature = "async")]
-async fn collect_async(mut handle: crate::AsyncCommandOperation) -> Result<crate::CommandOutput, CommandError> {
+async fn collect_async(
+    mut handle: crate::AsyncCommandOperation,
+) -> Result<crate::CommandOutput, CommandError> {
     let outcome = handle
         .wait_outcome()
         .await
@@ -752,7 +754,9 @@ fn map_outcome(
         qubit_operation::OperationOutcome::ChildFailed(failure) => {
             Err(managed_error(failure.outcome.summary.as_str().to_owned()))
         }
-        qubit_operation::OperationOutcome::Panicked(panic) => Err(managed_error(panic.summary.as_str().to_owned())),
+        qubit_operation::OperationOutcome::Panicked(panic) => {
+            Err(managed_error(panic.summary.as_str().to_owned()))
+        }
         qubit_operation::OperationOutcome::ExecutionFailed(failure) => {
             Err(managed_error(failure.summary.as_str().to_owned()))
         }
@@ -770,7 +774,9 @@ fn map_outcome(
 fn managed_error(message: String) -> CommandError {
     CommandError::from_reason(
         "<managed command>",
-        crate::CommandErrorReason::ManagedOperationFailed { diagnostic: message },
+        crate::CommandErrorReason::ManagedOperationFailed {
+            diagnostic: message,
+        },
         None,
     )
 }

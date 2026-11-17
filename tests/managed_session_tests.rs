@@ -71,11 +71,15 @@ fn test_managed_session_returns_endpoints_and_streams_both_pipes() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
     let runner = CommandRunner::new(Duration::from_secs(5));
-    let mut session = block_on(runner.start_session(
-        &executor,
-        Command::new("sh").arg("-c").arg("printf out; printf err >&2"),
-        Default::default(),
-    ))
+    let mut session = block_on(
+        runner.start_session(
+            &executor,
+            Command::new("sh")
+                .arg("-c")
+                .arg("printf out; printf err >&2"),
+            Default::default(),
+        ),
+    )
     .unwrap();
     let mut stdin = session.take_stdin().unwrap();
     block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).unwrap();
@@ -137,7 +141,10 @@ fn test_managed_session_input_flush_and_buffering_round_trip() {
     let mut stdin = session.take_stdin().unwrap();
     assert!(stdin.is_buffered());
     assert_eq!(
-        block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_write(cx, b"session input"))).unwrap(),
+        block_on(poll_fn(
+            |cx| Pin::new(&mut stdin).poll_write(cx, b"session input")
+        ))
+        .unwrap(),
         13
     );
     block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_flush(cx))).unwrap();
@@ -164,11 +171,15 @@ fn test_managed_session_applies_runner_total_output_budget() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
     let runner = CommandRunner::without_timeout().max_total_output_bytes(8);
-    let mut session = block_on(runner.start_session(
-        &executor,
-        Command::new("sh").arg("-c").arg("printf 12345678901234567890"),
-        CommandRunOptions::new(),
-    ))
+    let mut session = block_on(
+        runner.start_session(
+            &executor,
+            Command::new("sh")
+                .arg("-c")
+                .arg("printf 12345678901234567890"),
+            CommandRunOptions::new(),
+        ),
+    )
     .unwrap();
     let mut stdin = session.take_stdin().unwrap();
     let mut stdout = session.take_stdout().unwrap();
@@ -179,7 +190,10 @@ fn test_managed_session_applies_runner_total_output_budget() {
         let out_reader = scope.spawn(|| block_on(read_all(&mut stdout)));
         let err_reader = scope.spawn(|| block_on(read_all(&mut stderr)));
         block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).unwrap();
-        (out_reader.join().unwrap().unwrap(), err_reader.join().unwrap().unwrap())
+        (
+            out_reader.join().unwrap().unwrap(),
+            err_reader.join().unwrap().unwrap(),
+        )
     });
     assert!(!out.is_empty());
     assert!(err.is_empty());
@@ -217,19 +231,27 @@ fn test_dropping_session_requests_stop_and_preserves_observable_settlement() {
         if let Some(stop) = observer.snapshot().stop {
             break stop;
         }
-        assert!(std::time::Instant::now() < deadline, "session drop must request stop");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "session drop must request stop"
+        );
         thread::yield_now();
     };
     assert_eq!(stop.reason, StopReason::UserCancelled);
     let shutdown = executor.request_shutdown(ShutdownMode::Drain);
     let _ = shutdown.wait_for(Duration::from_secs(5)).unwrap();
     assert!(matches!(
-        observer.wait_settlement_for(Duration::from_secs(5)).unwrap(),
+        observer
+            .wait_settlement_for(Duration::from_secs(5))
+            .unwrap(),
         SettlementWait::Ready(_)
     ));
 }
 
-async fn futures_join<A: std::future::Future, B: std::future::Future>(a: A, b: B) -> (A::Output, B::Output) {
+async fn futures_join<A: std::future::Future, B: std::future::Future>(
+    a: A,
+    b: B,
+) -> (A::Output, B::Output) {
     let mut a = Box::pin(a);
     let mut b = Box::pin(b);
     let mut ao = None;

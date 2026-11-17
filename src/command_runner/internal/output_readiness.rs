@@ -54,7 +54,10 @@ pub(super) type OutputFd = std::os::windows::io::RawHandle;
 /// Returns an I/O error if polling fails for a reason other than an
 /// interrupted system call, which is retried internally.
 #[cfg(unix)]
-pub(super) fn wait_output_readiness(fd: OutputFd, cancellation: &IoCancellationToken) -> io::Result<OutputReadiness> {
+pub(super) fn wait_output_readiness(
+    fd: OutputFd,
+    cancellation: &IoCancellationToken,
+) -> io::Result<OutputReadiness> {
     if cancellation.wait_for_fd(fd, libc::POLLIN)? {
         Ok(OutputReadiness::Readable(8 * 1024))
     } else {
@@ -81,7 +84,10 @@ pub(super) fn wait_output_readiness(fd: OutputFd, cancellation: &IoCancellationT
 /// Returns the operating-system error from `PeekNamedPipe` unless it reports
 /// a broken pipe, which is returned as `Eof`.
 #[cfg(windows)]
-pub(super) fn wait_output_readiness(fd: OutputFd, cancellation: &IoCancellationToken) -> io::Result<OutputReadiness> {
+pub(super) fn wait_output_readiness(
+    fd: OutputFd,
+    cancellation: &IoCancellationToken,
+) -> io::Result<OutputReadiness> {
     use std::ffi::c_void;
     unsafe extern "system" {
         /// Observes bytes available in the named pipe without consuming them.

@@ -61,7 +61,12 @@ pub(crate) fn harness_metadata_command(cargo: &OsStr, root: &Path, manifest: &Pa
     command
 }
 
-pub(crate) fn harness_test_command(cargo: &OsStr, root: &Path, manifest: &Path, target: &Path) -> Command {
+pub(crate) fn harness_test_command(
+    cargo: &OsStr,
+    root: &Path,
+    manifest: &Path,
+    target: &Path,
+) -> Command {
     let mut command = Command::new(cargo);
     command
         .arg("test")
@@ -76,7 +81,9 @@ pub(crate) fn harness_test_command(cargo: &OsStr, root: &Path, manifest: &Path, 
 }
 
 fn field<'a>(value: &'a Value, key: &str) -> Result<&'a Value, String> {
-    value.get(key).ok_or_else(|| format!("metadata missing {key}"))
+    value
+        .get(key)
+        .ok_or_else(|| format!("metadata missing {key}"))
 }
 
 fn string<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -129,7 +136,10 @@ fn production_graph(metadata: &Value, base: &Path) -> Result<Graph, String> {
         .ok_or("metadata resolve.nodes is not an array")?;
     let mut ids = BTreeMap::new();
     for package in packages {
-        ids.insert(string(package, "id")?.to_owned(), package_id(package, base)?);
+        ids.insert(
+            string(package, "id")?.to_owned(),
+            package_id(package, base)?,
+        );
     }
     let roots = packages
         .iter()
@@ -137,7 +147,10 @@ fn production_graph(metadata: &Value, base: &Path) -> Result<Graph, String> {
         .map(|package| string(package, "id").map(str::to_owned))
         .collect::<Result<Vec<_>, _>>()?;
     if roots.len() != 1 {
-        return Err(format!("expected one qubit-command package, found {}", roots.len()));
+        return Err(format!(
+            "expected one qubit-command package, found {}",
+            roots.len()
+        ));
     }
     let mut graph = Graph {
         roots: roots.clone(),
@@ -150,7 +163,10 @@ fn production_graph(metadata: &Value, base: &Path) -> Result<Graph, String> {
             .ok_or_else(|| format!("resolve node has unknown package {id}"))?
             .clone();
         let mut edges = Vec::new();
-        for dependency in field(node, "deps")?.as_array().ok_or("node deps is not an array")? {
+        for dependency in field(node, "deps")?
+            .as_array()
+            .ok_or("node deps is not an array")?
+        {
             let dep_name = string(dependency, "name")?.to_owned();
             let target_ids = field(dependency, "pkg")?
                 .as_str()
@@ -207,7 +223,10 @@ fn closure(graph: &Graph) -> Result<Closure, String> {
                 target.clone(),
                 format!("{kind}:{condition}"),
             ));
-            if let Some((target_id, _)) = graph.nodes.iter().find(|(_, (candidate, _))| candidate == target)
+            if let Some((target_id, _)) = graph
+                .nodes
+                .iter()
+                .find(|(_, (candidate, _))| candidate == target)
                 && !seen.contains(target_id)
             {
                 queue.push_back(target_id.clone());
@@ -221,7 +240,11 @@ fn closure(graph: &Graph) -> Result<Closure, String> {
     Ok((identities, edges))
 }
 
-pub(crate) fn compare_metadata(baseline: &Value, harness: &Value, base: &Path) -> Result<(), String> {
+pub(crate) fn compare_metadata(
+    baseline: &Value,
+    harness: &Value,
+    base: &Path,
+) -> Result<(), String> {
     let baseline_graph = production_graph(baseline, base)?;
     let harness_graph = production_graph(harness, base)?;
     let (base_packages, base_edges) = closure(&baseline_graph)?;

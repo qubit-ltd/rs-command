@@ -71,7 +71,10 @@ fn test_owned_preparation_failure_retains_and_reports_recovery() {
             options,
         )
         .unwrap();
-    assert!(matches!(operation.wait_outcome().unwrap(), OperationOutcome::Failed(_)));
+    assert!(matches!(
+        operation.wait_outcome().unwrap(),
+        OperationOutcome::Failed(_)
+    ));
     let settlement = operation.wait_settlement().unwrap();
     let external = settlement
         .external_settlement
@@ -91,7 +94,10 @@ fn test_owned_preparation_failure_retains_and_reports_recovery() {
     assert!(!external.recoveries_truncated);
     assert_eq!(settlement.resource_reports_total, 1);
     assert_eq!(settlement.effects_total, 1);
-    assert_eq!(settlement.effects[0].fact, qubit_operation::EffectFact::Unknown);
+    assert_eq!(
+        settlement.effects[0].fact,
+        qubit_operation::EffectFact::Unknown
+    );
     assert!(settlement.effects[0].resource_id.is_some());
 }
 
@@ -240,6 +246,9 @@ fn test_async_wait_future_is_lazy_and_cancelled_waiter_is_removed() {
             (outcome, settlement)
         }
     });
-    assert!(matches!(second_outcome.unwrap(), OperationOutcome::Succeeded(_)));
+    assert!(matches!(
+        second_outcome.unwrap(),
+        OperationOutcome::Succeeded(_)
+    ));
     assert!(second_settlement.all_released());
 }

@@ -38,7 +38,11 @@ pub(super) struct ScriptedChild {
 
 impl ScriptedChild {
     /// Creates a wrapper that records operations and delegates unscripted work.
-    pub(super) fn new(name: &'static str, inner: Box<dyn ChildWrapper>, calls: Arc<Mutex<Vec<String>>>) -> Self {
+    pub(super) fn new(
+        name: &'static str,
+        inner: Box<dyn ChildWrapper>,
+        calls: Arc<Mutex<Vec<String>>>,
+    ) -> Self {
         Self {
             name,
             inner,

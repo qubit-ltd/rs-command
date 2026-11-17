@@ -210,7 +210,11 @@ impl fmt::Debug for CommandErrorReason {
                 .debug_struct("NonRegularInputFile")
                 .field("path", &redacted_debug_text(path))
                 .finish(),
-            Self::OpenOutputFailed { stream, path, source } => formatter
+            Self::OpenOutputFailed {
+                stream,
+                path,
+                source,
+            } => formatter
                 .debug_struct("OpenOutputFailed")
                 .field("stream", stream)
                 .field("path", &redacted_debug_text(path))
@@ -261,13 +265,20 @@ impl fmt::Debug for CommandErrorReason {
                 .debug_struct("WriteInputFailed")
                 .field("source", &io_source_summary(source))
                 .finish(),
-            Self::WriteOutputFailed { stream, path, source } => formatter
+            Self::WriteOutputFailed {
+                stream,
+                path,
+                source,
+            } => formatter
                 .debug_struct("WriteOutputFailed")
                 .field("stream", stream)
                 .field("path", &redacted_debug_text(path))
                 .field("source", &io_source_summary(source))
                 .finish(),
-            Self::TimedOut { timeout } => formatter.debug_struct("TimedOut").field("timeout", timeout).finish(),
+            Self::TimedOut { timeout } => formatter
+                .debug_struct("TimedOut")
+                .field("timeout", timeout)
+                .finish(),
             Self::Cancelled => formatter.write_str("Cancelled"),
             Self::ManagedOperationFailed { .. } => {
                 formatter.write_str("ManagedOperationFailed { diagnostic: <redacted> }")
@@ -278,7 +289,10 @@ impl fmt::Debug for CommandErrorReason {
                 .field("limit", limit)
                 .field("observed", observed)
                 .finish(),
-            Self::UnexpectedExit { exit_code, expected } => formatter
+            Self::UnexpectedExit {
+                exit_code,
+                expected,
+            } => formatter
                 .debug_struct("UnexpectedExit")
                 .field("exit_code", exit_code)
                 .field("expected", expected)

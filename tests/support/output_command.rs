@@ -15,7 +15,9 @@ pub(crate) fn output_command(stdout: &[u8], stderr: &[u8], exit_code: i32) -> Co
     {
         let stdout = printf_octal(stdout);
         let stderr = printf_octal(stderr);
-        Command::shell(&format!("printf '{stdout}'; printf '{stderr}' >&2; exit {exit_code}"))
+        Command::shell(&format!(
+            "printf '{stdout}'; printf '{stderr}' >&2; exit {exit_code}"
+        ))
     }
     #[cfg(windows)]
     {
@@ -39,5 +41,9 @@ fn printf_octal(bytes: &[u8]) -> String {
 
 #[cfg(windows)]
 fn powershell_bytes(bytes: &[u8]) -> String {
-    bytes.iter().map(u8::to_string).collect::<Vec<_>>().join(",")
+    bytes
+        .iter()
+        .map(u8::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
 }

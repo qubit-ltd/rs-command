@@ -78,7 +78,9 @@ impl SessionBridge for Bridge {
     }
     /// Reports whether combined output reached its termination limit.
     fn output_budget_exceeded(&self) -> bool {
-        self.output_budget.as_ref().is_some_and(|budget| budget.exceeded())
+        self.output_budget
+            .as_ref()
+            .is_some_and(|budget| budget.exceeded())
     }
     /// Returns the configured combined output limit.
     fn output_budget_limit(&self) -> Option<u64> {
@@ -86,6 +88,8 @@ impl SessionBridge for Bridge {
     }
     /// Returns bytes counted against the combined output limit.
     fn output_bytes_observed(&self) -> u64 {
-        self.output_budget.as_ref().map_or(0, |budget| budget.observed())
+        self.output_budget
+            .as_ref()
+            .map_or(0, |budget| budget.observed())
     }
 }

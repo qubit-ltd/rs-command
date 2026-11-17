@@ -105,7 +105,10 @@ impl qubit_io::AsyncOutput for CommandStdin {
         count: usize,
     ) -> Poll<io::Result<usize>> {
         let Some(end) = index.checked_add(count) else {
-            return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidInput, "input range overflow")));
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "input range overflow",
+            )));
         };
         let Some(slice) = input.get(index..end) else {
             return Poll::Ready(Err(io::Error::new(

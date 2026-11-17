@@ -19,5 +19,7 @@ pub enum CommandExecutorCreateError {
     WorkerStartFailed,
     /// Preserves the operation manager group binding failure.
     #[error("failed to bind command service operation group: {0}")]
-    GroupBinding(#[doc = "The operation group binding failure."] qubit_operation::GroupBindingError),
+    GroupBinding(
+        #[doc = "The operation group binding failure."] qubit_operation::GroupBindingError,
+    ),
 }

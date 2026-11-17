@@ -56,13 +56,17 @@ pub(crate) fn run_for_with_env(
     body: impl FnOnce(),
 ) -> Result<(), String> {
     if std::env::var_os(CHILD_ENV).is_some() {
-        let gate = std::env::var_os(GATE_ENV).expect("managed test parent should provide a start gate");
+        let gate =
+            std::env::var_os(GATE_ENV).expect("managed test parent should provide a start gate");
         let gate = std::path::PathBuf::from(gate);
         let deadline = Instant::now() + Duration::from_secs(5);
         while !gate.exists() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(5));
         }
-        assert!(gate.exists(), "parent should release the managed test start gate");
+        assert!(
+            gate.exists(),
+            "parent should release the managed test start gate"
+        );
         body();
         return Ok(());
     }
@@ -78,25 +82,40 @@ pub(crate) fn run_for_with_env(
     if let Some(path) = &ack_path {
         let _ = fs::remove_file(path);
     }
-    let mut child = Command::new(std::env::current_exe().expect("test executable should be available"))
-        .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
-        .env(CHILD_ENV, "1")
-        .env(PID_ENV, pid_path.unwrap_or_else(|| std::path::Path::new("")))
-        .env(GATE_ENV, &gate_path)
-        .envs(extra_env.iter().copied())
-        .env(ABORT_ENV, abort_path.as_deref().unwrap_or(std::path::Path::new("")))
-        .env(ACK_ENV, ack_path.as_deref().unwrap_or(std::path::Path::new("")))
-        .process_group(0)
-        .spawn()
-        .expect("managed test subprocess should start");
+    let mut child =
+        Command::new(std::env::current_exe().expect("test executable should be available"))
+            .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+            .env(CHILD_ENV, "1")
+            .env(
+                PID_ENV,
+                pid_path.unwrap_or_else(|| std::path::Path::new("")),
+            )
+            .env(GATE_ENV, &gate_path)
+            .envs(extra_env.iter().copied())
+            .env(
+                ABORT_ENV,
+                abort_path.as_deref().unwrap_or(std::path::Path::new("")),
+            )
+            .env(
+                ACK_ENV,
+                ack_path.as_deref().unwrap_or(std::path::Path::new("")),
+            )
+            .process_group(0)
+            .spawn()
+            .expect("managed test subprocess should start");
     fs::write(&gate_path, b"start").expect("managed test start gate should open");
     let deadline = Instant::now() + watchdog;
     loop {
-        match child.try_wait().expect("managed test subprocess should be observable") {
+        match child
+            .try_wait()
+            .expect("managed test subprocess should be observable")
+        {
             Some(status) => {
-                let pgid = i32::try_from(child.id()).map_err(|error| format!("test PID overflow: {error}"))?;
+                let pgid = i32::try_from(child.id())
+                    .map_err(|error| format!("test PID overflow: {error}"))?;
                 let test_group_cleanup = cleanup_unexpected_test_group(pgid);
-                let command_group_cleanup = pid_path.map(cleanup_unexpected_command_group).transpose();
+                let command_group_cleanup =
+                    pid_path.map(cleanup_unexpected_command_group).transpose();
                 test_group_cleanup?;
                 command_group_cleanup?;
                 if status.success() {
@@ -112,17 +131,26 @@ pub(crate) fn run_for_with_env(
                     Some(
                         fs::write(abort_path, b"abort")
                             .map_err(|error| format!("request command start abort: {error}"))
-                            .and_then(|()| wait_for_spawn_resolution(pid_path, ack_path, Duration::from_secs(3))),
+                            .and_then(|()| {
+                                wait_for_spawn_resolution(
+                                    pid_path,
+                                    ack_path,
+                                    Duration::from_secs(3),
+                                )
+                            }),
                     )
                 } else {
                     None
                 };
-                let pgid = i32::try_from(child.id()).map_err(|error| format!("test PID overflow: {error}"))?;
+                let pgid = i32::try_from(child.id())
+                    .map_err(|error| format!("test PID overflow: {error}"))?;
                 let group_kill = unsafe { libc::kill(-pgid, libc::SIGKILL) };
                 if group_kill != 0 {
                     let error = std::io::Error::last_os_error();
                     if error.raw_os_error() != Some(libc::ESRCH) {
-                        return Err(format!("watchdog should terminate test process group: {error}"));
+                        return Err(format!(
+                            "watchdog should terminate test process group: {error}"
+                        ));
                     }
                 }
                 child
@@ -138,7 +166,9 @@ pub(crate) fn run_for_with_env(
                     }
                     if matches!(resolution, Some(Ok(SpawnResolution::NotStarted))) {
                         if pid_path.exists() {
-                            return Err("command PID appeared after not-started acknowledgement".to_owned());
+                            return Err(
+                                "command PID appeared after not-started acknowledgement".to_owned()
+                            );
                         }
                         command_group_clean = true;
                     }
@@ -153,24 +183,30 @@ pub(crate) fn run_for_with_env(
                         cleanup_error = Some(error.clone());
                     }
                     if !command_group_clean {
-                        return Err(
-                            cleanup_error.unwrap_or_else(|| "command process cleanup was not acknowledged".to_owned())
-                        );
+                        return Err(cleanup_error.unwrap_or_else(|| {
+                            "command process cleanup was not acknowledged".to_owned()
+                        }));
                     }
                 } else {
                     command_group_clean = true;
                 }
                 match resolution {
-                    Some(Ok(SpawnResolution::Published)) if pid_path.is_some_and(|p| p.exists()) => {}
-                    Some(Ok(SpawnResolution::NotStarted)) if pid_path.is_some_and(|p| !p.exists()) => {}
+                    Some(Ok(SpawnResolution::Published))
+                        if pid_path.is_some_and(|p| p.exists()) => {}
+                    Some(Ok(SpawnResolution::NotStarted))
+                        if pid_path.is_some_and(|p| !p.exists()) => {}
                     Some(Err(error)) if command_group_clean => {
                         return Err(format!("spawn cleanup handshake failed: {error}"));
                     }
                     _ => {
-                        return Err("spawn cleanup protocol returned an inconsistent state".to_owned());
+                        return Err(
+                            "spawn cleanup protocol returned an inconsistent state".to_owned()
+                        );
                     }
                 }
-                return Err(format!("managed test subprocess exceeded {watchdog:?} watchdog"));
+                return Err(format!(
+                    "managed test subprocess exceeded {watchdog:?} watchdog"
+                ));
             }
         }
     }
@@ -190,7 +226,9 @@ fn cleanup_unexpected_test_group(pgid: i32) -> Result<(), String> {
     if killed != 0 {
         let error = std::io::Error::last_os_error();
         if error.raw_os_error() != Some(libc::ESRCH) {
-            return Err(format!("terminate leftover test process group {pgid}: {error}"));
+            return Err(format!(
+                "terminate leftover test process group {pgid}: {error}"
+            ));
         }
     }
     wait_for_group_gone(pgid, Duration::from_secs(1))?;
@@ -239,7 +277,8 @@ fn wait_for_pid_publication(pid_path: &std::path::Path, timeout: Duration) -> bo
 }
 
 fn cleanup_unexpected_command_group(pid_path: &std::path::Path) -> Result<(), String> {
-    let value = fs::read_to_string(pid_path).map_err(|error| format!("read command PID after test: {error}"))?;
+    let value = fs::read_to_string(pid_path)
+        .map_err(|error| format!("read command PID after test: {error}"))?;
     let pid = value
         .trim()
         .parse::<i32>()
@@ -271,7 +310,9 @@ fn wait_for_group_gone(pgid: i32, timeout: Duration) -> Result<(), String> {
             if matches!(error.raw_os_error(), Some(libc::ESRCH | libc::EPERM)) {
                 return Ok(());
             }
-            return Err(format!("check process group {pgid} after termination: {error}"));
+            return Err(format!(
+                "check process group {pgid} after termination: {error}"
+            ));
         }
         if Instant::now() >= deadline {
             return Err(format!("process group {pgid} remained after {timeout:?}"));

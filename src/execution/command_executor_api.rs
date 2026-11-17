@@ -156,7 +156,9 @@ pub trait CommandExecutorApi {
         runner: CommandRunner,
         command: Command,
         options: CommandResourceRunOptions,
-    ) -> impl std::future::Future<Output = Result<AsyncCommandOperation, CommandResourceSubmitFailure>> + Send;
+    ) -> impl std::future::Future<
+        Output = Result<AsyncCommandOperation, CommandResourceSubmitFailure>,
+    > + Send;
     /// Performs the submit wait resources in step in the managed command
     /// execution lifecycle.
     ///
@@ -172,7 +174,10 @@ pub trait CommandExecutorApi {
         runner: CommandRunner,
         command: Command,
         options: CommandResourceRunOptions,
-    ) -> impl std::future::Future<Output = Result<AsyncCommandOperation, CommandResourceSubmitFailure>> + Send + 'a;
+    ) -> impl std::future::Future<
+        Output = Result<AsyncCommandOperation, CommandResourceSubmitFailure>,
+    > + Send
+    + 'a;
     /// Performs the submit async step in the managed command execution
     /// lifecycle.
     ///

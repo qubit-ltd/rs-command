@@ -16,7 +16,11 @@ use std::io;
 /// * `source` — the I/O error whose kind and raw operating-system code are
 ///   summarized.
 pub(crate) fn io_source_summary(source: &io::Error) -> String {
-    format!("kind={:?}, raw_os_error={:?}", source.kind(), source.raw_os_error())
+    format!(
+        "kind={:?}, raw_os_error={:?}",
+        source.kind(),
+        source.raw_os_error()
+    )
 }
 
 /// Fixed marker used instead of formatting a time error source.

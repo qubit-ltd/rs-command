@@ -36,7 +36,11 @@ impl PreparedFiles {
         stdout: Option<PreparedSink>,
         stderr: Option<PreparedSink>,
     ) -> Self {
-        Self { stdin, stdout, stderr }
+        Self {
+            stdin,
+            stdout,
+            stderr,
+        }
     }
 }
 impl std::fmt::Debug for PreparedFiles {

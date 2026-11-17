@@ -48,7 +48,10 @@ impl Waiters {
     }
     /// Performs the wake all step in the managed command execution lifecycle.
     pub fn wake_all(&mut self) -> Vec<Waker> {
-        self.entries.iter_mut().filter_map(|(_, w)| w.take()).collect()
+        self.entries
+            .iter_mut()
+            .filter_map(|(_, w)| w.take())
+            .collect()
     }
     /// Performs the len step in the managed command execution lifecycle.
     pub fn len(&self) -> usize {

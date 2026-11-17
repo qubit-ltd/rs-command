@@ -44,7 +44,10 @@ impl Reaper {
                 .name(format!("qubit-command-reaper-{name}-{index}"))
                 .spawn(move || {
                     loop {
-                        let task = receiver.lock().unwrap_or_else(|error| error.into_inner()).recv();
+                        let task = receiver
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .recv();
                         match task {
                             Ok(task) => task.reap(),
                             Err(_) => break,
@@ -76,7 +79,9 @@ impl Reaper {
             Err(TrySendError::Full(owner) | TrySendError::Disconnected(owner)) => {
                 match self.overflow_sender.try_send(owner) {
                     Ok(()) => Ok(()),
-                    Err(TrySendError::Full(owner) | TrySendError::Disconnected(owner)) => Err(owner),
+                    Err(TrySendError::Full(owner) | TrySendError::Disconnected(owner)) => {
+                        Err(owner)
+                    }
                 }
             }
         }

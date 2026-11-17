@@ -82,10 +82,19 @@ pub(in crate::command_runner) fn write_stdin_session(
             None,
         )
     })?;
-    prepare_stdin_pipe(&stdin)
-        .map_err(|source| CommandError::from_reason(command, CommandErrorReason::WriteInputFailed { source }, None))?;
+    prepare_stdin_pipe(&stdin).map_err(|source| {
+        CommandError::from_reason(
+            command,
+            CommandErrorReason::WriteInputFailed { source },
+            None,
+        )
+    })?;
     let (cancellation, token) = IoCancellation::pair().map_err(|source| {
-        CommandError::from_reason(command, CommandErrorReason::StartInputThreadFailed { source }, None)
+        CommandError::from_reason(
+            command,
+            CommandErrorReason::StartInputThreadFailed { source },
+            None,
+        )
     })?;
     let bridge = bridge.expect("checked above");
     let bytes = stdin_bytes.unwrap_or_default();
@@ -137,7 +146,9 @@ fn write_session_stdin(
                 return Ok(());
             }
             Ok(count) => {
-                if let Err(error) = write_stdin_until_cancelled(&mut stdin, &buffer[..count], &token) {
+                if let Err(error) =
+                    write_stdin_until_cancelled(&mut stdin, &buffer[..count], &token)
+                {
                     if error.kind() == io::ErrorKind::BrokenPipe {
                         bridge.record_stdin_broken_pipe();
                     }
@@ -179,18 +190,31 @@ fn write_stdin_bytes_with(
     command: &str,
     child: &mut dyn ChildWrapper,
     stdin_bytes: Option<Vec<u8>>,
-    spawn: impl FnOnce(ChildStdin, Vec<u8>, IoCancellationToken) -> io::Result<JoinHandle<io::Result<()>>>,
+    spawn: impl FnOnce(
+        ChildStdin,
+        Vec<u8>,
+        IoCancellationToken,
+    ) -> io::Result<JoinHandle<io::Result<()>>>,
 ) -> Result<OptionalStdinWriter, CommandError> {
     match stdin_bytes {
         Some(bytes) => match child.stdin().take() {
             Some(stdin) => {
                 prepare_stdin_pipe(&stdin).map_err(|source| {
-                    CommandError::from_reason(command, CommandErrorReason::WriteInputFailed { source }, None)
+                    CommandError::from_reason(
+                        command,
+                        CommandErrorReason::WriteInputFailed { source },
+                        None,
+                    )
                 })?;
                 let (cancellation, token) = IoCancellation::pair().map_err(|source| {
-                    CommandError::from_reason(command, CommandErrorReason::StartInputThreadFailed { source }, None)
+                    CommandError::from_reason(
+                        command,
+                        CommandErrorReason::StartInputThreadFailed { source },
+                        None,
+                    )
                 })?;
-                let writer = spawn(stdin, bytes, token).map(|join| Some(StdinWriter::new(join, cancellation)));
+                let writer = spawn(stdin, bytes, token)
+                    .map(|join| Some(StdinWriter::new(join, cancellation)));
                 map_stdin_thread_result(command, writer)
             }
             None => Err(CommandError::from_reason(
@@ -251,7 +275,11 @@ pub(in crate::command_runner) fn map_stdin_thread_result(
     result: io::Result<OptionalStdinWriter>,
 ) -> Result<OptionalStdinWriter, CommandError> {
     result.map_err(|source| {
-        CommandError::from_reason(command, CommandErrorReason::StartInputThreadFailed { source }, None)
+        CommandError::from_reason(
+            command,
+            CommandErrorReason::StartInputThreadFailed { source },
+            None,
+        )
     })
 }
 
@@ -334,7 +362,10 @@ pub(super) fn write_stdin_until_cancelled<W: PollableStdin>(
         }
         match stdin.write(&bytes[offset..]) {
             Ok(0) => {
-                return Err(io::Error::new(io::ErrorKind::WriteZero, "stdin write made no progress"));
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "stdin write made no progress",
+                ));
             }
             Ok(written) => offset += written,
             Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
@@ -451,7 +482,8 @@ mod tests {
 
     #[test]
     fn test_join_stdin_writer_maps_write_failure() {
-        let (cancellation, token) = IoCancellation::pair().expect("cancellation pair should be created");
+        let (cancellation, token) =
+            IoCancellation::pair().expect("cancellation pair should be created");
         let writer = StdinWriter::new(
             thread::spawn(move || {
                 let _token = token;
@@ -460,14 +492,16 @@ mod tests {
             cancellation,
         );
 
-        let error = join_stdin_writer("command", Some(writer)).expect_err("stdin write failure should be mapped");
+        let error = join_stdin_writer("command", Some(writer))
+            .expect_err("stdin write failure should be mapped");
 
         assert_eq!(error.kind(), CommandErrorKind::WriteInputFailed);
     }
 
     #[test]
     fn test_join_stdin_writer_maps_worker_panic() {
-        let (cancellation, token) = IoCancellation::pair().expect("cancellation pair should be created");
+        let (cancellation, token) =
+            IoCancellation::pair().expect("cancellation pair should be created");
         let writer = StdinWriter::new(
             thread::spawn(move || -> io::Result<()> {
                 let _token = token;
@@ -476,7 +510,8 @@ mod tests {
             cancellation,
         );
 
-        let error = join_stdin_writer("command", Some(writer)).expect_err("stdin worker panic should be mapped");
+        let error = join_stdin_writer("command", Some(writer))
+            .expect_err("stdin worker panic should be mapped");
 
         assert_eq!(error.kind(), CommandErrorKind::WriteInputFailed);
     }

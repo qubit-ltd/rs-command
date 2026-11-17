@@ -122,7 +122,8 @@ mod tests {
     #[test]
     fn test_identity_rejects_non_regular_handles() {
         let directory = File::open(std::env::temp_dir()).expect("temp directory should open");
-        let error = validate_files(&[("stdin", &directory)]).expect_err("directories are not valid file streams");
+        let error = validate_files(&[("stdin", &directory)])
+            .expect_err("directories are not valid file streams");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
 }

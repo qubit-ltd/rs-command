@@ -117,7 +117,11 @@ pub(in crate::command_runner) fn open_output_candidate(path: &Path) -> io::Resul
 /// Returns the operating-system error reported while opening `path`.
 #[cfg(not(unix))]
 pub(in crate::command_runner) fn open_output_candidate(path: &Path) -> io::Result<File> {
-    OpenOptions::new().create(true).write(true).truncate(false).open(path)
+    OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
 }
 
 /// Clears the temporary nonblocking flag from a validated Unix file handle.
@@ -325,7 +329,8 @@ fn open_input(
         }
         CommandStdin::File(path) => {
             ensure_regular_input(command, &path)?;
-            let file = open_input_candidate(&path).map_err(|source| open_input_error(command, &path, source))?;
+            let file = open_input_candidate(&path)
+                .map_err(|source| open_input_error(command, &path, source))?;
             ensure_regular_input_handle(command, &path, &file)?;
             clear_nonblocking(&file).map_err(|source| open_input_error(command, &path, source))?;
             Ok((Some(path), Some(file), None))
@@ -348,12 +353,18 @@ fn open_input(
 /// # Errors
 ///
 /// Returns [CommandError] when the file cannot be opened.
-fn open_output(command: &str, stream: OutputStream, path: Option<&Path>) -> Result<Option<FileTee>, CommandError> {
+fn open_output(
+    command: &str,
+    stream: OutputStream,
+    path: Option<&Path>,
+) -> Result<Option<FileTee>, CommandError> {
     path.map(|path| {
         ensure_regular_output(command, stream, path)?;
-        let file = open_output_candidate(path).map_err(|source| open_output_error(command, stream, path, source))?;
+        let file = open_output_candidate(path)
+            .map_err(|source| open_output_error(command, stream, path, source))?;
         ensure_regular_output_handle(command, stream, path, &file)?;
-        clear_nonblocking(&file).map_err(|source| open_output_error(command, stream, path, source))?;
+        clear_nonblocking(&file)
+            .map_err(|source| open_output_error(command, stream, path, source))?;
         Ok(FileTee::new(file, path.to_path_buf()))
     })
     .transpose()
@@ -466,11 +477,16 @@ fn ensure_regular_input(command: &str, path: &Path) -> Result<(), CommandError> 
 /// Returns [`CommandError`] when an existing path is not
 /// an ordinary file, or [`CommandError`] when metadata
 /// inspection fails for a reason other than absence.
-fn ensure_regular_output(command: &str, stream: OutputStream, path: &Path) -> Result<(), CommandError> {
+fn ensure_regular_output(
+    command: &str,
+    stream: OutputStream,
+    path: &Path,
+) -> Result<(), CommandError> {
     match fs::metadata(path) {
         Ok(metadata) if metadata.file_type().is_file() => Ok(()),
         Ok(_) => Err(non_regular_output_error(command, stream, path)),
-        Err(source) if source.kind() == io::ErrorKind::NotFound => match fs::symlink_metadata(path) {
+        Err(source) if source.kind() == io::ErrorKind::NotFound => match fs::symlink_metadata(path)
+        {
             Ok(_) => Err(non_regular_output_error(command, stream, path)),
             Err(link_source) if link_source.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(link_source) => Err(inspect_error(command, path, link_source)),
@@ -560,7 +576,10 @@ fn validate_normalized_paths(
 ///
 /// Returns [CommandError] when the current directory or
 /// an existing path cannot be resolved.
-fn normalized_path(command: &str, path: Option<&Path>) -> Result<Option<Option<PathBuf>>, CommandError> {
+fn normalized_path(
+    command: &str,
+    path: Option<&Path>,
+) -> Result<Option<Option<PathBuf>>, CommandError> {
     path.map(|path| {
         let absolute = if path.is_absolute() {
             path.to_path_buf()
@@ -669,7 +688,10 @@ fn validate_file_identities(
 ///
 /// Returns [CommandError] when cloning or inspecting
 /// the file fails.
-fn file_handle(command: &str, file: Option<(&Path, &File)>) -> Result<Option<Handle>, CommandError> {
+fn file_handle(
+    command: &str,
+    file: Option<(&Path, &File)>,
+) -> Result<Option<Handle>, CommandError> {
     file.map(|(path, file)| {
         let clone = file
             .try_clone()
@@ -754,7 +776,12 @@ fn truncate_outputs_with(
     stdout_file: Option<&File>,
     stderr_path: Option<&Path>,
     stderr_file: Option<&File>,
-    mut truncate: impl FnMut(&str, OutputStream, Option<&Path>, Option<&File>) -> Result<(), CommandError>,
+    mut truncate: impl FnMut(
+        &str,
+        OutputStream,
+        Option<&Path>,
+        Option<&File>,
+    ) -> Result<(), CommandError>,
 ) -> Result<(), CommandError> {
     truncate(command, OutputStream::Stdout, stdout_path, stdout_file)?;
     truncate(command, OutputStream::Stderr, stderr_path, stderr_file)
@@ -860,7 +887,12 @@ fn open_input_error(command: &str, path: &Path, source: io::Error) -> CommandErr
 /// * `stream` - Stream attributed to this reader.
 /// * `path` - Filesystem path involved in this operation.
 /// * `source` - Underlying I/O error to inspect or preserve.
-fn open_output_error(command: &str, stream: OutputStream, path: &Path, source: io::Error) -> CommandError {
+fn open_output_error(
+    command: &str,
+    stream: OutputStream,
+    path: &Path,
+    source: io::Error,
+) -> CommandError {
     CommandError::from_reason(
         command,
         CommandErrorReason::OpenOutputFailed {
@@ -917,7 +949,8 @@ mod tests {
     #[test]
     fn test_truncate_output_maps_injected_set_len_failure() {
         let output = tempfile::NamedTempFile::new().expect("output fixture should be created");
-        std::fs::write(output.path(), b"preserve-on-failure").expect("output fixture should be populated");
+        std::fs::write(output.path(), b"preserve-on-failure")
+            .expect("output fixture should be populated");
         let file = OpenOptions::new()
             .write(true)
             .open(output.path())
@@ -980,7 +1013,10 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(std::fs::read(stdout.path()).expect("stdout should be readable"), b"",);
+        assert_eq!(
+            std::fs::read(stdout.path()).expect("stdout should be readable"),
+            b"",
+        );
         assert_eq!(
             std::fs::read(stderr.path()).expect("stderr should be readable"),
             b"old stderr",

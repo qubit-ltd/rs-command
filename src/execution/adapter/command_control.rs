@@ -80,7 +80,10 @@ impl CommandControl {
     ///
     /// # Parameters
     /// * `outcome`: Supplies the outcome value used by this operation.
-    pub(crate) fn publish_outcome(&self, outcome: OperationOutcome<CommandOutput, CommandError>) -> bool {
+    pub(crate) fn publish_outcome(
+        &self,
+        outcome: OperationOutcome<CommandOutput, CommandError>,
+    ) -> bool {
         let wakers = {
             let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
             let Some(id) = s.id else {
@@ -90,14 +93,24 @@ impl CommandControl {
                 return false;
             }
             let (kind, diagnostic): (ChildOutcomeKind, String) = match &outcome {
-                OperationOutcome::Succeeded(_) => (ChildOutcomeKind::Succeeded, "command succeeded".to_owned()),
-                OperationOutcome::Failed(e) => (ChildOutcomeKind::Failed, e.to_string()),
-                OperationOutcome::ChildFailed(e) => (ChildOutcomeKind::Failed, e.outcome.summary.as_str().to_owned()),
-                OperationOutcome::Stopped(_) => (ChildOutcomeKind::Stopped, "command stopped".to_owned()),
-                OperationOutcome::Panicked(p) => (ChildOutcomeKind::Panicked, p.summary.as_str().to_owned()),
-                OperationOutcome::ExecutionFailed(f) => {
-                    (ChildOutcomeKind::ExecutionFailed, f.summary.as_str().to_owned())
+                OperationOutcome::Succeeded(_) => {
+                    (ChildOutcomeKind::Succeeded, "command succeeded".to_owned())
                 }
+                OperationOutcome::Failed(e) => (ChildOutcomeKind::Failed, e.to_string()),
+                OperationOutcome::ChildFailed(e) => (
+                    ChildOutcomeKind::Failed,
+                    e.outcome.summary.as_str().to_owned(),
+                ),
+                OperationOutcome::Stopped(_) => {
+                    (ChildOutcomeKind::Stopped, "command stopped".to_owned())
+                }
+                OperationOutcome::Panicked(p) => {
+                    (ChildOutcomeKind::Panicked, p.summary.as_str().to_owned())
+                }
+                OperationOutcome::ExecutionFailed(f) => (
+                    ChildOutcomeKind::ExecutionFailed,
+                    f.summary.as_str().to_owned(),
+                ),
             };
             s.summary = Some(ChildOutcomeSummary {
                 operation_id: id,
@@ -154,7 +167,10 @@ impl CommandControl {
     ///
     /// # Parameters
     /// * `cx`: Supplies the cx value used by this operation.
-    pub(crate) fn take(&self, cx: &mut Context<'_>) -> Poll<OperationOutcome<CommandOutput, CommandError>> {
+    pub(crate) fn take(
+        &self,
+        cx: &mut Context<'_>,
+    ) -> Poll<OperationOutcome<CommandOutput, CommandError>> {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(out) = s.outcome.take() {
             return Poll::Ready(out);
@@ -183,7 +199,9 @@ impl OperationControl for CommandControl {
     fn snapshot(&self) -> ChildSnapshot {
         let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         ChildSnapshot {
-            operation_id: s.id.expect("operation manager binds before observing child"),
+            operation_id: s
+                .id
+                .expect("operation manager binds before observing child"),
             execution: s.phase,
             stop: s.stop.clone(),
             outcome: s.summary.clone(),
