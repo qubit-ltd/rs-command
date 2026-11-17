@@ -51,3 +51,43 @@ fn test_managed_backend_resolves_relative_tee_paths_from_runner_directory() {
     assert_eq!(std::fs::read(directory.path().join("stdout.log")).unwrap(), b"stdout");
     assert_eq!(std::fs::read(directory.path().join("stderr.log")).unwrap(), b"stderr");
 }
+
+#[test]
+fn test_managed_spawn_failure_publishes_failure_and_released_settlement() {
+    use std::time::Duration;
+
+    use qubit_command::Command;
+    use qubit_command::CommandErrorReason;
+    use qubit_command::CommandExecutionConfig;
+    use qubit_command::CommandExecutor;
+    use qubit_command::CommandRunner;
+    use qubit_operation::ManagerOptions;
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOutcome;
+    use qubit_operation::SettlementStatus;
+
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let mut operation = executor
+        .submit(
+            CommandRunner::new(Duration::from_secs(5)),
+            Command::new("__qubit_command_missing_executable_for_managed_test__"),
+            Default::default(),
+        )
+        .unwrap();
+    match operation.wait_outcome().unwrap() {
+        OperationOutcome::Failed(error) => {
+            assert!(matches!(
+                error.reason(),
+                CommandErrorReason::SpawnFailed { .. }
+            ));
+        }
+        other => panic!("missing executable should fail: {other:?}"),
+    }
+    let settlement = operation.wait_settlement().unwrap();
+    assert!(settlement.all_released());
+    assert_eq!(
+        settlement.external_settlement.as_ref().unwrap().status,
+        SettlementStatus::Released
+    );
+}
