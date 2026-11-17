@@ -326,4 +326,16 @@ mod tests {
         completed.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(matches!(completed.try_recv(), Err(mpsc::TryRecvError::Disconnected)));
     }
+
+    #[test]
+    fn test_completion_after_receiver_drop_is_recorded_without_panicking() {
+        let (observer, completed) = ReaperObserver::pair();
+        drop(completed);
+
+        observer.complete();
+        observer.complete();
+
+        assert!(observer.is_complete());
+        assert!(!observer.is_pending());
+    }
 }

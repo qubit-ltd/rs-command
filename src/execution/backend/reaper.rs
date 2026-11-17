@@ -147,6 +147,20 @@ mod tests {
     }
 
     #[test]
+    fn test_global_reaper_initializes_once_and_accepts_cleanup_handoff() {
+        let first = Reaper::global().expect("global reaper should initialize");
+        let second = Reaper::global().expect("global reaper should remain available");
+        assert!(std::ptr::eq(first, second));
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let owner = ReaperOwner::new(move || done_tx.send(()).unwrap());
+        first.handoff(owner).expect("available queue should accept owner");
+        done_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("reaper worker should complete the handed-off cleanup");
+    }
+
+    #[test]
     fn test_reaper_observer_tracks_pending_completion_and_notifies_once() {
         let (observer, completed) = ReaperObserver::pair();
         assert!(!observer.is_pending());

@@ -467,6 +467,7 @@ mod activation_failure_tests {
     use crate::execution::contracts::IoPathSnapshot;
     use crate::execution::contracts::Request;
     use crate::execution::contracts::RequestOptions;
+    use crate::execution::contracts::RecoveryOwner;
     use crate::execution::contracts::Scheduler;
 
     struct InlineScheduler;
@@ -515,6 +516,24 @@ mod activation_failure_tests {
             sink.confirm_input_release().unwrap();
             sink.publish_settlement(Arc::new(super::released_report(activated.operation_id)))
                 .unwrap();
+        }
+    }
+
+    struct DropObservedRecoveryOwner(Arc<AtomicBool>);
+
+    impl Drop for DropObservedRecoveryOwner {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    impl RecoveryOwner for DropObservedRecoveryOwner {
+        fn summary(&self) -> String {
+            "test recovery owner".to_owned()
+        }
+
+        fn retry_cleanup(&self) -> Result<(), crate::execution::contracts::RecoveryRetryError> {
+            Ok(())
         }
     }
     use crate::execution::scheduler::BoundedScheduler;
@@ -837,5 +856,24 @@ mod activation_failure_tests {
             Err(crate::execution::contracts::FactPublishError::DuplicateSettlement)
         );
         assert_eq!(OperationControl::snapshot(&*state).operation_id, id);
+    }
+
+    #[test]
+    fn test_recovery_owner_is_returned_when_adapter_has_no_operation_identity() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let state = make_state(scheduler, permit);
+        let dropped = Arc::new(AtomicBool::new(false));
+        let failure = crate::execution::contracts::FactSink::retain_recovery_owner(
+            &*state,
+            Box::new(DropObservedRecoveryOwner(Arc::clone(&dropped))),
+        )
+        .expect_err("an unbound adapter cannot retain an operation-scoped owner");
+
+        assert_eq!(failure.reason, crate::execution::contracts::RecoveryPublishError::StoreUnavailable);
+        assert!(!dropped.load(Ordering::SeqCst), "failure must preserve owner ownership");
+        assert_eq!(failure.owner.summary(), "test recovery owner");
+        drop(failure);
+        assert!(dropped.load(Ordering::SeqCst), "returned owner remains caller-owned");
     }
 }

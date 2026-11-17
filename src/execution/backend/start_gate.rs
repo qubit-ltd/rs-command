@@ -316,6 +316,16 @@ mod tests {
     }
 
     #[test]
+    fn test_attaching_absent_external_cancellation_leaves_gate_authorizable() {
+        let gate = StartGate::default();
+        gate.attach_external_cancellation(None);
+
+        assert!(!gate.stop_requested());
+        assert_eq!(gate.stop_reason(), None);
+        assert!(gate.authorize().is_some());
+    }
+
+    #[test]
     fn test_attaching_pre_cancelled_external_token_stops_and_cancels_gate() {
         let gate = StartGate::default();
         let gate_cancellation = gate.cancellation();

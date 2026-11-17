@@ -1354,8 +1354,15 @@ fn make_request(
 
 #[cfg(test)]
 mod executor_decision_tests {
+    use std::task::Waker;
+
+    use qubit_operation::ClockDomainId;
+    use qubit_operation::ClockSource;
     use qubit_operation::ContextOptions;
+    use qubit_operation::Deadline;
+    use qubit_operation::MonotonicTime;
     use qubit_operation::OperationContext;
+    use qubit_operation::TimerRegistration;
 
     use super::deadline_failure;
     #[cfg(feature = "async")]
@@ -1365,6 +1372,24 @@ mod executor_decision_tests {
     use crate::execution::CommandSubmitFailureReason;
     use crate::execution::SnapshotFailure;
     use crate::execution::scheduler::BoundedScheduler;
+
+    struct FixedClock(ClockDomainId);
+
+    impl ClockSource for FixedClock {
+        fn now(&self) -> MonotonicTime {
+            MonotonicTime::new(self.0, 0)
+        }
+
+        fn register_deadline(&self, _: MonotonicTime, _: Waker) -> Box<dyn TimerRegistration> {
+            Box::new(NoopRegistration)
+        }
+    }
+
+    struct NoopRegistration;
+
+    impl TimerRegistration for NoopRegistration {
+        fn cancel(self: Box<Self>) {}
+    }
 
     #[test]
     fn test_retry_decision_preserves_other_failures_and_retries_manager_busy() {
@@ -1382,6 +1407,25 @@ mod executor_decision_tests {
             0,
             None,
         ));
+    }
+
+    #[test]
+    fn test_expired_deadline_replaces_retry_failure_with_deadline_failure() {
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig::default()).unwrap();
+        let domain = ClockDomainId::new_unique();
+        let context = OperationContext::new(ContextOptions {
+            clock: Some(std::sync::Arc::new(FixedClock(domain))),
+            deadline: Some(Deadline::at(MonotonicTime::new(domain, 0))),
+            budget: None,
+        })
+        .unwrap();
+        let busy = CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy);
+
+        assert!(!retry_wait(&busy, &scheduler, 0, Some(context.clone())));
+        assert_eq!(
+            deadline_failure(busy, &context),
+            CommandSubmitFailureReason::Capacity(crate::execution::CapacityFailure::DeadlineExpired)
+        );
     }
 
     #[cfg(feature = "async")]
@@ -1405,6 +1449,18 @@ mod executor_decision_tests {
         assert!(!async_capacity_retry(&input_limit));
         assert!(retryable_async(&busy));
         assert!(!retryable_async(&snapshot));
+    }
+
+    #[cfg(feature = "async")]
+    #[test]
+    fn test_managed_failure_preserves_diagnostic_as_structured_reason() {
+        let error = super::managed_failure("executor worker unavailable".to_owned());
+
+        assert!(matches!(
+            error.reason(),
+            crate::CommandErrorReason::ManagedOperationFailed { diagnostic }
+                if diagnostic == "executor worker unavailable"
+        ));
     }
 
     #[cfg(feature = "async")]
