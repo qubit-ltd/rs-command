@@ -133,3 +133,42 @@ pub(crate) trait OutputEndpointState: Send + Sync {
     /// * `output` - Buffer receiving available child output.
     fn poll_read(&self, cx: &mut Context<'_>, output: &mut [u8]) -> Poll<io::Result<usize>>;
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::SessionBridge;
+
+    struct DefaultBridge;
+
+    impl SessionBridge for DefaultBridge {
+        fn read_stdin(&self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Ok(0)
+        }
+
+        fn write_stdout(&self, _bytes: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn write_stderr(&self, _bytes: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn close_stdin(&self) {}
+    }
+
+    #[test]
+    fn test_session_bridge_defaults_report_no_stream_failures_or_budget() {
+        let bridge = DefaultBridge;
+
+        bridge.request_output_stop();
+        bridge.record_stdin_broken_pipe();
+        assert!(!bridge.stdout_incomplete());
+        assert!(!bridge.stderr_incomplete());
+        assert!(!bridge.stdin_broken_pipe());
+        assert!(!bridge.output_budget_exceeded());
+        assert_eq!(bridge.output_budget_limit(), None);
+        assert_eq!(bridge.output_bytes_observed(), 0);
+    }
+}
