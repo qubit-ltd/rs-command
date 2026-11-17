@@ -764,6 +764,25 @@ mod activation_failure_tests {
     }
 
     #[test]
+    fn test_activation_without_request_publishes_failure_and_preserves_recovered_request() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let state = make_state(Arc::clone(&scheduler), permit);
+        let recovered = state.restore().expect("prepared request should be recoverable");
+
+        drive_activation(Arc::clone(&state));
+
+        assert!(recovered.operation_id.is_none());
+        let snapshot = OperationControl::snapshot(&*state);
+        assert_eq!(snapshot.execution, qubit_operation::ExecutionPhase::Finished);
+        assert_eq!(snapshot.outcome.expect("missing request is an execution failure").kind,
+            qubit_operation::ChildOutcomeKind::ExecutionFailed);
+        assert!(snapshot.input_released);
+        assert!(snapshot.settlement.is_some());
+        assert!(scheduler.try_reserve(0).is_ok(), "failed activation must return its reservation");
+    }
+
+    #[test]
     fn test_enqueue_rejection_drops_request_before_release() {
         let scheduler = scheduler();
         let permit = scheduler.try_reserve(0).unwrap();

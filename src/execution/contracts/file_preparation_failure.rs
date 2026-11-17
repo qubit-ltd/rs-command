@@ -66,4 +66,18 @@ mod tests {
         assert!(failure.input.is_some());
         assert!(failure.prepared.is_some());
     }
+
+    #[test]
+    fn test_debug_marks_absent_recovery_parts() {
+        let failure = FilePreparationFailure {
+            message: "snapshot failed before registering files".to_owned(),
+            input: None,
+            prepared: None,
+        };
+
+        assert_eq!(
+            format!("{failure:?}"),
+            "FilePreparationFailure { message: \"snapshot failed before registering files\", input_retained: false, prepared_retained: false }"
+        );
+    }
 }
