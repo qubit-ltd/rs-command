@@ -1212,3 +1212,122 @@ mod session_accessor_tests {
         operation.wait_settlement().expect("session operation should settle");
     }
 }
+
+#[cfg(test)]
+mod outcome_mapping_coverage_tests {
+    use super::map_outcome;
+    use crate::Command;
+    use crate::CommandError;
+    use crate::CommandErrorReason;
+    use crate::CommandExecutionConfig;
+    use crate::CommandExecutor;
+    use crate::CommandRunner;
+    use qubit_operation::ChildFailureSummary;
+    use qubit_operation::ChildOutcomeKind;
+    use qubit_operation::ChildOutcomeSummary;
+    use qubit_operation::DiagnosticSummary;
+    use qubit_operation::ExecutionFailure;
+    use qubit_operation::ExecutionPhase;
+    use qubit_operation::ManagerOptions;
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOptions;
+    use qubit_operation::OperationOutcome;
+    use qubit_operation::PanicSummary;
+    use qubit_operation::StopReason;
+    use qubit_operation::StopReport;
+
+    fn operation_id() -> qubit_operation::OperationId {
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let mut handle = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let id = handle.id();
+        let _ = handle.wait_outcome().unwrap();
+        handle.wait_settlement().unwrap();
+        id
+    }
+
+    #[test]
+    fn test_stopped_operation_maps_to_cancelled_error() {
+        let actual = map_outcome(OperationOutcome::<crate::CommandOutput, CommandError>::Stopped(
+            StopReport {
+                reason: StopReason::UserCancelled,
+                accepted_at: None,
+            },
+        ))
+        .unwrap_err();
+
+        assert_eq!(actual.command(), "<managed command>");
+        assert!(matches!(actual.reason(), CommandErrorReason::Cancelled));
+    }
+
+    #[test]
+    fn test_child_panic_and_execution_failures_keep_diagnostics() {
+        let id = operation_id();
+        let child = ChildFailureSummary {
+            operation_id: id,
+            outcome: ChildOutcomeSummary {
+                operation_id: id,
+                kind: ChildOutcomeKind::Failed,
+                summary: DiagnosticSummary::new("required child failed"),
+            },
+        };
+        let child_error = map_outcome(
+            OperationOutcome::<crate::CommandOutput, CommandError>::ChildFailed(child),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            child_error.reason(),
+            CommandErrorReason::ManagedOperationFailed { diagnostic }
+                if diagnostic == "required child failed"
+        ));
+
+        let panic_error = map_outcome(OperationOutcome::<
+            crate::CommandOutput,
+            CommandError,
+        >::Panicked(PanicSummary {
+            operation_id: id,
+            phase: ExecutionPhase::Running,
+            summary: DiagnosticSummary::new("managed worker panicked"),
+        }))
+        .unwrap_err();
+        assert!(matches!(
+            panic_error.reason(),
+            CommandErrorReason::ManagedOperationFailed { diagnostic }
+                if diagnostic == "managed worker panicked"
+        ));
+
+        let execution_error = map_outcome(OperationOutcome::<
+            crate::CommandOutput,
+            CommandError,
+        >::ExecutionFailed(ExecutionFailure {
+            operation_id: id,
+            summary: DiagnosticSummary::new("executor could not run command"),
+            source: None,
+        }))
+        .unwrap_err();
+        assert!(matches!(
+            execution_error.reason(),
+            CommandErrorReason::ManagedOperationFailed { diagnostic }
+                if diagnostic == "executor could not run command"
+        ));
+    }
+
+    #[test]
+    fn test_managed_runner_keeps_spawn_failure() {
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+        let missing_command = "__qubit_command_missing_managed_api_test_binary__";
+
+        let error = CommandRunner::without_timeout()
+            .run_managed(&executor, Command::new(missing_command), Default::default())
+            .expect_err("a missing executable should remain a command failure");
+
+        assert!(error.command().contains(missing_command));
+        assert!(error.output().is_none());
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::SpawnFailed { .. }
+        ));
+    }
+}
