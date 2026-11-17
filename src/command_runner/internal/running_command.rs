@@ -676,7 +676,6 @@ mod tests {
     use crate::CommandErrorKind;
     use crate::CommandErrorReason;
     use crate::OutputStream;
-
     #[cfg(feature = "async")]
     use crate::session::channel::SessionChannels;
     #[cfg(feature = "async")]

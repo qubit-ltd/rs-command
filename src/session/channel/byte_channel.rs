@@ -1009,17 +1009,12 @@ mod tests {
     #[test]
     fn test_blocking_writer_resumes_after_capacity_is_read_without_reordering() {
         let channel = Arc::new(ByteChannel::new());
-        let bytes = (0..=u8::MAX)
-            .cycle()
-            .take(CHANNEL_CAPACITY + 37)
-            .collect::<Vec<_>>();
+        let bytes = (0..=u8::MAX).cycle().take(CHANNEL_CAPACITY + 37).collect::<Vec<_>>();
         let writer_channel = channel.clone();
         let writer_bytes = bytes.clone();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let writer = std::thread::spawn(move || {
-            done_tx
-                .send(writer_channel.blocking_write(&writer_bytes))
-                .unwrap();
+            done_tx.send(writer_channel.blocking_write(&writer_bytes)).unwrap();
         });
         channel.wait_until_blocked();
 
@@ -1067,8 +1062,7 @@ mod tests {
     #[test]
     fn test_blocking_write_after_output_stop_counts_dropped_budget_bytes() {
         let budget = Arc::new(OutputBudget::new(10));
-        let channel =
-            ByteChannel::with_policy(SessionStreamPolicy::Backpressure, Some(budget.clone()));
+        let channel = ByteChannel::with_policy(SessionStreamPolicy::Backpressure, Some(budget.clone()));
         channel.stop_output();
 
         channel.blocking_write(b"five!").unwrap();

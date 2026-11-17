@@ -554,9 +554,7 @@ mod tests {
             error.cleanup_failures(),
             [CommandCleanupFailure::ChildTermination { .. }]
         ));
-        let calls = calls
-            .lock()
-            .expect("child lifecycle calls should be readable");
+        let calls = calls.lock().expect("child lifecycle calls should be readable");
         // Direct-child fallback bypasses the outer ScriptedChild wrapper.
         assert!(!calls.iter().any(|call| call == "child.kill"));
         assert!(calls.iter().any(|call| call == "child.try_wait"));
