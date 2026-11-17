@@ -88,3 +88,56 @@ fn test_managed_spawn_failure_publishes_failure_and_released_settlement() {
         SettlementStatus::Released
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn test_managed_stop_after_child_start_waits_for_tree_settlement() {
+    use std::time::Duration;
+
+    use qubit_command::Command;
+    use qubit_command::CommandExecutionConfig;
+    use qubit_command::CommandExecutor;
+    use qubit_command::CommandRunner;
+    use qubit_operation::ManagerOptions;
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOutcome;
+    use qubit_operation::SettlementStatus;
+    use qubit_operation::StopReason;
+    use qubit_operation::StopRequestStatus;
+
+    let directory = tempfile::tempdir().unwrap();
+    let ready = directory.path().join("child-ready");
+    let script = format!("sleep 30 & echo ready > '{}' ; wait", ready.display());
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let mut operation = executor
+        .submit(
+            CommandRunner::without_timeout(),
+            Command::new("sh").arg("-c").arg(&script),
+            Default::default(),
+        )
+        .unwrap();
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while !ready.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "child process should start"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        operation.request_stop(StopReason::UserCancelled),
+        StopRequestStatus::Accepted
+    );
+    match operation.wait_outcome().unwrap() {
+        OperationOutcome::Stopped(report) => assert_eq!(report.reason, StopReason::UserCancelled),
+        other => panic!("running managed process should stop: {other:?}"),
+    }
+    let settlement = operation.wait_settlement().unwrap();
+    assert!(settlement.all_released());
+    assert_eq!(
+        settlement.external_settlement.as_ref().unwrap().status,
+        SettlementStatus::Released
+    );
+}
