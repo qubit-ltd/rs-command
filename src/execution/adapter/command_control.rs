@@ -431,4 +431,70 @@ mod tests {
             StopReason::Timeout
         );
     }
+
+    #[test]
+    fn test_control_wakes_each_distinct_observer_once() {
+        let report = settlement_report();
+        let control = CommandControl::default();
+        assert!(control.bind(report.operation_id));
+
+        let first_wake = Arc::new(CountWake(AtomicUsize::new(0)));
+        let first_waker = Waker::from(Arc::clone(&first_wake));
+        let mut first_context = Context::from_waker(&first_waker);
+        let second_wake = Arc::new(CountWake(AtomicUsize::new(0)));
+        let second_waker = Waker::from(Arc::clone(&second_wake));
+        let mut second_context = Context::from_waker(&second_waker);
+
+        assert!(matches!(control.take(&mut first_context), Poll::Pending));
+        for context in [&mut first_context, &mut second_context] {
+            assert!(matches!(
+                OperationControl::poll_outcome(&control, context),
+                Poll::Pending
+            ));
+            assert!(matches!(
+                OperationControl::poll_release(&control, context),
+                Poll::Pending
+            ));
+            assert!(matches!(
+                OperationControl::poll_settlement(&control, context),
+                Poll::Pending
+            ));
+        }
+        assert!(matches!(
+            OperationControl::poll_outcome(&control, &mut first_context),
+            Poll::Pending
+        ));
+        assert!(matches!(
+            OperationControl::poll_release(&control, &mut first_context),
+            Poll::Pending
+        ));
+        assert!(matches!(
+            OperationControl::poll_settlement(&control, &mut first_context),
+            Poll::Pending
+        ));
+
+        assert!(
+            control.publish_outcome(OperationOutcome::Stopped(StopReport {
+                reason: StopReason::UserCancelled,
+                accepted_at: None,
+            }))
+        );
+        assert_eq!(first_wake.0.load(Ordering::SeqCst), 1);
+        assert_eq!(second_wake.0.load(Ordering::SeqCst), 1);
+        assert!(OperationControl::poll_outcome(&control, &mut second_context).is_ready());
+
+        assert!(control.release());
+        assert_eq!(first_wake.0.load(Ordering::SeqCst), 2);
+        assert_eq!(second_wake.0.load(Ordering::SeqCst), 2);
+        assert!(OperationControl::poll_release(&control, &mut second_context).is_ready());
+
+        assert!(control.settlement(report));
+        assert_eq!(first_wake.0.load(Ordering::SeqCst), 3);
+        assert_eq!(second_wake.0.load(Ordering::SeqCst), 3);
+        assert!(OperationControl::poll_settlement(&control, &mut second_context).is_ready());
+        assert!(matches!(
+            control.take(&mut first_context),
+            Poll::Ready(OperationOutcome::Stopped(_))
+        ));
+    }
 }
