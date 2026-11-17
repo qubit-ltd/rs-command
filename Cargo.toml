@@ -21,6 +21,7 @@ include = [
     "/doc/**",
     "/tests/**",
     "/benches/**",
+    "/examples/**",
 ]
 
 [lib]

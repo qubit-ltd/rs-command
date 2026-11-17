@@ -8,6 +8,14 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
     cargo test --lib windows_ -- --nocapture
 fi
 
+package_files=$(cargo package --list --allow-dirty)
+for example_file in managed_collect managed_session managed_file managed_shutdown; do
+    if ! printf '%s\n' "$package_files" | rg -q -x "examples/${example_file}\.rs"; then
+        echo "missing packaged example: ${example_file}" >&2
+        exit 1
+    fi
+done
+
 cargo test --all-targets --no-default-features
 cargo test --all-targets --features async
 cargo test --doc --no-default-features
