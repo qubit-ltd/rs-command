@@ -1256,49 +1256,56 @@ mod tests {
 
     #[test]
     fn test_stop_output_wakes_registered_reader_and_full_channel_writer() {
-        let channel = ByteChannel::new();
-        let first = Arc::new(CountWake(AtomicUsize::new(0)));
-        let second = Arc::new(CountWake(AtomicUsize::new(0)));
-        let first_waker = std::task::Waker::from(first.clone());
-        let second_waker = std::task::Waker::from(second.clone());
-        let mut first_context = std::task::Context::from_waker(&first_waker);
-        let mut second_context = std::task::Context::from_waker(&second_waker);
+        let reader_channel = ByteChannel::new();
+        let reader_counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let reader_waker = std::task::Waker::from(reader_counter.clone());
+        let mut reader_context = std::task::Context::from_waker(&reader_waker);
 
         assert!(matches!(
-            channel.poll_read(&mut first_context, &mut [0; 1]),
+            reader_channel.poll_read(&mut reader_context, &mut [0; 1]),
             std::task::Poll::Pending
         ));
+        reader_channel.stop_output();
+        assert_eq!(reader_counter.0.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            reader_channel.poll_read(&mut reader_context, &mut [0; 1]),
+            std::task::Poll::Ready(Ok(0))
+        ));
+
+        let writer_channel = ByteChannel::new();
+        let writer_counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let writer_waker = std::task::Waker::from(writer_counter.clone());
+        let mut writer_context = std::task::Context::from_waker(&writer_waker);
         let block = vec![0x7a; MAX_BLOCK];
         for _ in 0..CHANNEL_CAPACITY / MAX_BLOCK {
             assert!(matches!(
-                channel.poll_write(&mut second_context, &block),
+                writer_channel.poll_write(&mut writer_context, &block),
                 std::task::Poll::Ready(Ok(MAX_BLOCK))
             ));
         }
         assert!(matches!(
-            channel.poll_write(&mut second_context, b"blocked"),
+            writer_channel.poll_write(&mut writer_context, b"blocked"),
             std::task::Poll::Pending
         ));
 
-        channel.stop_output();
+        writer_channel.stop_output();
 
-        assert_eq!(first.0.load(Ordering::SeqCst), 1);
-        assert_eq!(second.0.load(Ordering::SeqCst), 1);
+        assert_eq!(writer_counter.0.load(Ordering::SeqCst), 1);
         assert!(matches!(
-            channel.poll_write(&mut second_context, b"after stop"),
+            writer_channel.poll_write(&mut writer_context, b"after stop"),
             std::task::Poll::Ready(Ok(10))
         ));
         let mut output = vec![0; CHANNEL_CAPACITY];
         let mut total = 0;
         while total < CHANNEL_CAPACITY {
-            match channel.poll_read(&mut first_context, &mut output[total..]) {
+            match writer_channel.poll_read(&mut writer_context, &mut output[total..]) {
                 std::task::Poll::Ready(Ok(n)) => total += n,
                 other => panic!("queued output should remain readable after stop: {other:?}"),
             }
         }
         assert!(output.iter().all(|byte| *byte == 0x7a));
         assert!(matches!(
-            channel.poll_read(&mut first_context, &mut [0; 1]),
+            writer_channel.poll_read(&mut writer_context, &mut [0; 1]),
             std::task::Poll::Ready(Ok(0))
         ));
     }
