@@ -29,6 +29,9 @@ pub(crate) struct ByteChannel {
     /// Test-only signal that a writer reached the capacity wait.
     #[cfg(test)]
     wait_entered: (Mutex<usize>, Condvar),
+    /// Test-only signal that a blocking reader entered the empty-queue wait.
+    #[cfg(test)]
+    reader_wait_entered: (Mutex<usize>, Condvar),
 }
 
 impl ByteChannel {
@@ -60,6 +63,8 @@ impl ByteChannel {
             changed: Condvar::new(),
             #[cfg(test)]
             wait_entered: (Mutex::new(0), Condvar::new()),
+            #[cfg(test)]
+            reader_wait_entered: (Mutex::new(0), Condvar::new()),
         }
     }
 
@@ -75,6 +80,24 @@ impl ByteChannel {
     #[cfg(test)]
     pub(crate) fn wait_until_blocked(&self) {
         let (lock, condition) = &self.wait_entered;
+        let mut count = lock.lock().unwrap_or_else(|e| e.into_inner());
+        while *count == 0 {
+            count = condition.wait(count).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    /// Signals test observers that a blocking reader reached its wait.
+    #[cfg(test)]
+    fn note_reader_wait(&self) {
+        let (lock, condition) = &self.reader_wait_entered;
+        *lock.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+        condition.notify_all();
+    }
+
+    /// Waits until a blocking reader reports reaching the empty-queue wait.
+    #[cfg(test)]
+    fn wait_until_reader_blocked(&self) {
+        let (lock, condition) = &self.reader_wait_entered;
         let mut count = lock.lock().unwrap_or_else(|e| e.into_inner());
         while *count == 0 {
             count = condition.wait(count).unwrap_or_else(|e| e.into_inner());
@@ -279,6 +302,8 @@ impl ByteChannel {
         }
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         while s.bytes.is_empty() && !s.writer_closed && !s.reader_gone {
+            #[cfg(test)]
+            self.note_reader_wait();
             s = self.changed.wait(s).unwrap_or_else(|e| e.into_inner());
         }
         if s.reader_gone {
@@ -926,5 +951,141 @@ mod tests {
                 other => panic!("unexpected read result: {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn test_empty_write_and_close_wakes_pending_reader() {
+        let channel = ByteChannel::new();
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = std::task::Waker::from(counter.clone());
+        let mut context = std::task::Context::from_waker(&waker);
+
+        assert!(matches!(
+            channel.poll_write(&mut context, &[]),
+            std::task::Poll::Ready(Ok(0))
+        ));
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut [0; 1]),
+            std::task::Poll::Pending
+        ));
+        channel.close_writer();
+
+        assert_eq!(counter.0.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut [0; 1]),
+            std::task::Poll::Ready(Ok(0))
+        ));
+    }
+
+    #[test]
+    fn test_dropping_reader_wakes_pending_async_writer() {
+        let channel = ByteChannel::new();
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = std::task::Waker::from(counter.clone());
+        let mut context = std::task::Context::from_waker(&waker);
+        let block = vec![0x5a; MAX_BLOCK];
+        for _ in 0..CHANNEL_CAPACITY / MAX_BLOCK {
+            assert!(matches!(
+                channel.poll_write(&mut context, &block),
+                std::task::Poll::Ready(Ok(MAX_BLOCK))
+            ));
+        }
+        assert!(matches!(
+            channel.poll_write(&mut context, b"wait for reader"),
+            std::task::Poll::Pending
+        ));
+
+        channel.drop_reader();
+
+        assert_eq!(counter.0.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            channel.poll_write(&mut context, b"reader is gone"),
+            std::task::Poll::Ready(Err(ref error)) if error.kind() == io::ErrorKind::BrokenPipe
+        ));
+        assert!(channel.incomplete());
+        assert!(channel.broken_pipe());
+    }
+
+    #[test]
+    fn test_blocking_writer_resumes_after_capacity_is_read_without_reordering() {
+        let channel = Arc::new(ByteChannel::new());
+        let bytes = (0..=u8::MAX)
+            .cycle()
+            .take(CHANNEL_CAPACITY + 37)
+            .collect::<Vec<_>>();
+        let writer_channel = channel.clone();
+        let writer_bytes = bytes.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            done_tx
+                .send(writer_channel.blocking_write(&writer_bytes))
+                .unwrap();
+        });
+        channel.wait_until_blocked();
+
+        let mut actual = Vec::with_capacity(bytes.len());
+        let mut chunk = vec![0; MAX_BLOCK];
+        let n = channel.blocking_read(&mut chunk).unwrap();
+        assert_eq!(n, MAX_BLOCK);
+        actual.extend_from_slice(&chunk[..n]);
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("reading capacity should release the blocked writer")
+            .unwrap();
+        writer.join().unwrap();
+
+        while actual.len() < bytes.len() {
+            let n = channel.blocking_read(&mut chunk).unwrap();
+            assert_ne!(n, 0, "all accepted bytes should be readable");
+            actual.extend_from_slice(&chunk[..n]);
+        }
+        assert_eq!(actual, bytes);
+    }
+
+    #[test]
+    fn test_blocking_reader_wakes_for_data_and_writer_close() {
+        let channel = Arc::new(ByteChannel::new());
+        let reader_channel = channel.clone();
+        let reader = std::thread::spawn(move || {
+            let mut output = [0; 8];
+            let count = reader_channel.blocking_read(&mut output).unwrap();
+            (count, output)
+        });
+        channel.wait_until_reader_blocked();
+        channel.blocking_write(b"arrived").unwrap();
+        let (count, output) = reader.join().unwrap();
+        assert_eq!(&output[..count], b"arrived");
+
+        let closed = Arc::new(ByteChannel::new());
+        let reader_channel = closed.clone();
+        let reader = std::thread::spawn(move || reader_channel.blocking_read(&mut [0; 8]).unwrap());
+        closed.wait_until_reader_blocked();
+        closed.close_writer();
+        assert_eq!(reader.join().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_blocking_write_after_output_stop_counts_dropped_budget_bytes() {
+        let budget = Arc::new(OutputBudget::new(10));
+        let channel =
+            ByteChannel::with_policy(SessionStreamPolicy::Backpressure, Some(budget.clone()));
+        channel.stop_output();
+
+        channel.blocking_write(b"five!").unwrap();
+        assert_eq!(budget.observed(), 5);
+        assert!(!budget.exceeded());
+        assert!(channel.incomplete());
+        channel.blocking_write(b"sixsix").unwrap();
+        assert_eq!(budget.observed(), 11);
+        assert!(budget.exceeded());
+
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = std::task::Waker::from(counter);
+        let mut context = std::task::Context::from_waker(&waker);
+        let mut output = [0; 1];
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Ready(Ok(0))
+        ));
     }
 }
