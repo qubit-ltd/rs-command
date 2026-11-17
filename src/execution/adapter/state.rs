@@ -460,6 +460,7 @@ impl qubit_operation::OperationControl for AdapterState {
 mod activation_failure_tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::task::Context;
     use std::task::Poll;
@@ -502,6 +503,40 @@ mod activation_failure_tests {
                 7,
                 11,
                 |_| {},
+                |_| crate::execution::contracts::ReservationLease::new(|| {}),
+            ))
+        }
+
+        fn enqueue(
+            &self,
+            job: crate::execution::contracts::ScheduledJob,
+            permit: crate::execution::Reservation,
+        ) -> Result<(), crate::execution::contracts::EnqueueFailure> {
+            (job.run)(permit);
+            Ok(())
+        }
+
+        fn wait_next(&self) -> Option<(crate::execution::contracts::ScheduledJob, crate::execution::Reservation)> {
+            None
+        }
+
+        fn close_admission(&self) {}
+    }
+
+    struct ReleaseTrackingInlineScheduler(Arc<AtomicUsize>);
+
+    impl Scheduler for ReleaseTrackingInlineScheduler {
+        fn try_reserve(
+            &self,
+            _input_bytes: usize,
+        ) -> Result<crate::execution::Reservation, crate::execution::contracts::CapacityFailure> {
+            let releases = Arc::clone(&self.0);
+            Ok(crate::execution::Reservation::new(
+                17,
+                29,
+                move |_| {
+                    releases.fetch_add(1, Ordering::SeqCst);
+                },
                 |_| crate::execution::contracts::ReservationLease::new(|| {}),
             ))
         }
@@ -964,6 +999,55 @@ mod activation_failure_tests {
         assert!(
             scheduler.try_reserve(0).is_ok(),
             "abandon should return the reservation"
+        );
+    }
+
+    #[test]
+    fn test_abandon_after_activation_does_not_release_resources_twice() {
+        let releases = Arc::new(AtomicUsize::new(0));
+        let scheduler = Arc::new(ReleaseTrackingInlineScheduler(Arc::clone(&releases)));
+        let permit = scheduler.try_reserve(0).unwrap();
+        let process_backend = Arc::new(ProcessBackend::new());
+        let mut command_request = request();
+        command_request.command = Command::new("true");
+        let state = Arc::new(AdapterState::new(
+            command_request,
+            permit,
+            scheduler,
+            Arc::new(ExecutingBackend),
+            process_backend,
+            super::super::cleanup::start_recovery_worker(1).unwrap(),
+            None,
+        ));
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut handle = manager
+            .try_submit_external(OperationOptions::default(), Arc::clone(&state))
+            .unwrap();
+
+        assert!(matches!(handle.wait_outcome().unwrap(), OperationOutcome::Succeeded(_)));
+        let report = handle.wait_settlement().unwrap();
+        assert_eq!(report.status, qubit_operation::SettlementStatus::Released);
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
+
+        state.clone().abandon();
+
+        let snapshot = OperationControl::snapshot(&*state);
+        assert_eq!(snapshot.execution, qubit_operation::ExecutionPhase::Finished);
+        assert_eq!(
+            snapshot.outcome.expect("completed activation keeps its outcome").kind,
+            qubit_operation::ChildOutcomeKind::Succeeded
+        );
+        assert_eq!(
+            snapshot
+                .settlement
+                .expect("completed activation keeps its settlement")
+                .status,
+            qubit_operation::SettlementStatus::Released
+        );
+        assert_eq!(
+            releases.load(Ordering::SeqCst),
+            1,
+            "abandoning activated state must not release twice"
         );
     }
 

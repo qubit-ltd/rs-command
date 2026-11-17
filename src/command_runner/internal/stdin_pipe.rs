@@ -482,6 +482,31 @@ mod tests {
     }
 
     #[cfg(unix)]
+    struct CancelDuringWriteStdin {
+        write_calls: usize,
+    }
+
+    #[cfg(unix)]
+    impl Write for CancelDuringWriteStdin {
+        fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
+            self.write_calls += 1;
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
+    impl PollableStdin for CancelDuringWriteStdin {
+        fn wait_writable(&self, cancellation: &IoCancellationToken) -> io::Result<bool> {
+            cancellation.cancelled.store(true, std::sync::atomic::Ordering::Release);
+            Ok(true)
+        }
+    }
+
+    #[cfg(unix)]
     struct TestSessionBridge {
         input: Mutex<VecDeque<Vec<u8>>>,
         fail_read: bool,
@@ -718,6 +743,19 @@ mod tests {
         let error = write_stdin_until_cancelled(&mut broken_writer, b"data", &token)
             .expect_err("non-cancellation write errors must be propagated");
         assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_stdin_until_cancelled_swallows_write_error_after_concurrent_cancellation() {
+        let (_cancellation, token) = IoCancellation::pair().expect("cancellation pair should be created");
+        let mut stdin = CancelDuringWriteStdin { write_calls: 0 };
+
+        write_stdin_until_cancelled(&mut stdin, b"payload", &token)
+            .expect("a write error racing with cancellation should complete successfully");
+
+        assert!(token.is_cancelled());
+        assert_eq!(stdin.write_calls, 1);
     }
 
     #[cfg(unix)]
