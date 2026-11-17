@@ -1786,6 +1786,90 @@ mod executor_decision_tests {
     }
 }
 
+#[cfg(all(test, unix))]
+mod snapshot_failure_tests {
+    use std::io::Read;
+    use std::io::Seek;
+    use std::io::SeekFrom;
+    use std::io::Write;
+    use std::process::Command as ProcessCommand;
+
+    use qubit_operation::OperationManager;
+
+    use crate::Command;
+    use crate::CommandExecutionConfig;
+    use crate::CommandExecutor;
+    use crate::CommandResourceRunOptions;
+    use crate::CommandRunner;
+    use crate::execution::CommandSubmitFailureReason;
+
+    const CHILD_MARKER: &str = "QUBIT_COMMAND_SNAPSHOT_FAILURE_CHILD";
+
+    #[test]
+    fn test_resource_submission_returns_input_when_working_directory_snapshot_fails() {
+        if std::env::var_os(CHILD_MARKER).is_some() {
+            assert_snapshot_failure_returns_input();
+            return;
+        }
+
+        let output = ProcessCommand::new(std::env::current_exe().expect("test executable should be available"))
+            .arg("--exact")
+            .arg("execution::executor::snapshot_failure_tests::test_resource_submission_returns_input_when_working_directory_snapshot_fails")
+            .arg("--nocapture")
+            .env(CHILD_MARKER, "1")
+            .output()
+            .expect("isolated snapshot failure test should start");
+        assert!(
+            output.status.success(),
+            "child test failed\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn assert_snapshot_failure_returns_input() {
+        let mut input = tempfile::tempfile().expect("stdin file should be created");
+        input
+            .write_all(b"recoverable input bytes")
+            .expect("stdin fixture should be written");
+        input.seek(SeekFrom::Start(0)).expect("stdin cursor should be reset");
+
+        let manager = OperationManager::new(Default::default()).expect("manager should start");
+        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).expect("executor should start");
+        let removed_directory = tempfile::tempdir().expect("temporary directory should be created");
+        std::env::set_current_dir(removed_directory.path()).expect("current directory should change");
+        std::fs::remove_dir(removed_directory.path()).expect("current directory should be unlinked");
+
+        let failure = match executor.submit_resources(
+            CommandRunner::without_timeout(),
+            Command::new("true"),
+            CommandResourceRunOptions::new().stdin_file(input),
+        ) {
+            Ok(_) => panic!("submission must reject a missing working-directory snapshot"),
+            Err(failure) => failure,
+        };
+        match &failure.reason {
+            CommandSubmitFailureReason::Snapshot(snapshot) => {
+                assert!(snapshot.diagnostic.contains("working directory snapshot failed"));
+            }
+            other => panic!("expected snapshot failure, got {other:?}"),
+        }
+
+        let mut returned_input = failure
+            .options
+            .configured_stdin()
+            .expect("rejected submission must return its stdin owner")
+            .try_clone()
+            .expect("returned stdin should remain usable");
+        let mut bytes = Vec::new();
+        returned_input
+            .read_to_end(&mut bytes)
+            .expect("returned stdin should retain its bytes");
+        assert_eq!(bytes, b"recoverable input bytes");
+        assert_eq!(failure.command.program(), std::ffi::OsStr::new("true"));
+    }
+}
+
 #[cfg(all(test, feature = "async"))]
 fn futures_lite_block_on<F: std::future::Future>(future: F) -> F::Output {
     use std::sync::Arc;
