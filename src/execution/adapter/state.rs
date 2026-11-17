@@ -664,13 +664,19 @@ mod activation_failure_tests {
             })
             .unwrap();
 
-        assert!(matches!(handle.wait_outcome().unwrap(), OperationOutcome::Succeeded(())));
+        assert!(matches!(
+            handle.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
         handle.wait_settlement().unwrap();
         assert!(state.restore().is_none(), "abandoned request must not be restorable");
         let snapshot = OperationControl::snapshot(&*state);
         assert!(snapshot.input_released);
         assert_eq!(snapshot.execution, qubit_operation::ExecutionPhase::Queued);
         assert!(snapshot.settlement.is_some());
-        assert!(scheduler.try_reserve(0).is_ok(), "abandon should return the reservation");
+        assert!(
+            scheduler.try_reserve(0).is_ok(),
+            "abandon should return the reservation"
+        );
     }
 }

@@ -260,10 +260,9 @@ mod tests {
     use std::path::Path;
     use std::path::PathBuf;
 
+    use super::CommandRunOptions;
     use crate::CommandCancellation;
     use crate::ProcessTreePolicy;
-
-    use super::CommandRunOptions;
 
     #[test]
     fn test_process_tree_policy_defaults_to_managed_and_can_be_overridden() {
@@ -271,10 +270,7 @@ mod tests {
         assert_eq!(defaults.process_tree_policy(), ProcessTreePolicy::Managed);
 
         let direct_child = defaults.with_process_tree_policy(ProcessTreePolicy::DirectChild);
-        assert_eq!(
-            direct_child.process_tree_policy(),
-            ProcessTreePolicy::DirectChild
-        );
+        assert_eq!(direct_child.process_tree_policy(), ProcessTreePolicy::DirectChild);
     }
 
     #[test]
@@ -292,14 +288,8 @@ mod tests {
                 .configured_cancellation()
                 .is_some_and(|handle| !handle.is_cancelled())
         );
-        assert_eq!(
-            options.configured_stdout_file(),
-            Some(Path::new(&stdout_path))
-        );
-        assert_eq!(
-            options.configured_stderr_file(),
-            Some(Path::new(&stderr_path))
-        );
+        assert_eq!(options.configured_stdout_file(), Some(Path::new(&stdout_path)));
+        assert_eq!(options.configured_stderr_file(), Some(Path::new(&stderr_path)));
         let debug = format!("{options:?}");
         assert!(debug.contains("cancellation_configured: true"));
         assert!(debug.contains("stdout_file: Some(\"<redacted path>\")"));

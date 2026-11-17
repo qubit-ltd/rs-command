@@ -141,8 +141,7 @@ mod tests {
         let stdin = tempfile::tempfile().expect("stdin fixture should be created");
         let stdout = tempfile::tempfile().expect("stdout fixture should be created");
         let stderr = tempfile::tempfile().expect("stderr fixture should be created");
-        let command_options =
-            CommandRunOptions::new().with_process_tree_policy(ProcessTreePolicy::DirectChild);
+        let command_options = CommandRunOptions::new().with_process_tree_policy(ProcessTreePolicy::DirectChild);
         let options = CommandResourceRunOptions::new()
             .options(command_options)
             .stdin_file(stdin)
