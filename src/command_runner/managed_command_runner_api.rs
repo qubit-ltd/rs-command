@@ -800,6 +800,37 @@ mod tests {
         assert!(matches!(actual.reason(), crate::CommandErrorReason::Cancelled));
     }
 
+    #[test]
+    fn test_sync_managed_runner_maps_admission_rejection_for_owned_and_plain_requests() {
+        let (_manager, executor, runner) = setup();
+        let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
+
+        let ordinary = runner
+            .run_managed(
+                &executor,
+                Command::new("__must_not_spawn_after_executor_shutdown__"),
+                Default::default(),
+            )
+            .expect_err("closed executor should reject an ordinary request");
+        let resources = runner
+            .run_managed_resources(
+                &executor,
+                Command::new("__must_not_spawn_after_executor_shutdown__"),
+                CommandResourceRunOptions::new(),
+            )
+            .expect_err("closed executor should reject an owned-resource request");
+
+        for error in [ordinary, resources] {
+            assert_eq!(error.kind(), crate::CommandErrorKind::ManagedOperationFailed);
+            assert!(matches!(
+                error.reason(),
+                crate::CommandErrorReason::ManagedOperationFailed { diagnostic }
+                    if diagnostic.starts_with("submission rejected:")
+            ));
+            assert!(error.output().is_none());
+        }
+    }
+
     fn setup() -> (OperationManager, CommandExecutor, CommandRunner) {
         let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
         let executor =
@@ -940,6 +971,35 @@ mod tests {
             ));
             operation.wait_settlement().expect("session should settle");
             (stdout, stderr)
+        }
+
+        #[test]
+        fn test_async_managed_runner_maps_closed_executor_rejection() {
+            let (_manager, executor, runner) = setup();
+            let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
+
+            let ordinary = block_on(runner.run_async(
+                &executor,
+                Command::new("__must_not_spawn_after_async_executor_shutdown__"),
+                Default::default(),
+            ))
+            .expect_err("closed executor should reject an async request");
+            let resources = block_on(runner.run_async_resources(
+                &executor,
+                Command::new("__must_not_spawn_after_async_executor_shutdown__"),
+                CommandResourceRunOptions::new(),
+            ))
+            .expect_err("closed executor should reject an async resource request");
+
+            for error in [ordinary, resources] {
+                assert_eq!(error.kind(), crate::CommandErrorKind::ManagedOperationFailed);
+                assert!(matches!(
+                    error.reason(),
+                    crate::CommandErrorReason::ManagedOperationFailed { diagnostic }
+                        if diagnostic.starts_with("submission rejected:")
+                ));
+                assert!(error.output().is_none());
+            }
         }
 
         #[test]

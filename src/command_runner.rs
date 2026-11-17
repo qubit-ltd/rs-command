@@ -436,6 +436,54 @@ mod tests {
         assert!(without_total_budget.is_output_truncation_failure_enabled());
     }
 
+    #[test]
+    fn test_runner_policy_method_items_round_trip_configuration() {
+        let new: fn(Duration) -> CommandRunner = std::hint::black_box(CommandRunner::new);
+        let with_directory: fn(CommandRunner, std::path::PathBuf) -> CommandRunner =
+            std::hint::black_box(CommandRunner::working_directory);
+        let with_success_code: fn(CommandRunner, i32) -> CommandRunner =
+            std::hint::black_box(CommandRunner::success_exit_code);
+        let with_success_codes: fn(CommandRunner, &[i32]) -> CommandRunner =
+            std::hint::black_box(CommandRunner::success_exit_codes);
+        let with_logging: fn(CommandRunner, bool) -> CommandRunner =
+            std::hint::black_box(CommandRunner::disable_logging);
+        let with_truncation: fn(CommandRunner, bool) -> CommandRunner =
+            std::hint::black_box(CommandRunner::fail_on_output_truncation);
+        let with_stdout_limit: fn(CommandRunner, usize) -> CommandRunner =
+            std::hint::black_box(CommandRunner::max_stdout_bytes);
+        let with_stderr_limit: fn(CommandRunner, usize) -> CommandRunner =
+            std::hint::black_box(CommandRunner::max_stderr_bytes);
+        let with_output_limit: fn(CommandRunner, usize) -> CommandRunner =
+            std::hint::black_box(CommandRunner::max_output_bytes);
+        let with_total_limit: fn(CommandRunner, u64) -> CommandRunner =
+            std::hint::black_box(CommandRunner::max_total_output_bytes);
+        let timeout: fn(&CommandRunner) -> Option<Duration> = std::hint::black_box(CommandRunner::configured_timeout);
+        let directory: for<'a> fn(&'a CommandRunner) -> Option<&'a std::path::Path> =
+            std::hint::black_box(CommandRunner::configured_working_directory);
+        let success_codes: for<'a> fn(&'a CommandRunner) -> &'a [i32] =
+            std::hint::black_box(CommandRunner::configured_success_exit_codes);
+
+        let expected_directory = std::env::temp_dir();
+        let runner = with_directory(new(Duration::from_secs(3)), expected_directory.clone());
+        let runner = with_success_code(runner, 0);
+        let runner = with_success_codes(runner, &[0, 7]);
+        let runner = with_logging(runner, true);
+        let runner = with_truncation(runner, false);
+        let runner = with_stdout_limit(runner, 13);
+        let runner = with_stderr_limit(runner, 17);
+        let runner = with_output_limit(runner, 19);
+        let runner = with_total_limit(runner, 23);
+
+        assert_eq!(timeout(&runner), Some(Duration::from_secs(3)));
+        assert_eq!(directory(&runner), Some(expected_directory.as_path()));
+        assert_eq!(success_codes(&runner), &[0, 7]);
+        assert!(runner.is_logging_disabled());
+        assert!(!runner.is_output_truncation_failure_enabled());
+        assert_eq!(runner.configured_max_stdout_bytes(), Some(19));
+        assert_eq!(runner.configured_max_stderr_bytes(), Some(19));
+        assert_eq!(runner.configured_max_total_output_bytes(), Some(23));
+    }
+
     fn managed_file(scope: &OperationScope, file: File) -> qubit_operation::ResourceRef<Mutex<File>> {
         scope
             .manage(Mutex::new(file))
