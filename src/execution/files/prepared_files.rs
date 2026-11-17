@@ -263,4 +263,115 @@ mod tests {
         assert_eq!(settlement.effects[0].fact, qubit_operation::EffectFact::Known);
         assert_eq!(settlement.effects[0].description.as_str(), "stdout sink truncated");
     }
+
+    #[test]
+    fn test_register_files_restores_unregistered_input_when_reservation_is_missing() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let input = tempfile::tempfile().unwrap();
+                let mut reservations = Vec::new();
+                let failure = register_files(&scope, &mut reservations, Some(input), None, None)
+                    .expect_err("input registration requires a reserved resource slot");
+                let (error, prepared, mut raw_files) = *failure;
+
+                assert!(error.to_string().contains("missing reserved resource slot"));
+                assert!(prepared.is_none());
+                assert!(raw_files[0].take().is_some());
+                assert!(raw_files[1].is_none());
+                assert!(raw_files[2].is_none());
+                Ok::<_, String>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        assert!(operation.wait_settlement().unwrap().all_released());
+    }
+
+    #[test]
+    fn test_register_files_returns_partial_owner_and_remaining_output_file() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let input = tempfile::tempfile().unwrap();
+                let output = tempfile::tempfile().unwrap();
+                let mut reservations = vec![scope.reserve_resource().unwrap()];
+                let failure = register_files(
+                    &scope,
+                    &mut reservations,
+                    Some(input),
+                    Some((output, FileSinkPolicy::Preserve)),
+                    None,
+                )
+                .expect_err("stdout registration should fail after the input takes the only slot");
+                let (error, prepared, mut raw_files) = *failure;
+                let partial = prepared.expect("successfully registered stdin stays owned");
+
+                assert!(error.to_string().contains("missing reserved resource slot"));
+                assert!(reservations.is_empty());
+                assert!(partial.stdin.is_some());
+                assert!(partial.stdout.is_none());
+                assert!(partial.stderr.is_none());
+                assert!(raw_files[0].is_none());
+                assert!(raw_files[1].take().is_some());
+                assert!(raw_files[2].is_none());
+                drop(partial);
+                Ok::<_, String>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        assert!(operation.wait_settlement().unwrap().all_released());
+    }
+
+    #[test]
+    fn test_register_files_transfers_all_streams_and_preserves_selected_sink() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let mut reservations = (0..3)
+                    .map(|_| scope.reserve_resource().unwrap())
+                    .collect::<Vec<_>>();
+                let prepared = register_files(
+                    &scope,
+                    &mut reservations,
+                    Some(tempfile::tempfile().unwrap()),
+                    Some((tempfile::tempfile().unwrap(), FileSinkPolicy::Preserve)),
+                    Some((tempfile::tempfile().unwrap(), FileSinkPolicy::Truncate)),
+                )
+                .expect("all three reserved files should be registered");
+
+                assert!(reservations.is_empty());
+                assert!(prepared.stdin.is_some());
+                assert_eq!(
+                    prepared.stdout.as_ref().unwrap().policy,
+                    FileSinkPolicy::Preserve
+                );
+                assert_eq!(
+                    prepared.stderr.as_ref().unwrap().policy,
+                    FileSinkPolicy::Truncate
+                );
+                truncate_sinks(&prepared, &scope).map_err(|error| error.to_string())?;
+                Ok::<_, String>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        let settlement = operation.wait_settlement().unwrap();
+        assert!(settlement.all_released());
+        assert_eq!(settlement.effects_total, 1);
+        assert_eq!(
+            settlement.effects[0].description.as_str(),
+            "stderr sink truncated"
+        );
+    }
 }
