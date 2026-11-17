@@ -3413,6 +3413,83 @@ mod command_executor_api_tests {
         }
 
         #[test]
+        fn test_scoped_session_apis_reject_foreign_scope_before_admission() {
+            block_on(async {
+                use crate::CommandErrorKind;
+                use crate::ManagedCommandRunnerApi;
+
+                let (_manager, executor, runner) = setup();
+                let foreign_manager = super::super::OperationManager::new(Default::default()).unwrap();
+                let marker_directory = tempfile::tempdir().unwrap();
+                let standard_marker = marker_directory.path().join("standard-session-ran");
+                let resource_marker = marker_directory.path().join("resource-session-ran");
+                let standard_command_marker = standard_marker.clone();
+                let resource_command_marker = resource_marker.clone();
+                let scoped_executor = executor.clone();
+                let scoped_runner = runner.clone();
+                let outcome = foreign_manager
+                    .as_async()
+                    .run(Default::default(), move |scope| async move {
+                        let standard_error = match scoped_runner
+                            .start_session_in(
+                                &scope,
+                                &scoped_executor,
+                                Command::new("sh")
+                                    .arg("-c")
+                                    .arg("touch \"$1\"")
+                                    .arg("sh")
+                                    .arg(standard_command_marker.to_string_lossy().as_ref()),
+                                Default::default(),
+                            )
+                            .await
+                        {
+                            Err(error) => error,
+                            Ok(_) => panic!("a foreign scope must not start a managed session"),
+                        };
+                        assert_eq!(standard_error.kind(), CommandErrorKind::ManagedOperationFailed);
+                        assert!(matches!(
+                            standard_error.reason(),
+                            crate::CommandErrorReason::ManagedOperationFailed { diagnostic }
+                                if diagnostic.starts_with("group binding failed:")
+                        ));
+
+                        let resource_error = match scoped_runner
+                            .start_session_resources_in(
+                                &scope,
+                                &scoped_executor,
+                                Command::new("sh")
+                                    .arg("-c")
+                                    .arg("touch \"$1\"")
+                                    .arg("sh")
+                                    .arg(resource_command_marker.to_string_lossy().as_ref()),
+                                CommandResourceRunOptions::new(),
+                            )
+                            .await
+                        {
+                            Err(error) => error,
+                            Ok(_) => panic!("a foreign scope must not start a resource session"),
+                        };
+                        assert_eq!(resource_error.kind(), CommandErrorKind::ManagedOperationFailed);
+                        assert!(matches!(
+                            resource_error.reason(),
+                            crate::CommandErrorReason::ManagedOperationFailed { diagnostic }
+                                if diagnostic.starts_with("group binding failed:")
+                        ));
+                        Ok::<_, crate::CommandError>(())
+                    })
+                    .await
+                    .unwrap();
+
+                assert!(matches!(outcome, OperationOutcome::Succeeded(())));
+                assert!(!standard_marker.exists());
+                assert!(!resource_marker.exists());
+                assert_eq!(executor.scheduler_snapshot().active, 0);
+                assert_eq!(executor.scheduler_snapshot().queued, 0);
+                assert_eq!(executor.scheduler_snapshot().waiters, 0);
+            });
+        }
+
+        #[test]
         fn test_async_resource_wait_returns_over_budget_file_without_admission() {
             block_on(async {
                 use crate::execution::CapacityFailure;
