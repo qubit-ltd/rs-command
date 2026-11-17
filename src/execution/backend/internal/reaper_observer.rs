@@ -338,4 +338,64 @@ mod tests {
         assert!(observer.is_complete());
         assert!(!observer.is_pending());
     }
+
+    #[test]
+    fn test_recovery_sink_remains_readable_after_mutex_poisoning() {
+        let sink = sink(false);
+        let (observer, _completed) = ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink) as Arc<dyn FactSink>);
+        let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = observer.recovery_sink.lock().unwrap();
+            panic!("poison recovery sink mutex for recovery test");
+        }));
+
+        assert!(poison_result.is_err());
+        let recovered = observer
+            .recovery_sink()
+            .expect("poisoned sink lock should recover its value");
+        assert!(Arc::ptr_eq(&recovered, &(sink as Arc<dyn FactSink>)));
+    }
+
+    #[test]
+    fn test_deferred_owner_can_be_stored_and_taken_after_mutex_poisoning() {
+        let (observer, completed) = ReaperObserver::pair();
+        let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = observer.deferred_owner.lock().unwrap();
+            panic!("poison deferred owner mutex for recovery test");
+        }));
+        assert!(poison_result.is_err());
+
+        observer.mark_pending();
+        let cleanup_observer = observer.clone();
+        observer.retain_or_defer_reaper_owner(ReaperOwner::new(move || cleanup_observer.complete()));
+        let owner = observer
+            .take_deferred_recovery_owner()
+            .expect("poisoned owner lock should retain deferred cleanup");
+        assert_eq!(
+            owner.summary(),
+            "managed child and I/O helpers awaiting bounded reaper capacity"
+        );
+        owner.retry_cleanup().expect("recovered owner should be retryable");
+        completed
+            .recv_timeout(Duration::from_secs(3))
+            .expect("recovered cleanup should signal completion");
+        assert!(observer.is_complete());
+    }
+
+    #[test]
+    fn test_completion_signals_waiter_after_sender_mutex_poisoning() {
+        let (observer, completed) = ReaperObserver::pair();
+        let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = observer.completion_sender.lock().unwrap();
+            panic!("poison completion sender mutex for recovery test");
+        }));
+        assert!(poison_result.is_err());
+
+        observer.complete();
+
+        assert!(observer.is_complete());
+        completed
+            .recv_timeout(Duration::from_secs(1))
+            .expect("complete should signal through the recovered sender");
+        assert!(matches!(completed.try_recv(), Err(mpsc::TryRecvError::Disconnected)));
+    }
 }
