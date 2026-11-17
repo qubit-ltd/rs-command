@@ -676,6 +676,7 @@ mod tests {
     use crate::CommandErrorKind;
     use crate::CommandErrorReason;
     use crate::OutputStream;
+    use crate::execution::contracts::ReservationLease;
     #[cfg(feature = "async")]
     use crate::session::channel::SessionChannels;
     #[cfg(feature = "async")]
@@ -1645,6 +1646,48 @@ mod tests {
         assert!(matches!(command.wait_for_event(None), RunEvent::Exited(value) if value.success()));
         assert_eq!(at_calls.load(Ordering::SeqCst), 1);
         assert_eq!(now_calls.load(Ordering::SeqCst), samples_before_wait + 1);
+    }
+
+    #[test]
+    fn test_timeout_monitor_clock_domain_failure_cleans_up_resources() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let child = ScriptedChild::new("child", raw_child(), Arc::clone(&calls)).try_wait_results([Ok(None)]);
+        let started_clock = ManualMonotonicClock::new_shared();
+        let timer_clock = ManualMonotonicClock::new_shared();
+        let releases = Arc::new(AtomicUsize::new(0));
+        let released = Arc::clone(&releases);
+
+        let result = RunningCommand::new_with_reaper(
+            "clock domain failure".to_owned(),
+            ManagedChildProcess::new(Box::new(child), true),
+            CommandIo::new(successful_reader(), successful_reader(), None),
+            started_clock.now(),
+            timer_clock.new_timer(),
+            RunningCommandResources {
+                cancellation_token: None,
+                total_budget: None,
+                capacity_lease: Some(ReservationLease::new(move || {
+                    released.fetch_add(1, Ordering::SeqCst);
+                })),
+                reaper_observer: None,
+                session_bridge: None,
+                operation_context: None,
+            },
+        )
+        .wait_for_completion(Some(Duration::from_secs(1)));
+
+        let error = expect_error(result, "a foreign timer clock should fail timeout monitoring");
+        assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::TimeFailed {
+                source: TimeError::ClockDomainMismatch { .. }
+            }
+        ));
+        assert!(error.output().is_none());
+        assert!(error.cleanup_failures().is_empty());
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
+        assert!(calls.lock().unwrap().iter().any(|call| call == "child.kill"));
     }
 
     #[test]
