@@ -713,10 +713,7 @@ mod data_api_tests {
             .env("AFTER_CLEAR", "kept");
 
         assert_eq!(command.program(), OsStr::new("worker"));
-        assert_eq!(
-            command.working_directory_override(),
-            Some(Path::new("/tmp/work"))
-        );
+        assert_eq!(command.working_directory_override(), Some(Path::new("/tmp/work")));
         assert!(command.clears_environment());
         assert_eq!(
             command.arguments().collect::<Vec<_>>(),

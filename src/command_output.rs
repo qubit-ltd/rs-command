@@ -425,12 +425,8 @@ mod tests {
 
         assert!(output.stdout_text().is_err());
         assert!(output.stderr_text().is_err());
-        assert!(
-            matches!(output.stdout_lossy_text(), std::borrow::Cow::Owned(text) if text == "a\u{fffd}")
-        );
-        assert!(
-            matches!(output.stderr_lossy_text(), std::borrow::Cow::Owned(text) if text == "\u{fffd}")
-        );
+        assert!(matches!(output.stdout_lossy_text(), std::borrow::Cow::Owned(text) if text == "a\u{fffd}"));
+        assert!(matches!(output.stderr_lossy_text(), std::borrow::Cow::Owned(text) if text == "\u{fffd}"));
     }
 
     #[test]
