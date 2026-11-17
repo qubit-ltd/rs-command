@@ -59,3 +59,33 @@ impl CommandExecutor {
         &self.manager
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOptions;
+    use qubit_operation::OperationOutcome;
+
+    use super::CommandExecutionConfig;
+    use super::CommandExecutor;
+
+    #[test]
+    fn executor_exposes_its_config_and_manager_for_future_operations() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let config = CommandExecutionConfig {
+            max_active: 2,
+            max_queued: 3,
+            max_waiters: 5,
+            max_queued_input_bytes: 128,
+            max_diagnostics: 7,
+        };
+        let executor = CommandExecutor::new(manager, config.clone()).unwrap();
+
+        assert_eq!(executor.config(), &config);
+        let outcome = executor
+            .manager()
+            .run(OperationOptions::default(), |_| Ok::<_, ()>("manager view works"))
+            .unwrap();
+        assert!(matches!(outcome, OperationOutcome::Succeeded("manager view works")));
+    }
+}

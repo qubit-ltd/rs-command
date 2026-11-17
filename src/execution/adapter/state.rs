@@ -679,4 +679,20 @@ mod activation_failure_tests {
             "abandon should return the reservation"
         );
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_restore_returns_unactivated_request_for_retry() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let state = make_state(Arc::clone(&scheduler), permit);
+
+        let request = state.restore().expect("prepared request should be recoverable");
+        assert!(request.operation_id.is_none());
+        let output = request.runner.run(request.command).unwrap();
+        assert!(output.exit_status().success());
+
+        drop(state);
+        assert!(scheduler.try_reserve(0).is_ok(), "dropping restored state should release its reservation");
+    }
 }
