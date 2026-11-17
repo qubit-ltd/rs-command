@@ -52,29 +52,70 @@ mod tests {
 
     use super::OperationObserverSlot;
 
-    #[test]
-    fn test_waiting_observer_receives_published_operation_identity() {
+    fn completed_observer() -> (
+        qubit_operation::OperationObserver,
+        qubit_operation::OperationId,
+    ) {
         let manager = OperationManager::new(ManagerOptions::default()).unwrap();
-        let mut operation = manager
+        let mut handle = manager
             .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
             .unwrap();
-        let expected_id = operation.id();
+        let observer = handle.observer();
+        let id = handle.id();
+        let _ = handle.wait_outcome().unwrap();
+        handle.wait_settlement().unwrap();
+        (observer, id)
+    }
+
+    #[test]
+    fn test_wait_blocks_until_observer_is_published_and_returns_its_identity() {
+        let (observer, expected_id) = completed_observer();
         let slot = Arc::new(OperationObserverSlot::default());
-        let waiting_slot = Arc::clone(&slot);
+        let waiter_slot = Arc::clone(&slot);
         let (started_tx, started_rx) = mpsc::channel();
-        let (observer_tx, observer_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
         let waiter = std::thread::spawn(move || {
             started_tx.send(()).unwrap();
-            observer_tx.send(waiting_slot.wait()).unwrap();
+            result_tx.send(waiter_slot.wait().id()).unwrap();
         });
 
-        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        std::thread::sleep(Duration::from_millis(10));
-        slot.set(operation.observer());
-        let observed = observer_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        waiter.join().unwrap();
-        assert_eq!(observed.id(), expected_id);
-        let _outcome = operation.wait_outcome().unwrap();
-        operation.wait_settlement().unwrap();
+        started_rx.recv().unwrap();
+        assert!(result_rx.recv_timeout(Duration::from_millis(20)).is_err());
+        slot.set(observer);
+
+        assert_eq!(
+            result_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            expected_id
+        );
+        assert_eq!(waiter.join().unwrap(), ());
+        assert_eq!(slot.wait().id(), expected_id);
+    }
+
+    #[test]
+    fn test_set_notifies_all_waiters_with_the_published_observer() {
+        let (observer, expected_id) = completed_observer();
+        let slot = Arc::new(OperationObserverSlot::default());
+        let waiter_count = 3;
+        let (started_tx, started_rx) = mpsc::channel();
+        let mut waiters = Vec::new();
+
+        for _ in 0..waiter_count {
+            let waiter_slot = Arc::clone(&slot);
+            let started_tx = started_tx.clone();
+            waiters.push(std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                waiter_slot.wait().id()
+            }));
+        }
+        drop(started_tx);
+        for _ in 0..waiter_count {
+            started_rx.recv().unwrap();
+        }
+
+        slot.set(observer);
+
+        for waiter in waiters {
+            assert_eq!(waiter.join().unwrap(), expected_id);
+        }
     }
 }
