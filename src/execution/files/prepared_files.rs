@@ -202,6 +202,7 @@ fn record_effect(
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::panic::AssertUnwindSafe;
 
     use qubit_operation::OperationManager;
     use qubit_operation::OperationOptions;
@@ -262,6 +263,40 @@ mod tests {
         assert_eq!(settlement.effects.len(), 1);
         assert_eq!(settlement.effects[0].fact, qubit_operation::EffectFact::Known);
         assert_eq!(settlement.effects[0].description.as_str(), "stdout sink truncated");
+    }
+
+    #[test]
+    fn test_poisoned_sink_lock_returns_error_and_releases_registered_owner() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let output = tempfile::tempfile().unwrap();
+                let mut reservations = vec![scope.reserve_resource().unwrap()];
+                let prepared = register_files(
+                    &scope,
+                    &mut reservations,
+                    None,
+                    Some((output, FileSinkPolicy::Truncate)),
+                    None,
+                )
+                .map_err(|error| error.0.to_string())?;
+                let sink = prepared.stdout.as_ref().expect("stdout sink should be registered");
+
+                let panic = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    let _guard = sink.file.lock().unwrap();
+                    panic!("poison the sink lock to exercise truncation recovery");
+                }));
+                assert!(panic.is_err());
+                let error = truncate_sinks(&prepared, &scope)
+                    .expect_err("a poisoned sink must fail truncation without losing its owner");
+                assert!(error.to_string().contains("poisoned"));
+                drop(prepared);
+                Ok::<_, String>(())
+            })
+            .unwrap();
+
+        assert!(matches!(operation.wait_outcome().unwrap(), OperationOutcome::Succeeded(())));
+        assert!(operation.wait_settlement().unwrap().all_released());
     }
 
     #[test]
