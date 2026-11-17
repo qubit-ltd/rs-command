@@ -363,4 +363,78 @@ mod async_tests {
             })
             .unwrap();
     }
+
+    #[test]
+    fn test_session_runner_methods_return_submission_rejections() {
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let closed_executor = executor(&manager);
+        let _shutdown = closed_executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
+
+        for (result, diagnostic_prefix) in [
+            (
+                block_on(runner().start_session(
+                    &closed_executor,
+                    Command::new("__must_not_spawn_after_session_executor_shutdown__"),
+                    Default::default(),
+                )),
+                "managed session admission failed:",
+            ),
+            (
+                block_on(runner().start_session_resources(
+                    &closed_executor,
+                    Command::new("__must_not_spawn_after_session_executor_shutdown__"),
+                    CommandResourceRunOptions::new(),
+                )),
+                "managed resource session admission failed:",
+            ),
+        ] {
+            let error = match result {
+                Ok(_) => panic!("closed executor should reject a session request"),
+                Err(error) => error,
+            };
+            assert_eq!(error.kind(), CommandErrorKind::ManagedOperationFailed);
+            assert!(matches!(
+                error.reason(),
+                qubit_command::CommandErrorReason::ManagedOperationFailed { diagnostic }
+                    if diagnostic.starts_with(diagnostic_prefix)
+            ));
+            assert!(error.output().is_none());
+        }
+
+        let scope_manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let other_manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let wrong_executor = executor(&other_manager);
+        let result = scope_manager
+            .run(OperationOptions::default(), move |scope| {
+                let ordinary = block_on(runner().start_session_in(
+                    &scope,
+                    &wrong_executor,
+                    Command::new("__must_not_spawn_for_foreign_session_scope__"),
+                    Default::default(),
+                ));
+                let resources = block_on(runner().start_session_resources_in(
+                    &scope,
+                    &wrong_executor,
+                    Command::new("__must_not_spawn_for_foreign_session_scope__"),
+                    CommandResourceRunOptions::new(),
+                ));
+
+                for result in [ordinary, resources] {
+                    let error = match result {
+                        Ok(_) => panic!("session scope must reject a foreign executor"),
+                        Err(error) => error,
+                    };
+                    assert_eq!(error.kind(), CommandErrorKind::ManagedOperationFailed);
+                    assert!(matches!(
+                        error.reason(),
+                        qubit_command::CommandErrorReason::ManagedOperationFailed { diagnostic }
+                            if diagnostic.starts_with("group binding failed:")
+                    ));
+                    assert!(error.output().is_none());
+                }
+                Ok::<_, qubit_command::CommandError>(())
+            })
+            .unwrap();
+        assert!(matches!(result, OperationOutcome::Succeeded(())));
+    }
 }
