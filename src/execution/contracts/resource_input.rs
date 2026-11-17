@@ -41,3 +41,61 @@ pub trait ResourceInput: Send {
         self.prepare_files(scope)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+
+    use qubit_operation::GroupOptions;
+    use qubit_operation::ManagerOptions;
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOptions;
+    use qubit_operation::OperationOutcome;
+    use qubit_operation::OperationScope;
+
+    use super::ResourceInput;
+    use crate::execution::contracts::ExecutionSnapshot;
+    use crate::execution::contracts::FilePreparationFailure;
+    use crate::execution::contracts::PreparedFiles;
+
+    struct LegacyInput(Arc<AtomicBool>);
+
+    impl ResourceInput for LegacyInput {
+        fn prepare_files(
+            self: Box<Self>,
+            _scope: &OperationScope,
+        ) -> Result<PreparedFiles, FilePreparationFailure> {
+            self.0.store(true, Ordering::SeqCst);
+            Ok(PreparedFiles::new(None, None, None))
+        }
+    }
+
+    #[test]
+    fn test_snapshot_preparation_default_forwards_to_legacy_file_preparation() {
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let group = manager.group(GroupOptions { capacity: 1 }).unwrap();
+        let prepared_legacy = Arc::new(AtomicBool::new(false));
+        let observed = prepared_legacy.clone();
+
+        let completion = group
+            .run_and_settle(OperationOptions::default(), move |scope| {
+                let prepared = Box::new(LegacyInput(observed))
+                    .prepare_files_with_snapshot(&scope, &ExecutionSnapshot::default())
+                    .expect("default adapter should delegate legacy preparation");
+                assert_eq!(
+                    format!("{prepared:?}"),
+                    "PreparedFiles { stdin: false, stdout: false, stderr: false }"
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            completion.outcome,
+            OperationOutcome::Succeeded(())
+        ));
+        assert!(prepared_legacy.load(Ordering::SeqCst));
+    }
+}

@@ -1130,4 +1130,51 @@ mod tests {
         assert!(channel.incomplete());
         assert_eq!(channel.blocking_read(&mut [0; 4]).unwrap(), 0);
     }
+
+    #[test]
+    fn test_poll_read_caps_each_result_and_preserves_following_bytes() {
+        let channel = ByteChannel::new();
+        let bytes = (0..=u8::MAX)
+            .cycle()
+            .take(MAX_BLOCK + 7)
+            .collect::<Vec<_>>();
+        channel.blocking_write(&bytes).unwrap();
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = std::task::Waker::from(counter);
+        let mut context = std::task::Context::from_waker(&waker);
+        let mut output = vec![0; MAX_BLOCK * 2];
+
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Ready(Ok(n)) if n == MAX_BLOCK
+        ));
+        assert_eq!(&output[..MAX_BLOCK], &bytes[..MAX_BLOCK]);
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Ready(Ok(7))
+        ));
+        assert_eq!(&output[..7], &bytes[MAX_BLOCK..]);
+    }
+
+    #[test]
+    fn test_stop_output_wakes_pending_reader_and_returns_eof() {
+        let channel = ByteChannel::new();
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = std::task::Waker::from(counter.clone());
+        let mut context = std::task::Context::from_waker(&waker);
+        let mut output = [0; 1];
+
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Pending
+        ));
+        channel.stop_output();
+
+        assert_eq!(counter.0.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Ready(Ok(0))
+        ));
+        assert!(channel.incomplete());
+    }
 }

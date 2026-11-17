@@ -32,3 +32,41 @@ impl std::fmt::Debug for FilePreparationFailure {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use qubit_operation::OperationScope;
+
+    use super::FilePreparationFailure;
+    use crate::execution::contracts::PreparedFiles;
+    use crate::execution::contracts::ResourceInput;
+
+    struct RetainedInput;
+
+    impl ResourceInput for RetainedInput {
+        fn prepare_files(
+            self: Box<Self>,
+            _scope: &OperationScope,
+        ) -> Result<PreparedFiles, FilePreparationFailure> {
+            unreachable!("retained test input is inspected, not prepared")
+        }
+    }
+
+    #[test]
+    fn test_debug_reports_retained_recovery_parts_without_formatting_them() {
+        let failure = FilePreparationFailure {
+            message: "file preparation stopped".to_owned(),
+            input: Some(Box::new(RetainedInput)),
+            prepared: Some(Box::new(PreparedFiles::new(None, None, None))),
+        };
+
+        let debug = format!("{failure:?}");
+
+        assert!(debug.contains("file preparation stopped"));
+        assert!(debug.contains("input_retained: true"));
+        assert!(debug.contains("prepared_retained: true"));
+        assert!(!debug.contains("RetainedInput"));
+        assert!(failure.input.is_some());
+        assert!(failure.prepared.is_some());
+    }
+}

@@ -58,3 +58,47 @@ impl std::fmt::Debug for Request {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    use super::Request;
+    use crate::Command;
+    use crate::CommandRunOptions;
+    use crate::CommandRunner;
+    use crate::execution::contracts::ExecutionSnapshot;
+    use crate::execution::contracts::IoPathSnapshot;
+    use crate::execution::contracts::RequestOptions;
+
+    #[test]
+    fn test_request_debug_summarizes_deadline_and_redacts_nested_command_settings() {
+        let request = Request {
+            operation_id: None,
+            runner: CommandRunner::without_timeout(),
+            command: Command::new("worker").sensitive_arg("request-command-secret"),
+            options: RequestOptions::Standard(
+                CommandRunOptions::new().tee_stdout_to_file("private/request-output.log"),
+            ),
+            snapshot: ExecutionSnapshot {
+                working_directory: PathBuf::from("working-directory"),
+                environment: vec![(OsString::from("MODE"), Some(OsString::from("safe")))],
+            },
+            io_paths: IoPathSnapshot {
+                stdin: None,
+                stdout: Some(PathBuf::from("request-output.log")),
+                stderr: None,
+            },
+            deadline: None,
+        };
+
+        let debug = format!("{request:?}");
+
+        assert!(debug.contains("deadline_configured: false"));
+        assert!(debug.contains("working-directory"));
+        assert!(debug.contains("request-output.log"));
+        assert!(!debug.contains("request-command-secret"));
+        assert!(!debug.contains("private/request-output.log"));
+    }
+}

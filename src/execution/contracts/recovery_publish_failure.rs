@@ -31,3 +31,44 @@ impl std::fmt::Debug for RecoveryPublishFailure {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    use super::RecoveryPublishFailure;
+    use crate::execution::contracts::RecoveryOwner;
+    use crate::execution::contracts::RecoveryPublishError;
+    use crate::execution::contracts::RecoveryRetryError;
+
+    struct RetainedOwner(Arc<AtomicUsize>);
+
+    impl RecoveryOwner for RetainedOwner {
+        fn summary(&self) -> String {
+            "cleanup owner remains retryable".to_owned()
+        }
+
+        fn retry_cleanup(&self) -> Result<(), RecoveryRetryError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_debug_describes_publish_rejection_and_owner_remains_recoverable() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let failure = RecoveryPublishFailure {
+            reason: RecoveryPublishError::CapacityExceeded,
+            owner: Box::new(RetainedOwner(attempts.clone())),
+        };
+
+        let debug = format!("{failure:?}");
+        assert!(debug.contains("CapacityExceeded"));
+        assert!(debug.contains("cleanup owner remains retryable"));
+        assert!(!failure.owner.is_complete());
+        failure.owner.retry_cleanup().unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+}
