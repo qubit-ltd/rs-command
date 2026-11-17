@@ -748,6 +748,87 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn test_external_cancellation_after_spawn_publishes_user_stop_and_releases() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::new());
+        let sink = Arc::new(RecordingSink::default());
+        let cancellation = crate::CommandCancellation::new();
+        let operation_backend = Arc::clone(&backend);
+        let operation_sink = Arc::clone(&sink);
+        let operation_cancellation = cancellation.clone();
+        let directory = tempfile::tempdir().unwrap();
+        let ready = directory.path().join("external-cancel-ready");
+        let operation_ready = ready.clone();
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout(),
+                    command: Command::new("sh").arg("-c").arg(&format!(
+                        "printf partial; touch {}; exec sleep 30",
+                        operation_ready.display()
+                    )),
+                    options: RequestOptions::Standard(CommandRunOptions::new().cancellation(operation_cancellation)),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
+                    },
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: None,
+                };
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    |_| {},
+                    |_| crate::execution::contracts::ReservationLease::new(|| {}),
+                );
+                operation_backend.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: operation_sink.clone(),
+                        session_bridge: None,
+                    },
+                    operation_sink,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while !ready.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        cancellation.cancel();
+        assert!(ready.exists(), "the command must start before external cancellation");
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        operation.wait_settlement().unwrap();
+        assert!(matches!(
+            sink.outcome.lock().unwrap().take(),
+            Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::UserCancelled
+        ));
+        let diagnostic = sink
+            .stop_diagnostic
+            .lock()
+            .unwrap()
+            .take()
+            .expect("external cancellation should preserve the runner diagnostic");
+        assert_eq!(diagnostic.kind(), crate::CommandErrorKind::Cancelled);
+        assert_eq!(diagnostic.captured_output().unwrap().stdout(), b"partial");
+        assert!(sink.released.load(Ordering::SeqCst));
+        assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_spawn_failure_publishes_error_and_releases_reservation() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let backend = Arc::new(ProcessBackend::new());
