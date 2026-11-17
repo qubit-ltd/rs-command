@@ -335,9 +335,7 @@ mod tests {
         let manager = OperationManager::new(Default::default()).unwrap();
         let mut operation = manager
             .try_submit(OperationOptions::default(), move |scope| {
-                let mut reservations = (0..3)
-                    .map(|_| scope.reserve_resource().unwrap())
-                    .collect::<Vec<_>>();
+                let mut reservations = (0..3).map(|_| scope.reserve_resource().unwrap()).collect::<Vec<_>>();
                 let prepared = register_files(
                     &scope,
                     &mut reservations,
@@ -349,14 +347,8 @@ mod tests {
 
                 assert!(reservations.is_empty());
                 assert!(prepared.stdin.is_some());
-                assert_eq!(
-                    prepared.stdout.as_ref().unwrap().policy,
-                    FileSinkPolicy::Preserve
-                );
-                assert_eq!(
-                    prepared.stderr.as_ref().unwrap().policy,
-                    FileSinkPolicy::Truncate
-                );
+                assert_eq!(prepared.stdout.as_ref().unwrap().policy, FileSinkPolicy::Preserve);
+                assert_eq!(prepared.stderr.as_ref().unwrap().policy, FileSinkPolicy::Truncate);
                 truncate_sinks(&prepared, &scope).map_err(|error| error.to_string())?;
                 Ok::<_, String>(())
             })
@@ -369,9 +361,6 @@ mod tests {
         let settlement = operation.wait_settlement().unwrap();
         assert!(settlement.all_released());
         assert_eq!(settlement.effects_total, 1);
-        assert_eq!(
-            settlement.effects[0].description.as_str(),
-            "stderr sink truncated"
-        );
+        assert_eq!(settlement.effects[0].description.as_str(), "stderr sink truncated");
     }
 }

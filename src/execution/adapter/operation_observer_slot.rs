@@ -52,10 +52,7 @@ mod tests {
 
     use super::OperationObserverSlot;
 
-    fn completed_observer() -> (
-        qubit_operation::OperationObserver,
-        qubit_operation::OperationId,
-    ) {
+    fn completed_observer() -> (qubit_operation::OperationObserver, qubit_operation::OperationId) {
         let manager = OperationManager::new(ManagerOptions::default()).unwrap();
         let mut handle = manager
             .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
@@ -83,10 +80,7 @@ mod tests {
         assert!(result_rx.recv_timeout(Duration::from_millis(20)).is_err());
         slot.set(observer);
 
-        assert_eq!(
-            result_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-            expected_id
-        );
+        assert_eq!(result_rx.recv_timeout(Duration::from_secs(1)).unwrap(), expected_id);
         assert_eq!(waiter.join().unwrap(), ());
         assert_eq!(slot.wait().id(), expected_id);
     }

@@ -305,8 +305,9 @@ mod tests {
 
         assert!(!gate.stop_requested());
         assert_eq!(gate.stop_reason(), None);
-        let permit = gate.authorize().expect("new gate should authorize startup");
-        drop(permit);
+        {
+            let _permit = gate.authorize().expect("new gate should authorize startup");
+        }
 
         assert!(gate.authorize().is_some());
         assert!(!gate.request_stop(StopReason::UserCancelled));
