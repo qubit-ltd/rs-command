@@ -706,6 +706,43 @@ mod tests {
     }
 
     #[test]
+    fn test_request_cancel_signals_every_io_helper() {
+        use super::super::io_cancellation_token::IoCancellationToken;
+
+        let (stdout_cancel, stdout_token) = IoCancellation::pair().expect("stdout cancellation should initialize");
+        let (stderr_cancel, stderr_token) = IoCancellation::pair().expect("stderr cancellation should initialize");
+        let (stdin_cancel, stdin_token) = IoCancellation::pair().expect("stdin cancellation should initialize");
+        let reader = |cancellation: IoCancellation, token: IoCancellationToken| {
+            OutputReader::new(
+                thread::spawn(move || {
+                    while !token.is_cancelled() {
+                        thread::yield_now();
+                    }
+                    Ok(CapturedOutput::default())
+                }),
+                cancellation,
+            )
+        };
+        let writer = StdinWriter::new(
+            thread::spawn(move || {
+                while !stdin_token.is_cancelled() {
+                    thread::yield_now();
+                }
+                Ok(())
+            }),
+            stdin_cancel,
+        );
+        let command_io = CommandIo::new(
+            reader(stdout_cancel, stdout_token),
+            reader(stderr_cancel, stderr_token),
+            Some(writer),
+        );
+
+        command_io.request_cancel();
+        wait_for_completion(|| command_io.is_finished());
+    }
+
+    #[test]
     fn test_poll_read_failure_collects_both_reader_results() {
         use super::super::output_capture_error::OutputCaptureError;
 

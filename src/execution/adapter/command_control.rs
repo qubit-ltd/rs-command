@@ -515,4 +515,52 @@ mod tests {
         assert!(!snapshot.input_released);
         assert!(snapshot.settlement.is_none());
     }
+
+    #[test]
+    fn test_control_remains_usable_after_state_mutex_is_poisoned() {
+        let control = CommandControl::default();
+        let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _state = control.state.lock().unwrap();
+            panic!("inject poisoned control state");
+        }));
+        assert!(poison.is_err());
+
+        let report = settlement_report();
+        assert!(control.bind(report.operation_id));
+        control.running();
+        control.request_stop(StopReason::UserCancelled);
+
+        let wake = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = Waker::from(Arc::clone(&wake));
+        let mut context = Context::from_waker(&waker);
+        assert!(matches!(control.take(&mut context), Poll::Pending));
+        assert!(matches!(
+            OperationControl::poll_outcome(&control, &mut context),
+            Poll::Pending
+        ));
+        assert!(matches!(
+            OperationControl::poll_release(&control, &mut context),
+            Poll::Pending
+        ));
+        assert!(matches!(
+            OperationControl::poll_settlement(&control, &mut context),
+            Poll::Pending
+        ));
+
+        assert!(control.publish_outcome(OperationOutcome::Stopped(StopReport {
+            reason: StopReason::UserCancelled,
+            accepted_at: None,
+        })));
+        assert!(control.release());
+        assert!(control.settlement(Arc::clone(&report)));
+
+        let snapshot = OperationControl::snapshot(&control);
+        assert_eq!(snapshot.operation_id, report.operation_id);
+        assert!(snapshot.input_released);
+        assert_eq!(snapshot.stop.unwrap().reason, StopReason::UserCancelled);
+        assert!(OperationControl::poll_outcome(&control, &mut context).is_ready());
+        assert!(OperationControl::poll_release(&control, &mut context).is_ready());
+        assert!(OperationControl::poll_settlement(&control, &mut context).is_ready());
+        assert!(matches!(control.take(&mut context), Poll::Ready(OperationOutcome::Stopped(_))));
+    }
 }

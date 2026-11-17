@@ -634,6 +634,7 @@ mod tests {
     use super::super::command_io::CommandIo;
     use super::super::io_cancellation::IoCancellation;
     use super::super::output_capture_error::OutputCaptureError;
+    use super::super::output_capture_failure::OutputCaptureFailure;
     use super::super::output_capture_options::OutputCaptureOptions;
     use super::super::output_reader::OutputReader;
     use super::super::output_tee::OutputTee;
@@ -675,6 +676,47 @@ mod tests {
             },
             None,
         )
+    }
+
+    #[test]
+    fn test_output_cleanup_failure_maps_stream_and_failure_kind() {
+        let stdout_read = super::output_cleanup_failure(
+            OutputStream::Stdout,
+            OutputCaptureFailure::Read {
+                source: io::Error::other("stdout read failed"),
+            },
+        );
+        let stderr_read = super::output_cleanup_failure(
+            OutputStream::Stderr,
+            OutputCaptureFailure::Read {
+                source: io::Error::other("stderr read failed"),
+            },
+        );
+        let stdout_write = super::output_cleanup_failure(
+            OutputStream::Stdout,
+            OutputCaptureFailure::Write {
+                path: Path::new("stdout.log").to_path_buf(),
+                source: io::Error::other("stdout write failed"),
+            },
+        );
+        let stderr_write = super::output_cleanup_failure(
+            OutputStream::Stderr,
+            OutputCaptureFailure::Write {
+                path: Path::new("stderr.log").to_path_buf(),
+                source: io::Error::other("stderr write failed"),
+            },
+        );
+
+        assert!(matches!(stdout_read, CommandCleanupFailure::StdoutRead { .. }));
+        assert!(matches!(stderr_read, CommandCleanupFailure::StderrRead { .. }));
+        assert!(matches!(
+            stdout_write,
+            CommandCleanupFailure::StdoutWrite { ref path, .. } if path == Path::new("stdout.log")
+        ));
+        assert!(matches!(
+            stderr_write,
+            CommandCleanupFailure::StderrWrite { ref path, .. } if path == Path::new("stderr.log")
+        ));
     }
 
     struct CancellingReader {

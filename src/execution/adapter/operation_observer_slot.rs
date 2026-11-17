@@ -112,4 +112,19 @@ mod tests {
             assert_eq!(waiter.join().unwrap(), expected_id);
         }
     }
+
+    #[test]
+    fn test_observer_slot_recovers_a_poisoned_mutex() {
+        let slot = OperationObserverSlot::default();
+        let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _observer = slot.observer.lock().unwrap();
+            panic!("inject poisoned observer slot");
+        }));
+        assert!(poison.is_err());
+
+        let (observer, expected_id) = completed_observer();
+        slot.set(observer);
+
+        assert_eq!(slot.wait().id(), expected_id);
+    }
 }
