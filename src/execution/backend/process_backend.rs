@@ -1,11 +1,9 @@
-// =============================================================================
-//    Copyright (c) 2025 - 2026 Haixing Hu.
+// ======================================================================//    Copyright (c) 2025 - 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
 //
 //    Licensed under the Apache License, Version 2.0.
-// =============================================================================
-//! Adapter from activated requests to the established synchronous runner.
+// ======================================================================//! Adapter from activated requests to the established synchronous runner.
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -356,6 +354,7 @@ mod tests {
     use super::schedule_recovery_transfer;
     use crate::Command;
     use crate::CommandError;
+    use crate::CommandErrorReason;
     use crate::CommandOutput;
     use crate::CommandRunOptions;
     use crate::CommandRunner;
@@ -365,6 +364,7 @@ mod tests {
     use crate::execution::contracts::FactPublishError;
     use crate::execution::contracts::FactSink;
     use crate::execution::contracts::IoPathSnapshot;
+    use crate::execution::contracts::RecoveryRetryError;
     use crate::execution::contracts::RecoveryEffectEvidence;
     use crate::execution::contracts::RecoveryOwner;
     use crate::execution::contracts::RecoveryPublishError;
@@ -373,12 +373,15 @@ mod tests {
     use crate::execution::contracts::RequestOptions;
     use crate::execution::contracts::Reservation;
     use crate::execution::contracts::StopPort;
+    use crate::resource_run_options::CommandResourceRunOptions;
+    use crate::resource_run_options::FileSinkPolicy;
 
     #[derive(Default)]
     struct RecordingSink {
         outcome: Mutex<Option<OperationOutcome<CommandOutput, CommandError>>>,
         released: AtomicBool,
         settlement: Mutex<Option<Arc<SettlementReport>>>,
+        recovery_owner: Mutex<Option<Box<dyn RecoveryOwner>>>,
     }
 
     impl FactSink for RecordingSink {
@@ -400,11 +403,13 @@ mod tests {
             Ok(())
         }
 
-        fn retain_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) -> Result<(), RecoveryPublishFailure> {
-            Err(RecoveryPublishFailure {
-                reason: RecoveryPublishError::CapacityExceeded,
-                owner,
-            })
+        fn retain_recovery_owner(
+            &self,
+            owner: Box<dyn RecoveryOwner>,
+        ) -> Result<(), RecoveryPublishFailure> {
+            *self.recovery_owner.lock().unwrap() = Some(owner);
+            Ok(())
+        }
         }
     }
 
@@ -479,6 +484,91 @@ mod tests {
         ));
         let report = sink.settlement.lock().unwrap().take().unwrap();
         assert!(report.all_released());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_preparation_failure_retains_recovery_owner_until_scope_cleanup() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::new());
+        let sink = Arc::new(RecordingSink::default());
+        let capacity_released = Arc::new(AtomicBool::new(false));
+        let operation_backend = Arc::clone(&backend);
+        let operation_sink = Arc::clone(&sink);
+        let operation_capacity_released = Arc::clone(&capacity_released);
+        let file = tempfile::tempfile().unwrap();
+        let duplicate = file.try_clone().unwrap();
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    |_| {},
+                    move |_| {
+                        let released = Arc::clone(&operation_capacity_released);
+                        crate::execution::contracts::ReservationLease::new(move || {
+                            released.store(true, Ordering::SeqCst);
+                        })
+                    },
+                );
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout(),
+                    command: Command::new("sh").arg("-c").arg("exit 99"),
+                    options: RequestOptions::Resources(
+                        CommandResourceRunOptions::new()
+                            .stdin_file(duplicate)
+                            .stdout_sink(file, FileSinkPolicy::Truncate),
+                    ),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
+                    },
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: None,
+                };
+                operation_backend.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: operation_sink.clone(),
+                        session_bridge: None,
+                    },
+                    operation_sink,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(operation.wait_outcome().unwrap(), OperationOutcome::Succeeded(())));
+        assert!(!sink.released.load(Ordering::SeqCst));
+        assert!(sink.settlement.lock().unwrap().is_none());
+        let outcome = sink.outcome.lock().unwrap().take().unwrap();
+        assert!(matches!(
+            outcome,
+            OperationOutcome::Failed(error)
+                if matches!(error.reason(), CommandErrorReason::WriteOutputFailed { .. })
+        ));
+
+        let owner = sink
+            .recovery_owner
+            .lock()
+            .unwrap()
+            .take()
+            .expect("partial prepared resources should remain under recovery ownership");
+        assert_eq!(owner.summary(), "command file preparation retained partial resources");
+        assert!(!owner.is_complete());
+        owner.retry_cleanup().unwrap();
+        assert!(owner.is_complete());
+        assert_eq!(owner.retry_cleanup().unwrap_err(), RecoveryRetryError::OwnerAlreadyConsumed);
+        operation.wait_settlement().unwrap();
+        assert!(!capacity_released.load(Ordering::SeqCst));
+        drop(owner);
+        assert!(capacity_released.load(Ordering::SeqCst));
     }
 
     struct RetrySink {
