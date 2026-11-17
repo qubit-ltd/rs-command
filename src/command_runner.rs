@@ -366,11 +366,7 @@ mod tests {
             self.0
         }
 
-        fn register_deadline(
-            &self,
-            _at: MonotonicTime,
-            _waker: std::task::Waker,
-        ) -> Box<dyn TimerRegistration> {
+        fn register_deadline(&self, _at: MonotonicTime, _waker: std::task::Waker) -> Box<dyn TimerRegistration> {
             Box::new(NoopTimerRegistration)
         }
     }
@@ -403,10 +399,7 @@ mod tests {
             .expect_err("an expired operation context should stop before spawning");
 
         assert_eq!(error.kind(), CommandErrorKind::CancelledBeforeStart);
-        assert_eq!(
-            context.stop_reason(),
-            Some(qubit_operation::StopReason::Timeout)
-        );
+        assert_eq!(context.stop_reason(), Some(qubit_operation::StopReason::Timeout));
     }
 
     #[test]

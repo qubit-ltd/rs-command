@@ -775,11 +775,16 @@ mod activation_failure_tests {
         assert!(recovered.operation_id.is_none());
         let snapshot = OperationControl::snapshot(&*state);
         assert_eq!(snapshot.execution, qubit_operation::ExecutionPhase::Finished);
-        assert_eq!(snapshot.outcome.expect("missing request is an execution failure").kind,
-            qubit_operation::ChildOutcomeKind::ExecutionFailed);
+        assert_eq!(
+            snapshot.outcome.expect("missing request is an execution failure").kind,
+            qubit_operation::ChildOutcomeKind::ExecutionFailed
+        );
         assert!(snapshot.input_released);
         assert!(snapshot.settlement.is_some());
-        assert!(scheduler.try_reserve(0).is_ok(), "failed activation must return its reservation");
+        assert!(
+            scheduler.try_reserve(0).is_ok(),
+            "failed activation must return its reservation"
+        );
     }
 
     #[test]
