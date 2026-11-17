@@ -98,3 +98,64 @@ impl RecoveryOwner for DeferredReaperOwner {
         self.observer.is_complete()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOptions;
+
+    use super::DeferredReaperOwner;
+    use super::ReaperObserver;
+    use super::ReaperOwner;
+    use crate::execution::contracts::RecoveryOwner;
+
+    #[test]
+    fn cleanup_retry_moves_owner_once_and_reports_handoff_state() {
+        let (observer, completed) = ReaperObserver::pair();
+        observer.mark_pending();
+        let (cleanup_tx, cleanup_rx) = mpsc::channel();
+        let cleanup_observer = observer.clone();
+        let owner = DeferredReaperOwner::new(
+            ReaperOwner::new(move || {
+                cleanup_rx.recv().unwrap();
+                cleanup_observer.complete();
+            }),
+            observer.clone(),
+        );
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let id = operation.id();
+
+        let awaiting_handoff = owner.effect_evidence(id);
+        assert_eq!(awaiting_handoff.effects_total, 1);
+        assert_eq!(
+            awaiting_handoff.effects[0].description.as_str(),
+            "managed process/helper cleanup awaits reaper handoff"
+        );
+
+        owner.retry_cleanup().unwrap();
+        let awaiting_reaper = owner.effect_evidence(id);
+        assert_eq!(awaiting_reaper.effects_total, 1);
+        assert_eq!(
+            awaiting_reaper.effects[0].description.as_str(),
+            "managed process/helper cleanup is pending in reaper"
+        );
+        assert!(matches!(
+            owner.retry_cleanup(),
+            Err(crate::execution::contracts::RecoveryRetryError::CleanupHandoffUnavailable)
+        ));
+
+        assert!(operation.wait_outcome().is_ok());
+        operation.wait_settlement().unwrap();
+        cleanup_tx.send(()).unwrap();
+        completed.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(owner.is_complete());
+        assert!(owner.effect_evidence(id).effects.is_empty());
+        owner.retry_cleanup().unwrap();
+    }
+}

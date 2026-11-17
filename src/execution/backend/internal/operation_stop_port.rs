@@ -47,3 +47,44 @@ impl Drop for OperationStopPort {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOptions;
+    use qubit_operation::StopReason;
+
+    use super::OperationStopPort;
+    use crate::execution::backend::StartGate;
+    use crate::execution::contracts::StopPort;
+
+    #[test]
+    fn stop_port_propagates_reason_and_removes_its_gate_when_dropped() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let operation_id = operation.id();
+        let gate = std::sync::Arc::new(StartGate::default());
+        let gates = std::sync::Arc::new(std::sync::Mutex::new(HashMap::from([(
+            operation_id,
+            std::sync::Arc::clone(&gate),
+        )])));
+        let port = OperationStopPort {
+            operation_id,
+            gate: std::sync::Arc::clone(&gate),
+            gates: std::sync::Arc::downgrade(&gates),
+        };
+
+        StopPort::request_stop(&port, StopReason::Timeout);
+        assert_eq!(gate.stop_reason(), Some(StopReason::Timeout));
+        assert!(gate.cancellation().is_cancelled());
+
+        drop(port);
+        assert!(!gates.lock().unwrap().contains_key(&operation_id));
+        assert!(operation.wait_outcome().is_ok());
+        operation.wait_settlement().unwrap();
+    }
+}
