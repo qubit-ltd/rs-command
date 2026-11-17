@@ -430,6 +430,49 @@ mod tests {
     }
 
     #[test]
+    fn test_write_stdin_bytes_delivers_payload_and_closes_child_stdin() {
+        let mut child = ProcessCommand::new("sh")
+            .arg("-c")
+            .arg("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("test child should spawn");
+
+        let writer = write_stdin_bytes("command", &mut child, Some(b"writer payload".to_vec()))
+            .expect("stdin writer should start");
+        join_stdin_writer("command", writer).expect("stdin writer should finish");
+        let output = child
+            .wait_with_output()
+            .expect("test child should finish after stdin closes");
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"writer payload");
+    }
+
+    #[test]
+    fn test_write_stdin_bytes_without_payload_starts_no_writer() {
+        let mut child = ProcessCommand::new("sh")
+            .arg("-c")
+            .arg("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("test child should spawn");
+
+        let writer = write_stdin_bytes("command", &mut child, None)
+            .expect("absent stdin bytes should not require a worker");
+        join_stdin_writer("command", writer).expect("an absent worker should join successfully");
+        drop(child.stdin.take());
+        let output = child
+            .wait_with_output()
+            .expect("test child should finish after stdin closes");
+
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty());
+    }
+
+    #[test]
     fn test_write_stdin_bytes_maps_injected_spawn_failure() {
         let mut child = ProcessCommand::new("rustc")
             .arg("--version")

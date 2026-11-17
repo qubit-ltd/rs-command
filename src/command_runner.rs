@@ -488,6 +488,37 @@ mod tests {
         assert_eq!(output.exit_code(), Some(0));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_runner_applies_working_directory_and_configured_success_codes() {
+        let directory = tempfile::tempdir().expect("working directory should be created");
+        let output = CommandRunner::without_timeout()
+            .working_directory(directory.path())
+            .success_exit_codes(&[7])
+            .run(
+                crate::Command::new("sh")
+                    .arg("-c")
+                    .arg("printf '%s' \"$PWD\"; exit 7"),
+            )
+            .expect("configured nonzero exit code should be successful");
+
+        assert_eq!(output.exit_code(), Some(7));
+        assert_eq!(
+            output.stdout(),
+            directory.path().to_string_lossy().as_bytes()
+        );
+    }
+
+    #[test]
+    fn test_runner_debug_redacts_working_directory() {
+        let runner = CommandRunner::without_timeout().working_directory("/private/runner/path");
+
+        let debug = format!("{runner:?}");
+
+        assert!(debug.contains("<redacted path>"));
+        assert!(!debug.contains("/private/runner/path"));
+    }
+
     #[test]
     fn test_run_with_rejects_pre_cancelled_command_before_spawn() {
         let cancellation = CommandCancellation::new();

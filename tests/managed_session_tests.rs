@@ -21,6 +21,7 @@ use qubit_command::Command;
 use qubit_command::CommandErrorReason;
 use qubit_command::CommandExecutionConfig;
 use qubit_command::CommandExecutor;
+use qubit_command::CommandResourceRunOptions;
 use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
 use qubit_command::ManagedCommandRunnerApi;
@@ -115,6 +116,44 @@ fn test_managed_session_returns_endpoints_and_streams_both_pipes() {
     });
     assert_eq!(output.0, b"out");
     assert_eq!(output.1, b"err");
+    let mut operation = session.take_operation().unwrap();
+    assert!(matches!(
+        operation.wait_outcome().unwrap(),
+        OperationOutcome::Succeeded(_)
+    ));
+    operation.wait_settlement().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn test_managed_resource_session_returns_streams_and_operation() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let mut session = block_on(
+        CommandRunner::without_timeout().start_session_resources(
+            &executor,
+            Command::new("sh")
+                .arg("-c")
+                .arg("cat; printf resource-session >&2"),
+            CommandResourceRunOptions::new(),
+        ),
+    )
+    .unwrap();
+    let mut stdin = session.take_stdin().unwrap();
+    block_on(poll_fn(|cx| {
+        Pin::new(&mut stdin).poll_write(cx, b"resource input")
+    }))
+    .unwrap();
+    block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).unwrap();
+    drop(stdin);
+
+    let mut stdout = session.take_stdout().unwrap();
+    let mut stderr = session.take_stderr().unwrap();
+    assert_eq!(block_on(read_all(&mut stdout)).unwrap(), b"resource input");
+    assert_eq!(
+        block_on(read_all(&mut stderr)).unwrap(),
+        b"resource-session"
+    );
     let mut operation = session.take_operation().unwrap();
     assert!(matches!(
         operation.wait_outcome().unwrap(),

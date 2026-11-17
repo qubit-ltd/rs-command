@@ -908,11 +908,85 @@ fn non_regular_output_error(command: &str, stream: OutputStream, path: &Path) ->
 mod tests {
     use std::fs::OpenOptions;
     use std::io;
+    use std::process::Command as ProcessCommand;
 
+    use super::IoFiles;
     use super::truncate_output_with;
     use super::truncate_outputs_with;
     use crate::CommandErrorKind;
     use crate::OutputStream;
+    use crate::command_stdin::CommandStdin;
+
+    #[test]
+    fn test_prepare_is_non_destructive_and_commit_truncates_and_attaches_files() {
+        let stdin = tempfile::NamedTempFile::new().expect("stdin fixture should be created");
+        std::fs::write(stdin.path(), b"input").expect("stdin fixture should be populated");
+        let stdout = tempfile::NamedTempFile::new().expect("stdout fixture should be created");
+        let stderr = tempfile::NamedTempFile::new().expect("stderr fixture should be created");
+        std::fs::write(stdout.path(), b"old stdout").expect("stdout should be populated");
+        std::fs::write(stderr.path(), b"old stderr").expect("stderr should be populated");
+        let mut process = ProcessCommand::new("unused-test-program");
+
+        let mut files = IoFiles::prepare(
+            "command",
+            CommandStdin::File(stdin.path().to_path_buf()),
+            Some(stdout.path()),
+            Some(stderr.path()),
+            &mut process,
+        )
+        .expect("regular input and output files should prepare");
+
+        assert_eq!(
+            std::fs::read(stdout.path()).expect("stdout should remain readable before commit"),
+            b"old stdout",
+        );
+        assert_eq!(
+            std::fs::read(stderr.path()).expect("stderr should remain readable before commit"),
+            b"old stderr",
+        );
+        assert!(files.stdin_file.is_some());
+        files
+            .commit(
+                "command",
+                Some(stdout.path()),
+                Some(stderr.path()),
+                &mut process,
+            )
+            .expect("commit should attach stdin and prepare both output tees");
+
+        assert_eq!(
+            std::fs::read(stdout.path()).expect("stdout should remain readable after commit"),
+            b"",
+        );
+        assert_eq!(
+            std::fs::read(stderr.path()).expect("stderr should remain readable after commit"),
+            b"",
+        );
+        assert!(files.stdin_file.is_none());
+        assert!(files.stdout_tee.is_some());
+        assert!(files.stderr_tee.is_some());
+    }
+
+    #[test]
+    fn test_prepare_bytes_stdin_configures_pipe_without_output_files() {
+        let mut process = ProcessCommand::new("unused-test-program");
+        let files = IoFiles::prepare(
+            "command",
+            CommandStdin::Bytes(b"buffered input".to_vec()),
+            None,
+            None,
+            &mut process,
+        )
+        .expect("byte stdin should prepare");
+
+        assert_eq!(
+            files.stdin_bytes.as_deref(),
+            Some(b"buffered input".as_slice())
+        );
+        assert!(files.stdin_file.is_none());
+        assert!(files.stdout_tee.is_none());
+        assert!(files.stderr_tee.is_none());
+    }
 
     #[test]
     fn test_truncate_output_maps_injected_set_len_failure() {
