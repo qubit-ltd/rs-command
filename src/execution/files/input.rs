@@ -225,6 +225,12 @@ mod tests {
     static PREPARATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
+    fn test_file_sink_policy_exhaustiveness_covers_every_supported_policy() {
+        super::_policy_is_exhaustive(FileSinkPolicy::Preserve);
+        super::_policy_is_exhaustive(FileSinkPolicy::Truncate);
+    }
+
+    #[test]
     fn test_helper_resource_reference_delays_scope_settlement_until_dropped() {
         let _guard = PREPARATION_TEST_LOCK.lock().expect("test lock should be available");
         let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");

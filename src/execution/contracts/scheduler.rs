@@ -74,6 +74,13 @@ mod tests {
     use crate::execution::contracts::ReservationLease;
     use crate::execution::contracts::ScheduledJob;
     use crate::execution::contracts::Scheduler;
+    use crate::execution::contracts::StopPort;
+
+    struct NoopStop;
+
+    impl StopPort for NoopStop {
+        fn request_stop(&self, _reason: qubit_operation::StopReason) {}
+    }
 
     struct CompatibilityScheduler(std::sync::atomic::AtomicUsize);
 
@@ -83,8 +90,12 @@ mod tests {
             Ok(Reservation::new(9, 12, |_| {}, |_| ReservationLease::new(|| {})))
         }
 
-        fn enqueue(&self, _job: ScheduledJob, _permit: Reservation) -> Result<(), EnqueueFailure> {
-            unreachable!("enqueue is outside this compatibility test")
+        fn enqueue(&self, job: ScheduledJob, permit: Reservation) -> Result<(), EnqueueFailure> {
+            Err(EnqueueFailure {
+                reason: CapacityFailure::QueueFull,
+                job,
+                permit,
+            })
         }
 
         fn wait_next(&self) -> Option<(ScheduledJob, Reservation)> {
@@ -106,8 +117,12 @@ mod tests {
             Err(CapacityFailure::QueueFull)
         }
 
-        fn enqueue(&self, _job: ScheduledJob, _permit: Reservation) -> Result<(), EnqueueFailure> {
-            unreachable!("enqueue is outside this reservation forwarding test")
+        fn enqueue(&self, job: ScheduledJob, permit: Reservation) -> Result<(), EnqueueFailure> {
+            Err(EnqueueFailure {
+                reason: CapacityFailure::QueueFull,
+                job,
+                permit,
+            })
         }
 
         fn wait_next(&self) -> Option<(ScheduledJob, Reservation)> {
@@ -225,5 +240,53 @@ mod tests {
         assert_eq!(releases.load(Ordering::SeqCst), 1);
         drop(helper);
         assert_eq!(releases.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn test_compatibility_scheduler_forwards_jobs_and_close_methods() {
+        let scheduler = CompatibilityScheduler(AtomicUsize::new(0));
+        let executed = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&executed);
+        let job = ScheduledJob {
+            run: Box::new(move |_| {
+                observed.fetch_add(1, Ordering::SeqCst);
+            }),
+            stop: Arc::new(NoopStop),
+        };
+        let permit = Reservation::new(9, 13, |_| {}, |_| ReservationLease::new(|| {}));
+
+        let failure = scheduler
+            .enqueue(job, permit)
+            .expect_err("compatibility scheduler returns ownership on rejection");
+        assert_eq!(failure.reason, CapacityFailure::QueueFull);
+        failure
+            .job
+            .stop
+            .request_stop(qubit_operation::StopReason::UserCancelled);
+        (failure.job.run)(failure.permit);
+        assert_eq!(executed.load(Ordering::SeqCst), 1);
+        assert!(scheduler.wait_next().is_none());
+        scheduler.close_admission();
+    }
+
+    #[test]
+    fn test_rejecting_scheduler_forwards_jobs_without_changing_input_accounting() {
+        let scheduler = RejectingCompatibilityScheduler {
+            calls: AtomicUsize::new(0),
+            input_bytes: AtomicUsize::new(17),
+        };
+        let job = ScheduledJob {
+            run: Box::new(|_| {}),
+            stop: Arc::new(NoopStop),
+        };
+        let permit = Reservation::new(9, 14, |_| {}, |_| ReservationLease::new(|| {}));
+
+        let failure = scheduler
+            .enqueue(job, permit)
+            .expect_err("rejected enqueue must return the owned values");
+        assert_eq!(failure.reason, CapacityFailure::QueueFull);
+        assert_eq!(scheduler.input_bytes.load(Ordering::SeqCst), 17);
+        assert!(scheduler.wait_next().is_none());
+        scheduler.close_admission();
     }
 }

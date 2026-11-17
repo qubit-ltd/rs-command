@@ -103,20 +103,21 @@ mod tests {
         let mut context = Context::from_waker(waker);
         let mut output = [0; 4];
 
-        let overflow = match unsafe {
-            Pin::new(&mut endpoint).poll_read_unchecked(&mut context, &mut output, usize::MAX, 1)
-        } {
-            std::task::Poll::Ready(result) => result,
-            other => panic!("range overflow should be rejected immediately: {other:?}"),
-        };
-        assert_eq!(overflow.expect_err("overflow is invalid").kind(), io::ErrorKind::InvalidInput);
+        let overflow =
+            match unsafe { Pin::new(&mut endpoint).poll_read_unchecked(&mut context, &mut output, usize::MAX, 1) } {
+                std::task::Poll::Ready(result) => result,
+                other => panic!("range overflow should be rejected immediately: {other:?}"),
+            };
+        assert_eq!(
+            overflow.expect_err("overflow is invalid").kind(),
+            io::ErrorKind::InvalidInput
+        );
 
-        let out_of_bounds = match unsafe {
-            Pin::new(&mut endpoint).poll_read_unchecked(&mut context, &mut output, 3, 2)
-        } {
-            std::task::Poll::Ready(result) => result,
-            other => panic!("out-of-bounds output should be rejected immediately: {other:?}"),
-        };
+        let out_of_bounds =
+            match unsafe { Pin::new(&mut endpoint).poll_read_unchecked(&mut context, &mut output, 3, 2) } {
+                std::task::Poll::Ready(result) => result,
+                other => panic!("out-of-bounds output should be rejected immediately: {other:?}"),
+            };
         assert_eq!(
             out_of_bounds
                 .expect_err("range must fit within the output slice")
@@ -132,7 +133,9 @@ mod tests {
         ));
         assert_eq!(output, [0, b'x', b'y', 0]);
 
-        channel.blocking_write(b"queued").expect("error output should queue before endpoint drop");
+        channel
+            .blocking_write(b"queued")
+            .expect("error output should queue before endpoint drop");
         drop(endpoint);
         assert!(channel.incomplete());
         assert_eq!(channel.blocking_read(&mut [0; 8]).unwrap(), 0);

@@ -465,9 +465,9 @@ mod activation_failure_tests {
     use crate::execution::adapter::command_control::CommandControl;
     use crate::execution::contracts::ExecutionSnapshot;
     use crate::execution::contracts::IoPathSnapshot;
+    use crate::execution::contracts::RecoveryOwner;
     use crate::execution::contracts::Request;
     use crate::execution::contracts::RequestOptions;
-    use crate::execution::contracts::RecoveryOwner;
     use crate::execution::contracts::Scheduler;
 
     struct InlineScheduler;
@@ -870,7 +870,10 @@ mod activation_failure_tests {
         )
         .expect_err("an unbound adapter cannot retain an operation-scoped owner");
 
-        assert_eq!(failure.reason, crate::execution::contracts::RecoveryPublishError::StoreUnavailable);
+        assert_eq!(
+            failure.reason,
+            crate::execution::contracts::RecoveryPublishError::StoreUnavailable
+        );
         assert!(!dropped.load(Ordering::SeqCst), "failure must preserve owner ownership");
         assert_eq!(failure.owner.summary(), "test recovery owner");
         drop(failure);

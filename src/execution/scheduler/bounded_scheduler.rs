@@ -637,6 +637,7 @@ mod tests {
     use super::BoundedScheduler;
     use crate::execution::CommandExecutionConfig;
     use crate::execution::contracts::CapacityFailure;
+    use crate::execution::contracts::ScheduledJob;
     use crate::execution::contracts::Scheduler;
 
     struct CountWake(AtomicUsize);
@@ -868,5 +869,29 @@ mod tests {
         assert_eq!(scheduler.snapshot().active, 0);
         assert_eq!(scheduler.snapshot().input_bytes, 0);
         assert!(scheduler.try_next().is_none());
+    }
+
+    #[test]
+    fn test_scheduler_trait_dispatches_queued_work_and_drains_after_close() {
+        let scheduler = BoundedScheduler::new(config(1, 0)).unwrap();
+        let executed = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&executed);
+        let job = ScheduledJob {
+            run: Box::new(move |_| {
+                observed.fetch_add(1, Ordering::SeqCst);
+            }),
+            stop: Arc::new(NoopStop),
+        };
+        drop(Scheduler::try_reserve_until(&scheduler, 0, None).unwrap());
+        let permit = Scheduler::try_reserve(&scheduler, 0).unwrap();
+
+        Scheduler::enqueue(&scheduler, job, permit).unwrap();
+        let (job, permit) = Scheduler::wait_next(&scheduler).expect("queued work should be dispatched");
+        (job.run)(permit);
+        assert_eq!(executed.load(Ordering::SeqCst), 1);
+        assert_eq!(scheduler.snapshot().active, 0);
+
+        Scheduler::close_admission(&scheduler);
+        assert!(Scheduler::wait_next(&scheduler).is_none());
     }
 }

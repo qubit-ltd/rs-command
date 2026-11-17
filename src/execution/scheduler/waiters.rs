@@ -135,4 +135,15 @@ mod tests {
         assert_eq!(retained.0.load(Ordering::SeqCst), 1);
         assert_eq!(waiters.len(), 1);
     }
+
+    #[test]
+    fn test_waiter_waker_can_be_notified_by_reference() {
+        let wake = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = Waker::from(wake.clone());
+
+        waker.wake_by_ref();
+
+        assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+        assert_eq!(Arc::strong_count(&wake), 2);
+    }
 }

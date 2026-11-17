@@ -156,24 +156,23 @@ mod tests {
         let waker = Waker::noop();
         let mut context = Context::from_waker(waker);
 
-        let overflow = match unsafe {
-            Pin::new(&mut endpoint).poll_write_unchecked(&mut context, b"input", usize::MAX, 1)
-        } {
-            std::task::Poll::Ready(result) => result,
-            other => panic!("range overflow should be rejected immediately: {other:?}"),
-        };
-        assert_eq!(overflow.expect_err("overflow is invalid").kind(), io::ErrorKind::InvalidInput);
+        let overflow =
+            match unsafe { Pin::new(&mut endpoint).poll_write_unchecked(&mut context, b"input", usize::MAX, 1) } {
+                std::task::Poll::Ready(result) => result,
+                other => panic!("range overflow should be rejected immediately: {other:?}"),
+            };
+        assert_eq!(
+            overflow.expect_err("overflow is invalid").kind(),
+            io::ErrorKind::InvalidInput
+        );
 
-        let out_of_bounds = match unsafe {
-            Pin::new(&mut endpoint).poll_write_unchecked(&mut context, b"input", 4, 2)
-        } {
+        let out_of_bounds = match unsafe { Pin::new(&mut endpoint).poll_write_unchecked(&mut context, b"input", 4, 2) }
+        {
             std::task::Poll::Ready(result) => result,
             other => panic!("out-of-bounds input should be rejected immediately: {other:?}"),
         };
         assert_eq!(
-            out_of_bounds
-                .expect_err("range must fit within the input slice")
-                .kind(),
+            out_of_bounds.expect_err("range must fit within the input slice").kind(),
             io::ErrorKind::InvalidInput
         );
 

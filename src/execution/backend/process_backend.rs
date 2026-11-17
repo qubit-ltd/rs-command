@@ -529,9 +529,15 @@ mod tests {
             })
             .unwrap();
 
-        assert!(matches!(operation.wait_outcome().unwrap(), OperationOutcome::Succeeded(())));
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
         operation.wait_settlement().unwrap();
-        assert!(matches!(sink.outcome.lock().unwrap().take(), Some(OperationOutcome::Failed(_))));
+        assert!(matches!(
+            sink.outcome.lock().unwrap().take(),
+            Some(OperationOutcome::Failed(_))
+        ));
         assert!(sink.released.load(Ordering::SeqCst));
         assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
     }

@@ -561,6 +561,9 @@ mod tests {
         assert!(OperationControl::poll_outcome(&control, &mut context).is_ready());
         assert!(OperationControl::poll_release(&control, &mut context).is_ready());
         assert!(OperationControl::poll_settlement(&control, &mut context).is_ready());
-        assert!(matches!(control.take(&mut context), Poll::Ready(OperationOutcome::Stopped(_))));
+        assert!(matches!(
+            control.take(&mut context),
+            Poll::Ready(OperationOutcome::Stopped(_))
+        ));
     }
 }
