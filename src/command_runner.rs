@@ -391,10 +391,7 @@ mod tests {
             configured.configured_working_directory().unwrap(),
             "runner/working-directory"
         );
-        assert_eq!(
-            configured.configured_timer().clock().now().domain(),
-            timer_domain
-        );
+        assert_eq!(configured.configured_timer().clock().now().domain(), timer_domain);
         assert_eq!(configured.configured_success_exit_codes(), &[3, 7]);
         assert!(configured.is_logging_disabled());
         assert!(configured.is_output_truncation_failure_enabled());
@@ -426,9 +423,7 @@ mod tests {
 
     #[cfg(unix)]
     fn successful_test_command() -> crate::Command {
-        crate::Command::new("sh")
-            .arg("-c")
-            .arg("printf unit-runner")
+        crate::Command::new("sh").arg("-c").arg("printf unit-runner")
     }
 
     #[cfg(windows)]

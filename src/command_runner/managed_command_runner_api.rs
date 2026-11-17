@@ -791,17 +791,16 @@ mod tests {
     use crate::CommandRunner;
 
     fn setup() -> (OperationManager, CommandExecutor, CommandRunner) {
-        let manager =
-            OperationManager::new(ManagerOptions::default()).expect("manager should start");
-        let executor = CommandExecutor::new(manager.clone(), CommandExecutionConfig::default())
-            .expect("executor should start");
+        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let executor =
+            CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).expect("executor should start");
         let runner = CommandRunner::new(Duration::from_secs(5));
         (manager, executor, runner)
     }
 
     #[cfg(unix)]
     #[test]
-    fn sync_runner_methods_collect_root_and_scoped_command_results() {
+    fn test_sync_runner_methods_collect_root_and_scoped_command_results() {
         let (manager, executor, runner) = setup();
         let root = runner
             .run_managed(
@@ -858,10 +857,7 @@ mod tests {
                 Default::default(),
             )
             .expect_err("spawn failure should be returned to the caller");
-        assert!(matches!(
-            error.reason(),
-            crate::CommandErrorReason::SpawnFailed { .. }
-        ));
+        assert!(matches!(error.reason(), crate::CommandErrorReason::SpawnFailed { .. }));
     }
 
     #[cfg(all(feature = "async", unix))]
@@ -874,11 +870,17 @@ mod tests {
         use std::task::Poll;
         use std::task::Wake;
         use std::task::Waker;
+        use std::time::Duration;
 
-        use super::*;
+        use qubit_io::AsyncInput;
+        use qubit_operation::OperationOutcome;
+
+        use super::ManagedCommandRunnerApi;
+        use super::setup;
+        use crate::Command;
+        use crate::CommandResourceRunOptions;
         use crate::CommandSession;
         use crate::session::CommandSessionApi;
-        use qubit_io::AsyncInput;
 
         struct ThreadWake(std::thread::Thread);
         impl Wake for ThreadWake {
@@ -902,9 +904,7 @@ mod tests {
             }
         }
 
-        async fn read_all(
-            reader: &mut (impl AsyncInput<Item = u8> + Unpin),
-        ) -> std::io::Result<Vec<u8>> {
+        async fn read_all(reader: &mut (impl AsyncInput<Item = u8> + Unpin)) -> std::io::Result<Vec<u8>> {
             let mut bytes = Vec::new();
             let mut buffer = [0_u8; 128];
             loop {
@@ -917,29 +917,15 @@ mod tests {
         }
 
         async fn session_bytes(mut session: CommandSession) -> (Vec<u8>, Vec<u8>) {
-            let stdin = session
-                .take_stdin()
-                .expect("session stdin should be available");
+            let stdin = session.take_stdin().expect("session stdin should be available");
             drop(stdin);
-            let mut stdout = session
-                .take_stdout()
-                .expect("session stdout should be available");
-            let mut stderr = session
-                .take_stderr()
-                .expect("session stderr should be available");
-            let stdout = read_all(&mut stdout)
-                .await
-                .expect("stdout should be readable");
-            let stderr = read_all(&mut stderr)
-                .await
-                .expect("stderr should be readable");
-            let mut operation = session
-                .take_operation()
-                .expect("session operation should be available");
+            let mut stdout = session.take_stdout().expect("session stdout should be available");
+            let mut stderr = session.take_stderr().expect("session stderr should be available");
+            let stdout = read_all(&mut stdout).await.expect("stdout should be readable");
+            let stderr = read_all(&mut stderr).await.expect("stderr should be readable");
+            let mut operation = session.take_operation().expect("session operation should be available");
             assert!(matches!(
-                operation
-                    .wait_outcome()
-                    .expect("session outcome should be available"),
+                operation.wait_outcome().expect("session outcome should be available"),
                 OperationOutcome::Succeeded(_)
             ));
             operation.wait_settlement().expect("session should settle");
@@ -947,7 +933,7 @@ mod tests {
         }
 
         #[test]
-        fn async_runner_methods_collect_root_and_scoped_results_and_sessions() {
+        fn test_async_runner_methods_collect_root_and_scoped_results_and_sessions() {
             let (manager, executor, runner) = setup();
             let root = block_on(runner.run_async(
                 &executor,
@@ -1008,9 +994,7 @@ mod tests {
                         .run_async_resources_in(
                             &scope,
                             &scoped_executor,
-                            Command::new("sh")
-                                .arg("-c")
-                                .arg("printf async-scoped-resource"),
+                            Command::new("sh").arg("-c").arg("printf async-scoped-resource"),
                             CommandResourceRunOptions::new(),
                         )
                         .await?;
@@ -1019,9 +1003,7 @@ mod tests {
                         .start_session_in(
                             &scope,
                             &scoped_executor,
-                            Command::new("sh")
-                                .arg("-c")
-                                .arg("printf async-scoped-session"),
+                            Command::new("sh").arg("-c").arg("printf async-scoped-session"),
                             Default::default(),
                         )
                         .await?;
@@ -1030,16 +1012,11 @@ mod tests {
                         .start_session_resources_in(
                             &scope,
                             &scoped_executor,
-                            Command::new("sh")
-                                .arg("-c")
-                                .arg("printf async-scoped-resource-session"),
+                            Command::new("sh").arg("-c").arg("printf async-scoped-resource-session"),
                             CommandResourceRunOptions::new(),
                         )
                         .await?;
-                    assert_eq!(
-                        session_bytes(session).await.0,
-                        b"async-scoped-resource-session"
-                    );
+                    assert_eq!(session_bytes(session).await.0, b"async-scoped-resource-session");
                     Ok::<_, crate::CommandError>(ordinary)
                 },
             ))
@@ -1054,10 +1031,7 @@ mod tests {
                 Default::default(),
             ))
             .expect_err("async spawn failure should be returned");
-            assert!(matches!(
-                error.reason(),
-                crate::CommandErrorReason::SpawnFailed { .. }
-            ));
+            assert!(matches!(error.reason(), crate::CommandErrorReason::SpawnFailed { .. }));
         }
     }
 }
