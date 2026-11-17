@@ -793,11 +793,7 @@ mod tests {
 
     #[test]
     fn test_failed_operation_preserves_the_command_error() {
-        let error = crate::CommandError::from_reason(
-            "tool",
-            crate::CommandErrorReason::Cancelled,
-            None,
-        );
+        let error = crate::CommandError::from_reason("tool", crate::CommandErrorReason::Cancelled, None);
         let actual = map_outcome(OperationOutcome::<crate::CommandOutput, _>::Failed(error)).unwrap_err();
 
         assert_eq!(actual.command(), "tool");

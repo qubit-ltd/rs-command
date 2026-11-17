@@ -1304,14 +1304,15 @@ mod executor_decision_tests {
     use qubit_operation::OperationContext;
 
     use super::deadline_failure;
+    use super::futures_lite_block_on;
     use super::retry_wait;
-    use crate::execution::BoundedScheduler;
     use crate::execution::CommandExecutionConfig;
     use crate::execution::CommandSubmitFailureReason;
     use crate::execution::SnapshotFailure;
+    use crate::execution::scheduler::BoundedScheduler;
 
     #[test]
-    fn preserves_non_capacity_failures_and_retries_manager_busy() {
+    fn test_retry_decision_preserves_other_failures_and_retries_manager_busy() {
         let scheduler = BoundedScheduler::new(CommandExecutionConfig::default()).unwrap();
         let context = OperationContext::new(ContextOptions::default()).unwrap();
         let snapshot = CommandSubmitFailureReason::Snapshot(SnapshotFailure {
@@ -1330,10 +1331,10 @@ mod executor_decision_tests {
 
     #[cfg(feature = "async")]
     #[test]
-    fn classifies_only_capacity_and_busy_as_async_retryable() {
+    fn test_async_retry_classification_accepts_only_capacity_and_busy() {
+        use super::async_capacity_retry;
+        use super::retryable_async;
         use crate::execution::CapacityFailure;
-
-        use super::{async_capacity_retry, retryable_async};
 
         let active_full = CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull);
         let queue_full = CommandSubmitFailureReason::Capacity(CapacityFailure::QueueFull);
@@ -1353,11 +1354,9 @@ mod executor_decision_tests {
 
     #[cfg(feature = "async")]
     #[test]
-    fn async_capacity_wait_returns_immediately_when_scheduler_has_room() {
+    fn test_async_capacity_wait_returns_when_scheduler_has_room() {
         let scheduler = BoundedScheduler::new(CommandExecutionConfig::default()).unwrap();
-        assert!(futures_lite_block_on(super::wait_capacity_async(
-            scheduler, 0, None
-        )));
+        assert!(futures_lite_block_on(super::wait_capacity_async(scheduler, 0, None)));
     }
 }
 
