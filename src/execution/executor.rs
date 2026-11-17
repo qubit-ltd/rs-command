@@ -882,13 +882,24 @@ fn resource_option_bytes(options: &CommandResourceRunOptions) -> usize {
 
 #[cfg(test)]
 mod resource_byte_tests {
+    use std::io::Read;
+    use std::io::Seek;
+    use std::io::SeekFrom;
     use std::io::Write;
 
     use super::RequestOptions;
     use super::resource_bytes;
     use super::resource_option_bytes;
+    use crate::Command;
+    use crate::CommandExecutionConfig;
+    use crate::CommandExecutor;
     use crate::CommandResourceRunOptions;
+    use crate::CommandRunner;
+    use crate::execution::CapacityFailure;
+    use crate::execution::CommandSubmitFailureReason;
     use crate::resource_run_options::FileSinkPolicy;
+    use qubit_operation::ManagerOptions;
+    use qubit_operation::OperationManager;
 
     #[test]
     fn test_resource_byte_estimates_sum_all_present_files() {
@@ -906,6 +917,48 @@ mod resource_byte_tests {
         assert_eq!(resource_option_bytes(&options), 14);
         assert_eq!(resource_bytes(&RequestOptions::Resources(options)), 14);
         assert_eq!(resource_bytes(&RequestOptions::Standard(Default::default())), 0);
+    }
+
+    #[test]
+    fn test_resource_capacity_rejection_returns_the_original_input_file() {
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let executor = CommandExecutor::new(
+            manager,
+            CommandExecutionConfig {
+                max_active: 1,
+                max_queued: 0,
+                max_waiters: 1,
+                max_queued_input_bytes: 2,
+                max_diagnostics: 1,
+            },
+        )
+        .unwrap();
+        let mut input = tempfile::tempfile().unwrap();
+        input.write_all(b"larger than budget").unwrap();
+        let failure = match executor.submit_resources(
+            CommandRunner::without_timeout(),
+            Command::new("must-not-run-after-input-limit-rejection"),
+            CommandResourceRunOptions::new().stdin_file(input),
+        ) {
+            Ok(_) => panic!("resource input over the byte budget must be rejected"),
+            Err(failure) => failure,
+        };
+
+        assert_eq!(
+            failure.reason,
+            CommandSubmitFailureReason::Capacity(CapacityFailure::InputBytesExceeded)
+        );
+        let mut returned_input = failure
+            .options
+            .configured_stdin()
+            .expect("the rejected input owner should be returned")
+            .try_clone()
+            .unwrap();
+        returned_input.seek(SeekFrom::Start(0)).unwrap();
+        let mut contents = Vec::new();
+        returned_input.read_to_end(&mut contents).unwrap();
+        assert_eq!(contents, b"larger than budget");
+        let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Drain);
     }
 }
 
