@@ -1181,15 +1181,9 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).expect("dangling symlink should be created");
         let mut process = ProcessCommand::new("unused-test-program");
 
-        let error = IoFiles::prepare(
-            "command",
-            CommandStdin::Null,
-            Some(&link),
-            None,
-            &mut process,
-        )
-        .err()
-        .expect("a dangling symlink is an existing non-regular output path");
+        let error = IoFiles::prepare("command", CommandStdin::Null, Some(&link), None, &mut process)
+            .err()
+            .expect("a dangling symlink is an existing non-regular output path");
 
         assert_eq!(error.kind(), CommandErrorKind::NonRegularOutputFile);
         assert!(std::fs::symlink_metadata(&link).is_ok());
@@ -1200,16 +1194,14 @@ mod tests {
     #[test]
     fn test_open_handle_checks_reject_directories_even_when_the_path_was_not_checked() {
         let directory = tempfile::tempdir().expect("directory fixture should be created");
-        let file =
-            std::fs::File::open(directory.path()).expect("Unix permits opening a directory handle");
+        let file = std::fs::File::open(directory.path()).expect("Unix permits opening a directory handle");
 
         let input_error = ensure_regular_input_handle("command", directory.path(), &file)
             .expect_err("an opened directory is not a valid stdin file");
         assert_eq!(input_error.kind(), CommandErrorKind::NonRegularInputFile);
 
-        let output_error =
-            ensure_regular_output_handle("command", OutputStream::Stderr, directory.path(), &file)
-                .expect_err("an opened directory is not a valid output file");
+        let output_error = ensure_regular_output_handle("command", OutputStream::Stderr, directory.path(), &file)
+            .expect_err("an opened directory is not a valid output file");
         assert_eq!(output_error.kind(), CommandErrorKind::NonRegularOutputFile);
         assert!(matches!(
             output_error.reason(),
@@ -1225,15 +1217,9 @@ mod tests {
         let invalid_path = std::path::PathBuf::from("\0invalid-output-path");
         let mut process = ProcessCommand::new("unused-test-program");
 
-        let error = IoFiles::prepare(
-            "command",
-            CommandStdin::Null,
-            Some(&invalid_path),
-            None,
-            &mut process,
-        )
-        .err()
-        .expect("OS rejection while inspecting a path should retain inspection context");
+        let error = IoFiles::prepare("command", CommandStdin::Null, Some(&invalid_path), None, &mut process)
+            .err()
+            .expect("OS rejection while inspecting a path should retain inspection context");
 
         assert_eq!(error.kind(), CommandErrorKind::InspectIoFileFailed);
         assert!(matches!(

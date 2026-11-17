@@ -402,20 +402,20 @@ fn prepare_stdin_pipe<T>(_pipe: &T) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-    use std::process::Command as ProcessCommand;
-    use std::process::Stdio;
-    use std::thread;
     #[cfg(unix)]
     use std::cell::Cell;
     #[cfg(unix)]
     use std::collections::VecDeque;
+    use std::io;
     #[cfg(unix)]
     use std::io::Write;
+    use std::process::Command as ProcessCommand;
+    use std::process::Stdio;
     #[cfg(unix)]
     use std::sync::Arc;
     #[cfg(unix)]
     use std::sync::Mutex;
+    use std::thread;
 
     use super::super::io_cancellation::IoCancellation;
     #[cfg(unix)]
@@ -443,10 +443,7 @@ mod tests {
 
     #[cfg(unix)]
     impl ScriptedStdin {
-        fn new(
-            wait_ready: bool,
-            write_results: impl IntoIterator<Item = io::Result<usize>>,
-        ) -> Self {
+        fn new(wait_ready: bool, write_results: impl IntoIterator<Item = io::Result<usize>>) -> Self {
             Self {
                 wait_ready,
                 wait_calls: Cell::new(0),
@@ -526,13 +523,11 @@ mod tests {
         }
 
         fn close_stdin(&self) {
-            self.stdin_closed
-                .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.stdin_closed.store(true, std::sync::atomic::Ordering::SeqCst);
         }
 
         fn record_stdin_broken_pipe(&self) {
-            self.stdin_broken_pipe
-                .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.stdin_broken_pipe.store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
@@ -666,8 +661,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_write_stdin_until_cancelled_retries_transient_errors_and_partial_writes() {
-        let (_cancellation, token) =
-            IoCancellation::pair().expect("cancellation pair should be created");
+        let (_cancellation, token) = IoCancellation::pair().expect("cancellation pair should be created");
         let mut stdin = ScriptedStdin::new(
             true,
             [
@@ -678,8 +672,7 @@ mod tests {
             ],
         );
 
-        write_stdin_until_cancelled(&mut stdin, b"hello", &token)
-            .expect("transient writes should retry");
+        write_stdin_until_cancelled(&mut stdin, b"hello", &token).expect("transient writes should retry");
 
         assert_eq!(stdin.written, b"hello");
         assert_eq!(stdin.write_calls, 4);
@@ -689,11 +682,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_write_stdin_until_cancelled_stops_and_preserves_write_errors() {
-        let (_cancellation, token) =
-            IoCancellation::pair().expect("cancellation pair should be created");
-        token
-            .cancelled
-            .store(true, std::sync::atomic::Ordering::Release);
+        let (_cancellation, token) = IoCancellation::pair().expect("cancellation pair should be created");
+        token.cancelled.store(true, std::sync::atomic::Ordering::Release);
         let mut cancelled_stdin = ScriptedStdin::new(true, []);
 
         write_stdin_until_cancelled(&mut cancelled_stdin, b"not written", &token)
@@ -701,8 +691,7 @@ mod tests {
         assert_eq!(cancelled_stdin.write_calls, 0);
         assert_eq!(cancelled_stdin.wait_calls.get(), 0);
 
-        let (_cancellation, token) =
-            IoCancellation::pair().expect("cancellation pair should be created");
+        let (_cancellation, token) = IoCancellation::pair().expect("cancellation pair should be created");
         let mut zero_writer = ScriptedStdin::new(true, [Ok(0)]);
         let error = write_stdin_until_cancelled(&mut zero_writer, b"data", &token)
             .expect_err("a zero-length write must be reported");
@@ -726,23 +715,14 @@ mod tests {
             .spawn()
             .expect("test child should spawn");
 
-        let writer = write_stdin_session(
-            "command",
-            &mut child,
-            Some(b"prefix".to_vec()),
-            Some(bridge.clone()),
-        )
-        .expect("session stdin writer should start");
+        let writer = write_stdin_session("command", &mut child, Some(b"prefix".to_vec()), Some(bridge.clone()))
+            .expect("session stdin writer should start");
         join_stdin_writer("command", writer).expect("session stdin should finish");
         let output = child.wait_with_output().expect("test child should finish");
 
         assert!(output.status.success());
         assert_eq!(output.stdout, b"prefixsession");
-        assert!(
-            bridge
-                .stdin_closed
-                .load(std::sync::atomic::Ordering::SeqCst)
-        );
+        assert!(bridge.stdin_closed.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[cfg(unix)]
@@ -759,8 +739,7 @@ mod tests {
 
         let writer = write_stdin_session("command", &mut child, None, Some(bridge.clone()))
             .expect("session stdin writer should start");
-        let error = join_stdin_writer("command", writer)
-            .expect_err("session read failure should be reported");
+        let error = join_stdin_writer("command", writer).expect_err("session read failure should be reported");
         let output = child
             .wait_with_output()
             .expect("test child should finish after stdin closes");
@@ -768,11 +747,7 @@ mod tests {
         assert_eq!(error.kind(), CommandErrorKind::WriteInputFailed);
         assert!(output.status.success());
         assert!(output.stdout.is_empty());
-        assert!(
-            bridge
-                .stdin_closed
-                .load(std::sync::atomic::Ordering::SeqCst)
-        );
+        assert!(bridge.stdin_closed.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[cfg(unix)]
@@ -797,15 +772,7 @@ mod tests {
         let status = child.wait().expect("test child should finish");
 
         assert!(status.success());
-        assert!(
-            bridge
-                .stdin_broken_pipe
-                .load(std::sync::atomic::Ordering::SeqCst)
-        );
-        assert!(
-            bridge
-                .stdin_closed
-                .load(std::sync::atomic::Ordering::SeqCst)
-        );
+        assert!(bridge.stdin_broken_pipe.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(bridge.stdin_closed.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

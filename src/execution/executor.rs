@@ -887,6 +887,9 @@ mod resource_byte_tests {
     use std::io::SeekFrom;
     use std::io::Write;
 
+    use qubit_operation::ManagerOptions;
+    use qubit_operation::OperationManager;
+
     use super::RequestOptions;
     use super::resource_bytes;
     use super::resource_option_bytes;
@@ -898,8 +901,6 @@ mod resource_byte_tests {
     use crate::execution::CapacityFailure;
     use crate::execution::CommandSubmitFailureReason;
     use crate::resource_run_options::FileSinkPolicy;
-    use qubit_operation::ManagerOptions;
-    use qubit_operation::OperationManager;
 
     #[test]
     fn test_resource_byte_estimates_sum_all_present_files() {
