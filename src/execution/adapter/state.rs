@@ -578,7 +578,7 @@ mod activation_failure_tests {
         Request {
             operation_id: None,
             runner: CommandRunner::without_timeout(),
-            command: Command::new("true"),
+            command: Command::new("rustc").arg("--version"),
             options: RequestOptions::Standard(Default::default()),
             snapshot: ExecutionSnapshot {
                 working_directory: std::env::current_dir().unwrap(),
