@@ -75,13 +75,7 @@ where
 {
     match result {
         Ok(output) => OperationOutcome::Succeeded(output),
-        Err(error)
-            if stop.is_some()
-                && matches!(
-                    error.kind(),
-                    crate::CommandErrorKind::Cancelled | crate::CommandErrorKind::TimedOut
-                ) =>
-        {
+        Err(error) if stop.is_some() && matches!(error.kind(), crate::CommandErrorKind::Cancelled) => {
             let reason = stop.expect("guard checked that the stop cause is present");
             match retain_diagnostic(error) {
                 Ok(()) => OperationOutcome::Stopped(qubit_operation::StopReport {
@@ -377,6 +371,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::task::Waker;
+    use std::time::Duration;
 
     use qubit_operation::ClockDomainId;
     use qubit_operation::ClockSource;
@@ -465,6 +460,26 @@ mod tests {
         let captured = retained.captured_output().expect("partial capture should survive");
         assert_eq!(captured.stdout(), b"partial stdout");
         assert_eq!(captured.stderr(), b"partial stderr");
+    }
+
+    #[test]
+    fn test_late_stop_does_not_replace_runner_timeout() {
+        let error = CommandError::from_reason(
+            "command",
+            CommandErrorReason::TimedOut {
+                timeout: Duration::from_millis(10),
+            },
+            None,
+        );
+
+        let outcome = runner_result_outcome(Err(error), Some(StopReason::ManagerShutdown), |_| {
+            panic!("a late stop must not claim a runner-selected timeout")
+        });
+
+        let OperationOutcome::Failed(error) = outcome else {
+            panic!("a natural runner timeout must remain a failure");
+        };
+        assert_eq!(error.kind(), crate::CommandErrorKind::TimedOut);
     }
 
     struct ExpiredClock(ClockDomainId);

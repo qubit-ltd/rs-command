@@ -43,6 +43,8 @@ pub struct CommandError {
     output: Option<Box<CommandOutput>>,
     /// Captured bytes when no real process status is available.
     captured_output: Option<Box<CommandCapturedOutput>>,
+    /// Operation-manager stop cause associated with this command error.
+    stop_reason: Option<qubit_operation::StopReason>,
     /// Failures observed while cleaning up after the primary failure.
     cleanup_failures: Vec<CommandCleanupFailure>,
 }
@@ -82,6 +84,7 @@ impl CommandError {
             reason: Box::new(reason),
             output,
             captured_output: None,
+            stop_reason: None,
             cleanup_failures: Vec::new(),
         }
     }
@@ -122,6 +125,7 @@ impl CommandError {
     /// # Parameters
     /// * `reason`: The operation-manager stop cause.
     pub(crate) fn with_managed_stop_reason(mut self, reason: qubit_operation::StopReason) -> Self {
+        self.stop_reason = Some(reason);
         if reason != qubit_operation::StopReason::UserCancelled {
             self.reason = Box::new(CommandErrorReason::Stopped { reason });
         }
@@ -205,6 +209,17 @@ impl CommandError {
     #[inline(always)]
     pub fn reason(&self) -> &CommandErrorReason {
         self.reason.as_ref()
+    }
+
+    /// Returns the operation-manager stop cause associated with this error.
+    ///
+    /// # Returns
+    /// The accepted stop cause when this error came from a stopped managed
+    /// operation.
+    #[must_use]
+    #[inline]
+    pub fn stop_reason(&self) -> Option<qubit_operation::StopReason> {
+        self.stop_reason
     }
 
     /// Returns retained output with an exit status and elapsed time.

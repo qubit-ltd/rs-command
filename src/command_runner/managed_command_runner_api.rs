@@ -769,7 +769,7 @@ fn map_outcome(
                 qubit_operation::StopReason::UserCancelled => crate::CommandErrorReason::Cancelled,
                 reason => crate::CommandErrorReason::Stopped { reason },
             };
-            Err(CommandError::from_reason("<managed command>", reason, None))
+            Err(CommandError::from_reason("<managed command>", reason, None).with_managed_stop_reason(report.reason))
         }
         qubit_operation::OperationOutcome::ChildFailed(failure) => {
             Err(managed_error(failure.outcome.summary.as_str().to_owned()))
@@ -1343,6 +1343,7 @@ mod outcome_mapping_coverage_tests {
         .unwrap_err();
 
         assert_eq!(actual.command(), "<managed command>");
+        assert_eq!(actual.stop_reason(), Some(StopReason::UserCancelled));
         assert!(matches!(actual.reason(), CommandErrorReason::Cancelled));
     }
 
@@ -1387,6 +1388,7 @@ mod outcome_mapping_coverage_tests {
                 reason: StopReason::ManagerShutdown
             }
         ));
+        assert_eq!(actual.stop_reason(), Some(StopReason::ManagerShutdown));
         let captured = actual.captured_output().expect("captured bytes should survive");
         assert_eq!(captured.stdout(), b"partial");
         assert_eq!(captured.stderr(), b"tail");
