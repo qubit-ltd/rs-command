@@ -1304,6 +1304,7 @@ mod executor_decision_tests {
     use qubit_operation::OperationContext;
 
     use super::deadline_failure;
+    #[cfg(feature = "async")]
     use super::futures_lite_block_on;
     use super::retry_wait;
     use crate::execution::CommandExecutionConfig;
