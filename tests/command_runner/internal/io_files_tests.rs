@@ -468,6 +468,35 @@ fn test_runner_reports_symlink_loop_during_path_inspection() {
     assert_eq!(error.kind(), CommandErrorKind::InspectIoFileFailed);
 }
 
+#[cfg(unix)]
+#[test]
+fn test_runner_rejects_dangling_output_symlink_without_creating_target() {
+    let temp_dir = temp_dir();
+    let target = temp_dir.path().join("missing-output");
+    let link = temp_dir.path().join("dangling-output-link");
+    std::os::unix::fs::symlink(&target, &link).expect("dangling symlink should be created");
+
+    let error = CommandRunner::new(Duration::from_secs(10))
+        .run_with(
+            unspawnable_command(),
+            CommandRunOptions::new().tee_stdout_to_file(&link),
+        )
+        .expect_err("a dangling symlink is not an output file");
+
+    assert!(matches!(
+        error.reason(),
+        CommandErrorReason::NonRegularOutputFile {
+            stream: OutputStream::Stdout,
+            ..
+        }
+    ));
+    assert!(
+        fs::symlink_metadata(&link).is_ok(),
+        "the symlink should remain"
+    );
+    assert!(!target.exists(), "the symlink target should not be created");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn test_runner_rejects_output_device() {
