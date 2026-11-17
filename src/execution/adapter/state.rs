@@ -647,4 +647,30 @@ mod activation_failure_tests {
         assert!(state.restore().is_none(), "request must not survive published release");
         assert!(OperationControl::snapshot(&*state).input_released);
     }
+
+    #[test]
+    fn test_abandon_prepared_adapter_releases_inputs_and_scheduler_capacity() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let state = make_state(Arc::clone(&scheduler), permit);
+        let state_for_operation = Arc::clone(&state);
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut handle = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                state_for_operation.bind(scope.id()).unwrap();
+                state_for_operation.clone().abandon();
+                state_for_operation.clone().abandon();
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(handle.wait_outcome().unwrap(), OperationOutcome::Succeeded(())));
+        handle.wait_settlement().unwrap();
+        assert!(state.restore().is_none(), "abandoned request must not be restorable");
+        let snapshot = OperationControl::snapshot(&*state);
+        assert!(snapshot.input_released);
+        assert_eq!(snapshot.execution, qubit_operation::ExecutionPhase::Queued);
+        assert!(snapshot.settlement.is_some());
+        assert!(scheduler.try_reserve(0).is_ok(), "abandon should return the reservation");
+    }
 }

@@ -39,3 +39,42 @@ impl OperationObserverSlot {
         observer.as_ref().expect("observer is set").clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use qubit_operation::ManagerOptions;
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOptions;
+
+    use super::OperationObserverSlot;
+
+    #[test]
+    fn waiting_observer_receives_published_operation_identity() {
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let expected_id = operation.id();
+        let slot = Arc::new(OperationObserverSlot::default());
+        let waiting_slot = Arc::clone(&slot);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (observer_tx, observer_rx) = mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            observer_tx.send(waiting_slot.wait()).unwrap();
+        });
+
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+        slot.set(operation.observer());
+        let observed = observer_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        waiter.join().unwrap();
+        assert_eq!(observed.id(), expected_id);
+        let _outcome = operation.wait_outcome().unwrap();
+        operation.wait_settlement().unwrap();
+    }
+}

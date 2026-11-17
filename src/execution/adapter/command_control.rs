@@ -234,3 +234,112 @@ impl OperationControl for CommandControl {
         Poll::Pending
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::task::Context;
+    use std::task::Poll;
+    use std::task::Wake;
+    use std::task::Waker;
+
+    use qubit_operation::ExecutionPhase;
+    use qubit_operation::OperationControl;
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOptions;
+    use qubit_operation::OperationOutcome;
+    use qubit_operation::StopReason;
+
+    use super::CommandControl;
+    use crate::Command;
+    use crate::CommandRunner;
+
+    struct CountWake(AtomicUsize);
+    impl Wake for CountWake {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn settlement_report() -> Arc<qubit_operation::SettlementReport> {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let _ = operation.wait_outcome().unwrap();
+        operation.wait_settlement().unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn control_publishes_terminal_facts_once_and_wakes_observers() {
+        let control = CommandControl::default();
+        let other_report = settlement_report();
+        let (operation_id, report) = {
+            let manager = OperationManager::new(Default::default()).unwrap();
+            let mut operation = manager
+                .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+                .unwrap();
+            let id = operation.id();
+            let _ = operation.wait_outcome().unwrap();
+            (id, operation.wait_settlement().unwrap())
+        };
+        assert_eq!(control.operation_id(), None);
+        assert!(!control.publish_outcome(OperationOutcome::Succeeded(
+            CommandRunner::new(std::time::Duration::from_secs(5))
+                .run(Command::new("true"))
+                .unwrap(),
+        )));
+        assert!(!control.release());
+        assert!(!control.settlement(Arc::clone(&report)));
+
+        assert!(control.bind(operation_id));
+        assert!(!control.bind(other_report.operation_id));
+        assert_eq!(control.operation_id(), Some(operation_id));
+        control.running();
+        assert_eq!(OperationControl::snapshot(&control).execution, ExecutionPhase::Running);
+
+        let wake = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = Waker::from(Arc::clone(&wake));
+        let mut context = Context::from_waker(&waker);
+        assert!(matches!(control.take(&mut context), Poll::Pending));
+        assert!(matches!(OperationControl::poll_outcome(&control, &mut context), Poll::Pending));
+        assert!(matches!(OperationControl::poll_release(&control, &mut context), Poll::Pending));
+        assert!(matches!(OperationControl::poll_settlement(&control, &mut context), Poll::Pending));
+
+        let output = CommandRunner::new(std::time::Duration::from_secs(5))
+            .run(Command::new("sh").arg("-c").arg("printf controlled"))
+            .unwrap();
+        assert!(control.publish_outcome(OperationOutcome::Succeeded(output)));
+        assert!(!control.publish_outcome(OperationOutcome::Stopped(qubit_operation::StopReport {
+            reason: StopReason::UserCancelled,
+            accepted_at: None,
+        })));
+        let snapshot = OperationControl::snapshot(&control);
+        assert_eq!(snapshot.execution, ExecutionPhase::Finished);
+        assert_eq!(snapshot.outcome.unwrap().kind, qubit_operation::ChildOutcomeKind::Succeeded);
+        assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+
+        assert!(control.release());
+        assert!(!control.release());
+        assert!(OperationControl::poll_release(&control, &mut context).is_ready());
+        assert_eq!(wake.0.load(Ordering::SeqCst), 2);
+
+        assert!(!control.settlement(Arc::new((*other_report).clone())));
+        assert!(control.settlement(Arc::clone(&report)));
+        assert!(!control.settlement(Arc::clone(&report)));
+        assert!(OperationControl::poll_settlement(&control, &mut context).is_ready());
+        assert_eq!(wake.0.load(Ordering::SeqCst), 3);
+
+        assert!(matches!(control.take(&mut context), Poll::Ready(OperationOutcome::Succeeded(_))));
+        assert!(matches!(control.take(&mut context), Poll::Pending));
+        control.request_stop(StopReason::Timeout);
+        control.request_stop(StopReason::UserCancelled);
+        assert_eq!(OperationControl::snapshot(&control).stop.unwrap().reason, StopReason::Timeout);
+    }
+}
