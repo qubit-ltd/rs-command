@@ -474,6 +474,14 @@ mod tests {
             OperationControl::poll_settlement(&control, &mut first_context),
             Poll::Pending
         ));
+        {
+            let state = control.state.lock().unwrap();
+            assert_eq!(state.outcome_wakers.len(), 2);
+            assert_eq!(state.release_wakers.len(), 2);
+            assert_eq!(state.settlement_wakers.len(), 2);
+        }
+        assert_eq!(first_wake.0.load(Ordering::SeqCst), 0);
+        assert_eq!(second_wake.0.load(Ordering::SeqCst), 0);
 
         assert!(control.publish_outcome(OperationOutcome::Stopped(StopReport {
             reason: StopReason::UserCancelled,
