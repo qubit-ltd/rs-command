@@ -27,6 +27,7 @@ use qubit_command::ManagedCommandRunnerApi;
 use qubit_command::session::CommandSessionApi;
 use qubit_io::AsyncClose;
 use qubit_io::AsyncInput;
+use qubit_io::AsyncOutput;
 use qubit_operation::ManagerOptions;
 use qubit_operation::OperationManager;
 use qubit_operation::OperationOutcome;
@@ -114,6 +115,41 @@ fn test_managed_session_returns_endpoints_and_streams_both_pipes() {
     });
     assert_eq!(output.0, b"out");
     assert_eq!(output.1, b"err");
+    let mut operation = session.take_operation().unwrap();
+    assert!(matches!(
+        operation.wait_outcome().unwrap(),
+        OperationOutcome::Succeeded(_)
+    ));
+    operation.wait_settlement().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn test_managed_session_input_flush_and_buffering_round_trip() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let mut session = block_on(CommandRunner::new(Duration::from_secs(5)).start_session(
+        &executor,
+        Command::new("sh").arg("-c").arg("cat"),
+        Default::default(),
+    ))
+    .unwrap();
+    let mut stdin = session.take_stdin().unwrap();
+    assert!(stdin.is_buffered());
+    assert_eq!(
+        block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_write(cx, b"session input"))).unwrap(),
+        13
+    );
+    block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_flush(cx))).unwrap();
+    block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).unwrap();
+    drop(stdin);
+
+    let mut stdout = session.take_stdout().unwrap();
+    let mut stderr = session.take_stderr().unwrap();
+    assert!(stdout.is_buffered());
+    assert!(stderr.is_buffered());
+    assert_eq!(block_on(read_all(&mut stdout)).unwrap(), b"session input");
+    assert!(block_on(read_all(&mut stderr)).unwrap().is_empty());
     let mut operation = session.take_operation().unwrap();
     assert!(matches!(
         operation.wait_outcome().unwrap(),

@@ -433,6 +433,7 @@ mod tests {
     use super::CHANNEL_CAPACITY;
     use super::MAX_BLOCK;
     use crate::session::channel::SessionChannels;
+    use crate::session::channel::OutputBudget;
     use crate::session::contracts::SessionBridge;
     use crate::session::contracts::SessionStreamPolicy;
     struct CountWake(AtomicUsize);
@@ -501,6 +502,82 @@ mod tests {
         assert!(matches!(
             c.poll_read(&mut context, &mut out),
             std::task::Poll::Ready(Ok(0))
+        ));
+    }
+
+    #[test]
+    fn test_closed_writer_rejects_writes_and_reader_observes_eof() {
+        let channel = ByteChannel::new();
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = std::task::Waker::from(counter);
+        let mut context = std::task::Context::from_waker(&waker);
+
+        channel.close_writer();
+        assert!(matches!(
+            channel.poll_write(&mut context, b"late"),
+            std::task::Poll::Ready(Err(ref error)) if error.kind() == io::ErrorKind::BrokenPipe
+        ));
+        assert!(!channel.broken_pipe());
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut [0; 4]),
+            std::task::Poll::Ready(Ok(0))
+        ));
+        assert_eq!(channel.blocking_read(&mut []).unwrap(), 0);
+        assert_eq!(channel.blocking_read(&mut [0; 1]).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_discard_policy_accepts_full_write_and_tracks_truncated_buffer() {
+        let channel = ByteChannel::with_policy(SessionStreamPolicy::Discard, None);
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = std::task::Waker::from(counter);
+        let mut context = std::task::Context::from_waker(&waker);
+        let input = vec![0x5a; CHANNEL_CAPACITY + 31];
+
+        let mut written = 0;
+        for chunk in input.chunks(MAX_BLOCK) {
+            assert!(matches!(
+                channel.poll_write(&mut context, chunk),
+                std::task::Poll::Ready(Ok(n)) if n == chunk.len()
+            ));
+            written += chunk.len();
+        }
+        assert_eq!(written, input.len());
+        assert!(channel.incomplete());
+        let mut output = vec![0; CHANNEL_CAPACITY + MAX_BLOCK];
+        let mut total = 0;
+        while total < CHANNEL_CAPACITY {
+            match channel.poll_read(&mut context, &mut output[total..]) {
+                std::task::Poll::Ready(Ok(n)) => total += n,
+                other => panic!("buffered discard-policy output should be readable: {other:?}"),
+            }
+        }
+        assert_eq!(total, CHANNEL_CAPACITY);
+        assert!(output[..total].iter().all(|byte| *byte == 0x5a));
+    }
+
+    #[test]
+    fn test_zero_budget_discards_bytes_but_counts_observed_output() {
+        let budget = Arc::new(OutputBudget::new(0));
+        let channel = ByteChannel::with_policy(
+            SessionStreamPolicy::TerminateAfterBytes(0),
+            Some(budget.clone()),
+        );
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = std::task::Waker::from(counter);
+        let mut context = std::task::Context::from_waker(&waker);
+
+        assert!(matches!(
+            channel.poll_write(&mut context, b"over limit"),
+            std::task::Poll::Ready(Ok(10))
+        ));
+        assert!(budget.exceeded());
+        assert_eq!(budget.observed(), 10);
+        assert!(channel.incomplete());
+        let mut output = [0; 16];
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Pending
         ));
     }
 
