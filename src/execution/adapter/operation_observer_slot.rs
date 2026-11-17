@@ -53,7 +53,7 @@ mod tests {
     use super::OperationObserverSlot;
 
     #[test]
-    fn waiting_observer_receives_published_operation_identity() {
+    fn test_waiting_observer_receives_published_operation_identity() {
         let manager = OperationManager::new(ManagerOptions::default()).unwrap();
         let mut operation = manager
             .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))

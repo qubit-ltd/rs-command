@@ -277,7 +277,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn control_publishes_terminal_facts_once_and_wakes_observers() {
+    fn test_control_publishes_terminal_facts_once_and_wakes_observers() {
         let control = CommandControl::default();
         let other_report = settlement_report();
         let (operation_id, report) = {
@@ -290,11 +290,13 @@ mod tests {
             (id, operation.wait_settlement().unwrap())
         };
         assert_eq!(control.operation_id(), None);
-        assert!(!control.publish_outcome(OperationOutcome::Succeeded(
-            CommandRunner::new(std::time::Duration::from_secs(5))
-                .run(Command::new("true"))
-                .unwrap(),
-        )));
+        assert!(
+            !control.publish_outcome(OperationOutcome::Succeeded(
+                CommandRunner::new(std::time::Duration::from_secs(5))
+                    .run(Command::new("true"))
+                    .unwrap(),
+            ))
+        );
         assert!(!control.release());
         assert!(!control.settlement(Arc::clone(&report)));
 
@@ -308,21 +310,35 @@ mod tests {
         let waker = Waker::from(Arc::clone(&wake));
         let mut context = Context::from_waker(&waker);
         assert!(matches!(control.take(&mut context), Poll::Pending));
-        assert!(matches!(OperationControl::poll_outcome(&control, &mut context), Poll::Pending));
-        assert!(matches!(OperationControl::poll_release(&control, &mut context), Poll::Pending));
-        assert!(matches!(OperationControl::poll_settlement(&control, &mut context), Poll::Pending));
+        assert!(matches!(
+            OperationControl::poll_outcome(&control, &mut context),
+            Poll::Pending
+        ));
+        assert!(matches!(
+            OperationControl::poll_release(&control, &mut context),
+            Poll::Pending
+        ));
+        assert!(matches!(
+            OperationControl::poll_settlement(&control, &mut context),
+            Poll::Pending
+        ));
 
         let output = CommandRunner::new(std::time::Duration::from_secs(5))
             .run(Command::new("sh").arg("-c").arg("printf controlled"))
             .unwrap();
         assert!(control.publish_outcome(OperationOutcome::Succeeded(output)));
-        assert!(!control.publish_outcome(OperationOutcome::Stopped(qubit_operation::StopReport {
-            reason: StopReason::UserCancelled,
-            accepted_at: None,
-        })));
+        assert!(
+            !control.publish_outcome(OperationOutcome::Stopped(qubit_operation::StopReport {
+                reason: StopReason::UserCancelled,
+                accepted_at: None,
+            }))
+        );
         let snapshot = OperationControl::snapshot(&control);
         assert_eq!(snapshot.execution, ExecutionPhase::Finished);
-        assert_eq!(snapshot.outcome.unwrap().kind, qubit_operation::ChildOutcomeKind::Succeeded);
+        assert_eq!(
+            snapshot.outcome.unwrap().kind,
+            qubit_operation::ChildOutcomeKind::Succeeded
+        );
         assert_eq!(wake.0.load(Ordering::SeqCst), 1);
 
         assert!(control.release());
@@ -336,10 +352,16 @@ mod tests {
         assert!(OperationControl::poll_settlement(&control, &mut context).is_ready());
         assert_eq!(wake.0.load(Ordering::SeqCst), 3);
 
-        assert!(matches!(control.take(&mut context), Poll::Ready(OperationOutcome::Succeeded(_))));
+        assert!(matches!(
+            control.take(&mut context),
+            Poll::Ready(OperationOutcome::Succeeded(_))
+        ));
         assert!(matches!(control.take(&mut context), Poll::Pending));
         control.request_stop(StopReason::Timeout);
         control.request_stop(StopReason::UserCancelled);
-        assert_eq!(OperationControl::snapshot(&control).stop.unwrap().reason, StopReason::Timeout);
+        assert_eq!(
+            OperationControl::snapshot(&control).stop.unwrap().reason,
+            StopReason::Timeout
+        );
     }
 }
