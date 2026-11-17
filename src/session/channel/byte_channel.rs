@@ -1086,10 +1086,7 @@ mod tests {
     #[test]
     fn test_exact_budget_boundary_retains_bytes_then_discards_later_output() {
         let budget = Arc::new(OutputBudget::new(3));
-        let channel = ByteChannel::with_policy(
-            SessionStreamPolicy::TerminateAfterBytes(3),
-            Some(budget.clone()),
-        );
+        let channel = ByteChannel::with_policy(SessionStreamPolicy::TerminateAfterBytes(3), Some(budget.clone()));
         let counter = Arc::new(CountWake(AtomicUsize::new(0)));
         let waker = std::task::Waker::from(counter);
         let mut context = std::task::Context::from_waker(&waker);
