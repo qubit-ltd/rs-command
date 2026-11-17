@@ -2520,6 +2520,57 @@ mod command_executor_api_tests {
         );
         assert!(second_waiter.join().unwrap().is_empty());
 
+        let scoped_executor = executor.clone();
+        let scoped_runner = runner.clone();
+        let scoped = manager.run(Default::default(), move |scope| {
+            let ordinary = output_and_settle(
+                <CommandExecutor as CommandExecutorApi>::submit_wait_blocking_in(
+                    &scoped_executor,
+                    &scope,
+                    scoped_runner.clone(),
+                    Command::new("sh").arg("-c").arg("printf trait-scoped-wait"),
+                    Default::default(),
+                )
+                .map_err(|_| {
+                    crate::CommandError::from_reason(
+                        "trait submit_wait_blocking_in",
+                        crate::CommandErrorReason::ManagedOperationFailed {
+                            diagnostic: "scoped wait rejected".into(),
+                        },
+                        None,
+                    )
+                })?,
+            );
+            let resources = output_and_settle(
+                <CommandExecutor as CommandExecutorApi>::submit_wait_resources_blocking_in(
+                    &scoped_executor,
+                    &scope,
+                    scoped_runner,
+                    Command::new("sh")
+                        .arg("-c")
+                        .arg("printf trait-scoped-resource-wait"),
+                    CommandResourceRunOptions::new(),
+                )
+                .map_err(|_| {
+                    crate::CommandError::from_reason(
+                        "trait submit_wait_resources_blocking_in",
+                        crate::CommandErrorReason::ManagedOperationFailed {
+                            diagnostic: "scoped resource wait rejected".into(),
+                        },
+                        None,
+                    )
+                })?,
+            );
+            Ok::<_, crate::CommandError>((ordinary, resources))
+        });
+        match scoped.unwrap() {
+            OperationOutcome::Succeeded((ordinary, resources)) => {
+                assert_eq!(ordinary, b"trait-scoped-wait");
+                assert_eq!(resources, b"trait-scoped-resource-wait");
+            }
+            other => panic!("scoped trait waits failed: {other:?}"),
+        }
+
         let other_manager = OperationManager::new(Default::default()).unwrap();
         let result = other_manager.run(Default::default(), move |scope| {
             assert!(
@@ -2604,6 +2655,182 @@ mod command_executor_api_tests {
         #[test]
         fn test_async_submit_and_wait_variants_run_and_settle_commands() {
             block_on(async_submit_and_wait_variants_run_and_settle_commands_inner());
+        }
+
+        #[test]
+        fn test_trait_async_entry_points_run_root_and_scoped_commands() {
+            block_on(async_trait_entry_points_run_root_and_scoped_commands());
+        }
+
+        async fn async_trait_entry_points_run_root_and_scoped_commands() {
+            let (manager, executor, runner) = setup();
+            let ordinary = output_and_settle(
+                <crate::CommandExecutor as CommandExecutorApi>::submit_async(
+                    &executor,
+                    runner.clone(),
+                    Command::new("sh")
+                        .arg("-c")
+                        .arg("printf trait-async-submit"),
+                    Default::default(),
+                )
+                .unwrap(),
+            )
+            .await;
+            assert_eq!(ordinary, b"trait-async-submit");
+
+            let resources = output_and_settle(
+                <crate::CommandExecutor as CommandExecutorApi>::submit_async_resources(
+                    &executor,
+                    runner.clone(),
+                    Command::new("sh")
+                        .arg("-c")
+                        .arg("printf trait-async-resources"),
+                    CommandResourceRunOptions::new(),
+                )
+                .unwrap(),
+            )
+            .await;
+            assert_eq!(resources, b"trait-async-resources");
+
+            let waited = output_and_settle(
+                <crate::CommandExecutor as CommandExecutorApi>::submit_wait(
+                    &executor,
+                    runner.clone(),
+                    Command::new("sh").arg("-c").arg("printf trait-async-wait"),
+                    Default::default(),
+                )
+                .await
+                .unwrap(),
+            )
+            .await;
+            assert_eq!(waited, b"trait-async-wait");
+
+            let waited_resources = output_and_settle(
+                <crate::CommandExecutor as CommandExecutorApi>::submit_wait_resources(
+                    &executor,
+                    runner.clone(),
+                    Command::new("sh")
+                        .arg("-c")
+                        .arg("printf trait-async-wait-resources"),
+                    CommandResourceRunOptions::new(),
+                )
+                .await
+                .unwrap(),
+            )
+            .await;
+            assert_eq!(waited_resources, b"trait-async-wait-resources");
+
+            let scoped_executor = executor.clone();
+            let result = manager
+                .as_async()
+                .run(Default::default(), move |scope| async move {
+                    let direct = output_and_settle(
+                        <crate::CommandExecutor as CommandExecutorApi>::submit_async_in(
+                            &scoped_executor,
+                            &scope,
+                            runner.clone(),
+                            Command::new("sh").arg("-c").arg("printf trait-async-in"),
+                            Default::default(),
+                        )
+                        .map_err(|_| {
+                            crate::CommandError::from_reason(
+                                "trait submit_async_in",
+                                crate::CommandErrorReason::ManagedOperationFailed {
+                                    diagnostic: "scoped async submission rejected".into(),
+                                },
+                                None,
+                            )
+                        })?,
+                    )
+                    .await;
+                    let direct_resources = output_and_settle(
+                        <crate::CommandExecutor as CommandExecutorApi>::submit_async_resources_in(
+                            &scoped_executor,
+                            &scope,
+                            runner.clone(),
+                            Command::new("sh")
+                                .arg("-c")
+                                .arg("printf trait-async-resources-in"),
+                            CommandResourceRunOptions::new(),
+                        )
+                        .map_err(|_| {
+                            crate::CommandError::from_reason(
+                                "trait submit_async_resources_in",
+                                crate::CommandErrorReason::ManagedOperationFailed {
+                                    diagnostic: "scoped async resource submission rejected".into(),
+                                },
+                                None,
+                            )
+                        })?,
+                    )
+                    .await;
+                    let waited = output_and_settle(
+                        <crate::CommandExecutor as CommandExecutorApi>::submit_wait_in(
+                            &scoped_executor,
+                            &scope,
+                            runner.clone(),
+                            Command::new("sh")
+                                .arg("-c")
+                                .arg("printf trait-async-wait-in"),
+                            Default::default(),
+                        )
+                        .await
+                        .map_err(|_| {
+                            crate::CommandError::from_reason(
+                                "trait submit_wait_in",
+                                crate::CommandErrorReason::ManagedOperationFailed {
+                                    diagnostic: "scoped async wait rejected".into(),
+                                },
+                                None,
+                            )
+                        })?,
+                    )
+                    .await;
+                    let waited_resources = output_and_settle(
+                        <crate::CommandExecutor as CommandExecutorApi>::submit_wait_resources_in(
+                            &scoped_executor,
+                            &scope,
+                            runner,
+                            Command::new("sh")
+                                .arg("-c")
+                                .arg("printf trait-async-wait-resources-in"),
+                            CommandResourceRunOptions::new(),
+                        )
+                        .await
+                        .map_err(|_| {
+                            crate::CommandError::from_reason(
+                                "trait submit_wait_resources_in",
+                                crate::CommandErrorReason::ManagedOperationFailed {
+                                    diagnostic: "scoped async resource wait rejected".into(),
+                                },
+                                None,
+                            )
+                        })?,
+                    )
+                    .await;
+                    Ok::<_, crate::CommandError>((
+                        direct,
+                        direct_resources,
+                        waited,
+                        waited_resources,
+                    ))
+                })
+                .await
+                .expect("scoped trait submissions should complete");
+            match result {
+                OperationOutcome::Succeeded((
+                    direct,
+                    direct_resources,
+                    waited,
+                    waited_resources,
+                )) => {
+                    assert_eq!(direct, b"trait-async-in");
+                    assert_eq!(direct_resources, b"trait-async-resources-in");
+                    assert_eq!(waited, b"trait-async-wait-in");
+                    assert_eq!(waited_resources, b"trait-async-wait-resources-in");
+                }
+                other => panic!("scoped async trait submissions failed: {other:?}"),
+            }
         }
 
         async fn async_submit_and_wait_variants_run_and_settle_commands_inner() {
