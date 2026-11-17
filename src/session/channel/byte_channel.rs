@@ -828,6 +828,26 @@ mod tests {
     }
 
     #[test]
+    fn test_wait_observers_recover_poisoned_test_counters() {
+        let channel = ByteChannel::new();
+        let poisoned_writer_counter = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _counter = channel.wait_entered.0.lock().unwrap();
+            panic!("simulate a test observer panic while holding the writer counter");
+        }));
+        assert!(poisoned_writer_counter.is_err());
+        channel.note_wait();
+        channel.wait_until_blocked();
+
+        let poisoned_reader_counter = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _counter = channel.reader_wait_entered.0.lock().unwrap();
+            panic!("simulate a test observer panic while holding the reader counter");
+        }));
+        assert!(poisoned_reader_counter.is_err());
+        channel.note_reader_wait();
+        channel.wait_until_reader_blocked();
+    }
+
+    #[test]
     fn test_blocking_write_after_reader_drop_reports_incomplete_output() {
         let channel = ByteChannel::new();
         channel.blocking_write(b"queued output").unwrap();
