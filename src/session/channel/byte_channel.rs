@@ -1339,14 +1339,14 @@ mod tests {
     #[test]
     fn test_blocking_writer_dropped_reader_while_waiting_returns_incomplete() {
         let channel = Arc::new(ByteChannel::new());
-        channel
-            .blocking_write(&vec![0x42; CHANNEL_CAPACITY])
-            .unwrap();
+        channel.blocking_write(&vec![0x42; CHANNEL_CAPACITY]).unwrap();
 
         let writer_channel = channel.clone();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let writer = std::thread::spawn(move || {
-            done_tx.send(writer_channel.blocking_write(b"reader disappeared")).unwrap();
+            done_tx
+                .send(writer_channel.blocking_write(b"reader disappeared"))
+                .unwrap();
         });
         channel.wait_until_blocked();
         channel.drop_reader();

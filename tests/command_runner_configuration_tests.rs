@@ -88,10 +88,7 @@ fn test_runner_accepts_owned_os_string_working_directory_in_sync_run() {
     let working_directory: OsString = directory.path().as_os_str().to_os_string();
     let runner = CommandRunner::without_timeout().working_directory(working_directory);
 
-    assert_eq!(
-        runner.configured_working_directory(),
-        Some(directory.path())
-    );
+    assert_eq!(runner.configured_working_directory(), Some(directory.path()));
     let output = runner
         .run(print_working_directory_command())
         .expect("synchronous run should use the configured owned working directory");

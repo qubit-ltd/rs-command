@@ -1215,13 +1215,6 @@ mod session_accessor_tests {
 
 #[cfg(test)]
 mod outcome_mapping_coverage_tests {
-    use super::map_outcome;
-    use crate::Command;
-    use crate::CommandError;
-    use crate::CommandErrorReason;
-    use crate::CommandExecutionConfig;
-    use crate::CommandExecutor;
-    use crate::CommandRunner;
     use qubit_operation::ChildFailureSummary;
     use qubit_operation::ChildOutcomeKind;
     use qubit_operation::ChildOutcomeSummary;
@@ -1235,6 +1228,15 @@ mod outcome_mapping_coverage_tests {
     use qubit_operation::PanicSummary;
     use qubit_operation::StopReason;
     use qubit_operation::StopReport;
+
+    use super::map_outcome;
+    use crate::Command;
+    use crate::CommandError;
+    use crate::CommandErrorReason;
+    use crate::CommandExecutionConfig;
+    use crate::CommandExecutor;
+    use crate::CommandRunner;
+    use crate::command_runner::ManagedCommandRunnerApi;
 
     fn operation_id() -> qubit_operation::OperationId {
         let manager = OperationManager::new(ManagerOptions::default()).unwrap();
@@ -1272,9 +1274,9 @@ mod outcome_mapping_coverage_tests {
                 summary: DiagnosticSummary::new("required child failed"),
             },
         };
-        let child_error = map_outcome(
-            OperationOutcome::<crate::CommandOutput, CommandError>::ChildFailed(child),
-        )
+        let child_error = map_outcome(OperationOutcome::<crate::CommandOutput, CommandError>::ChildFailed(
+            child,
+        ))
         .unwrap_err();
         assert!(matches!(
             child_error.reason(),
@@ -1282,14 +1284,13 @@ mod outcome_mapping_coverage_tests {
                 if diagnostic == "required child failed"
         ));
 
-        let panic_error = map_outcome(OperationOutcome::<
-            crate::CommandOutput,
-            CommandError,
-        >::Panicked(PanicSummary {
-            operation_id: id,
-            phase: ExecutionPhase::Running,
-            summary: DiagnosticSummary::new("managed worker panicked"),
-        }))
+        let panic_error = map_outcome(OperationOutcome::<crate::CommandOutput, CommandError>::Panicked(
+            PanicSummary {
+                operation_id: id,
+                phase: ExecutionPhase::Running,
+                summary: DiagnosticSummary::new("managed worker panicked"),
+            },
+        ))
         .unwrap_err();
         assert!(matches!(
             panic_error.reason(),
@@ -1297,14 +1298,13 @@ mod outcome_mapping_coverage_tests {
                 if diagnostic == "managed worker panicked"
         ));
 
-        let execution_error = map_outcome(OperationOutcome::<
-            crate::CommandOutput,
-            CommandError,
-        >::ExecutionFailed(ExecutionFailure {
-            operation_id: id,
-            summary: DiagnosticSummary::new("executor could not run command"),
-            source: None,
-        }))
+        let execution_error = map_outcome(OperationOutcome::<crate::CommandOutput, CommandError>::ExecutionFailed(
+            ExecutionFailure {
+                operation_id: id,
+                summary: DiagnosticSummary::new("executor could not run command"),
+                source: None,
+            },
+        ))
         .unwrap_err();
         assert!(matches!(
             execution_error.reason(),
@@ -1325,9 +1325,6 @@ mod outcome_mapping_coverage_tests {
 
         assert!(error.command().contains(missing_command));
         assert!(error.output().is_none());
-        assert!(matches!(
-            error.reason(),
-            CommandErrorReason::SpawnFailed { .. }
-        ));
+        assert!(matches!(error.reason(), CommandErrorReason::SpawnFailed { .. }));
     }
 }
