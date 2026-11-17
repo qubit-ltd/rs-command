@@ -245,12 +245,19 @@ mod tests {
     use std::task::Wake;
     use std::task::Waker;
 
+    use qubit_operation::ChildFailureSummary;
+    use qubit_operation::ChildOutcomeKind;
+    use qubit_operation::ChildOutcomeSummary;
+    use qubit_operation::DiagnosticSummary;
+    use qubit_operation::ExecutionFailure;
     use qubit_operation::ExecutionPhase;
     use qubit_operation::OperationControl;
     use qubit_operation::OperationManager;
     use qubit_operation::OperationOptions;
     use qubit_operation::OperationOutcome;
+    use qubit_operation::PanicSummary;
     use qubit_operation::StopReason;
+    use qubit_operation::StopReport;
 
     use super::CommandControl;
     use crate::Command;
@@ -273,6 +280,66 @@ mod tests {
             .unwrap();
         let _ = operation.wait_outcome().unwrap();
         operation.wait_settlement().unwrap()
+    }
+
+    #[test]
+    fn test_control_summarizes_each_terminal_failure_kind() {
+        let id = settlement_report().operation_id;
+        let outcomes = [
+            (
+                OperationOutcome::Failed(crate::CommandError::from_reason(
+                    "failed command",
+                    crate::CommandErrorReason::Cancelled,
+                    None,
+                )),
+                ChildOutcomeKind::Failed,
+            ),
+            (
+                OperationOutcome::ChildFailed(ChildFailureSummary {
+                    operation_id: id,
+                    outcome: ChildOutcomeSummary {
+                        operation_id: id,
+                        kind: ChildOutcomeKind::Failed,
+                        summary: DiagnosticSummary::new("child failed"),
+                    },
+                }),
+                ChildOutcomeKind::Failed,
+            ),
+            (
+                OperationOutcome::Stopped(StopReport {
+                    reason: StopReason::Timeout,
+                    accepted_at: None,
+                }),
+                ChildOutcomeKind::Stopped,
+            ),
+            (
+                OperationOutcome::Panicked(PanicSummary {
+                    operation_id: id,
+                    phase: ExecutionPhase::Running,
+                    summary: DiagnosticSummary::new("worker panicked"),
+                }),
+                ChildOutcomeKind::Panicked,
+            ),
+            (
+                OperationOutcome::ExecutionFailed(ExecutionFailure {
+                    operation_id: id,
+                    summary: DiagnosticSummary::new("operation execution failed"),
+                    source: None,
+                }),
+                ChildOutcomeKind::ExecutionFailed,
+            ),
+        ];
+
+        for (outcome, expected_kind) in outcomes {
+            let control = CommandControl::default();
+            assert!(control.bind(id));
+            assert!(control.publish_outcome(outcome));
+            let snapshot = OperationControl::snapshot(&control);
+            assert_eq!(
+                snapshot.outcome.expect("terminal summary should be stored").kind,
+                expected_kind
+            );
+        }
     }
 
     #[cfg(unix)]
