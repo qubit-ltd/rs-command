@@ -352,6 +352,7 @@ mod tests {
     use qubit_operation::SettlementReport;
     use qubit_operation::StopReason;
 
+    use super::normalize_tee_paths;
     use super::ProcessBackend;
     use super::schedule_recovery_transfer;
     use crate::Command;
@@ -701,5 +702,36 @@ mod tests {
             .take()
             .expect("accepted owner should remain in store");
         assert_eq!(retained.summary(), "transiently rejected owner");
+    }
+
+    #[test]
+    fn test_normalize_tee_paths_resolves_relative_paths_and_keeps_absolute_paths() {
+        let base = std::path::Path::new("/work/dir");
+        let absolute_stderr = std::path::PathBuf::from("/logs/stderr.log");
+        let options = CommandRunOptions::new()
+            .tee_stdout_to_file("stdout.log")
+            .tee_stderr_to_file(absolute_stderr.clone());
+
+        let normalized = normalize_tee_paths(options, base);
+
+        assert_eq!(
+            normalized.configured_stdout_file(),
+            Some(std::path::Path::new("/work/dir/stdout.log"))
+        );
+        assert_eq!(
+            normalized.configured_stderr_file(),
+            Some(absolute_stderr.as_path())
+        );
+    }
+
+    #[test]
+    fn test_normalize_tee_paths_preserves_options_without_tee_files() {
+        let normalized = normalize_tee_paths(
+            CommandRunOptions::new(),
+            std::path::Path::new("/work/dir"),
+        );
+
+        assert_eq!(normalized.configured_stdout_file(), None);
+        assert_eq!(normalized.configured_stderr_file(), None);
     }
 }

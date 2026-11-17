@@ -43,3 +43,26 @@ impl ReaperOwner {
         self.reap();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use super::ReaperOwner;
+
+    #[test]
+    fn test_debug_format_does_not_run_or_expose_cleanup() {
+        let cleaned = Arc::new(AtomicBool::new(false));
+        let cleanup_state = Arc::clone(&cleaned);
+        let owner = ReaperOwner::new(move || cleanup_state.store(true, Ordering::SeqCst));
+
+        let debug = format!("{owner:?}");
+
+        assert_eq!(debug, "ReaperOwner { .. }");
+        assert!(!cleaned.load(Ordering::SeqCst));
+        owner.run_inline();
+        assert!(cleaned.load(Ordering::SeqCst));
+    }
+}

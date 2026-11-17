@@ -87,4 +87,25 @@ mod tests {
         assert!(operation.wait_outcome().is_ok());
         operation.wait_settlement().unwrap();
     }
+
+    #[test]
+    fn test_drop_after_gate_registry_is_gone_is_harmless() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let gate = std::sync::Arc::new(StartGate::default());
+        let gates = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let port = OperationStopPort {
+            operation_id: operation.id(),
+            gate,
+            gates: std::sync::Arc::downgrade(&gates),
+        };
+
+        drop(gates);
+        drop(port);
+
+        assert!(operation.wait_outcome().is_ok());
+        operation.wait_settlement().unwrap();
+    }
 }
