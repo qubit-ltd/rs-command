@@ -786,16 +786,10 @@ mod tests {
 
         let active = scheduler.try_reserve(0).unwrap();
         let queued = scheduler.try_reserve(0).unwrap();
-        assert_eq!(
-            scheduler.try_reserve(0).unwrap_err(),
-            CapacityFailure::QueueFull
-        );
+        assert_eq!(scheduler.try_reserve(0).unwrap_err(), CapacityFailure::QueueFull);
 
         scheduler.close_admission();
-        assert_eq!(
-            scheduler.try_reserve(0).unwrap_err(),
-            CapacityFailure::Closed
-        );
+        assert_eq!(scheduler.try_reserve(0).unwrap_err(), CapacityFailure::Closed);
         drop((active, queued));
     }
 
@@ -807,10 +801,7 @@ mod tests {
         let waker = Waker::from(counter.clone());
 
         scheduler.register_waiter(Some(&waker)).unwrap();
-        assert_eq!(
-            scheduler.register_waiter(None),
-            Err(CapacityFailure::QueueFull)
-        );
+        assert_eq!(scheduler.register_waiter(None), Err(CapacityFailure::QueueFull));
         drop(permit);
         assert_eq!(counter.0.load(Ordering::SeqCst), 1);
         assert_eq!(scheduler.snapshot().waiters, 0);
@@ -868,9 +859,7 @@ mod tests {
             )
             .unwrap();
 
-        let (job, permit) = scheduler
-            .try_next()
-            .expect("enqueued job should be available");
+        let (job, permit) = scheduler.try_next().expect("enqueued job should be available");
         (job.run)(permit);
 
         assert!(invoked.load(Ordering::SeqCst));
