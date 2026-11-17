@@ -1174,4 +1174,132 @@ mod tests {
         ));
         assert!(channel.incomplete());
     }
+
+    #[test]
+    fn test_stop_output_accepts_and_accounts_for_later_poll_writes() {
+        let budget = Arc::new(OutputBudget::new(5));
+        let channel = ByteChannel::with_policy(
+            SessionStreamPolicy::TerminateAfterBytes(5),
+            Some(budget.clone()),
+        );
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = std::task::Waker::from(counter);
+        let mut context = std::task::Context::from_waker(&waker);
+        let mut output = [0; 8];
+
+        assert!(matches!(
+            channel.poll_write(&mut context, b"keep"),
+            std::task::Poll::Ready(Ok(4))
+        ));
+        channel.stop_output();
+        assert!(channel.incomplete());
+        assert!(matches!(
+            channel.poll_write(&mut context, b"discard"),
+            std::task::Poll::Ready(Ok(7))
+        ));
+        assert_eq!(budget.observed(), 11);
+        assert!(budget.exceeded());
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Ready(Ok(4))
+        ));
+        assert_eq!(&output[..4], b"keep");
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Ready(Ok(0))
+        ));
+    }
+
+    #[test]
+    fn test_exceeded_budget_counts_all_later_async_output_without_buffering() {
+        let budget = Arc::new(OutputBudget::new(2));
+        let channel = ByteChannel::with_policy(
+            SessionStreamPolicy::TerminateAfterBytes(2),
+            Some(budget.clone()),
+        );
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = std::task::Waker::from(counter);
+        let mut context = std::task::Context::from_waker(&waker);
+        let mut output = [0; 8];
+
+        assert!(matches!(
+            channel.poll_write(&mut context, b"abc"),
+            std::task::Poll::Ready(Ok(3))
+        ));
+        assert!(matches!(
+            channel.poll_write(&mut context, b"later"),
+            std::task::Poll::Ready(Ok(5))
+        ));
+        assert_eq!(budget.observed(), 8);
+        assert!(channel.incomplete());
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Ready(Ok(2))
+        ));
+        assert_eq!(&output[..2], b"ab");
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Pending
+        ));
+    }
+
+    #[test]
+    fn test_broken_pipe_can_be_recorded_without_a_poll_write() {
+        let channel = ByteChannel::new();
+        assert!(!channel.broken_pipe());
+
+        channel.record_broken_pipe();
+
+        assert!(channel.broken_pipe());
+        assert!(!channel.incomplete());
+    }
+
+    #[test]
+    fn test_stop_output_wakes_registered_reader_and_full_channel_writer() {
+        let channel = ByteChannel::new();
+        let first = Arc::new(CountWake(AtomicUsize::new(0)));
+        let second = Arc::new(CountWake(AtomicUsize::new(0)));
+        let first_waker = std::task::Waker::from(first.clone());
+        let second_waker = std::task::Waker::from(second.clone());
+        let mut first_context = std::task::Context::from_waker(&first_waker);
+        let mut second_context = std::task::Context::from_waker(&second_waker);
+
+        assert!(matches!(
+            channel.poll_read(&mut first_context, &mut [0; 1]),
+            std::task::Poll::Pending
+        ));
+        let block = vec![0x7a; MAX_BLOCK];
+        for _ in 0..CHANNEL_CAPACITY / MAX_BLOCK {
+            assert!(matches!(
+                channel.poll_write(&mut second_context, &block),
+                std::task::Poll::Ready(Ok(MAX_BLOCK))
+            ));
+        }
+        assert!(matches!(
+            channel.poll_write(&mut second_context, b"blocked"),
+            std::task::Poll::Pending
+        ));
+
+        channel.stop_output();
+
+        assert_eq!(first.0.load(Ordering::SeqCst), 1);
+        assert_eq!(second.0.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            channel.poll_write(&mut second_context, b"after stop"),
+            std::task::Poll::Ready(Ok(10))
+        ));
+        let mut output = vec![0; CHANNEL_CAPACITY];
+        let mut total = 0;
+        while total < CHANNEL_CAPACITY {
+            match channel.poll_read(&mut first_context, &mut output[total..]) {
+                std::task::Poll::Ready(Ok(n)) => total += n,
+                other => panic!("queued output should remain readable after stop: {other:?}"),
+            }
+        }
+        assert!(output.iter().all(|byte| *byte == 0x7a));
+        assert!(matches!(
+            channel.poll_read(&mut first_context, &mut [0; 1]),
+            std::task::Poll::Ready(Ok(0))
+        ));
+    }
 }
