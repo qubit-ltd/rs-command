@@ -2155,7 +2155,7 @@ mod command_executor_api_tests {
 
     #[cfg(unix)]
     #[test]
-    fn trait_submit_entry_points_execute_root_and_scoped_commands() {
+    fn test_trait_submit_entry_points_execute_root_and_scoped_commands() {
         let (manager, executor, runner) = setup();
         assert_eq!(
             output_and_settle(
@@ -2199,13 +2199,15 @@ mod command_executor_api_tests {
                         Command::new("sh").arg("-c").arg("printf trait-submit-in"),
                         Default::default(),
                     )
-                    .map_err(|_| crate::CommandError::from_reason(
-                        "trait submit_in",
-                        crate::CommandErrorReason::ManagedOperationFailed {
-                            diagnostic: "scoped trait submission rejected".into(),
-                        },
-                        None,
-                    ))?,
+                    .map_err(|_| {
+                        crate::CommandError::from_reason(
+                            "trait submit_in",
+                            crate::CommandErrorReason::ManagedOperationFailed {
+                                diagnostic: "scoped trait submission rejected".into(),
+                            },
+                            None,
+                        )
+                    })?,
                 );
                 let resources = output_and_settle(
                     <CommandExecutor as CommandExecutorApi>::submit_resources_in(
@@ -2215,13 +2217,15 @@ mod command_executor_api_tests {
                         Command::new("sh").arg("-c").arg("printf trait-resources-in"),
                         CommandResourceRunOptions::new(),
                     )
-                    .map_err(|_| crate::CommandError::from_reason(
-                        "trait submit_resources_in",
-                        crate::CommandErrorReason::ManagedOperationFailed {
-                            diagnostic: "scoped resource trait submission rejected".into(),
-                        },
-                        None,
-                    ))?,
+                    .map_err(|_| {
+                        crate::CommandError::from_reason(
+                            "trait submit_resources_in",
+                            crate::CommandErrorReason::ManagedOperationFailed {
+                                diagnostic: "scoped resource trait submission rejected".into(),
+                            },
+                            None,
+                        )
+                    })?,
                 );
                 Ok::<_, crate::CommandError>((direct, resources))
             })

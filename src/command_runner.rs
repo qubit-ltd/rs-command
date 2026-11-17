@@ -349,10 +349,7 @@ mod tests {
         .expect("test command should prepare")
     }
 
-    fn managed_file(
-        scope: &OperationScope,
-        file: File,
-    ) -> qubit_operation::ResourceRef<Mutex<File>> {
+    fn managed_file(scope: &OperationScope, file: File) -> qubit_operation::ResourceRef<Mutex<File>> {
         scope
             .manage(Mutex::new(file))
             .expect("test file should register in the scope")
@@ -491,14 +488,10 @@ mod tests {
 
     #[test]
     fn test_validate_prepared_files_rejects_owned_file_aliases_and_path_tees() {
-        let manager =
-            OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
         let outcome = manager
             .run(qubit_operation::OperationOptions::default(), |scope| {
-                let shared = managed_file(
-                    &scope,
-                    tempfile::tempfile().expect("fixture file should open"),
-                );
+                let shared = managed_file(&scope, tempfile::tempfile().expect("fixture file should open"));
                 let same_stdin_and_stdout = PreparedFiles::new(
                     Some(shared.clone()),
                     Some(PreparedSink {
@@ -577,26 +570,19 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_apply_prepared_files_uses_stdin_and_sink_dispositions() {
-        let manager =
-            OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
         let outcome = manager
             .run(qubit_operation::OperationOptions::default(), |scope| {
                 let mut stdin = tempfile::tempfile().expect("stdin fixture should open");
-                stdin
-                    .write_all(b"owned stdin")
-                    .expect("stdin bytes should write");
+                stdin.write_all(b"owned stdin").expect("stdin bytes should write");
                 stdin.seek(SeekFrom::Start(0)).expect("stdin should rewind");
                 let stdin = managed_file(&scope, stdin);
 
                 let mut stdout = tempfile::tempfile().expect("stdout fixture should open");
-                stdout
-                    .write_all(b"replace me")
-                    .expect("stdout prefix should write");
+                stdout.write_all(b"replace me").expect("stdout prefix should write");
                 let stdout = managed_file(&scope, stdout);
                 let mut stderr = tempfile::tempfile().expect("stderr fixture should open");
-                stderr
-                    .write_all(b"preserve")
-                    .expect("stderr prefix should write");
+                stderr.write_all(b"preserve").expect("stderr prefix should write");
                 let stderr = managed_file(&scope, stderr);
                 let files = PreparedFiles::new(
                     Some(stdin),
@@ -614,8 +600,7 @@ mod tests {
                 let mut committed = prepared_command("cat", None, None)
                     .commit()
                     .expect("prepared command should commit");
-                apply_prepared_files("cat", &files, &mut committed)
-                    .expect("owned resources should be installed");
+                apply_prepared_files("cat", &files, &mut committed).expect("owned resources should be installed");
 
                 let output = committed
                     .process_command
@@ -624,27 +609,19 @@ mod tests {
                     .expect("stdin file should be connected to the command");
                 assert_eq!(output.stdout, b"owned stdin");
 
-                let stdout_tee = committed
-                    .stdout_tee
-                    .as_mut()
-                    .expect("stdout tee should be installed");
+                let stdout_tee = committed.stdout_tee.as_mut().expect("stdout tee should be installed");
                 stdout_tee
                     .file()
                     .write_all(b"fresh stdout")
                     .expect("stdout tee should write");
-                let stderr_tee = committed
-                    .stderr_tee
-                    .as_mut()
-                    .expect("stderr tee should be installed");
+                let stderr_tee = committed.stderr_tee.as_mut().expect("stderr tee should be installed");
                 stderr_tee
                     .file()
                     .write_all(b" appended")
                     .expect("stderr tee should write");
 
                 let mut actual_stdout = stdout.lock().expect("stdout fixture should lock");
-                actual_stdout
-                    .seek(SeekFrom::Start(0))
-                    .expect("stdout should rewind");
+                actual_stdout.seek(SeekFrom::Start(0)).expect("stdout should rewind");
                 let mut stdout_bytes = Vec::new();
                 actual_stdout
                     .read_to_end(&mut stdout_bytes)
@@ -652,9 +629,7 @@ mod tests {
                 assert_eq!(stdout_bytes, b"fresh stdout");
 
                 let mut actual_stderr = stderr.lock().expect("stderr fixture should lock");
-                actual_stderr
-                    .seek(SeekFrom::Start(0))
-                    .expect("stderr should rewind");
+                actual_stderr.seek(SeekFrom::Start(0)).expect("stderr should rewind");
                 let mut stderr_bytes = Vec::new();
                 actual_stderr
                     .read_to_end(&mut stderr_bytes)

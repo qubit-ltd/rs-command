@@ -1033,7 +1033,6 @@ mod tests {
             .expect_err("async spawn failure should be returned");
             assert!(matches!(error.reason(), crate::CommandErrorReason::SpawnFailed { .. }));
         }
-        }
     }
 }
 
@@ -1057,8 +1056,7 @@ mod outcome_mapping_tests {
     use super::map_outcome;
 
     fn operation_id() -> OperationId {
-        let manager = OperationManager::new(ManagerOptions::default())
-            .expect("test operation manager should start");
+        let manager = OperationManager::new(ManagerOptions::default()).expect("test operation manager should start");
         match manager
             .run(OperationOptions::default(), |scope| {
                 Ok::<_, std::convert::Infallible>(scope.id())
@@ -1080,10 +1078,7 @@ mod outcome_mapping_tests {
             accepted_at: None,
         }))
         .expect_err("a stopped operation should map to cancellation");
-        assert!(matches!(
-            stopped.reason(),
-            crate::CommandErrorReason::Cancelled
-        ));
+        assert!(matches!(stopped.reason(), crate::CommandErrorReason::Cancelled));
         assert_eq!(stopped.command(), "<managed command>");
 
         let child_failed = map_outcome(Outcome::ChildFailed(ChildFailureSummary {
@@ -1125,17 +1120,9 @@ mod outcome_mapping_tests {
                 if diagnostic == "executor rejected operation body"
         ));
 
-        let original = crate::CommandError::from_reason(
-            "original command",
-            crate::CommandErrorReason::Cancelled,
-            None,
-        );
-        let failed = map_outcome(Outcome::Failed(original))
-            .expect_err("an application error should be preserved");
+        let original = crate::CommandError::from_reason("original command", crate::CommandErrorReason::Cancelled, None);
+        let failed = map_outcome(Outcome::Failed(original)).expect_err("an application error should be preserved");
         assert_eq!(failed.command(), "original command");
-        assert!(matches!(
-            failed.reason(),
-            crate::CommandErrorReason::Cancelled
-        ));
+        assert!(matches!(failed.reason(), crate::CommandErrorReason::Cancelled));
     }
 }
