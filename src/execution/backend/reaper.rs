@@ -99,7 +99,115 @@ mod tests {
     use super::ReaperOwner;
     use crate::execution::backend::ReaperObserver;
     use crate::execution::backend::internal::DeferredReaperOwner;
+    use crate::execution::contracts::FactPublishError;
+    use crate::execution::contracts::FactSink;
     use crate::execution::contracts::RecoveryOwner;
+    use crate::execution::contracts::RecoveryPublishError;
+    use crate::execution::contracts::RecoveryPublishFailure;
+
+    struct RecoverySink {
+        retained: std::sync::Mutex<Option<Box<dyn RecoveryOwner>>>,
+        reject: bool,
+    }
+
+    impl FactSink for RecoverySink {
+        fn publish_outcome(
+            &self,
+            _outcome: OperationOutcome<crate::CommandOutput, crate::CommandError>,
+        ) -> Result<(), FactPublishError> {
+            unreachable!("reaper observer tests only use recovery owner retention")
+        }
+
+        fn confirm_input_release(&self) -> Result<(), FactPublishError> {
+            unreachable!("reaper observer tests only use recovery owner retention")
+        }
+
+        fn publish_settlement(
+            &self,
+            _report: Arc<qubit_operation::SettlementReport>,
+        ) -> Result<(), FactPublishError> {
+            unreachable!("reaper observer tests only use recovery owner retention")
+        }
+
+        fn retain_recovery_owner(
+            &self,
+            owner: Box<dyn RecoveryOwner>,
+        ) -> Result<(), RecoveryPublishFailure> {
+            if self.reject {
+                Err(RecoveryPublishFailure {
+                    reason: RecoveryPublishError::CapacityExceeded,
+                    owner,
+                })
+            } else {
+                *self.retained.lock().unwrap() = Some(owner);
+                Ok(())
+            }
+        }
+    }
+
+    fn recovery_sink(reject: bool) -> Arc<RecoverySink> {
+        Arc::new(RecoverySink {
+            retained: std::sync::Mutex::new(None),
+            reject,
+        })
+    }
+
+    #[test]
+    fn test_reaper_observer_tracks_pending_completion_and_notifies_once() {
+        let (observer, completed) = ReaperObserver::pair();
+        assert!(!observer.is_pending());
+        assert!(!observer.is_complete());
+        assert!(!observer.recovery_was_transferred());
+
+        let clone = observer.clone();
+        clone.mark_pending();
+        assert!(observer.is_pending(), "clones share the pending state");
+
+        observer.complete();
+        observer.complete();
+        assert!(clone.is_complete());
+        completed
+            .try_recv()
+            .expect("completion should publish one notification");
+        assert!(completed.try_recv().is_err(), "completion is signaled once");
+    }
+
+    #[test]
+    fn test_reaper_observer_transfers_recovery_owner_to_sink() {
+        let sink = recovery_sink(false);
+        let (observer, _completed) =
+            ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink) as Arc<dyn FactSink>);
+        assert!(observer.recovery_sink().is_some());
+
+        observer.retain_or_defer_reaper_owner(ReaperOwner::new(|| {}));
+
+        assert!(observer.recovery_was_transferred());
+        assert!(observer.take_deferred_recovery_owner().is_none());
+        let retained = sink
+            .retained
+            .lock()
+            .unwrap()
+            .take()
+            .expect("sink should retain the recovery owner");
+        assert!(retained.summary().contains("reaper"));
+    }
+
+    #[test]
+    fn test_reaper_observer_keeps_recovery_owner_when_sink_rejects_transfer() {
+        let sink = recovery_sink(true);
+        let (observer, _completed) =
+            ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink) as Arc<dyn FactSink>);
+
+        observer.retain_or_defer_reaper_owner(ReaperOwner::new(|| {}));
+
+        assert!(!observer.recovery_was_transferred());
+        assert!(sink.retained.lock().unwrap().is_none());
+        assert!(
+            observer.take_deferred_recovery_owner().is_some(),
+            "rejected owner should remain available to the backend"
+        );
+        assert!(observer.take_deferred_recovery_owner().is_none());
+    }
 
     #[test]
     fn test_deferred_process_owner_reports_bounded_unknown_effect_while_cleanup_is_pending() {
