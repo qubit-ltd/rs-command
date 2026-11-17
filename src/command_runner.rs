@@ -686,6 +686,32 @@ mod tests {
         assert_eq!(output.stdout(), directory.path().to_string_lossy().as_bytes());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_run_with_preserves_captured_output_for_unexpected_exit() {
+        let error = CommandRunner::without_timeout()
+            .success_exit_codes(&[0, 7])
+            .run_with(
+                crate::Command::new("sh")
+                    .arg("-c")
+                    .arg("printf stdout; printf stderr >&2; exit 9"),
+                crate::CommandRunOptions::new(),
+            )
+            .expect_err("exit code outside the configured success set should fail");
+
+        assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::UnexpectedExit {
+                exit_code: Some(9),
+                expected,
+            } if expected == &[0, 7]
+        ));
+        let output = error.output().expect("failed command output should be retained");
+        assert_eq!(output.stdout(), b"stdout");
+        assert_eq!(output.stderr(), b"stderr");
+    }
+
     #[test]
     fn test_runner_debug_redacts_working_directory() {
         let runner = CommandRunner::without_timeout().working_directory("/private/runner/path");
