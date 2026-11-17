@@ -677,6 +677,13 @@ mod tests {
     use crate::CommandErrorReason;
     use crate::OutputStream;
 
+    #[cfg(feature = "async")]
+    use crate::session::channel::SessionChannels;
+    #[cfg(feature = "async")]
+    use crate::session::contracts::SessionBridge;
+    #[cfg(feature = "async")]
+    use crate::session::contracts::SessionStreamPolicy;
+
     struct FailingTimer {
         clock: CountingClock,
         at_calls: Arc<AtomicUsize>,
@@ -1403,6 +1410,82 @@ mod tests {
                 status: None
             }
         ));
+    }
+
+    #[cfg(feature = "async")]
+    #[test]
+    fn test_session_output_budget_stops_child_and_post_exit_io_monitoring() {
+        let channels = SessionChannels::with_policy(SessionStreamPolicy::TerminateAfterBytes(1));
+        let bridge: Arc<dyn SessionBridge> = channels.bridge.clone();
+        bridge
+            .write_stdout(b"ab")
+            .expect("session bridge should record bytes against its budget");
+
+        let child = ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new())))
+            .try_wait_results([Ok(Some(status(0)))]);
+        let clock = ManualMonotonicClock::new_shared();
+        let started_at = clock.now();
+        let mut running = RunningCommand::new_with_reaper(
+            "session output budget".to_owned(),
+            ManagedChildProcess::new(Box::new(child), false),
+            CommandIo::new(successful_reader(), successful_reader(), None),
+            started_at,
+            clock.new_timer(),
+            RunningCommandResources {
+                cancellation_token: None,
+                total_budget: None,
+                capacity_lease: None,
+                reaper_observer: None,
+                session_bridge: Some(Arc::clone(&bridge)),
+                operation_context: None,
+            },
+        );
+
+        assert!(matches!(
+            running.wait_for_event(None),
+            RunEvent::OutputLimitExceeded {
+                limit: 1,
+                observed: 2,
+                status: Some(value),
+            } if value.success()
+        ));
+        let cleanup_failures = running.io.cancel_and_join(&running.command_text);
+        assert!(cleanup_failures.is_empty());
+
+        // A fresh bridge isolates the post-exit phase and keeps the readers
+        // blocked until the event has been selected.
+        let channels = SessionChannels::with_policy(SessionStreamPolicy::TerminateAfterBytes(1));
+        let bridge: Arc<dyn SessionBridge> = channels.bridge.clone();
+        bridge
+            .write_stderr(b"ab")
+            .expect("session bridge should record stderr against the shared budget");
+        let clock = ManualMonotonicClock::new_shared();
+        let started_at = clock.now();
+        let mut running = RunningCommand::new_with_reaper(
+            "post-exit session output budget".to_owned(),
+            terminating_child(status(0)),
+            CommandIo::new(successful_reader(), successful_reader(), None),
+            started_at,
+            clock.new_timer(),
+            RunningCommandResources {
+                cancellation_token: None,
+                total_budget: None,
+                capacity_lease: None,
+                reaper_observer: None,
+                session_bridge: Some(bridge),
+                operation_context: None,
+            },
+        );
+        assert!(matches!(
+            running.wait_for_io_event(status(0), None),
+            RunEvent::OutputLimitExceeded {
+                limit: 1,
+                observed: 2,
+                status: Some(value),
+            } if value.success()
+        ));
+        let cleanup_failures = running.io.cancel_and_join(&running.command_text);
+        assert!(cleanup_failures.is_empty());
     }
 
     #[test]
