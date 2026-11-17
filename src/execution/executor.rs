@@ -1011,11 +1011,8 @@ mod resource_byte_tests {
     #[test]
     fn test_manager_admission_rejection_restores_standard_and_resource_requests() {
         let manager = OperationManager::new(ManagerOptions::default()).unwrap();
-        let executor =
-            CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).unwrap();
-        let _shutdown = executor
-            .group
-            .request_shutdown(qubit_operation::ShutdownMode::Cancel);
+        let executor = CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).unwrap();
+        let _shutdown = executor.group.request_shutdown(qubit_operation::ShutdownMode::Cancel);
 
         let standard = match executor.submit(
             CommandRunner::without_timeout(),
@@ -1025,19 +1022,11 @@ mod resource_byte_tests {
             Ok(_) => panic!("manager shutdown should reject external operation admission"),
             Err(failure) => failure,
         };
-        assert!(matches!(
-            standard.reason,
-            CommandSubmitFailureReason::Admission(_)
-        ));
-        assert_eq!(
-            standard.command.program(),
-            "preserved-after-manager-rejection"
-        );
+        assert!(matches!(standard.reason, CommandSubmitFailureReason::Admission(_)));
+        assert_eq!(standard.command.program(), "preserved-after-manager-rejection");
 
         let mut input = tempfile::tempfile().unwrap();
-        input
-            .write_all(b"restored after manager rejection")
-            .unwrap();
+        input.write_all(b"restored after manager rejection").unwrap();
         let resource = match executor.submit_resources(
             CommandRunner::without_timeout(),
             Command::new("preserved-resource-after-manager-rejection"),
@@ -1046,14 +1035,8 @@ mod resource_byte_tests {
             Ok(_) => panic!("manager shutdown should reject resource operation admission"),
             Err(failure) => failure,
         };
-        assert!(matches!(
-            resource.reason,
-            CommandSubmitFailureReason::Admission(_)
-        ));
-        assert_eq!(
-            resource.command.program(),
-            "preserved-resource-after-manager-rejection"
-        );
+        assert!(matches!(resource.reason, CommandSubmitFailureReason::Admission(_)));
+        assert_eq!(resource.command.program(), "preserved-resource-after-manager-rejection");
 
         let mut returned_input = resource
             .options
@@ -1072,9 +1055,7 @@ mod resource_byte_tests {
     fn test_async_manager_admission_rejection_restores_standard_and_resource_requests() {
         let manager = OperationManager::new(ManagerOptions::default()).unwrap();
         let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
-        let _shutdown = executor
-            .group
-            .request_shutdown(qubit_operation::ShutdownMode::Cancel);
+        let _shutdown = executor.group.request_shutdown(qubit_operation::ShutdownMode::Cancel);
 
         let standard = match executor.submit_async(
             CommandRunner::without_timeout(),
@@ -1084,14 +1065,8 @@ mod resource_byte_tests {
             Ok(_) => panic!("closed group should reject async external operation admission"),
             Err(failure) => failure,
         };
-        assert!(matches!(
-            standard.reason,
-            CommandSubmitFailureReason::Admission(_)
-        ));
-        assert_eq!(
-            standard.command.program(),
-            "preserved-async-after-manager-rejection"
-        );
+        assert!(matches!(standard.reason, CommandSubmitFailureReason::Admission(_)));
+        assert_eq!(standard.command.program(), "preserved-async-after-manager-rejection");
 
         let mut input = tempfile::tempfile().unwrap();
         input
@@ -1105,10 +1080,7 @@ mod resource_byte_tests {
             Ok(_) => panic!("closed group should reject async resource admission"),
             Err(failure) => failure,
         };
-        assert!(matches!(
-            resource.reason,
-            CommandSubmitFailureReason::Admission(_)
-        ));
+        assert!(matches!(resource.reason, CommandSubmitFailureReason::Admission(_)));
         assert_eq!(
             resource.command.program(),
             "preserved-async-resource-after-manager-rejection"
@@ -3083,17 +3055,27 @@ mod command_executor_api_tests {
                             .take_operation()
                             .expect("standard session should own its operation");
                         assert!(matches!(
-                            standard_operation.wait_outcome().expect("session should have an outcome"),
+                            standard_operation
+                                .wait_outcome()
+                                .expect("session should have an outcome"),
                             OperationOutcome::Succeeded(_)
                         ));
-                        standard_operation.wait_settlement().expect("standard session should settle");
+                        standard_operation
+                            .wait_settlement()
+                            .expect("standard session should settle");
 
-                        let mut resource_stdin = resources.take_stdin().expect("resource session stdin should be present");
+                        let mut resource_stdin = resources
+                            .take_stdin()
+                            .expect("resource session stdin should be present");
                         qubit_io::AsyncClose::close_async(&mut resource_stdin)
                             .await
                             .expect("resource session stdin should close");
-                        let mut resource_stdout = resources.take_stdout().expect("resource session stdout should be present");
-                        let mut resource_stderr = resources.take_stderr().expect("resource session stderr should be present");
+                        let mut resource_stdout = resources
+                            .take_stdout()
+                            .expect("resource session stdout should be present");
+                        let mut resource_stderr = resources
+                            .take_stderr()
+                            .expect("resource session stderr should be present");
                         let resource_output = read_all(&mut resource_stdout)
                             .await
                             .expect("resource session stdout should be readable");
@@ -3104,10 +3086,14 @@ mod command_executor_api_tests {
                             .take_operation()
                             .expect("resource session should own its operation");
                         assert!(matches!(
-                            resource_operation.wait_outcome().expect("resource session should have an outcome"),
+                            resource_operation
+                                .wait_outcome()
+                                .expect("resource session should have an outcome"),
                             OperationOutcome::Succeeded(_)
                         ));
-                        resource_operation.wait_settlement().expect("resource session should settle");
+                        resource_operation
+                            .wait_settlement()
+                            .expect("resource session should settle");
                         Ok::<_, crate::CommandError>((standard_output, standard_error, resource_output, resource_error))
                     })
                     .await

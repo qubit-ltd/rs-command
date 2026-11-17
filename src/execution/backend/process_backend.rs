@@ -351,8 +351,8 @@ mod tests {
     use qubit_operation::ContextOptions;
     use qubit_operation::Deadline;
     use qubit_operation::MonotonicTime;
-    use qubit_operation::OperationId;
     use qubit_operation::OperationContext;
+    use qubit_operation::OperationId;
     use qubit_operation::OperationManager;
     use qubit_operation::OperationOptions;
     use qubit_operation::OperationOutcome;
@@ -394,11 +394,7 @@ mod tests {
             MonotonicTime::new(self.0, 1)
         }
 
-        fn register_deadline(
-            &self,
-            _deadline: MonotonicTime,
-            _waker: Waker,
-        ) -> Box<dyn TimerRegistration> {
+        fn register_deadline(&self, _deadline: MonotonicTime, _waker: Waker) -> Box<dyn TimerRegistration> {
             Box::new(NoopRegistration)
         }
     }
@@ -545,9 +541,7 @@ mod tests {
                     command: Command::new("sh")
                         .arg("-c")
                         .arg(&format!("touch {}", operation_path.display())),
-                    options: RequestOptions::Standard(
-                        CommandRunOptions::new().cancellation(operation_cancellation),
-                    ),
+                    options: RequestOptions::Standard(CommandRunOptions::new().cancellation(operation_cancellation)),
                     snapshot: ExecutionSnapshot {
                         working_directory: std::env::current_dir().unwrap(),
                         environment: Vec::new(),
@@ -581,14 +575,7 @@ mod tests {
             Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::UserCancelled
         ));
         assert!(sink.released.load(Ordering::SeqCst));
-        assert!(
-            sink.settlement
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .all_released()
-        );
+        assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
     }
 
     #[cfg(unix)]

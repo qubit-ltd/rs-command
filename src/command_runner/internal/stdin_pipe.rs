@@ -822,7 +822,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_session_stdin_records_broken_pipe_while_draining_queued_bytes() {
-        let bridge = Arc::new(TestSessionBridge::new(std::iter::repeat_n(vec![b'x'; 8192], 512), false));
+        let bridge = Arc::new(TestSessionBridge::new(
+            std::iter::repeat_n(vec![b'x'; 8192], 512),
+            false,
+        ));
         let mut child = ProcessCommand::new("sh")
             .arg("-c")
             .arg("sleep 0.1; exit 0")

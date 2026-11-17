@@ -955,19 +955,10 @@ mod activation_failure_tests {
     fn test_disconnected_recovery_store_returns_bound_owner_to_caller() {
         let scheduler = scheduler();
         let permit = scheduler.try_reserve(0).unwrap();
-        let (recovery, receiver) =
-            std::sync::mpsc::sync_channel::<super::super::RecoveryItem>(1);
+        let (recovery, receiver) = std::sync::mpsc::sync_channel::<super::super::RecoveryItem>(1);
         drop(receiver);
         let backend = Arc::new(ProcessBackend::new());
-        let state = AdapterState::new(
-            request(),
-            permit,
-            scheduler,
-            backend.clone(),
-            backend,
-            recovery,
-            None,
-        );
+        let state = AdapterState::new(request(), permit, scheduler, backend.clone(), backend, recovery, None);
         let manager = OperationManager::new(Default::default()).unwrap();
         let mut operation = manager
             .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
@@ -1030,10 +1021,7 @@ mod activation_failure_tests {
         };
         assert!(cleanup_finished.load(Ordering::SeqCst));
         assert_eq!(settlement.operation_id, id);
-        assert_eq!(
-            settlement.status,
-            qubit_operation::SettlementStatus::RecoveryRequired
-        );
+        assert_eq!(settlement.status, qubit_operation::SettlementStatus::RecoveryRequired);
         assert_eq!(settlement.recovery_count, 1);
     }
 }
