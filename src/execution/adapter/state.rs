@@ -726,6 +726,13 @@ mod activation_failure_tests {
             state.restore().is_none(),
             "activation transfers the request to the backend"
         );
+
+        OperationControl::request_stop(&*state, qubit_operation::StopReason::UserCancelled);
+        assert_eq!(
+            OperationControl::snapshot(&*state).stop.unwrap().reason,
+            qubit_operation::StopReason::UserCancelled,
+            "a stop request made after activation is retained in the operation snapshot"
+        );
     }
 
     #[test]
