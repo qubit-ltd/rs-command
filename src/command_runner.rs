@@ -1020,6 +1020,50 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn test_apply_prepared_files_reports_read_only_sink_truncation_failure() {
+        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let outcome = manager
+            .run(qubit_operation::OperationOptions::default(), |scope| {
+                let fixture = tempfile::NamedTempFile::new().expect("sink fixture should open");
+                std::fs::write(fixture.path(), b"preserve this content")
+                    .expect("sink fixture content should be written");
+                let read_only_sink = File::open(fixture.path()).expect("read-only sink should open");
+                let sink = managed_file(&scope, read_only_sink);
+                let files = PreparedFiles::new(
+                    None,
+                    Some(PreparedSink {
+                        file: sink,
+                        policy: FileSinkPolicy::Truncate,
+                    }),
+                    None,
+                );
+                let mut committed = prepared_command("unused-read-only-sink-test", None, None)
+                    .commit()
+                    .expect("prepared command should commit");
+
+                let error = apply_prepared_files("read-only-sink-test", &files, &mut committed)
+                    .expect_err("a read-only output sink cannot be truncated");
+                assert!(matches!(
+                    error.reason(),
+                    CommandErrorReason::WriteOutputFailed {
+                        stream: OutputStream::Stdout,
+                        path,
+                        source,
+                    } if path == std::path::Path::new("<owned sink>")
+                        && source.raw_os_error().is_some()
+                ));
+                assert_eq!(
+                    std::fs::read(fixture.path()).expect("failed preparation must preserve file bytes"),
+                    b"preserve this content"
+                );
+                Ok::<_, std::convert::Infallible>(())
+            })
+            .expect("owned sink failure test operation should finish");
+        assert!(matches!(outcome, OperationOutcome::Succeeded(())));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_apply_prepared_files_uses_stdin_and_sink_dispositions() {
         let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
         let outcome = manager
