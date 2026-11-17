@@ -652,6 +652,30 @@ mod activation_failure_tests {
     }
 
     #[test]
+    fn test_stop_requested_before_adapter_binding_is_retained() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let state = make_state(scheduler, permit);
+        let state_for_operation = Arc::clone(&state);
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut handle = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                OperationControl::request_stop(&*state_for_operation, qubit_operation::StopReason::Timeout);
+                state_for_operation.bind(scope.id()).unwrap();
+
+                let snapshot = OperationControl::snapshot(&*state_for_operation);
+                assert_eq!(snapshot.operation_id, scope.id());
+                assert_eq!(snapshot.stop.unwrap().reason, qubit_operation::StopReason::Timeout);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(handle.wait_outcome().unwrap(), OperationOutcome::Succeeded(())));
+        handle.wait_settlement().unwrap();
+        assert!(state.restore().is_some(), "a stop request alone must not consume prepared input");
+    }
+
+    #[test]
     fn test_activation_enqueues_and_runs_bound_request_before_settlement() {
         let scheduler = Arc::new(InlineScheduler);
         let permit = scheduler.try_reserve(0).unwrap();
