@@ -2,7 +2,7 @@
 
 [English user guide](user_guide.md) · [中文 README](../README.zh_CN.md) · [API 文档](https://docs.rs/qubit-command)
 
-本手册介绍 `qubit-command` 0.12，面向需要在 Rust 应用中管理外部进程、限制资源占用并处理取消和清理结果的开发者。
+本手册介绍 `qubit-command` 0.12 版本，面向需要在 Rust 应用中管理外部进程、限制资源占用并处理取消和清理结果的开发者。
 
 ## 面向服务任务的受管执行
 
