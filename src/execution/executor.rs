@@ -2173,13 +2173,17 @@ mod retry_wait_tests {
         let reservation = scheduler.try_reserve(0).unwrap();
         let context = OperationContext::new(ContextOptions::default()).unwrap();
         let mut wait = Box::pin(wait_capacity_async(scheduler.clone(), 0, Some(context.clone())));
-        let mut cx = Context::from_waker(&Waker::noop());
+        let mut cx = Context::from_waker(Waker::noop());
 
         assert!(wait.as_mut().poll(&mut cx).is_pending());
         assert_eq!(scheduler.snapshot().waiters, 1);
         assert!(context.request_stop(StopReason::UserCancelled));
         assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(false)));
-        assert_eq!(scheduler.snapshot().waiters, 0, "cancellation must unregister capacity waiter");
+        assert_eq!(
+            scheduler.snapshot().waiters,
+            0,
+            "cancellation must unregister capacity waiter"
+        );
         drop(reservation);
     }
 
@@ -2194,7 +2198,7 @@ mod retry_wait_tests {
         let reservation = scheduler.try_reserve(0).unwrap();
         scheduler.close_admission();
         let mut wait = Box::pin(wait_capacity_async(scheduler.clone(), 0, None));
-        let mut cx = Context::from_waker(&Waker::noop());
+        let mut cx = Context::from_waker(Waker::noop());
 
         assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(false)));
         assert_eq!(scheduler.snapshot().waiters, 0);
@@ -2223,7 +2227,11 @@ mod retry_wait_tests {
         assert_eq!(scheduler.snapshot().waiters, 1);
         clock.ticks.store(5, Ordering::SeqCst);
         assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(false)));
-        assert_eq!(scheduler.snapshot().waiters, 0, "deadline must unregister capacity waiter");
+        assert_eq!(
+            scheduler.snapshot().waiters,
+            0,
+            "deadline must unregister capacity waiter"
+        );
         drop(reservation);
     }
 }

@@ -352,8 +352,8 @@ mod tests {
     use qubit_operation::SettlementReport;
     use qubit_operation::StopReason;
 
-    use super::normalize_tee_paths;
     use super::ProcessBackend;
+    use super::normalize_tee_paths;
     use super::schedule_recovery_transfer;
     use crate::Command;
     use crate::CommandError;
@@ -718,18 +718,12 @@ mod tests {
             normalized.configured_stdout_file(),
             Some(std::path::Path::new("/work/dir/stdout.log"))
         );
-        assert_eq!(
-            normalized.configured_stderr_file(),
-            Some(absolute_stderr.as_path())
-        );
+        assert_eq!(normalized.configured_stderr_file(), Some(absolute_stderr.as_path()));
     }
 
     #[test]
     fn test_normalize_tee_paths_preserves_options_without_tee_files() {
-        let normalized = normalize_tee_paths(
-            CommandRunOptions::new(),
-            std::path::Path::new("/work/dir"),
-        );
+        let normalized = normalize_tee_paths(CommandRunOptions::new(), std::path::Path::new("/work/dir"));
 
         assert_eq!(normalized.configured_stdout_file(), None);
         assert_eq!(normalized.configured_stderr_file(), None);

@@ -337,14 +337,26 @@ mod tests {
 
                 truncate_sinks(&prepared, &scope).map_err(|error| error.to_string())?;
                 assert_eq!(
-                    prepared.stdout.as_ref().unwrap().file.lock().unwrap().metadata().unwrap().len(),
+                    prepared
+                        .stdout
+                        .as_ref()
+                        .unwrap()
+                        .file
+                        .lock()
+                        .unwrap()
+                        .metadata()
+                        .unwrap()
+                        .len(),
                     0
                 );
                 Ok::<_, String>(())
             })
             .unwrap();
 
-        assert!(matches!(operation.wait_outcome().unwrap(), OperationOutcome::Succeeded(())));
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
         let settlement = operation.wait_settlement().unwrap();
         assert!(settlement.all_released());
         assert_eq!(settlement.effects_total, 2);
