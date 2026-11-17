@@ -284,6 +284,63 @@ fn test_manual_clock_deadline_rejects_and_expired_accepted_job_dispatches_comple
 }
 
 #[test]
+fn test_enqueue_rejects_reservation_that_expires_after_acceptance_and_returns_ownership() {
+    let scheduler = BoundedScheduler::new(config(1, 1, 1, 8)).unwrap();
+    let clock = ManualClock::new();
+    let permit = scheduler
+        .try_reserve_until(3, Some(clock.context(10)))
+        .expect("reservation should be accepted before its deadline");
+    assert_eq!(
+        (
+            scheduler.snapshot().active,
+            scheduler.snapshot().queued,
+            scheduler.snapshot().input_bytes,
+        ),
+        (1, 0, 3)
+    );
+
+    clock.advance_to(10);
+    let ran = Arc::new(AtomicUsize::new(0));
+    let callback_ran = Arc::clone(&ran);
+    let stop_reasons = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let failure = scheduler
+        .enqueue(
+            ScheduledJob {
+                run: Box::new(move |_| {
+                    callback_ran.fetch_add(1, Ordering::SeqCst);
+                }),
+                stop: Arc::new(RecordingStop(Arc::clone(&stop_reasons))),
+            },
+            permit,
+        )
+        .expect_err("expired accepted work must not enter the worker queue");
+
+    assert_eq!(failure.reason, CapacityFailure::DeadlineExpired);
+    assert!(stop_reasons.lock().unwrap().is_empty());
+    assert_eq!(ran.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        (
+            scheduler.snapshot().active,
+            scheduler.snapshot().queued,
+            scheduler.snapshot().input_bytes,
+        ),
+        (1, 0, 3),
+        "rejection must return a still-live permit to the caller"
+    );
+
+    drop(failure);
+    assert_eq!(
+        (
+            scheduler.snapshot().active,
+            scheduler.snapshot().queued,
+            scheduler.snapshot().input_bytes,
+        ),
+        (0, 0, 0),
+        "dropping the returned job and permit releases all reserved capacity"
+    );
+}
+
+#[test]
 fn test_capacity_wait_rechecks_inherited_manual_clock_domain() {
     let s = BoundedScheduler::new(config(1, 0, 1, 8)).unwrap();
     let active = s.try_reserve(0).unwrap();
