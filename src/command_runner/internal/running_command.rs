@@ -1530,6 +1530,24 @@ mod tests {
     }
 
     #[test]
+    fn test_child_poll_failure_is_reported_as_wait_failure() {
+        let child = ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new())))
+            .try_wait_results([Err(io::Error::other("injected child poll failure"))]);
+        let command = running(
+            ManagedChildProcess::new(Box::new(child), false),
+            CommandIo::new(successful_reader(), successful_reader(), None),
+        );
+
+        let error = expect_error(
+            command.wait_for_completion(None),
+            "a child polling error should end command monitoring",
+        );
+
+        assert_eq!(error.kind(), CommandErrorKind::WaitFailed);
+        assert!(matches!(error.reason(), CommandErrorReason::WaitFailed { .. }));
+    }
+
+    #[test]
     fn test_post_exit_io_timeout_uses_original_started_at() {
         let clock = ManualMonotonicClock::new_shared();
         let started_at = clock.now();
