@@ -774,3 +774,290 @@ fn managed_error(message: String) -> CommandError {
         None,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use qubit_operation::ManagerOptions;
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOutcome;
+
+    use super::ManagedCommandRunnerApi;
+    use crate::Command;
+    use crate::CommandExecutionConfig;
+    use crate::CommandExecutor;
+    use crate::CommandResourceRunOptions;
+    use crate::CommandRunner;
+
+    fn setup() -> (OperationManager, CommandExecutor, CommandRunner) {
+        let manager =
+            OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let executor = CommandExecutor::new(manager.clone(), CommandExecutionConfig::default())
+            .expect("executor should start");
+        let runner = CommandRunner::new(Duration::from_secs(5));
+        (manager, executor, runner)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_runner_methods_collect_root_and_scoped_command_results() {
+        let (manager, executor, runner) = setup();
+        let root = runner
+            .run_managed(
+                &executor,
+                Command::new("sh").arg("-c").arg("printf root"),
+                Default::default(),
+            )
+            .expect("managed command should succeed");
+        assert_eq!(root.stdout(), b"root");
+
+        let mut input = tempfile::tempfile().expect("stdin file should be created");
+        use std::io::Seek;
+        use std::io::Write;
+        input.write_all(b"owned-input").unwrap();
+        input.rewind().unwrap();
+        let resources = runner
+            .run_managed_resources(
+                &executor,
+                Command::new("sh").arg("-c").arg("cat"),
+                CommandResourceRunOptions::new().stdin_file(input),
+            )
+            .expect("resource-backed command should succeed");
+        assert_eq!(resources.stdout(), b"owned-input");
+
+        let scoped_executor = executor.clone();
+        let scoped_runner = runner.clone();
+        let result = manager
+            .run(qubit_operation::OperationOptions::default(), move |scope| {
+                let ordinary = scoped_runner.run_managed_in(
+                    &scope,
+                    &scoped_executor,
+                    Command::new("sh").arg("-c").arg("printf scoped"),
+                    Default::default(),
+                )?;
+                let resources = scoped_runner.run_managed_resources_in(
+                    &scope,
+                    &scoped_executor,
+                    Command::new("sh").arg("-c").arg("printf scoped-resource"),
+                    CommandResourceRunOptions::new(),
+                )?;
+                assert_eq!(resources.stdout(), b"scoped-resource");
+                Ok::<_, crate::CommandError>(ordinary)
+            })
+            .expect("parent operation should complete");
+        match result {
+            OperationOutcome::Succeeded(output) => assert_eq!(output.stdout(), b"scoped"),
+            other => panic!("scoped runner call failed: {other:?}"),
+        }
+
+        let error = runner
+            .run_managed(
+                &executor,
+                Command::new("__qubit_managed_runner_missing_executable__"),
+                Default::default(),
+            )
+            .expect_err("spawn failure should be returned to the caller");
+        assert!(matches!(
+            error.reason(),
+            crate::CommandErrorReason::SpawnFailed { .. }
+        ));
+    }
+
+    #[cfg(all(feature = "async", unix))]
+    mod async_tests {
+        use std::future::Future;
+        use std::io::Seek;
+        use std::io::Write;
+        use std::sync::Arc;
+        use std::task::Context;
+        use std::task::Poll;
+        use std::task::Wake;
+        use std::task::Waker;
+
+        use super::*;
+        use crate::CommandSession;
+        use crate::session::CommandSessionApi;
+        use qubit_io::AsyncInput;
+
+        struct ThreadWake(std::thread::Thread);
+        impl Wake for ThreadWake {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+
+        fn block_on<F: Future>(future: F) -> F::Output {
+            let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+            let mut context = Context::from_waker(&waker);
+            let mut future = Box::pin(future);
+            loop {
+                if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
+                    return value;
+                }
+                std::thread::park_timeout(Duration::from_secs(2));
+            }
+        }
+
+        async fn read_all(
+            reader: &mut (impl AsyncInput<Item = u8> + Unpin),
+        ) -> std::io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            let mut buffer = [0_u8; 128];
+            loop {
+                let count = reader.read_async(&mut buffer).await?;
+                if count == 0 {
+                    return Ok(bytes);
+                }
+                bytes.extend_from_slice(&buffer[..count]);
+            }
+        }
+
+        async fn session_bytes(mut session: CommandSession) -> (Vec<u8>, Vec<u8>) {
+            let stdin = session
+                .take_stdin()
+                .expect("session stdin should be available");
+            drop(stdin);
+            let mut stdout = session
+                .take_stdout()
+                .expect("session stdout should be available");
+            let mut stderr = session
+                .take_stderr()
+                .expect("session stderr should be available");
+            let stdout = read_all(&mut stdout)
+                .await
+                .expect("stdout should be readable");
+            let stderr = read_all(&mut stderr)
+                .await
+                .expect("stderr should be readable");
+            let mut operation = session
+                .take_operation()
+                .expect("session operation should be available");
+            assert!(matches!(
+                operation
+                    .wait_outcome()
+                    .expect("session outcome should be available"),
+                OperationOutcome::Succeeded(_)
+            ));
+            operation.wait_settlement().expect("session should settle");
+            (stdout, stderr)
+        }
+
+        #[test]
+        fn async_runner_methods_collect_root_and_scoped_results_and_sessions() {
+            let (manager, executor, runner) = setup();
+            let root = block_on(runner.run_async(
+                &executor,
+                Command::new("sh").arg("-c").arg("printf async-root"),
+                Default::default(),
+            ))
+            .expect("async command should succeed");
+            assert_eq!(root.stdout(), b"async-root");
+
+            let mut input = tempfile::tempfile().expect("stdin fixture should be created");
+            input.write_all(b"async-owned").unwrap();
+            input.rewind().unwrap();
+            let resources = block_on(runner.run_async_resources(
+                &executor,
+                Command::new("sh").arg("-c").arg("cat"),
+                CommandResourceRunOptions::new().stdin_file(input),
+            ))
+            .expect("async resource command should succeed");
+            assert_eq!(resources.stdout(), b"async-owned");
+
+            let session = block_on(
+                runner.start_session(
+                    &executor,
+                    Command::new("sh")
+                        .arg("-c")
+                        .arg("printf session-out; printf session-err >&2"),
+                    Default::default(),
+                ),
+            )
+            .expect("session should start");
+            assert_eq!(
+                block_on(session_bytes(session)),
+                (b"session-out".to_vec(), b"session-err".to_vec())
+            );
+
+            let session = block_on(runner.start_session_resources(
+                &executor,
+                Command::new("sh").arg("-c").arg("printf resource-session"),
+                CommandResourceRunOptions::new(),
+            ))
+            .expect("resource session should start");
+            assert_eq!(block_on(session_bytes(session)).0, b"resource-session");
+
+            let scoped_executor = executor.clone();
+            let scoped_runner = runner.clone();
+            let outcome = block_on(manager.as_async().run(
+                qubit_operation::OperationOptions::default(),
+                move |scope| async move {
+                    let ordinary = scoped_runner
+                        .run_async_in(
+                            &scope,
+                            &scoped_executor,
+                            Command::new("sh").arg("-c").arg("printf async-scoped"),
+                            Default::default(),
+                        )
+                        .await?;
+                    let resources = scoped_runner
+                        .run_async_resources_in(
+                            &scope,
+                            &scoped_executor,
+                            Command::new("sh")
+                                .arg("-c")
+                                .arg("printf async-scoped-resource"),
+                            CommandResourceRunOptions::new(),
+                        )
+                        .await?;
+                    assert_eq!(resources.stdout(), b"async-scoped-resource");
+                    let session = scoped_runner
+                        .start_session_in(
+                            &scope,
+                            &scoped_executor,
+                            Command::new("sh")
+                                .arg("-c")
+                                .arg("printf async-scoped-session"),
+                            Default::default(),
+                        )
+                        .await?;
+                    assert_eq!(session_bytes(session).await.0, b"async-scoped-session");
+                    let session = scoped_runner
+                        .start_session_resources_in(
+                            &scope,
+                            &scoped_executor,
+                            Command::new("sh")
+                                .arg("-c")
+                                .arg("printf async-scoped-resource-session"),
+                            CommandResourceRunOptions::new(),
+                        )
+                        .await?;
+                    assert_eq!(
+                        session_bytes(session).await.0,
+                        b"async-scoped-resource-session"
+                    );
+                    Ok::<_, crate::CommandError>(ordinary)
+                },
+            ))
+            .expect("async parent operation should complete");
+            match outcome {
+                OperationOutcome::Succeeded(output) => assert_eq!(output.stdout(), b"async-scoped"),
+                other => panic!("async scoped runner call failed: {other:?}"),
+            }
+            let error = block_on(runner.run_async(
+                &executor,
+                Command::new("__qubit_managed_runner_missing_async_executable__"),
+                Default::default(),
+            ))
+            .expect_err("async spawn failure should be returned");
+            assert!(matches!(
+                error.reason(),
+                crate::CommandErrorReason::SpawnFailed { .. }
+            ));
+        }
+    }
+}
