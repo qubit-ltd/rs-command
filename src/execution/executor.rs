@@ -2460,7 +2460,7 @@ mod command_executor_api_tests {
     fn test_trait_wait_methods_and_foreign_scope_rejection() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let executor = CommandExecutor::new(
-            manager,
+            manager.clone(),
             CommandExecutionConfig {
                 max_active: 1,
                 max_queued: 0,
@@ -2546,9 +2546,7 @@ mod command_executor_api_tests {
                     &scoped_executor,
                     &scope,
                     scoped_runner,
-                    Command::new("sh")
-                        .arg("-c")
-                        .arg("printf trait-scoped-resource-wait"),
+                    Command::new("sh").arg("-c").arg("printf trait-scoped-resource-wait"),
                     CommandResourceRunOptions::new(),
                 )
                 .map_err(|_| {
@@ -2668,9 +2666,7 @@ mod command_executor_api_tests {
                 <crate::CommandExecutor as CommandExecutorApi>::submit_async(
                     &executor,
                     runner.clone(),
-                    Command::new("sh")
-                        .arg("-c")
-                        .arg("printf trait-async-submit"),
+                    Command::new("sh").arg("-c").arg("printf trait-async-submit"),
                     Default::default(),
                 )
                 .unwrap(),
@@ -2682,9 +2678,7 @@ mod command_executor_api_tests {
                 <crate::CommandExecutor as CommandExecutorApi>::submit_async_resources(
                     &executor,
                     runner.clone(),
-                    Command::new("sh")
-                        .arg("-c")
-                        .arg("printf trait-async-resources"),
+                    Command::new("sh").arg("-c").arg("printf trait-async-resources"),
                     CommandResourceRunOptions::new(),
                 )
                 .unwrap(),
@@ -2709,9 +2703,7 @@ mod command_executor_api_tests {
                 <crate::CommandExecutor as CommandExecutorApi>::submit_wait_resources(
                     &executor,
                     runner.clone(),
-                    Command::new("sh")
-                        .arg("-c")
-                        .arg("printf trait-async-wait-resources"),
+                    Command::new("sh").arg("-c").arg("printf trait-async-wait-resources"),
                     CommandResourceRunOptions::new(),
                 )
                 .await
@@ -2748,9 +2740,7 @@ mod command_executor_api_tests {
                             &scoped_executor,
                             &scope,
                             runner.clone(),
-                            Command::new("sh")
-                                .arg("-c")
-                                .arg("printf trait-async-resources-in"),
+                            Command::new("sh").arg("-c").arg("printf trait-async-resources-in"),
                             CommandResourceRunOptions::new(),
                         )
                         .map_err(|_| {
@@ -2769,9 +2759,7 @@ mod command_executor_api_tests {
                             &scoped_executor,
                             &scope,
                             runner.clone(),
-                            Command::new("sh")
-                                .arg("-c")
-                                .arg("printf trait-async-wait-in"),
+                            Command::new("sh").arg("-c").arg("printf trait-async-wait-in"),
                             Default::default(),
                         )
                         .await
@@ -2791,9 +2779,7 @@ mod command_executor_api_tests {
                             &scoped_executor,
                             &scope,
                             runner,
-                            Command::new("sh")
-                                .arg("-c")
-                                .arg("printf trait-async-wait-resources-in"),
+                            Command::new("sh").arg("-c").arg("printf trait-async-wait-resources-in"),
                             CommandResourceRunOptions::new(),
                         )
                         .await
@@ -2808,22 +2794,12 @@ mod command_executor_api_tests {
                         })?,
                     )
                     .await;
-                    Ok::<_, crate::CommandError>((
-                        direct,
-                        direct_resources,
-                        waited,
-                        waited_resources,
-                    ))
+                    Ok::<_, crate::CommandError>((direct, direct_resources, waited, waited_resources))
                 })
                 .await
                 .expect("scoped trait submissions should complete");
             match result {
-                OperationOutcome::Succeeded((
-                    direct,
-                    direct_resources,
-                    waited,
-                    waited_resources,
-                )) => {
+                OperationOutcome::Succeeded((direct, direct_resources, waited, waited_resources)) => {
                     assert_eq!(direct, b"trait-async-in");
                     assert_eq!(direct_resources, b"trait-async-resources-in");
                     assert_eq!(waited, b"trait-async-wait-in");

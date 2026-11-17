@@ -122,17 +122,11 @@ mod tests {
             unreachable!("reaper observer tests only use recovery owner retention")
         }
 
-        fn publish_settlement(
-            &self,
-            _report: Arc<qubit_operation::SettlementReport>,
-        ) -> Result<(), FactPublishError> {
+        fn publish_settlement(&self, _report: Arc<qubit_operation::SettlementReport>) -> Result<(), FactPublishError> {
             unreachable!("reaper observer tests only use recovery owner retention")
         }
 
-        fn retain_recovery_owner(
-            &self,
-            owner: Box<dyn RecoveryOwner>,
-        ) -> Result<(), RecoveryPublishFailure> {
+        fn retain_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) -> Result<(), RecoveryPublishFailure> {
             if self.reject {
                 Err(RecoveryPublishFailure {
                     reason: RecoveryPublishError::CapacityExceeded,
@@ -175,8 +169,7 @@ mod tests {
     #[test]
     fn test_reaper_observer_transfers_recovery_owner_to_sink() {
         let sink = recovery_sink(false);
-        let (observer, _completed) =
-            ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink) as Arc<dyn FactSink>);
+        let (observer, _completed) = ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink) as Arc<dyn FactSink>);
         assert!(observer.recovery_sink().is_some());
 
         observer.retain_or_defer_reaper_owner(ReaperOwner::new(|| {}));
@@ -195,8 +188,7 @@ mod tests {
     #[test]
     fn test_reaper_observer_keeps_recovery_owner_when_sink_rejects_transfer() {
         let sink = recovery_sink(true);
-        let (observer, _completed) =
-            ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink) as Arc<dyn FactSink>);
+        let (observer, _completed) = ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink) as Arc<dyn FactSink>);
 
         observer.retain_or_defer_reaper_owner(ReaperOwner::new(|| {}));
 

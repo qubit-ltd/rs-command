@@ -23,10 +23,7 @@ fn test_command_output_stdout_returns_bytes_and_text() {
         .expect("command should run successfully");
 
     assert_eq!(output.stdout(), b"hello");
-    assert_eq!(
-        output.stdout_text().expect("stdout should be valid UTF-8"),
-        "hello"
-    );
+    assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8"), "hello");
     assert_eq!(output.stdout_lossy_text(), "hello");
     assert_eq!(output.exit_status().code(), Some(0));
     assert!(!output.stdout_truncated());
@@ -39,10 +36,7 @@ fn test_command_output_stderr_returns_bytes_and_text() {
         .expect("command should run successfully");
 
     assert_eq!(output.stderr(), b"error");
-    assert_eq!(
-        output.stderr_text().expect("stderr should be valid UTF-8"),
-        "error"
-    );
+    assert_eq!(output.stderr_text().expect("stderr should be valid UTF-8"), "error");
     assert_eq!(output.stderr_lossy_text(), "error");
     assert!(!output.stderr_truncated());
 }
@@ -170,10 +164,7 @@ fn test_command_output_text_accessors_borrow_valid_utf8_and_replace_invalid_byte
         output.stdout_lossy_text(),
         std::borrow::Cow::Borrowed("héllo")
     ));
-    assert!(matches!(
-        output.stderr_lossy_text(),
-        std::borrow::Cow::Borrowed("世界")
-    ));
+    assert!(matches!(output.stderr_lossy_text(), std::borrow::Cow::Borrowed("世界")));
 
     let output = CommandRunner::new(Duration::from_secs(10))
         .run(output_command(&[b'a', 0xff, b'b'], &[0xc3, 0x28], 0))
@@ -182,14 +173,8 @@ fn test_command_output_text_accessors_borrow_valid_utf8_and_replace_invalid_byte
     assert!(output.stderr_text().is_err());
     assert_eq!(output.stdout_lossy_text(), "a\u{fffd}b");
     assert_eq!(output.stderr_lossy_text(), "\u{fffd}(");
-    assert!(matches!(
-        output.stdout_lossy_text(),
-        std::borrow::Cow::Owned(_)
-    ));
-    assert!(matches!(
-        output.stderr_lossy_text(),
-        std::borrow::Cow::Owned(_)
-    ));
+    assert!(matches!(output.stdout_lossy_text(), std::borrow::Cow::Owned(_)));
+    assert!(matches!(output.stderr_lossy_text(), std::borrow::Cow::Owned(_)));
 }
 
 #[test]
@@ -218,9 +203,7 @@ fn test_command_output_reports_unix_termination_signal() {
     let error = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell("kill -TERM $$"))
         .expect_err("signal-terminated command should not be successful");
-    let output = error
-        .output()
-        .expect("unexpected exit should expose output");
+    let output = error.output().expect("unexpected exit should expose output");
 
     assert_eq!(output.exit_code(), None);
     assert_eq!(output.termination_signal(), Some(15));
