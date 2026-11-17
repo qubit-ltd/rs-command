@@ -10,7 +10,14 @@ fi
 
 package_files=$(cargo package --list --allow-dirty)
 for example_file in managed_collect managed_session managed_file managed_shutdown; do
-    if ! printf '%s\n' "$package_files" | rg -q -x "examples/${example_file}\.rs"; then
+    found_example=false
+    while IFS= read -r package_file; do
+        if [[ "$package_file" == "examples/${example_file}.rs" ]]; then
+            found_example=true
+            break
+        fi
+    done <<<"$package_files"
+    if [[ "$found_example" != true ]]; then
         echo "missing packaged example: ${example_file}" >&2
         exit 1
     fi
