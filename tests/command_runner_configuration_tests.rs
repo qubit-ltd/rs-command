@@ -96,10 +96,10 @@ fn test_runner_accepts_owned_os_string_working_directory_in_sync_run() {
         .path()
         .canonicalize()
         .expect("working directory should resolve to an absolute path");
-    assert_eq!(
-        String::from_utf8_lossy(output.stdout()).trim(),
-        expected_working_directory.to_string_lossy()
-    );
+    let actual_working_directory = std::path::PathBuf::from(String::from_utf8_lossy(output.stdout()).trim())
+        .canonicalize()
+        .expect("reported working directory should resolve to an absolute path");
+    assert_eq!(actual_working_directory, expected_working_directory);
 }
 
 #[test]

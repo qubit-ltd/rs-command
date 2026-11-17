@@ -116,7 +116,8 @@ fn test_stdin_hold_is_cancelled_within_watchdog() {
     assert_eq!(error.kind(), CommandErrorKind::Cancelled);
     assert!(
         error.cleanup_failures().is_empty(),
-        "normal cancellation should not report cleanup failures"
+        "normal cancellation should not report cleanup failures: {:?}",
+        error.cleanup_failures()
     );
 }
 
