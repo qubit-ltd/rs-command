@@ -695,6 +695,139 @@ mod tests {
     }
 
     #[test]
+    fn test_repolling_with_same_waker_keeps_one_registered_waker() {
+        let channel = ByteChannel::new();
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = std::task::Waker::from(counter.clone());
+        waker.wake_by_ref();
+        assert_eq!(counter.0.load(Ordering::SeqCst), 1);
+        counter.0.store(0, Ordering::SeqCst);
+        let mut context = std::task::Context::from_waker(&waker);
+        let mut output = [0; 1];
+
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Pending
+        ));
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Pending
+        ));
+
+        assert!(matches!(
+            channel.poll_write(&mut context, b"x"),
+            std::task::Poll::Ready(Ok(1))
+        ));
+
+        assert_eq!(counter.0.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Ready(Ok(1))
+        ));
+        assert_eq!(&output, b"x");
+    }
+
+    #[test]
+    fn test_channel_operations_recover_state_after_poisoning() {
+        let channel = ByteChannel::new();
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut state = channel.state.lock().unwrap();
+            state.bytes.push_back(b'q');
+            panic!("simulate a producer panic while holding channel state");
+        }));
+        assert!(poisoned.is_err());
+
+        assert!(!channel.incomplete());
+        assert!(!channel.broken_pipe());
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = std::task::Waker::from(counter);
+        let mut context = std::task::Context::from_waker(&waker);
+        let mut output = [0; 2];
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Ready(Ok(1))
+        ));
+        assert_eq!(output[0], b'q');
+        assert!(matches!(
+            channel.poll_write(&mut context, b"x"),
+            std::task::Poll::Ready(Ok(1))
+        ));
+        assert_eq!(channel.blocking_read(&mut output).unwrap(), 1);
+        channel.close_writer();
+        assert_eq!(channel.blocking_read(&mut output).unwrap(), 0);
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Ready(Ok(0))
+        ));
+
+        channel.stop_output();
+        channel.blocking_write(b"after stop").unwrap();
+        assert!(channel.incomplete());
+        channel.drop_reader();
+        assert_eq!(channel.blocking_read(&mut output).unwrap(), 0);
+        assert!(matches!(
+            channel.poll_write(&mut context, b"after drop"),
+            std::task::Poll::Ready(Err(ref error)) if error.kind() == io::ErrorKind::BrokenPipe
+        ));
+        assert!(channel.broken_pipe());
+    }
+
+    fn poison_budget(budget: &Arc<OutputBudget>) {
+        let budget = Arc::clone(budget);
+        let panic = std::thread::spawn(move || {
+            let mut state = budget.state.lock().unwrap();
+            state.observed = 2;
+            panic!("simulate a producer panic while updating aggregate output budget");
+        })
+        .join();
+        assert!(panic.is_err());
+    }
+
+    #[test]
+    fn test_poll_and_blocking_writes_recover_poisoned_output_budget() {
+        let budget = Arc::new(OutputBudget::new(10));
+        poison_budget(&budget);
+        let channel = ByteChannel::with_policy(SessionStreamPolicy::TerminateAfterBytes(10), Some(budget.clone()));
+        let waker = std::task::Waker::noop();
+        let mut context = std::task::Context::from_waker(waker);
+        assert!(matches!(
+            channel.poll_write(&mut context, b"abc"),
+            std::task::Poll::Ready(Ok(3))
+        ));
+        assert_eq!(budget.observed(), 5);
+
+        let budget = Arc::new(OutputBudget::new(10));
+        poison_budget(&budget);
+        let channel = ByteChannel::with_policy(SessionStreamPolicy::Backpressure, Some(budget.clone()));
+        channel.blocking_write(b"abc").unwrap();
+        assert_eq!(budget.observed(), 5);
+
+        let budget = Arc::new(OutputBudget::new(10));
+        poison_budget(&budget);
+        let channel = ByteChannel::with_policy(SessionStreamPolicy::Backpressure, Some(budget.clone()));
+        channel.stop_output();
+        channel.blocking_write(b"abc").unwrap();
+        assert_eq!(budget.observed(), 5);
+
+        let budget = Arc::new(OutputBudget::new(10));
+        poison_budget(&budget);
+        let channel = ByteChannel::with_policy(SessionStreamPolicy::Backpressure, Some(budget.clone()));
+        channel.drop_reader();
+        channel.blocking_write(b"abc").unwrap();
+        assert_eq!(budget.observed(), 5);
+
+        let budget = Arc::new(OutputBudget::new(10));
+        poison_budget(&budget);
+        let channel = ByteChannel::with_policy(SessionStreamPolicy::Backpressure, Some(budget.clone()));
+        channel.stop_output();
+        assert!(matches!(
+            channel.poll_write(&mut context, b"abc"),
+            std::task::Poll::Ready(Ok(3))
+        ));
+        assert_eq!(budget.observed(), 5);
+    }
+
+    #[test]
     fn test_blocking_write_after_reader_drop_reports_incomplete_output() {
         let channel = ByteChannel::new();
         channel.blocking_write(b"queued output").unwrap();

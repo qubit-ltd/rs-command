@@ -81,3 +81,65 @@ impl qubit_io::AsyncInput for CommandStderr {
         self.as_mut().get_mut().state.poll_read(cx, slice)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::task::Context;
+    use std::task::Waker;
+
+    use qubit_io::AsyncInput;
+
+    use super::CommandStderr;
+    use crate::session::channel::ByteChannel;
+
+    #[test]
+    fn test_stderr_range_errors_and_drop_marks_reader_gone() {
+        let channel = Arc::new(ByteChannel::new());
+        let mut endpoint = CommandStderr::new(Arc::clone(&channel));
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        let mut output = [0; 4];
+
+        let overflow = match unsafe {
+            Pin::new(&mut endpoint).poll_read_unchecked(&mut context, &mut output, usize::MAX, 1)
+        } {
+            std::task::Poll::Ready(result) => result,
+            other => panic!("range overflow should be rejected immediately: {other:?}"),
+        };
+        assert_eq!(overflow.expect_err("overflow is invalid").kind(), io::ErrorKind::InvalidInput);
+
+        let out_of_bounds = match unsafe {
+            Pin::new(&mut endpoint).poll_read_unchecked(&mut context, &mut output, 3, 2)
+        } {
+            std::task::Poll::Ready(result) => result,
+            other => panic!("out-of-bounds output should be rejected immediately: {other:?}"),
+        };
+        assert_eq!(
+            out_of_bounds
+                .expect_err("range must fit within the output slice")
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        assert!(endpoint.is_buffered());
+        channel.blocking_write(b"xy").expect("stderr bytes should be queued");
+        assert!(matches!(
+            unsafe { Pin::new(&mut endpoint).poll_read_unchecked(&mut context, &mut output, 1, 2) },
+            std::task::Poll::Ready(Ok(2))
+        ));
+        assert_eq!(output, [0, b'x', b'y', 0]);
+
+        channel.blocking_write(b"queued").expect("error output should queue before endpoint drop");
+        drop(endpoint);
+        assert!(channel.incomplete());
+        assert_eq!(channel.blocking_read(&mut [0; 8]).unwrap(), 0);
+        assert!(matches!(
+            channel.poll_write(&mut context, b"late"),
+            std::task::Poll::Ready(Err(ref error)) if error.kind() == io::ErrorKind::BrokenPipe
+        ));
+        assert!(channel.broken_pipe());
+    }
+}

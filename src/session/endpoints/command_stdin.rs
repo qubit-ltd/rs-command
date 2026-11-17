@@ -134,3 +134,70 @@ impl qubit_io::AsyncClose for CommandStdin {
         self.get_mut().state.poll_close(cx)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::task::Context;
+    use std::task::Waker;
+
+    use qubit_io::AsyncClose;
+    use qubit_io::AsyncOutput;
+
+    use super::CommandStdin;
+    use crate::session::channel::ByteChannel;
+
+    #[test]
+    fn test_input_range_errors_and_close_rejects_later_writes() {
+        let channel = Arc::new(ByteChannel::new());
+        let mut endpoint = CommandStdin::new(Arc::clone(&channel));
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+
+        let overflow = match unsafe {
+            Pin::new(&mut endpoint).poll_write_unchecked(&mut context, b"input", usize::MAX, 1)
+        } {
+            std::task::Poll::Ready(result) => result,
+            other => panic!("range overflow should be rejected immediately: {other:?}"),
+        };
+        assert_eq!(overflow.expect_err("overflow is invalid").kind(), io::ErrorKind::InvalidInput);
+
+        let out_of_bounds = match unsafe {
+            Pin::new(&mut endpoint).poll_write_unchecked(&mut context, b"input", 4, 2)
+        } {
+            std::task::Poll::Ready(result) => result,
+            other => panic!("out-of-bounds input should be rejected immediately: {other:?}"),
+        };
+        assert_eq!(
+            out_of_bounds
+                .expect_err("range must fit within the input slice")
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        assert!(endpoint.is_buffered());
+        assert!(matches!(
+            Pin::new(&mut endpoint).poll_flush(&mut context),
+            std::task::Poll::Ready(Ok(()))
+        ));
+        assert!(matches!(
+            unsafe { Pin::new(&mut endpoint).poll_write_unchecked(&mut context, b"abcdef", 2, 2) },
+            std::task::Poll::Ready(Ok(2))
+        ));
+        let mut received = [0; 4];
+        assert_eq!(channel.blocking_read(&mut received).unwrap(), 2);
+        assert_eq!(&received[..2], b"cd");
+
+        assert!(matches!(
+            Pin::new(&mut endpoint).poll_close(&mut context),
+            std::task::Poll::Ready(Ok(()))
+        ));
+        let write_after_close = endpoint.state.poll_write(&mut context, b"late");
+        assert!(matches!(
+            write_after_close,
+            std::task::Poll::Ready(Err(ref error)) if error.kind() == io::ErrorKind::BrokenPipe
+        ));
+    }
+}
