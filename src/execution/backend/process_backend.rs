@@ -365,10 +365,7 @@ mod tests {
     }
 
     impl FactSink for RetrySink {
-        fn publish_outcome(
-            &self,
-            _: OperationOutcome<CommandOutput, CommandError>,
-        ) -> Result<(), FactPublishError> {
+        fn publish_outcome(&self, _: OperationOutcome<CommandOutput, CommandError>) -> Result<(), FactPublishError> {
             Ok(())
         }
 
@@ -380,16 +377,11 @@ mod tests {
             Ok(())
         }
 
-        fn retain_recovery_owner(
-            &self,
-            owner: Box<dyn RecoveryOwner>,
-        ) -> Result<(), RecoveryPublishFailure> {
+        fn retain_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) -> Result<(), RecoveryPublishFailure> {
             self.attempts.fetch_add(1, Ordering::SeqCst);
             if self
                 .rejections_left
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
-                    remaining.checked_sub(1)
-                })
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| remaining.checked_sub(1))
                 .is_ok()
             {
                 return Err(RecoveryPublishFailure {
@@ -416,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_transfer_retries_rejected_owner_until_store_accepts_it() {
+    fn test_recovery_transfer_retries_rejected_owner_until_store_accepts_it() {
         let sink = Arc::new(RetrySink {
             rejections_left: AtomicUsize::new(1),
             attempts: AtomicUsize::new(0),

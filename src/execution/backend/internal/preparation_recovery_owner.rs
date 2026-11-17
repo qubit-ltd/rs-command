@@ -70,7 +70,7 @@ mod tests {
     use crate::execution::contracts::ReservationLease;
 
     #[test]
-    fn retry_releases_scope_resources_but_retains_capacity_until_owner_drop() {
+    fn test_retry_releases_scope_resources_but_retains_capacity_until_owner_drop() {
         let manager = OperationManager::new(ManagerOptions::default()).unwrap();
         let retained = Arc::new(Mutex::new(None));
         let retained_for_operation = Arc::clone(&retained);
@@ -104,10 +104,7 @@ mod tests {
             .unwrap()
             .take()
             .expect("recovery owner should be retained");
-        assert_eq!(
-            owner.summary(),
-            "command file preparation retained partial resources"
-        );
+        assert_eq!(owner.summary(), "command file preparation retained partial resources");
         assert!(!owner.is_complete());
         owner
             .retry_cleanup()

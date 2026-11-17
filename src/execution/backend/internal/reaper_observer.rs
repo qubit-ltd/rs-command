@@ -175,10 +175,7 @@ mod tests {
     }
 
     impl FactSink for RecoverySink {
-        fn publish_outcome(
-            &self,
-            _: OperationOutcome<CommandOutput, CommandError>,
-        ) -> Result<(), FactPublishError> {
+        fn publish_outcome(&self, _: OperationOutcome<CommandOutput, CommandError>) -> Result<(), FactPublishError> {
             Ok(())
         }
 
@@ -190,10 +187,7 @@ mod tests {
             Ok(())
         }
 
-        fn retain_recovery_owner(
-            &self,
-            owner: Box<dyn RecoveryOwner>,
-        ) -> Result<(), RecoveryPublishFailure> {
+        fn retain_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) -> Result<(), RecoveryPublishFailure> {
             if self.reject {
                 return Err(RecoveryPublishFailure {
                     reason: RecoveryPublishError::CapacityExceeded,
@@ -213,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn accepted_recovery_transfer_marks_handoff_and_completes_cleanup() {
+    fn test_accepted_recovery_transfer_marks_handoff_and_completes_cleanup() {
         let sink = sink(false);
         let (observer, completed) = ReaperObserver::pair_with_recovery_sink(sink.clone());
         assert!(observer.recovery_sink().is_some());
@@ -239,9 +233,7 @@ mod tests {
             owner.summary(),
             "managed child and I/O helpers awaiting bounded reaper capacity"
         );
-        owner
-            .retry_cleanup()
-            .expect("owner should transfer to the reaper");
+        owner.retry_cleanup().expect("owner should transfer to the reaper");
         cleaned_rx
             .recv_timeout(Duration::from_secs(3))
             .expect("reaper should run cleanup");
@@ -252,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn rejected_recovery_transfer_returns_owner_for_backend_retry() {
+    fn test_rejected_recovery_transfer_returns_owner_for_backend_retry() {
         let sink = sink(true);
         let (observer, completed) = ReaperObserver::pair_with_recovery_sink(sink);
         observer.mark_pending();
@@ -273,10 +265,7 @@ mod tests {
             .unwrap();
         let evidence = owner.effect_evidence(operation.id());
         assert_eq!(evidence.effects_total, 1);
-        assert_eq!(
-            evidence.effects[0].fact,
-            qubit_operation::EffectFact::Unknown
-        );
+        assert_eq!(evidence.effects[0].fact, qubit_operation::EffectFact::Unknown);
         assert_eq!(
             evidence.effects[0].description.as_str(),
             "managed process/helper cleanup awaits reaper handoff"
@@ -301,7 +290,7 @@ mod tests {
     }
 
     #[test]
-    fn owner_is_deferred_when_no_recovery_sink_is_configured() {
+    fn test_owner_is_deferred_when_no_recovery_sink_is_configured() {
         let (observer, completed) = ReaperObserver::pair();
         assert!(observer.recovery_sink().is_none());
         observer.mark_pending();
@@ -315,7 +304,9 @@ mod tests {
             owner.summary(),
             "managed child and I/O helpers awaiting bounded reaper capacity"
         );
-        owner.retry_cleanup().expect("deferred owner should be handed to the reaper");
+        owner
+            .retry_cleanup()
+            .expect("deferred owner should be handed to the reaper");
         completed
             .recv_timeout(Duration::from_secs(3))
             .expect("deferred owner should complete cleanup");
