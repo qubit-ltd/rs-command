@@ -311,3 +311,75 @@ depend on files excluded from the Cargo archive.
   operations on untrusted or remote filesystems.
 - Any future public lifecycle change must update the error contract, stream
   completeness semantics, both language guides, and this design document.
+
+## Managed Execution Architecture
+
+The managed API layers local admission, operation observation, and recovery on
+the synchronous `CommandRunner`; it does not replace the runner's process and
+I/O contract. `CommandExecutor` asks `BoundedScheduler` for a reservation,
+builds an `AdapterState`, and submits it to `OperationManager`. The adapter
+keeps the request and reservation recoverable until activation transfers them
+to the scheduler. `ProcessBackend` then prepares any owned files and invokes
+`run_with_tree_policy`. These boundaries are implemented in
+`execution/executor.rs`, `execution/adapter/state.rs`, and
+`execution/backend/process_backend.rs`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Admission
+    Admission --> Rejected: capacity / closed / deadline
+    Admission --> Reserved: reservation acquired
+    Reserved --> PreparedAdapter: operation manager accepts
+    Reserved --> Rejected: manager rejects; request restored
+    PreparedAdapter --> Activated: scheduler activates
+    PreparedAdapter --> Rejected: activation fails / abandoned
+    Activated --> FilePreparation
+    FilePreparation --> FailedRecovery: owned-file preparation fails
+    FilePreparation --> Running: files prepared; start authorized
+    Running --> Outcome: process result selected and published
+    Running --> Reaping: uncertain child/helper cleanup
+    Reaping --> Recovery: ownership retained or transferred
+    Recovery --> Settlement
+    Outcome --> Settlement: input released, cleanup known
+    Outcome --> Pending: cleanup still owned by recovery
+    Pending --> Recovery
+    Rejected --> [*]
+    Settlement --> [*]
+```
+
+Admission rejection occurs before process execution and the submit failure
+retains the unaccepted request. Resource preparation happens after activation;
+it can fail after ownership transfer, so the failure path retains the original
+resource input and a capacity lease for recovery. Once the runner commits file
+resources, truncation and later spawn failures can have filesystem side
+effects, as described in the runner contract above. An operation outcome is a
+one-shot result, not proof that process, helper, file, or capacity ownership has
+settled. `CommandOperation` callers observe settlement separately; a
+`RecoveryRequired` settlement preserves effects that still require recovery.
+
+| Owner | Handoff | Release condition |
+| --- | --- | --- |
+| Executor request and reservation | Executor to prepared adapter, then scheduler on activation | Rejected/unactivated input is restored or dropped; activated reservation record is removed after its owner and all leases are released |
+| Child process and I/O helpers | Runner to `RunningCommand`; uncertain cleanup moves the owner to the reaper | Helpers and child are joined/reaped, or retained recovery ownership completes; a successful Windows cancellation request alone does not release the helper |
+| Owned stdin/stdout/stderr files | Resource input to `PreparedFiles`, then runner I/O state | Normal finalization closes them; preparation failure retains them for recovery; file commit may already have changed output contents |
+| Reservation owner and lease | Reservation owner retains a lease for runner/recovery cleanup | Accounting is released only when the scheduler record is removed after the final lease; releasing the operation owner alone may leave a lease active |
+| Session endpoints | Submission context keeps endpoints alive while `SessionBridge` connects channels to process workers | Caller closes the stdin writer to signal EOF; stdout/stderr are drained concurrently; endpoints settle when execution and retained owners release the bridge and keepalive |
+| Reaper and recovery handle | Runner transfers uncertain child/helper cleanup to reaper; recovery owner can be retained by the manager | Reaper completion or explicit recovery releases the retained owner; pending work remains observable and is not reported as released early |
+
+The legacy `CommandRunner::run` and `run_with` entry points remain synchronous
+and do not provide executor admission, operation settlement, or managed
+recovery observation. Managed execution uses the same runner with a
+`RunTreePolicy`; the default `CommandRunOptions` selects managed process-tree
+handling. For sessions, closing the caller's stdin endpoint lets the
+child observe EOF while stdout and stderr readers continue draining. Output
+limits still follow the runner's configured capture policy; the managed
+`max_queued_input_bytes` field is a legacy-named estimate of reserved file
+bytes, not an in-memory input or output limit.
+
+`request_shutdown` first closes scheduler admission and then requests manager
+shutdown. Callers must continue observing the returned shutdown handle while
+it is pending; a snapshot or sleep does not establish that workers, reaper
+owners, or recovery effects have finished. On Windows, successful synchronous
+I/O cancellation is followed by a join that is not bounded by the failed-call
+confirmation window. The production reachability investigation remains
+unresolved; see [Windows cancellation status](windows-cancellation-status.md).
