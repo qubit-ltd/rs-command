@@ -8,6 +8,7 @@
 //! Behavior tests for [`CommandRunner`](qubit_command::CommandRunner)
 //! configuration.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -69,6 +70,35 @@ fn exit_7_command() -> Command {
 #[cfg(windows)]
 fn exit_7_command() -> Command {
     Command::new("cmd").arg("/C").arg("exit 7")
+}
+
+#[cfg(unix)]
+fn print_working_directory_command() -> Command {
+    Command::new("sh").arg("-c").arg("pwd")
+}
+
+#[cfg(windows)]
+fn print_working_directory_command() -> Command {
+    Command::new("cmd").arg("/C").arg("cd")
+}
+
+#[test]
+fn test_runner_accepts_owned_os_string_working_directory_in_sync_run() {
+    let directory = tempfile::tempdir().expect("working directory should be created");
+    let working_directory: OsString = directory.path().as_os_str().to_os_string();
+    let runner = CommandRunner::without_timeout().working_directory(working_directory);
+
+    assert_eq!(
+        runner.configured_working_directory(),
+        Some(directory.path())
+    );
+    let output = runner
+        .run(print_working_directory_command())
+        .expect("synchronous run should use the configured owned working directory");
+    assert_eq!(
+        String::from_utf8_lossy(output.stdout()).trim(),
+        directory.path().to_string_lossy()
+    );
 }
 
 #[test]
