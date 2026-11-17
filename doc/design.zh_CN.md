@@ -226,7 +226,8 @@ stateDiagram-v2
     已预留 --> Adapter已准备: OperationManager 接受
     已预留 --> 拒绝: manager 拒绝；恢复 request
     Adapter已准备 --> 已激活: scheduler 激活
-    Adapter已准备 --> 拒绝: 激活失败 / 放弃
+    Adapter已准备 --> 激活失败: scheduler 激活失败；发布 ExecutionFailed
+    Adapter已准备 --> 已放弃: 已接受的 operation 被放弃；丢弃输入
     已激活 --> 文件准备
     文件准备 --> 失败待恢复: owned 文件准备失败
     文件准备 --> 执行中: 文件就绪且启动获准
@@ -237,12 +238,17 @@ stateDiagram-v2
     Outcome --> Settlement: 输入已释放且清理已知
     Outcome --> Pending: 清理仍由恢复流程持有
     Pending --> 恢复
+    激活失败 --> Settlement: 发布 released settlement
+    已放弃 --> Settlement: 发布 released settlement
     拒绝 --> [*]
     Settlement --> [*]
 ```
 
-接纳拒绝发生在进程执行前，submit failure 保留未接收的 request。资源准备在
-激活后执行；准备失败时所有权已经转移，因此失败路径会保留原始资源输入和
+接纳拒绝发生在进程执行前，submit failure 保留未接收的 request。`OperationManager`
+接受 operation 后，激活失败属于不同的终态 operation 结果：adapter 发布
+`ExecutionFailed` 和 released settlement，并丢弃不可用或被拒绝的输入。放弃已接受、
+尚未激活的 operation 也会丢弃输入并释放 reservation；这不是 submit rejection，
+也不会恢复 request。资源准备在激活后执行；准备失败时所有权已经转移，因此失败路径会保留原始资源输入和
 capacity lease 以供恢复。runner 提交文件资源后，截断及后续启动失败可能产生
 文件系统副作用，见上文 runner 契约。操作 outcome 是一次性结果，不代表进程、
 helper、文件或容量所有权已经结算。`CommandOperation` 调用方需单独观察
@@ -250,7 +256,7 @@ settlement；`RecoveryRequired` settlement 表示仍有待恢复的效果。
 
 | 所有者 | 交接 | 释放条件 |
 | --- | --- | --- |
-| Executor request 与 reservation | Executor 交给已准备的 adapter，激活时再交给 scheduler | 未激活的输入被恢复或丢弃；激活后的 reservation 记录在 owner 与全部 lease 释放后移除 |
+| Executor request 与 reservation | Executor 交给已准备的 adapter，激活时再交给 scheduler | Manager 拒绝时恢复未接受的 request；已接受后的激活失败或放弃会丢弃输入并以 released 结算；激活后的 reservation 记录在 owner 与全部 lease 释放后移除 |
 | 子进程与 I/O helper | Runner 交由 `RunningCommand`；清理状态不确定时将 owner 交给 reaper | helper 与子进程 join/reap，或保留的恢复所有权完成；Windows 取消请求成功本身不代表 helper 已释放 |
 | owned stdin/stdout/stderr 文件 | Resource input 交给 `PreparedFiles`，再交给 runner I/O 状态 | 正常结束时关闭；准备失败时保留以供恢复；文件提交可能已改变输出内容 |
 | Reservation owner 与 lease | Reservation owner 为 runner/恢复清理保留 lease | scheduler 记录在 owner 与最后一个 lease 都释放后移除；仅释放操作 owner 时 lease 可能仍有效 |
