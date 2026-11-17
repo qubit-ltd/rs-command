@@ -784,11 +784,25 @@ mod tests {
     use qubit_operation::OperationOutcome;
 
     use super::ManagedCommandRunnerApi;
+    use super::map_outcome;
     use crate::Command;
     use crate::CommandExecutionConfig;
     use crate::CommandExecutor;
     use crate::CommandResourceRunOptions;
     use crate::CommandRunner;
+
+    #[test]
+    fn test_failed_operation_preserves_the_command_error() {
+        let error = crate::CommandError::from_reason(
+            "tool",
+            crate::CommandErrorReason::Cancelled,
+            None,
+        );
+        let actual = map_outcome(OperationOutcome::<crate::CommandOutput, _>::Failed(error)).unwrap_err();
+
+        assert_eq!(actual.command(), "tool");
+        assert!(matches!(actual.reason(), crate::CommandErrorReason::Cancelled));
+    }
 
     fn setup() -> (OperationManager, CommandExecutor, CommandRunner) {
         let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
