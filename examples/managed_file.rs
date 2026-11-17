@@ -40,7 +40,7 @@ pub fn run() {
         .stdin_file(input)
         .stdout_sink(sink, FileSinkPolicy::Truncate);
     let command = if cfg!(windows) {
-        Command::new("cmd").args(&["/C", "more"])
+        Command::new("findstr").args(&["/R", "."])
     } else {
         Command::new("cat")
     };
