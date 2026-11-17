@@ -314,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_is_idempotent_and_signals_waiter_once() {
+    fn test_completion_is_idempotent_and_signals_waiter_once() {
         let (observer, completed) = ReaperObserver::pair();
         assert!(!observer.is_pending());
         assert!(!observer.is_complete());
@@ -324,9 +324,6 @@ mod tests {
 
         assert!(observer.is_complete());
         completed.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert!(matches!(
-            completed.try_recv(),
-            Err(mpsc::TryRecvError::Disconnected)
-        ));
+        assert!(matches!(completed.try_recv(), Err(mpsc::TryRecvError::Disconnected)));
     }
 }

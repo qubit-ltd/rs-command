@@ -365,13 +365,13 @@ mod tests {
     use crate::execution::contracts::FactPublishError;
     use crate::execution::contracts::FactSink;
     use crate::execution::contracts::IoPathSnapshot;
-    use crate::execution::contracts::Request;
-    use crate::execution::contracts::RequestOptions;
-    use crate::execution::contracts::Reservation;
     use crate::execution::contracts::RecoveryEffectEvidence;
     use crate::execution::contracts::RecoveryOwner;
     use crate::execution::contracts::RecoveryPublishError;
     use crate::execution::contracts::RecoveryPublishFailure;
+    use crate::execution::contracts::Request;
+    use crate::execution::contracts::RequestOptions;
+    use crate::execution::contracts::Reservation;
     use crate::execution::contracts::StopPort;
 
     #[derive(Default)]
@@ -400,10 +400,7 @@ mod tests {
             Ok(())
         }
 
-        fn retain_recovery_owner(
-            &self,
-            owner: Box<dyn RecoveryOwner>,
-        ) -> Result<(), RecoveryPublishFailure> {
+        fn retain_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) -> Result<(), RecoveryPublishFailure> {
             Err(RecoveryPublishFailure {
                 reason: RecoveryPublishError::CapacityExceeded,
                 owner,
@@ -413,7 +410,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn stop_before_backend_start_publishes_stopped_release_and_settlement() {
+    fn test_stop_before_backend_start_publishes_stopped_release_and_settlement() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let backend = Arc::new(ProcessBackend::new());
         let sink = Arc::new(RecordingSink::default());
@@ -465,9 +462,15 @@ mod tests {
             })
             .unwrap();
 
-        assert!(matches!(operation.wait_outcome().unwrap(), OperationOutcome::Succeeded(())));
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
         operation.wait_settlement().unwrap();
-        assert!(!path.exists(), "a stop that wins before authorization must prevent spawn");
+        assert!(
+            !path.exists(),
+            "a stop that wins before authorization must prevent spawn"
+        );
         assert!(reservation_released.load(Ordering::SeqCst));
         assert!(sink.released.load(Ordering::SeqCst));
         assert!(matches!(
