@@ -112,7 +112,9 @@ impl IoCancellation {
     /// # Errors
     ///
     /// Returns an I/O error if the Unix wakeup write fails for a reason other
-    /// than a broken pipe, or if interrupting the helper thread fails.
+    /// than a closed notification channel, or if interrupting the helper thread
+    /// fails.
+    ///
     /// # Type Parameters
     ///
     /// * `T` - Type of helper thread result.
@@ -137,10 +139,11 @@ impl IoCancellation {
             {
                 use std::io::Write;
 
-                if let Err(error) = (&self.notifier).write_all(&[1])
-                    && error.kind() != io::ErrorKind::BrokenPipe
-                {
-                    return Err(error);
+                if let Err(error) = (&self.notifier).write_all(&[1]) {
+                    match error.kind() {
+                        io::ErrorKind::BrokenPipe | io::ErrorKind::NotConnected => {}
+                        _ => return Err(error),
+                    }
                 }
                 let _ = join;
                 Ok(())
@@ -165,5 +168,22 @@ impl IoCancellation {
         if let Some(observer) = &self.test_observer {
             let _ = observer.send(result.as_ref().err().and_then(io::Error::raw_os_error));
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::IoCancellation;
+
+    #[test]
+    fn test_cancel_accepts_a_closed_notification_channel() {
+        let (cancellation, token) = IoCancellation::pair().expect("cancellation pair should be created");
+        drop(token);
+        let helper = std::thread::spawn(|| {});
+
+        cancellation
+            .cancel(&helper)
+            .expect("a closed helper channel needs no further wakeup");
+        helper.join().expect("helper thread should finish");
     }
 }

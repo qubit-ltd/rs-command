@@ -55,7 +55,7 @@ pub fn run() {
     // is no longer in use. The caller still owns ordinary external cleanup of
     // its directory; the path string itself did not act as a lease.
     let written = std::fs::read(&output_path).expect("read sink");
-    assert!(written.starts_with(b"data"));
+    assert!(written.starts_with(b"data"), "unexpected command output: {written:?}");
     println!("input started at byte {position}; sink now contains {:?}", written);
     drop(directory);
 }
