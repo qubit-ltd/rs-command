@@ -5,27 +5,37 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+#[cfg(unix)]
 use std::io::Read;
 use std::time::Duration;
 
+#[cfg(unix)]
 use qubit_command::Command;
 use qubit_command::CommandErrorKind;
 use qubit_command::CommandErrorReason;
 use qubit_command::CommandExecutionConfig;
 use qubit_command::CommandExecutor;
+#[cfg(unix)]
 use qubit_command::CommandResourceRunOptions;
 use qubit_command::CommandRunner;
+#[cfg(unix)]
 use qubit_command::FileSinkPolicy;
+#[cfg(unix)]
 use qubit_command::ManagedCommandRunnerApi;
+#[cfg(unix)]
 use qubit_operation::ManagerOptions;
 use qubit_operation::OperationManager;
+#[cfg(unix)]
 use qubit_operation::OperationOptions;
+#[cfg(unix)]
 use qubit_operation::OperationOutcome;
 
+#[cfg(unix)]
 fn executor(manager: &OperationManager) -> CommandExecutor {
     CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).unwrap()
 }
 
+#[cfg(unix)]
 fn runner() -> CommandRunner {
     CommandRunner::new(Duration::from_secs(5))
 }
@@ -141,6 +151,7 @@ fn test_scoped_managed_runner_maps_manager_mismatch_for_ordinary_and_resource_ca
     assert!(matches!(result, OperationOutcome::Succeeded(())));
 }
 
+#[cfg(unix)]
 fn assert_manager_mismatch(error: qubit_command::CommandError) {
     assert_eq!(error.kind(), CommandErrorKind::ManagedOperationFailed);
     assert!(matches!(

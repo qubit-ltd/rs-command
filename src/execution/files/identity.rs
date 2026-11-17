@@ -106,6 +106,7 @@ pub(super) fn absolute_lexical_path(base: &Path, path: &Path) -> std::path::Path
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::fs::File;
 
     use super::validate_files;

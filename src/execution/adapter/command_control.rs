@@ -260,7 +260,9 @@ mod tests {
     use qubit_operation::StopReport;
 
     use super::CommandControl;
+    #[cfg(unix)]
     use crate::Command;
+    #[cfg(unix)]
     use crate::CommandRunner;
 
     struct CountWake(AtomicUsize);

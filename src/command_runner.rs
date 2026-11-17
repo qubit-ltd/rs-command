@@ -304,9 +304,13 @@ fn owned_file_error(command: &str, stream: OutputStream, path: &str, source: io:
 mod tests {
     use std::fs::File;
     use std::io;
+    #[cfg(unix)]
     use std::io::Read;
+    #[cfg(unix)]
     use std::io::Seek;
+    #[cfg(unix)]
     use std::io::SeekFrom;
+    #[cfg(unix)]
     use std::io::Write;
     use std::sync::Arc;
     use std::sync::Mutex;
@@ -330,6 +334,7 @@ mod tests {
 
     use super::CommandRunner;
     use super::RunTreePolicy;
+    #[cfg(unix)]
     use super::apply_prepared_files;
     use super::start_output_reader;
     use super::take_output_pipe;

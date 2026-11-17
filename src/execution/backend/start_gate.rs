@@ -121,6 +121,7 @@ impl StopPort for StartGate {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::fs;
     use std::io;
     use std::io::Cursor;
@@ -132,24 +133,32 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::task::Waker;
     use std::thread;
+    #[cfg(unix)]
     use std::time::Duration;
+    #[cfg(unix)]
     use std::time::Instant;
 
     use qubit_operation::StopReason;
 
     use super::StartGate;
+    #[cfg(unix)]
     use crate::Command;
+    #[cfg(unix)]
     use crate::CommandErrorKind;
+    #[cfg(unix)]
     use crate::CommandRunOptions;
+    #[cfg(unix)]
     use crate::CommandRunner;
     use crate::execution::contracts::StopPort;
     use crate::session::contracts::SessionBridge;
 
+    #[cfg(unix)]
     struct ManualContextClock {
         domain: qubit_operation::ClockDomainId,
         ticks: Arc<AtomicU64>,
     }
 
+    #[cfg(unix)]
     impl qubit_operation::ClockSource for ManualContextClock {
         fn now(&self) -> qubit_operation::MonotonicTime {
             qubit_operation::MonotonicTime::new(self.domain, self.ticks.load(Ordering::SeqCst))

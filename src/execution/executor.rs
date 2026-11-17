@@ -2428,7 +2428,9 @@ mod command_executor_api_tests {
     use crate::Command;
     use crate::CommandExecutionConfig;
     use crate::CommandExecutor;
+    #[cfg(unix)]
     use crate::CommandExecutorApi;
+    #[cfg(unix)]
     use crate::CommandResourceRunOptions;
     use crate::CommandRunner;
 
@@ -2453,6 +2455,7 @@ mod command_executor_api_tests {
         assert_eq!(channels.bridge.output_budget_limit(), None);
     }
 
+    #[cfg(unix)]
     fn output_and_settle(mut operation: crate::CommandOperation) -> Vec<u8> {
         let output = match operation.wait_outcome().expect("command outcome should be observable") {
             OperationOutcome::Succeeded(output) => output,

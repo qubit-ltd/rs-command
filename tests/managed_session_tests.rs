@@ -5,7 +5,7 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-#![cfg(feature = "async")]
+#![cfg(all(feature = "async", unix))]
 
 use std::future::poll_fn;
 use std::pin::Pin;

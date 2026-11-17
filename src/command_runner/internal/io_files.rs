@@ -911,7 +911,9 @@ mod tests {
     use std::process::Command as ProcessCommand;
 
     use super::IoFiles;
+    #[cfg(unix)]
     use super::ensure_regular_input_handle;
+    #[cfg(unix)]
     use super::ensure_regular_output_handle;
     use super::truncate_output_with;
     use super::truncate_outputs_with;

@@ -5,18 +5,25 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+#[cfg(unix)]
 use std::time::Duration;
 
+#[cfg(unix)]
 use qubit_command::Command;
 use qubit_command::CommandExecutionConfig;
 use qubit_command::CommandExecutor;
+#[cfg(unix)]
 use qubit_command::CommandExecutorApi;
+#[cfg(unix)]
 use qubit_command::CommandResourceRunOptions;
+#[cfg(unix)]
 use qubit_command::CommandRunner;
 use qubit_operation::ManagerOptions;
 use qubit_operation::OperationManager;
+#[cfg(unix)]
 use qubit_operation::OperationOutcome;
 
+#[cfg(unix)]
 fn new_executor() -> CommandExecutor {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     CommandExecutor::new(

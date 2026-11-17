@@ -5,28 +5,28 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-#[cfg(feature = "async")]
+#[cfg(all(feature = "async", unix))]
 use std::future::Future;
-#[cfg(feature = "async")]
+#[cfg(all(feature = "async", unix))]
 use std::sync::Arc;
-#[cfg(feature = "async")]
+#[cfg(all(feature = "async", unix))]
 use std::task::Context;
-#[cfg(feature = "async")]
+#[cfg(all(feature = "async", unix))]
 use std::task::Poll;
-#[cfg(feature = "async")]
+#[cfg(all(feature = "async", unix))]
 use std::task::Wake;
-#[cfg(feature = "async")]
+#[cfg(all(feature = "async", unix))]
 use std::task::Waker;
-#[cfg(feature = "async")]
+#[cfg(all(feature = "async", unix))]
 use std::thread;
 use std::time::Duration;
 
-#[cfg(feature = "async")]
+#[cfg(all(feature = "async", unix))]
 use qubit_command::AsyncCommandOperation;
 use qubit_command::Command;
 use qubit_command::CommandExecutionConfig;
 use qubit_command::CommandExecutor;
-#[cfg(feature = "async")]
+#[cfg(all(feature = "async", unix))]
 use qubit_command::CommandExecutorApi;
 use qubit_command::CommandResourceRunOptions;
 use qubit_command::CommandRunner;

@@ -375,44 +375,63 @@ mod tests {
 
     use qubit_operation::ClockDomainId;
     use qubit_operation::ClockSource;
+    #[cfg(unix)]
     use qubit_operation::ContextOptions;
+    #[cfg(unix)]
     use qubit_operation::Deadline;
     use qubit_operation::MonotonicTime;
+    #[cfg(unix)]
     use qubit_operation::OperationContext;
     use qubit_operation::OperationId;
+    #[cfg(unix)]
     use qubit_operation::OperationManager;
+    #[cfg(unix)]
     use qubit_operation::OperationOptions;
     use qubit_operation::OperationOutcome;
     use qubit_operation::SettlementReport;
     use qubit_operation::StopReason;
     use qubit_operation::TimerRegistration;
 
+    #[cfg(unix)]
     use super::ProcessBackend;
     use super::normalize_tee_paths;
     use super::runner_result_outcome;
     use super::schedule_recovery_transfer;
+    #[cfg(unix)]
     use crate::Command;
     use crate::CommandError;
     use crate::CommandErrorReason;
     use crate::CommandOutput;
     use crate::CommandRunOptions;
+    #[cfg(unix)]
     use crate::CommandRunner;
+    #[cfg(unix)]
     use crate::execution::contracts::ActivatedRequest;
+    #[cfg(unix)]
     use crate::execution::contracts::Backend;
+    #[cfg(unix)]
     use crate::execution::contracts::ExecutionSnapshot;
     use crate::execution::contracts::FactPublishError;
     use crate::execution::contracts::FactSink;
+    #[cfg(unix)]
     use crate::execution::contracts::IoPathSnapshot;
     use crate::execution::contracts::RecoveryEffectEvidence;
     use crate::execution::contracts::RecoveryOwner;
     use crate::execution::contracts::RecoveryPublishError;
     use crate::execution::contracts::RecoveryPublishFailure;
+    #[cfg(unix)]
     use crate::execution::contracts::RecoveryRetryError;
+    #[cfg(unix)]
     use crate::execution::contracts::Request;
+    #[cfg(unix)]
     use crate::execution::contracts::RequestOptions;
+    #[cfg(unix)]
     use crate::execution::contracts::Reservation;
+    #[cfg(unix)]
     use crate::execution::contracts::StopPort;
+    #[cfg(unix)]
     use crate::resource_run_options::CommandResourceRunOptions;
+    #[cfg(unix)]
     use crate::resource_run_options::FileSinkPolicy;
 
     #[test]
@@ -482,8 +501,10 @@ mod tests {
         assert_eq!(error.kind(), crate::CommandErrorKind::TimedOut);
     }
 
+    #[cfg(unix)]
     struct ExpiredClock(ClockDomainId);
 
+    #[cfg(unix)]
     impl ClockSource for ExpiredClock {
         fn now(&self) -> MonotonicTime {
             MonotonicTime::new(self.0, 1)
@@ -494,12 +515,15 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     struct NoopRegistration;
 
+    #[cfg(unix)]
     impl TimerRegistration for NoopRegistration {
         fn cancel(self: Box<Self>) {}
     }
 
+    #[cfg(unix)]
     #[derive(Default)]
     struct RecordingSink {
         outcome: Mutex<Option<OperationOutcome<CommandOutput, CommandError>>>,
@@ -509,6 +533,7 @@ mod tests {
         recovery_owner: Mutex<Option<Box<dyn RecoveryOwner>>>,
     }
 
+    #[cfg(unix)]
     impl FactSink for RecordingSink {
         fn publish_stop_diagnostic(&self, error: CommandError) -> Result<(), CommandError> {
             *self.stop_diagnostic.lock().unwrap() = Some(error);
