@@ -406,13 +406,135 @@ mod tests {
     use std::process::Command as ProcessCommand;
     use std::process::Stdio;
     use std::thread;
+    #[cfg(unix)]
+    use std::cell::Cell;
+    #[cfg(unix)]
+    use std::collections::VecDeque;
+    #[cfg(unix)]
+    use std::io::Write;
+    #[cfg(unix)]
+    use std::sync::Arc;
+    #[cfg(unix)]
+    use std::sync::Mutex;
 
     use super::super::io_cancellation::IoCancellation;
+    #[cfg(unix)]
+    use super::super::io_cancellation_token::IoCancellationToken;
+    #[cfg(unix)]
+    use super::super::pollable_stdin::PollableStdin;
     use super::super::stdin_writer::StdinWriter;
     use super::join_stdin_writer;
     use super::write_stdin_bytes;
     use super::write_stdin_bytes_with;
+    #[cfg(unix)]
+    use super::write_stdin_session;
+    #[cfg(unix)]
+    use super::write_stdin_until_cancelled;
     use crate::CommandErrorKind;
+
+    #[cfg(unix)]
+    struct ScriptedStdin {
+        wait_ready: bool,
+        wait_calls: Cell<usize>,
+        write_results: VecDeque<io::Result<usize>>,
+        write_calls: usize,
+        written: Vec<u8>,
+    }
+
+    #[cfg(unix)]
+    impl ScriptedStdin {
+        fn new(
+            wait_ready: bool,
+            write_results: impl IntoIterator<Item = io::Result<usize>>,
+        ) -> Self {
+            Self {
+                wait_ready,
+                wait_calls: Cell::new(0),
+                write_results: write_results.into_iter().collect(),
+                write_calls: 0,
+                written: Vec::new(),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Write for ScriptedStdin {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.write_calls += 1;
+            match self.write_results.pop_front().unwrap_or(Ok(bytes.len())) {
+                Ok(count) => {
+                    let count = count.min(bytes.len());
+                    self.written.extend_from_slice(&bytes[..count]);
+                    Ok(count)
+                }
+                Err(error) => Err(error),
+            }
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
+    impl PollableStdin for ScriptedStdin {
+        fn wait_writable(&self, _cancellation: &IoCancellationToken) -> io::Result<bool> {
+            self.wait_calls.set(self.wait_calls.get() + 1);
+            Ok(self.wait_ready)
+        }
+    }
+
+    #[cfg(unix)]
+    struct TestSessionBridge {
+        input: Mutex<VecDeque<Vec<u8>>>,
+        fail_read: bool,
+        stdin_closed: std::sync::atomic::AtomicBool,
+        stdin_broken_pipe: std::sync::atomic::AtomicBool,
+    }
+
+    #[cfg(unix)]
+    impl TestSessionBridge {
+        fn new(input: impl IntoIterator<Item = Vec<u8>>, fail_read: bool) -> Self {
+            Self {
+                input: Mutex::new(input.into_iter().collect()),
+                fail_read,
+                stdin_closed: std::sync::atomic::AtomicBool::new(false),
+                stdin_broken_pipe: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl crate::session::contracts::SessionBridge for TestSessionBridge {
+        fn read_stdin(&self, buffer: &mut [u8]) -> io::Result<usize> {
+            if self.fail_read {
+                return Err(io::Error::other("injected session stdin read failure"));
+            }
+            let Some(bytes) = self.input.lock().unwrap().pop_front() else {
+                return Ok(0);
+            };
+            buffer[..bytes.len()].copy_from_slice(&bytes);
+            Ok(bytes.len())
+        }
+
+        fn write_stdout(&self, _bytes: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn write_stderr(&self, _bytes: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn close_stdin(&self) {
+            self.stdin_closed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        fn record_stdin_broken_pipe(&self) {
+            self.stdin_broken_pipe
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
 
     #[test]
     fn test_write_stdin_bytes_reports_missing_pipe() {
@@ -539,5 +661,151 @@ mod tests {
         let error = join_stdin_writer("command", Some(writer)).expect_err("stdin worker panic should be mapped");
 
         assert_eq!(error.kind(), CommandErrorKind::WriteInputFailed);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_stdin_until_cancelled_retries_transient_errors_and_partial_writes() {
+        let (_cancellation, token) =
+            IoCancellation::pair().expect("cancellation pair should be created");
+        let mut stdin = ScriptedStdin::new(
+            true,
+            [
+                Err(io::ErrorKind::Interrupted.into()),
+                Err(io::ErrorKind::WouldBlock.into()),
+                Ok(2),
+                Ok(3),
+            ],
+        );
+
+        write_stdin_until_cancelled(&mut stdin, b"hello", &token)
+            .expect("transient writes should retry");
+
+        assert_eq!(stdin.written, b"hello");
+        assert_eq!(stdin.write_calls, 4);
+        assert_eq!(stdin.wait_calls.get(), 4);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_stdin_until_cancelled_stops_and_preserves_write_errors() {
+        let (_cancellation, token) =
+            IoCancellation::pair().expect("cancellation pair should be created");
+        token
+            .cancelled
+            .store(true, std::sync::atomic::Ordering::Release);
+        let mut cancelled_stdin = ScriptedStdin::new(true, []);
+
+        write_stdin_until_cancelled(&mut cancelled_stdin, b"not written", &token)
+            .expect("cancellation should stop the write successfully");
+        assert_eq!(cancelled_stdin.write_calls, 0);
+        assert_eq!(cancelled_stdin.wait_calls.get(), 0);
+
+        let (_cancellation, token) =
+            IoCancellation::pair().expect("cancellation pair should be created");
+        let mut zero_writer = ScriptedStdin::new(true, [Ok(0)]);
+        let error = write_stdin_until_cancelled(&mut zero_writer, b"data", &token)
+            .expect_err("a zero-length write must be reported");
+        assert_eq!(error.kind(), io::ErrorKind::WriteZero);
+
+        let mut broken_writer = ScriptedStdin::new(true, [Err(io::ErrorKind::BrokenPipe.into())]);
+        let error = write_stdin_until_cancelled(&mut broken_writer, b"data", &token)
+            .expect_err("non-cancellation write errors must be propagated");
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_session_stdin_writes_prefix_and_queued_bytes_before_closing() {
+        let bridge = Arc::new(TestSessionBridge::new([b"session".to_vec()], false));
+        let mut child = ProcessCommand::new("sh")
+            .arg("-c")
+            .arg("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("test child should spawn");
+
+        let writer = write_stdin_session(
+            "command",
+            &mut child,
+            Some(b"prefix".to_vec()),
+            Some(bridge.clone()),
+        )
+        .expect("session stdin writer should start");
+        join_stdin_writer("command", writer).expect("session stdin should finish");
+        let output = child.wait_with_output().expect("test child should finish");
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"prefixsession");
+        assert!(
+            bridge
+                .stdin_closed
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_session_stdin_read_failure_closes_pipe_and_reaches_joiner() {
+        let bridge = Arc::new(TestSessionBridge::new([], true));
+        let mut child = ProcessCommand::new("sh")
+            .arg("-c")
+            .arg("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("test child should spawn");
+
+        let writer = write_stdin_session("command", &mut child, None, Some(bridge.clone()))
+            .expect("session stdin writer should start");
+        let error = join_stdin_writer("command", writer)
+            .expect_err("session read failure should be reported");
+        let output = child
+            .wait_with_output()
+            .expect("test child should finish after stdin closes");
+
+        assert_eq!(error.kind(), CommandErrorKind::WriteInputFailed);
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(
+            bridge
+                .stdin_closed
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_session_stdin_records_child_broken_pipe_and_closes_bridge() {
+        let bridge = Arc::new(TestSessionBridge::new([], false));
+        let mut child = ProcessCommand::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("test child should spawn");
+
+        let writer = write_stdin_session(
+            "command",
+            &mut child,
+            Some(vec![b'x'; 4 * 1024 * 1024]),
+            Some(bridge.clone()),
+        )
+        .expect("session stdin writer should start");
+        join_stdin_writer("command", writer).expect("an early child stdin close is accepted");
+        let status = child.wait().expect("test child should finish");
+
+        assert!(status.success());
+        assert!(
+            bridge
+                .stdin_broken_pipe
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+        assert!(
+            bridge
+                .stdin_closed
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
     }
 }
