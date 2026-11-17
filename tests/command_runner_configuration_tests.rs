@@ -179,3 +179,34 @@ fn test_runner_logging_truncation_and_redaction_builders_round_trip() {
             .is_output_truncation_failure_enabled()
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn test_runner_configuration_composes_for_nonzero_exit_and_independent_capture_limits() {
+    let runner = CommandRunner::without_timeout()
+        .success_exit_codes(&[3, 7])
+        .max_stdout_bytes(3)
+        .max_stderr_bytes(2)
+        .fail_on_output_truncation(false)
+        .disable_logging(true);
+
+    assert_eq!(runner.configured_timeout(), None);
+    assert_eq!(runner.configured_success_exit_codes(), &[3, 7]);
+    assert_eq!(runner.configured_max_stdout_bytes(), Some(3));
+    assert_eq!(runner.configured_max_stderr_bytes(), Some(2));
+    assert!(!runner.is_output_truncation_failure_enabled());
+    assert!(runner.is_logging_disabled());
+
+    let output = runner
+        .run(
+            Command::new("sh")
+                .arg("-c")
+                .arg("printf 'stdout'; printf 'stderr' >&2; exit 7"),
+        )
+        .expect("listed nonzero exit code should succeed even with truncated capture");
+    assert_eq!(output.exit_code(), Some(7));
+    assert_eq!(output.stdout(), b"std");
+    assert_eq!(output.stderr(), b"st");
+    assert!(output.stdout_truncated());
+    assert!(output.stderr_truncated());
+}
