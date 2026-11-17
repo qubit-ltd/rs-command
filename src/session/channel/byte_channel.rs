@@ -620,6 +620,75 @@ mod tests {
     }
 
     #[test]
+    fn test_pending_read_and_write_replace_obsolete_wakers() {
+        let channel = ByteChannel::new();
+        let first = Arc::new(CountWake(AtomicUsize::new(0)));
+        let second = Arc::new(CountWake(AtomicUsize::new(0)));
+        let first_waker = std::task::Waker::from(first.clone());
+        let second_waker = std::task::Waker::from(second.clone());
+        let mut first_context = std::task::Context::from_waker(&first_waker);
+        let mut second_context = std::task::Context::from_waker(&second_waker);
+        let mut output = [0; 1];
+
+        assert!(matches!(
+            channel.poll_read(&mut first_context, &mut output),
+            std::task::Poll::Pending
+        ));
+        assert!(matches!(
+            channel.poll_read(&mut second_context, &mut output),
+            std::task::Poll::Pending
+        ));
+        assert!(matches!(
+            channel.poll_write(&mut first_context, b"r"),
+            std::task::Poll::Ready(Ok(1))
+        ));
+        assert_eq!(first.0.load(Ordering::SeqCst), 0);
+        assert_eq!(second.0.load(Ordering::SeqCst), 1);
+
+        let channel = ByteChannel::new();
+        let block = vec![4; MAX_BLOCK];
+        for _ in 0..CHANNEL_CAPACITY / MAX_BLOCK {
+            assert!(matches!(
+                channel.poll_write(&mut first_context, &block),
+                std::task::Poll::Ready(Ok(MAX_BLOCK))
+            ));
+        }
+        assert!(matches!(
+            channel.poll_write(&mut first_context, b"blocked"),
+            std::task::Poll::Pending
+        ));
+        assert!(matches!(
+            channel.poll_write(&mut second_context, b"blocked"),
+            std::task::Poll::Pending
+        ));
+        assert!(matches!(
+            channel.poll_read(&mut first_context, &mut output),
+            std::task::Poll::Ready(Ok(1))
+        ));
+        assert_eq!(first.0.load(Ordering::SeqCst), 0);
+        assert_eq!(second.0.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn test_blocking_write_after_reader_drop_reports_incomplete_output() {
+        let channel = ByteChannel::new();
+        channel.blocking_write(b"queued output").unwrap();
+        channel.drop_reader();
+
+        assert_eq!(channel.blocking_read(&mut [0; 8]).unwrap(), 0);
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = std::task::Waker::from(counter);
+        let mut context = std::task::Context::from_waker(&waker);
+        assert!(matches!(
+            channel.poll_write(&mut context, b"poll after drop"),
+            std::task::Poll::Ready(Err(ref error)) if error.kind() == io::ErrorKind::BrokenPipe
+        ));
+        channel.blocking_write(b"output after reader drop").unwrap();
+        assert!(channel.incomplete());
+        assert!(channel.broken_pipe());
+    }
+
+    #[test]
     fn test_blocking_worker_and_async_endpoint_share_ordered_bytes() {
         let c = Arc::new(ByteChannel::new());
         let producer = c.clone();
