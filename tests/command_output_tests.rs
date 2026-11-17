@@ -23,7 +23,10 @@ fn test_command_output_stdout_returns_bytes_and_text() {
         .expect("command should run successfully");
 
     assert_eq!(output.stdout(), b"hello");
-    assert_eq!(output.stdout_text().expect("stdout should be valid UTF-8"), "hello");
+    assert_eq!(
+        output.stdout_text().expect("stdout should be valid UTF-8"),
+        "hello"
+    );
     assert_eq!(output.stdout_lossy_text(), "hello");
     assert_eq!(output.exit_status().code(), Some(0));
     assert!(!output.stdout_truncated());
@@ -36,7 +39,10 @@ fn test_command_output_stderr_returns_bytes_and_text() {
         .expect("command should run successfully");
 
     assert_eq!(output.stderr(), b"error");
-    assert_eq!(output.stderr_text().expect("stderr should be valid UTF-8"), "error");
+    assert_eq!(
+        output.stderr_text().expect("stderr should be valid UTF-8"),
+        "error"
+    );
     assert_eq!(output.stderr_lossy_text(), "error");
     assert!(!output.stderr_truncated());
 }
@@ -152,13 +158,69 @@ fn test_command_output_always_exposes_lossy_text() {
     assert_eq!(output.stderr(), &[0xff]);
 }
 
+#[test]
+fn test_command_output_text_accessors_borrow_valid_utf8_and_replace_invalid_bytes() {
+    let output = CommandRunner::new(Duration::from_secs(10))
+        .run(output_command("héllo".as_bytes(), "世界".as_bytes(), 0))
+        .expect("command should run successfully");
+
+    assert_eq!(output.stdout_text().expect("valid stdout UTF-8"), "héllo");
+    assert_eq!(output.stderr_text().expect("valid stderr UTF-8"), "世界");
+    assert!(matches!(
+        output.stdout_lossy_text(),
+        std::borrow::Cow::Borrowed("héllo")
+    ));
+    assert!(matches!(
+        output.stderr_lossy_text(),
+        std::borrow::Cow::Borrowed("世界")
+    ));
+
+    let output = CommandRunner::new(Duration::from_secs(10))
+        .run(output_command(&[b'a', 0xff, b'b'], &[0xc3, 0x28], 0))
+        .expect("binary output should run successfully");
+    assert!(output.stdout_text().is_err());
+    assert!(output.stderr_text().is_err());
+    assert_eq!(output.stdout_lossy_text(), "a\u{fffd}b");
+    assert_eq!(output.stderr_lossy_text(), "\u{fffd}(");
+    assert!(matches!(
+        output.stdout_lossy_text(),
+        std::borrow::Cow::Owned(_)
+    ));
+    assert!(matches!(
+        output.stderr_lossy_text(),
+        std::borrow::Cow::Owned(_)
+    ));
+}
+
+#[test]
+fn test_command_output_metadata_accessors_agree_with_captured_output() {
+    let output = CommandRunner::new(Duration::from_secs(10))
+        .run(output_command(b"out", b"err", 0))
+        .expect("command should run successfully");
+
+    assert_eq!(output.exit_code(), Some(0));
+    assert_eq!(output.exit_status().code(), Some(0));
+    assert!(output.elapsed() <= Duration::from_secs(10));
+    assert!(output.stdout_complete());
+    assert!(output.stderr_complete());
+    let captured = output.captured_output();
+    assert_eq!(captured.stdout(), b"out");
+    assert_eq!(captured.stderr(), b"err");
+    assert_eq!(captured.stdout_complete(), output.stdout_complete());
+    assert_eq!(captured.stderr_complete(), output.stderr_complete());
+    assert_eq!(captured.stdout_truncated(), output.stdout_truncated());
+    assert_eq!(captured.stderr_truncated(), output.stderr_truncated());
+}
+
 #[cfg(unix)]
 #[test]
 fn test_command_output_reports_unix_termination_signal() {
     let error = CommandRunner::new(Duration::from_secs(10))
         .run(Command::shell("kill -TERM $$"))
         .expect_err("signal-terminated command should not be successful");
-    let output = error.output().expect("unexpected exit should expose output");
+    let output = error
+        .output()
+        .expect("unexpected exit should expose output");
 
     assert_eq!(output.exit_code(), None);
     assert_eq!(output.termination_signal(), Some(15));
