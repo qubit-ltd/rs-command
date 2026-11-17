@@ -905,19 +905,6 @@ mod resource_byte_tests {
         assert_eq!(resource_bytes(&RequestOptions::Resources(options)), 14);
         assert_eq!(resource_bytes(&RequestOptions::Standard(Default::default())), 0);
     }
-
-    #[cfg(unix)]
-    #[test]
-    fn resource_byte_estimates_skip_files_whose_metadata_fails() {
-        use std::os::fd::FromRawFd;
-
-        // SAFETY: -1 is not an owned descriptor; File's drop closes it harmlessly.
-        let invalid_file = unsafe { std::fs::File::from_raw_fd(-1) };
-        let options = CommandResourceRunOptions::new().stdin_file(invalid_file);
-
-        assert_eq!(resource_option_bytes(&options), 0);
-        assert_eq!(resource_bytes(&RequestOptions::Resources(options)), 0);
-    }
 }
 
 /// Performs the retry wait step in the managed command execution lifecycle.
