@@ -744,6 +744,48 @@ mod data_api_tests {
     }
 
     #[test]
+    fn test_string_argument_builders_preserve_values_and_iterator_order() {
+        let command = Command::new("worker")
+            .arg("first")
+            .sensitive_arg("private")
+            .args(&["second", "third"]);
+
+        assert_eq!(command.program(), OsStr::new("worker"));
+        let mut arguments = command.arguments();
+        assert_eq!(arguments.len(), 4);
+        assert_eq!(arguments.next(), Some(OsStr::new("first")));
+        assert_eq!(arguments.len(), 3);
+        assert_eq!(arguments.next(), Some(OsStr::new("private")));
+        assert_eq!(
+            arguments.by_ref().collect::<Vec<_>>(),
+            [OsStr::new("second"), OsStr::new("third")]
+        );
+        assert_eq!(arguments.len(), 0);
+    }
+
+    #[test]
+    fn test_string_environment_updates_keep_only_effective_values() {
+        let command = Command::new("worker")
+            .env("REPLACED", "old")
+            .env_remove("REPLACED")
+            .env("REMOVED", "value")
+            .env_remove("REMOVED")
+            .env("RESTORED", "old")
+            .env_remove("RESTORED")
+            .env("RESTORED", "new");
+
+        assert!(!command.clears_environment());
+        assert_eq!(
+            command.environment(),
+            [(OsString::from("RESTORED"), OsString::from("new"))]
+        );
+        assert_eq!(
+            command.removed_environment(),
+            [OsString::from("REPLACED"), OsString::from("REMOVED")]
+        );
+    }
+
+    #[test]
     fn test_os_string_inputs_and_all_stdin_modes_preserve_configuration() {
         let input_file = tempfile::NamedTempFile::new().unwrap();
         let root = input_file.path().parent().unwrap();
