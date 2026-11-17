@@ -2433,6 +2433,20 @@ mod command_executor_api_tests {
         (manager, executor, CommandRunner::new(Duration::from_secs(5)))
     }
 
+    #[cfg(feature = "async")]
+    #[test]
+    fn test_session_channels_apply_runner_aggregate_output_limit() {
+        use crate::session::contracts::SessionBridge;
+
+        let configured = CommandRunner::without_timeout().max_total_output_bytes(7);
+        let channels = super::session_channels(&configured);
+        assert_eq!(channels.bridge.output_budget_limit(), Some(7));
+
+        let unbounded = CommandRunner::without_timeout();
+        let channels = super::session_channels(&unbounded);
+        assert_eq!(channels.bridge.output_budget_limit(), None);
+    }
+
     fn output_and_settle(mut operation: crate::CommandOperation) -> Vec<u8> {
         let output = match operation.wait_outcome().expect("command outcome should be observable") {
             OperationOutcome::Succeeded(output) => output,
