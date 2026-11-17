@@ -495,4 +495,21 @@ mod tests {
             Poll::Ready(OperationOutcome::Stopped(_))
         ));
     }
+
+    #[test]
+    fn test_stop_requested_before_binding_is_preserved_in_snapshot() {
+        let control = CommandControl::default();
+        control.request_stop(StopReason::Timeout);
+
+        let report = settlement_report();
+        assert!(control.bind(report.operation_id));
+        assert_eq!(control.operation_id(), Some(report.operation_id));
+
+        let snapshot = OperationControl::snapshot(&control);
+        assert_eq!(snapshot.execution, ExecutionPhase::Queued);
+        assert_eq!(snapshot.stop.expect("stop request should be retained").reason, StopReason::Timeout);
+        assert!(snapshot.outcome.is_none());
+        assert!(!snapshot.input_released);
+        assert!(snapshot.settlement.is_none());
+    }
 }
