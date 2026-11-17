@@ -13,7 +13,19 @@ use super::backend;
 use super::executor;
 use super::scheduler;
 
-/// Executor configuration bound to an operation manager.
+/// Manages local command admission and exposes operation handles tied to an operation manager.
+///
+/// Use [`CommandExecutionConfig`] to set the executor-local limits. The [`submit`](Self::submit)
+/// and [`submit_resources`](Self::submit_resources) methods attempt admission immediately;
+/// [`CommandExecutorApi::submit_wait_blocking`](crate::CommandExecutorApi::submit_wait_blocking)
+/// and, with the `async` feature,
+/// [`CommandExecutorApi::submit_wait`](crate::CommandExecutorApi::submit_wait) wait for capacity. The `*_in` variants use an
+/// [`qubit_operation::OperationScope`] group and context. The `submit_async*` methods return an
+/// asynchronous operation view but do not themselves wait for capacity.
+///
+/// A [`crate::CommandOperation`] outcome is one-shot; settlement and any recovery are separate resource
+/// lifecycle observations. See the [managed execution guide](../../doc/user_guide.md) and its
+/// [Chinese version](../../doc/user_guide.zh_CN.md) for the documented ownership and lifecycle.
 #[derive(Clone)]
 pub struct CommandExecutor {
     /// Stores the manager value used by this execution component.
