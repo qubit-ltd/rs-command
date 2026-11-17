@@ -487,6 +487,75 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn test_pre_cancelled_external_token_stops_backend_before_spawn() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::new());
+        let sink = Arc::new(RecordingSink::default());
+        let cancellation = crate::CommandCancellation::new();
+        cancellation.cancel();
+        let operation_backend = Arc::clone(&backend);
+        let operation_sink = Arc::clone(&sink);
+        let operation_cancellation = cancellation.clone();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("must-not-start-with-cancelled-token");
+        let operation_path = path.clone();
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    |_| {},
+                    |_| crate::execution::contracts::ReservationLease::new(|| {}),
+                );
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout(),
+                    command: Command::new("sh")
+                        .arg("-c")
+                        .arg(&format!("touch {}", operation_path.display())),
+                    options: RequestOptions::Standard(
+                        CommandRunOptions::new().cancellation(operation_cancellation),
+                    ),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
+                    },
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: None,
+                };
+                operation_backend.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: operation_sink.clone(),
+                        session_bridge: None,
+                    },
+                    operation_sink,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        operation.wait_settlement().unwrap();
+        assert!(!path.exists(), "a pre-cancelled request must not spawn");
+        assert!(matches!(
+            sink.outcome.lock().unwrap().take(),
+            Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::UserCancelled
+        ));
+        assert!(sink.released.load(Ordering::SeqCst));
+        assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_nonzero_child_exit_publishes_failure_and_releases_inputs() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let backend = Arc::new(ProcessBackend::new());
