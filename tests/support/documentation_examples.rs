@@ -231,7 +231,7 @@ pub(crate) fn check_documents(root: &Path) {
     fs::create_dir(harness.path().join("tests")).expect("create harness tests directory");
     let dependency_path = package_root.canonicalize().expect("canonicalize package root");
     let manifest = format!(
-        "[workspace]\n\n[package]\nname = \"documentation-example-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nqubit-command = {{ path = {:?} }}\n",
+        "[workspace]\n\n[package]\nname = \"documentation-example-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nqubit-command = {{ path = {:?} }}\nqubit-operation = \"^0.3\"\n",
         dependency_path.to_string_lossy()
     );
     fs::write(harness.path().join("Cargo.toml"), manifest).expect("write harness manifest");

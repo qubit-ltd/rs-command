@@ -33,6 +33,7 @@ use super::contracts::RequestOptions;
 use super::contracts::Scheduler;
 use super::scheduler::BoundedScheduler;
 use crate::Command;
+#[cfg(feature = "async")]
 use crate::CommandError;
 use crate::CommandResourceRunOptions;
 use crate::CommandRunOptions;

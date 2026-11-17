@@ -26,6 +26,7 @@ mod output_budget_state;
 pub(crate) use bridge::Bridge;
 #[cfg(feature = "async")]
 pub(crate) use byte_channel::ByteChannel;
+#[cfg(feature = "async")]
 pub(crate) use channel_reader::ChannelReader;
 #[cfg(feature = "async")]
 pub(crate) use channel_writer::ChannelWriter;

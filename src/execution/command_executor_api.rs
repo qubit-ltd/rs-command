@@ -6,6 +6,7 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 
+#[cfg(feature = "async")]
 use super::AsyncCommandOperation;
 use super::CommandOperation;
 use super::CommandResourceSubmitFailure;

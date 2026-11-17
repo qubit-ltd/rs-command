@@ -9,6 +9,7 @@
 #[path = "execution/adapter/mod.rs"]
 pub mod adapter;
 #[path = "execution/async_command_operation.rs"]
+#[cfg(feature = "async")]
 mod async_command_operation;
 #[path = "execution/backend/mod.rs"]
 pub mod backend;
@@ -39,6 +40,7 @@ pub mod scheduler;
 #[path = "execution/snapshot_failure.rs"]
 mod snapshot_failure;
 
+#[cfg(feature = "async")]
 pub use async_command_operation::AsyncCommandOperation;
 pub use command_execution_config::CommandExecutionConfig;
 pub use command_executor::CommandExecutor;

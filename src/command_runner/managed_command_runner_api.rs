@@ -11,6 +11,7 @@ use qubit_operation::OperationScope;
 use crate::Command;
 use crate::CommandError;
 use crate::CommandExecutor;
+#[cfg(feature = "async")]
 use crate::CommandExecutorApi;
 use crate::CommandResourceRunOptions;
 use crate::CommandRunOptions;
@@ -465,6 +466,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     /// # Errors
     ///
     /// Returns an error if submission or command execution fails.
+    #[cfg(feature = "async")]
     async fn run_async_resources<'a>(
         &'a self,
         e: &'a CommandExecutor,
@@ -492,6 +494,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     /// # Errors
     ///
     /// Returns an error if submission or command execution fails.
+    #[cfg(feature = "async")]
     async fn start_session<'a>(
         &'a self,
         e: &'a CommandExecutor,
@@ -515,6 +518,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     /// # Errors
     ///
     /// Returns an error if submission or command execution fails.
+    #[cfg(feature = "async")]
     async fn start_session_resources<'a>(
         &'a self,
         e: &'a CommandExecutor,
@@ -569,6 +573,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     /// # Errors
     ///
     /// Returns an error if submission or command execution fails.
+    #[cfg(feature = "async")]
     async fn run_async_resources_in<'a>(
         &'a self,
         s: &'a OperationScope,
@@ -598,6 +603,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     /// # Errors
     ///
     /// Returns an error if submission or command execution fails.
+    #[cfg(feature = "async")]
     async fn start_session_in<'a>(
         &'a self,
         s: &'a OperationScope,
@@ -623,6 +629,7 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     /// # Errors
     ///
     /// Returns an error if submission or command execution fails.
+    #[cfg(feature = "async")]
     async fn start_session_resources_in<'a>(
         &'a self,
         s: &'a OperationScope,
