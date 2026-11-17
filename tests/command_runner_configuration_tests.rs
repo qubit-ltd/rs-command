@@ -92,9 +92,13 @@ fn test_runner_accepts_owned_os_string_working_directory_in_sync_run() {
     let output = runner
         .run(print_working_directory_command())
         .expect("synchronous run should use the configured owned working directory");
+    let expected_working_directory = directory
+        .path()
+        .canonicalize()
+        .expect("working directory should resolve to an absolute path");
     assert_eq!(
         String::from_utf8_lossy(output.stdout()).trim(),
-        directory.path().to_string_lossy()
+        expected_working_directory.to_string_lossy()
     );
 }
 

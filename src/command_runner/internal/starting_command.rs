@@ -528,9 +528,10 @@ mod tests {
     #[test]
     fn test_managed_abort_without_reaper_observer_uses_local_cleanup() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let child = ScriptedChild::new("child", raw_child(), Arc::clone(&calls))
+        let direct_child = ScriptedChild::new("child", raw_child(), Arc::clone(&calls))
             .kill_error(io::Error::other("injected termination failure"))
             .try_wait_results([Ok(None)]);
+        let child = ScriptedChild::new("tree", Box::new(direct_child), Arc::clone(&calls));
         let guard = StartingCommand::new_managed(
             "redacted",
             ManagedChildProcess::new(Box::new(child), false),
@@ -556,7 +557,8 @@ mod tests {
         ));
         let calls = calls.lock().expect("child lifecycle calls should be readable");
         // Direct-child fallback bypasses the outer ScriptedChild wrapper.
-        assert!(!calls.iter().any(|call| call == "child.kill"));
+        assert!(calls.iter().any(|call| call == "child.kill"));
+        assert!(!calls.iter().any(|call| call == "tree.kill"));
         assert!(calls.iter().any(|call| call == "child.try_wait"));
     }
 

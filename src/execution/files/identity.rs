@@ -121,7 +121,19 @@ mod tests {
 
     #[test]
     fn test_identity_rejects_non_regular_handles() {
+        #[cfg(unix)]
         let directory = File::open(std::env::temp_dir()).expect("temp directory should open");
+        #[cfg(windows)]
+        let directory = {
+            use std::os::windows::fs::OpenOptionsExt;
+
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(std::env::temp_dir())
+                .expect("temp directory should open")
+        };
         let error = validate_files(&[("stdin", &directory)]).expect_err("directories are not valid file streams");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
