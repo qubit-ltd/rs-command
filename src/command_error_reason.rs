@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use qubit_clock::TimeError;
+use qubit_operation::StopReason;
 use qubit_redact::Redactor;
 
 use crate::OutputStream;
@@ -155,6 +156,11 @@ pub enum CommandErrorReason {
     },
     /// The command was cancelled after startup.
     Cancelled,
+    /// The managed operation stopped for a reason outside the command runner.
+    Stopped {
+        /// Cause recorded by the operation manager.
+        reason: StopReason,
+    },
     /// Successful command output was truncated.
     OutputTruncated,
     /// Combined stdout and stderr exceeded the configured hard limit.
@@ -269,6 +275,7 @@ impl fmt::Debug for CommandErrorReason {
                 .finish(),
             Self::TimedOut { timeout } => formatter.debug_struct("TimedOut").field("timeout", timeout).finish(),
             Self::Cancelled => formatter.write_str("Cancelled"),
+            Self::Stopped { reason } => formatter.debug_tuple("Stopped").field(reason).finish(),
             Self::ManagedOperationFailed { .. } => {
                 formatter.write_str("ManagedOperationFailed { diagnostic: <redacted> }")
             }

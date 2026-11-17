@@ -532,6 +532,9 @@ impl fmt::Display for CommandError {
             (CommandErrorReason::Cancelled, _) => {
                 write!(formatter, "command `{command}` was cancelled")
             }
+            (CommandErrorReason::Stopped { reason }, _) => {
+                write!(formatter, "managed command operation stopped: {reason:?}")
+            }
             (CommandErrorReason::ManagedOperationFailed { diagnostic }, _) => {
                 write!(formatter, "managed command operation failed: {diagnostic}")
             }
@@ -606,6 +609,7 @@ impl From<&CommandErrorReason> for CommandErrorKind {
             CommandErrorReason::WriteOutputFailed { .. } => Self::WriteOutputFailed,
             CommandErrorReason::TimedOut { .. } => Self::TimedOut,
             CommandErrorReason::Cancelled => Self::Cancelled,
+            CommandErrorReason::Stopped { .. } => Self::Stopped,
             CommandErrorReason::OutputTruncated => Self::OutputTruncated,
             CommandErrorReason::OutputLimitExceeded { .. } => Self::OutputLimitExceeded,
             CommandErrorReason::UnexpectedExit { .. } => Self::UnexpectedExit,

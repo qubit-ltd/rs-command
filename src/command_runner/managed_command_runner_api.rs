@@ -744,11 +744,13 @@ fn map_outcome(
     match outcome {
         qubit_operation::OperationOutcome::Succeeded(value) => Ok(value),
         qubit_operation::OperationOutcome::Failed(error) => Err(error),
-        qubit_operation::OperationOutcome::Stopped(_) => Err(CommandError::from_reason(
-            "<managed command>",
-            crate::CommandErrorReason::Cancelled,
-            None,
-        )),
+        qubit_operation::OperationOutcome::Stopped(report) => {
+            let reason = match report.reason {
+                qubit_operation::StopReason::UserCancelled => crate::CommandErrorReason::Cancelled,
+                reason => crate::CommandErrorReason::Stopped { reason },
+            };
+            Err(CommandError::from_reason("<managed command>", reason, None))
+        }
         qubit_operation::OperationOutcome::ChildFailed(failure) => {
             Err(managed_error(failure.outcome.summary.as_str().to_owned()))
         }
@@ -1147,7 +1149,7 @@ mod outcome_mapping_tests {
             reason: StopReason::UserCancelled,
             accepted_at: None,
         }))
-        .expect_err("a stopped operation should map to cancellation");
+        .expect_err("a stopped operation should map to its command error");
         assert!(matches!(stopped.reason(), crate::CommandErrorReason::Cancelled));
         assert_eq!(stopped.command(), "<managed command>");
 
@@ -1310,7 +1312,7 @@ mod outcome_mapping_coverage_tests {
     }
 
     #[test]
-    fn test_stopped_operation_maps_to_cancelled_error() {
+    fn test_user_cancellation_keeps_legacy_error_category() {
         let actual = map_outcome(OperationOutcome::<crate::CommandOutput, CommandError>::Stopped(
             StopReport {
                 reason: StopReason::UserCancelled,
@@ -1321,6 +1323,26 @@ mod outcome_mapping_coverage_tests {
 
         assert_eq!(actual.command(), "<managed command>");
         assert!(matches!(actual.reason(), CommandErrorReason::Cancelled));
+    }
+
+    #[test]
+    fn test_stopped_timeout_keeps_timeout_reason() {
+        for reason in [
+            StopReason::Timeout,
+            StopReason::ParentStopped,
+            StopReason::ManagerShutdown,
+            StopReason::RequiredChildFailed,
+        ] {
+            let actual = map_outcome(OperationOutcome::<crate::CommandOutput, CommandError>::Stopped(
+                StopReport {
+                    reason,
+                    accepted_at: None,
+                },
+            ))
+            .unwrap_err();
+
+            assert!(matches!(actual.reason(), CommandErrorReason::Stopped { reason: actual } if *actual == reason));
+        }
     }
 
     #[test]

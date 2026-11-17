@@ -59,6 +59,8 @@ pub enum CommandErrorKind {
     TimedOut,
     /// The command was cancelled after startup.
     Cancelled,
+    /// The managed operation stopped for a reason outside the command runner.
+    Stopped,
     /// Successful command output was truncated.
     OutputTruncated,
     /// The command exceeded its combined stdout/stderr output budget.

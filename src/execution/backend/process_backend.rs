@@ -56,6 +56,21 @@ fn schedule_recovery_transfer(sink: Arc<dyn FactSink>, mut owner: Box<dyn Recove
     }
 }
 
+/// Keeps the runner-selected result even if a stop arrives afterward.
+///
+/// # Parameters
+/// * `result`: The terminal result chosen by the process runner.
+/// * `late_stop`: A stop observed after the runner chose its terminal result.
+fn runner_result_outcome(
+    result: Result<crate::CommandOutput, CommandError>,
+    _late_stop: Option<StopReason>,
+) -> OperationOutcome<crate::CommandOutput, CommandError> {
+    match result {
+        Ok(output) => OperationOutcome::Succeeded(output),
+        Err(error) => OperationOutcome::Failed(error),
+    }
+}
+
 /// Represents the process backend state or contract used by managed command
 /// execution.
 #[derive(Clone, Debug, Default)]
@@ -229,25 +244,18 @@ impl Backend for ProcessBackend {
         };
         let deferred_owner = reaper_observer.take_deferred_recovery_owner();
         let mut recovery_transferred = reaper_observer.recovery_was_transferred();
-        let outcome = match output {
-            Ok(output) => OperationOutcome::Succeeded(output),
-            Err(error) => match stop
-                .stop_reason()
-                .or_else(|| {
-                    original_cancellation
-                        .as_ref()
-                        .filter(|cancellation| cancellation.is_cancelled())
-                        .map(|_| StopReason::UserCancelled)
-                })
-                .or_else(|| request.deadline.as_ref().and_then(|context| context.stop_reason()))
-            {
-                Some(reason) => OperationOutcome::Stopped(qubit_operation::StopReport {
-                    reason,
-                    accepted_at: None,
-                }),
-                None => OperationOutcome::Failed(error),
-            },
-        };
+        let late_stop = stop
+            .stop_reason()
+            .or_else(|| {
+                original_cancellation
+                    .as_ref()
+                    .filter(|cancellation| cancellation.is_cancelled())
+                    .map(|_| StopReason::UserCancelled)
+            })
+            .or_else(|| request.deadline.as_ref().and_then(|context| context.stop_reason()));
+        // Keep the runner's selected terminal result. A later stop must not
+        // replace its error, partial output, or cleanup diagnostics.
+        let outcome = runner_result_outcome(output, late_stop);
         if let Err(error) = sink.publish_outcome(outcome) {
             log::error!("failed to publish command outcome: {error:?}");
         }
@@ -362,6 +370,7 @@ mod tests {
 
     use super::ProcessBackend;
     use super::normalize_tee_paths;
+    use super::runner_result_outcome;
     use super::schedule_recovery_transfer;
     use crate::Command;
     use crate::CommandError;
@@ -386,6 +395,31 @@ mod tests {
     use crate::execution::contracts::StopPort;
     use crate::resource_run_options::CommandResourceRunOptions;
     use crate::resource_run_options::FileSinkPolicy;
+
+    #[test]
+    fn test_late_stop_does_not_replace_runner_error_or_its_diagnostics() {
+        let error = CommandError::from_reason(
+            "command",
+            CommandErrorReason::UnexpectedExit {
+                exit_code: Some(23),
+                expected: vec![0],
+            },
+            None,
+        )
+        .with_captured_output(crate::CommandCapturedOutput::new(
+            (b"partial stdout".to_vec(), false, true),
+            (b"partial stderr".to_vec(), false, true),
+        ));
+
+        let outcome = runner_result_outcome(Err(error), Some(StopReason::Timeout));
+        let OperationOutcome::Failed(error) = outcome else {
+            panic!("a later stop must not replace the runner's terminal failure");
+        };
+        assert_eq!(error.kind(), crate::CommandErrorKind::UnexpectedExit);
+        let captured = error.captured_output().expect("partial capture should survive");
+        assert_eq!(captured.stdout(), b"partial stdout");
+        assert_eq!(captured.stderr(), b"partial stderr");
+    }
 
     struct ExpiredClock(ClockDomainId);
 
