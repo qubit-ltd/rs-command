@@ -5,6 +5,10 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
+use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
@@ -15,6 +19,12 @@ use std::task::Waker;
 use std::time::Duration;
 use std::time::Instant;
 
+use qubit_command::Command;
+use qubit_command::CommandExecutionConfig as PublicCommandExecutionConfig;
+use qubit_command::CommandExecutor;
+use qubit_command::CommandResourceRunOptions;
+use qubit_command::CommandRunner;
+use qubit_command::FileSinkPolicy;
 use qubit_command::execution::CapacityFailure;
 use qubit_command::execution::CommandExecutionConfig;
 use qubit_command::execution::ScheduledJob;
@@ -25,8 +35,11 @@ use qubit_operation::ClockDomainId;
 use qubit_operation::ClockSource;
 use qubit_operation::ContextOptions;
 use qubit_operation::Deadline;
+use qubit_operation::ManagerOptions;
 use qubit_operation::MonotonicTime;
 use qubit_operation::OperationContext;
+use qubit_operation::OperationManager;
+use qubit_operation::OperationOutcome;
 use qubit_operation::StopReason;
 use qubit_operation::TimerRegistration;
 struct ManualClock {
@@ -115,6 +128,97 @@ fn job(f: impl FnOnce(qubit_command::execution::Reservation) + Send + 'static) -
         run: Box::new(f),
         stop: Arc::new(Stop),
     }
+}
+
+fn public_executor(bytes: usize) -> CommandExecutor {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    CommandExecutor::new(
+        manager,
+        PublicCommandExecutionConfig {
+            max_active: 1,
+            max_queued: 0,
+            max_waiters: 0,
+            max_queued_input_bytes: bytes,
+            max_diagnostics: 4,
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn test_active_resource_admission_obeys_file_byte_estimate() {
+    let executor = public_executor(2);
+    let mut input = tempfile::tempfile().unwrap();
+    input.write_all(b"abc").unwrap();
+    let failure = match executor.submit_resources(
+        CommandRunner::without_timeout(),
+        Command::new("must-not-run-after-input-limit-rejection"),
+        CommandResourceRunOptions::new().stdin_file(input),
+    ) {
+        Err(failure) => failure,
+        Ok(_) => panic!("active owned file exceeding the byte budget was admitted"),
+    };
+
+    assert_eq!(
+        failure.reason,
+        qubit_command::execution::CommandSubmitFailureReason::Capacity(
+            CapacityFailure::InputBytesExceeded
+        )
+    );
+    let mut returned = failure
+        .options
+        .configured_stdin()
+        .unwrap()
+        .try_clone()
+        .unwrap();
+    returned.seek(SeekFrom::Start(0)).unwrap();
+    let mut contents = Vec::new();
+    returned.read_to_end(&mut contents).unwrap();
+    assert_eq!(contents, b"abc");
+}
+
+#[test]
+fn test_existing_output_length_counts_before_truncate() {
+    let executor = public_executor(2);
+    let mut stdout = tempfile::tempfile().unwrap();
+    stdout.write_all(b"old").unwrap();
+    let mut observer = stdout.try_clone().unwrap();
+    let failure = match executor.submit_resources(
+        CommandRunner::without_timeout(),
+        Command::new("must-not-run-after-output-limit-rejection"),
+        CommandResourceRunOptions::new().stdout_sink(stdout, FileSinkPolicy::Truncate),
+    ) {
+        Err(failure) => failure,
+        Ok(_) => panic!("output file exceeding the byte budget was admitted"),
+    };
+
+    assert_eq!(
+        failure.reason,
+        qubit_command::execution::CommandSubmitFailureReason::Capacity(
+            CapacityFailure::InputBytesExceeded
+        )
+    );
+    observer.seek(SeekFrom::Start(0)).unwrap();
+    let mut contents = Vec::new();
+    observer.read_to_end(&mut contents).unwrap();
+    assert_eq!(contents, b"old");
+}
+
+#[test]
+fn test_zero_file_budget_allows_standard_byte_input() {
+    let executor = public_executor(0);
+    let mut operation = executor
+        .submit(
+            CommandRunner::without_timeout(),
+            Command::new("echo").stdin_bytes(b"small-payload".to_vec()),
+            Default::default(),
+        )
+        .unwrap();
+    assert!(matches!(
+        operation.wait_outcome().unwrap(),
+        OperationOutcome::Succeeded(_)
+    ));
+    assert!(operation.wait_settlement().unwrap().all_released());
 }
 
 #[test]

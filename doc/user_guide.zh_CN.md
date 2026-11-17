@@ -27,7 +27,11 @@ println!("{}", output.stdout_lossy_text());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-默认配置最多同时运行 4 个命令、排队 64 个命令、等待 64 个容量空位；排队的 owned 输入总量上限为 16 MiB，诊断记录最多保留 64 条。`max_active` 不能设为 0。以上限制属于 executor；应用级 operation 数量限制仍由共享的 `OperationManager` 配置。
+默认配置允许 4 个 active reservation、64 个 queued reservation 和 64 个容量等待者。历史命名的 `max_queued_input_bytes` 默认值为 16 MiB，限制的是**所有 active 与 queued reservation 持有的文件字节估算总量**，并非仅限制队列。普通 `CommandRunOptions` 提交（包括 `stdin_bytes`）估算为 0。`CommandResourceRunOptions` 会对每个已提供的 stdin、stdout、stderr 文件的 metadata 长度求和。估算使用完整文件长度（包括截断前已有的输出内容），不移动文件游标；metadata 查询失败按 0 计，整数转换和求和采用饱和运算。这只是准入估算，不限制进程内存、缓冲的 stdin 或实际输出。容量等待者尚未取得 reservation，因此不计入预算；但等待中的调用方仍可能持有输入。
+
+因此，`max_queued_input_bytes` 为 0 时，估算为 0 的提交仍可准入，包括普通 stdin 字节缓冲；非零长度的资源文件会被拒绝。`max_queued` 为 0 会禁用排队，但空闲 active 槽仍可立即接纳任务；`max_waiters` 为 0 会禁止注册容量等待者。`max_active` 不能设为 0。只要 reservation 记录仍存在，其字节就继续计入：仅释放 owner、但仍有 lease 时不会回收；取到 operation outcome 也不能证明 reservation 已移除。以上均为 executor 本地限制；应用级 operation 数量限制仍由共享的 `OperationManager` 配置。
+
+`max_diagnostics` 为兼容配置结构而保留，但没有效果：executor 不读取它，设为 0 与其他值行为相同。停止的 operation 只有一个诊断槽，重复的停止诊断不会再次发布。这不代表所有 operation 的诊断总内存有上限。
 
 受管执行默认使用 `ProcessTreePolicy::Managed`，不依赖是否配置 timeout 或 cancellation。只有在应用明确只管理直接子进程时才选择 `ProcessTreePolicy::DirectChild`。该策略适用于受管入口；旧的 `CommandRunner::run` 和 `run_with` 仍保留原有生命周期契约。
 
