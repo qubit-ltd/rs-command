@@ -478,6 +478,8 @@ mod activation_failure_tests {
     use super::ProcessBackend;
     use crate::Command;
     use crate::CommandError;
+    use crate::CommandErrorKind;
+    use crate::CommandErrorReason;
     use crate::CommandExecutionConfig;
     use crate::CommandOutput;
     use crate::CommandRunner;
@@ -953,6 +955,44 @@ mod activation_failure_tests {
             Err(crate::execution::contracts::FactPublishError::DuplicateSettlement)
         );
         assert_eq!(OperationControl::snapshot(&*state).operation_id, id);
+    }
+
+    #[test]
+    fn test_stop_diagnostic_retains_first_error_and_returns_duplicate() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let state = make_state(scheduler, permit);
+        let first = CommandError::from_reason(
+            "first stopped diagnostic",
+            CommandErrorReason::WaitFailed {
+                source: std::io::Error::other("primary wait failure"),
+            },
+            None,
+        );
+
+        assert!(matches!(
+            crate::execution::contracts::FactSink::publish_stop_diagnostic(&*state, first),
+            Ok(())
+        ));
+        let duplicate = crate::execution::contracts::FactSink::publish_stop_diagnostic(
+            &*state,
+            CommandError::from_reason("duplicate diagnostic", CommandErrorReason::Cancelled, None),
+        )
+        .expect_err("a stopped command may retain only its first diagnostic");
+        assert_eq!(duplicate.kind(), CommandErrorKind::Cancelled);
+
+        let retained = state
+            .stop_diagnostic_slot()
+            .lock()
+            .unwrap()
+            .take()
+            .expect("first diagnostic should remain available to the operation wrapper");
+        assert_eq!(retained.kind(), CommandErrorKind::WaitFailed);
+        assert!(matches!(
+            retained.reason(),
+            CommandErrorReason::WaitFailed { source }
+                if source.to_string() == "primary wait failure"
+        ));
     }
 
     #[test]
