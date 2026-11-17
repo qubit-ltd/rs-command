@@ -732,6 +732,157 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn test_spawn_failure_publishes_error_and_releases_reservation() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::new());
+        let sink = Arc::new(RecordingSink::default());
+        let reservation_released = Arc::new(AtomicBool::new(false));
+        let lease_released = Arc::new(AtomicBool::new(false));
+        let operation_backend = Arc::clone(&backend);
+        let operation_sink = Arc::clone(&sink);
+        let operation_reservation_released = Arc::clone(&reservation_released);
+        let operation_lease_released = Arc::clone(&lease_released);
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("missing-command");
+        assert!(!executable.exists());
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    move |_| operation_reservation_released.store(true, Ordering::SeqCst),
+                    move |_| {
+                        let released = Arc::clone(&operation_lease_released);
+                        crate::execution::contracts::ReservationLease::new(move || {
+                            released.store(true, Ordering::SeqCst);
+                        })
+                    },
+                );
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout(),
+                    command: Command::new(executable.to_str().expect("temporary path should be UTF-8")),
+                    options: RequestOptions::Standard(CommandRunOptions::default()),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
+                    },
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: None,
+                };
+                operation_backend.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: operation_sink.clone(),
+                        session_bridge: None,
+                    },
+                    operation_sink,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        operation.wait_settlement().unwrap();
+
+        let Some(OperationOutcome::Failed(error)) = sink.outcome.lock().unwrap().take() else {
+            panic!("spawn failure should be published as a command failure");
+        };
+        assert_eq!(error.kind(), crate::CommandErrorKind::SpawnFailed);
+        assert!(matches!(error.reason(), CommandErrorReason::SpawnFailed { .. }));
+        assert!(sink.released.load(Ordering::SeqCst));
+        assert!(reservation_released.load(Ordering::SeqCst));
+        assert!(lease_released.load(Ordering::SeqCst));
+        assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_invalid_working_directory_spawn_failure_releases_reservation() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::new());
+        let sink = Arc::new(RecordingSink::default());
+        let reservation_released = Arc::new(AtomicBool::new(false));
+        let lease_released = Arc::new(AtomicBool::new(false));
+        let operation_backend = Arc::clone(&backend);
+        let operation_sink = Arc::clone(&sink);
+        let operation_reservation_released = Arc::clone(&reservation_released);
+        let operation_lease_released = Arc::clone(&lease_released);
+        let directory = tempfile::tempdir().unwrap();
+        let missing_directory = directory.path().join("missing-working-directory");
+        assert!(!missing_directory.exists());
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    move |_| operation_reservation_released.store(true, Ordering::SeqCst),
+                    move |_| {
+                        let released = Arc::clone(&operation_lease_released);
+                        crate::execution::contracts::ReservationLease::new(move || {
+                            released.store(true, Ordering::SeqCst);
+                        })
+                    },
+                );
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout().working_directory(&missing_directory),
+                    command: Command::new("sh").arg("-c").arg("exit 0"),
+                    options: RequestOptions::Standard(CommandRunOptions::default()),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
+                    },
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: None,
+                };
+                operation_backend.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: operation_sink.clone(),
+                        session_bridge: None,
+                    },
+                    operation_sink,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        operation.wait_settlement().unwrap();
+
+        let Some(OperationOutcome::Failed(error)) = sink.outcome.lock().unwrap().take() else {
+            panic!("invalid working directory should fail process startup");
+        };
+        assert_eq!(error.kind(), crate::CommandErrorKind::SpawnFailed);
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::SpawnFailed { source } if source.kind() == std::io::ErrorKind::NotFound
+        ));
+        assert!(sink.released.load(Ordering::SeqCst));
+        assert!(reservation_released.load(Ordering::SeqCst));
+        assert!(lease_released.load(Ordering::SeqCst));
+        assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_expired_deadline_stops_backend_before_spawn() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let backend = Arc::new(ProcessBackend::new());

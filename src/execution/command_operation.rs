@@ -83,3 +83,71 @@ impl DerefMut for CommandOperation {
         &mut self.inner
     }
 }
+
+#[cfg(all(test, feature = "async"))]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOptions;
+    use qubit_operation::OperationOutcome;
+
+    use super::CommandOperation;
+    use crate::CommandError;
+    use crate::CommandErrorReason;
+    use crate::CommandOutput;
+
+    fn failed_handle(manager: &OperationManager) -> qubit_operation::OperationHandle<CommandOutput, CommandError> {
+        manager
+            .try_submit(OperationOptions::default(), |_| {
+                Err::<CommandOutput, _>(CommandError::from_reason(
+                    "operation command",
+                    CommandErrorReason::Cancelled,
+                    None,
+                ))
+            })
+            .expect("operation should be accepted")
+    }
+
+    #[test]
+    fn test_async_conversion_preserves_one_shot_stop_diagnostic_and_outcome() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let diagnostic = CommandError::from_reason("retained stop diagnostic", CommandErrorReason::Cancelled, None);
+        let slot = Arc::new(Mutex::new(Some(diagnostic)));
+        let operation = CommandOperation::new(failed_handle(&manager), Arc::clone(&slot));
+
+        let asynchronous = operation.into_async();
+        let mut synchronous = asynchronous.into_sync();
+        assert_eq!(
+            synchronous.take_stop_diagnostic().unwrap().command(),
+            "retained stop diagnostic"
+        );
+        assert!(synchronous.take_stop_diagnostic().is_none());
+        assert!(slot.lock().unwrap().is_none());
+
+        let OperationOutcome::Failed(failure) = synchronous.wait_outcome().unwrap() else {
+            panic!("operation should preserve its failed outcome");
+        };
+        assert_eq!(failure.command(), "operation command");
+        synchronous.wait_settlement().unwrap();
+    }
+
+    #[test]
+    fn test_into_inner_preserves_the_operation_result() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let slot = Arc::new(Mutex::new(Some(CommandError::from_reason(
+            "unobserved diagnostic",
+            CommandErrorReason::Cancelled,
+            None,
+        ))));
+        let operation = CommandOperation::new(failed_handle(&manager), slot);
+
+        let mut inner = operation.into_inner();
+        let OperationOutcome::Failed(failure) = inner.wait_outcome().unwrap() else {
+            panic!("inner handle should preserve its failed outcome");
+        };
+        assert_eq!(failure.command(), "operation command");
+        inner.wait_settlement().unwrap();
+    }
+}

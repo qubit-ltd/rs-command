@@ -302,6 +302,58 @@ mod tests {
         assert!(operation.wait_settlement().unwrap().all_released());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_directory_sink_failure_records_uncertain_effect_and_releases_owner() {
+        use std::fs::File;
+        use std::io::ErrorKind;
+
+        let directory = tempfile::tempdir().expect("directory sink should be created");
+        let directory_path = directory.path().to_owned();
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let sink = File::open(&directory_path).expect("directory can be opened as a file");
+                let mut reservations = vec![scope.reserve_resource().unwrap()];
+                let prepared = register_files(
+                    &scope,
+                    &mut reservations,
+                    None,
+                    Some((sink, FileSinkPolicy::Truncate)),
+                    None,
+                )
+                .expect("sink owner should register before truncation");
+                let sink = prepared.stdout.as_ref().expect("stdout owner should be retained");
+                let resource_id = sink.file.id();
+
+                let error =
+                    truncate_sinks(&prepared, &scope).expect_err("a directory cannot be truncated as an output file");
+                assert_eq!(error.kind(), ErrorKind::InvalidInput);
+                assert_eq!(prepared.stdout.as_ref().unwrap().file.id(), resource_id);
+                assert!(
+                    directory_path.is_dir(),
+                    "failed truncation must leave the directory present"
+                );
+                drop(prepared);
+                Ok::<_, String>(resource_id)
+            })
+            .unwrap();
+
+        let resource_id = match operation.wait_outcome().unwrap() {
+            OperationOutcome::Succeeded(resource_id) => resource_id,
+            other => panic!("directory sink truncation should be handled as a recorded effect: {other:?}"),
+        };
+        let settlement = operation.wait_settlement().unwrap();
+        assert!(settlement.all_released());
+        assert_eq!(settlement.effects_total, 1);
+        assert_eq!(settlement.effects[0].resource_id, Some(resource_id));
+        assert_eq!(settlement.effects[0].fact, qubit_operation::EffectFact::Unknown);
+        assert_eq!(
+            settlement.effects[0].description.as_str(),
+            "stdout sink truncation could not be confirmed"
+        );
+    }
+
     #[test]
     fn test_effect_record_overflow_does_not_block_sink_truncation() {
         let file = tempfile::NamedTempFile::new().unwrap();

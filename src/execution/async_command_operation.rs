@@ -82,3 +82,65 @@ impl DerefMut for AsyncCommandOperation {
         &mut self.inner
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOptions;
+    use qubit_operation::OperationOutcome;
+
+    use super::AsyncCommandOperation;
+    use crate::CommandError;
+    use crate::CommandErrorReason;
+    use crate::CommandOutput;
+
+    fn failed_handle(manager: &OperationManager) -> qubit_operation::OperationHandle<CommandOutput, CommandError> {
+        manager
+            .try_submit(OperationOptions::default(), |_| {
+                Err::<CommandOutput, _>(CommandError::from_reason(
+                    "async operation command",
+                    CommandErrorReason::Cancelled,
+                    None,
+                ))
+            })
+            .expect("operation should be accepted")
+    }
+
+    #[test]
+    fn test_async_handle_takes_stop_diagnostic_once_before_sync_conversion() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let diagnostic = CommandError::from_reason("async retained diagnostic", CommandErrorReason::Cancelled, None);
+        let slot = Arc::new(Mutex::new(Some(diagnostic)));
+        let mut operation = AsyncCommandOperation::new(failed_handle(&manager).into_async(), Arc::clone(&slot));
+
+        assert_eq!(
+            operation.take_stop_diagnostic().unwrap().command(),
+            "async retained diagnostic"
+        );
+        assert!(operation.take_stop_diagnostic().is_none());
+        assert!(slot.lock().unwrap().is_none());
+
+        let mut synchronous = operation.into_sync();
+        let OperationOutcome::Failed(failure) = synchronous.wait_outcome().unwrap() else {
+            panic!("operation should preserve its failed outcome");
+        };
+        assert_eq!(failure.command(), "async operation command");
+        synchronous.wait_settlement().unwrap();
+    }
+
+    #[test]
+    fn test_async_into_inner_preserves_operation_result_and_settlement() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let operation = AsyncCommandOperation::new(failed_handle(&manager).into_async(), Arc::new(Mutex::new(None)));
+
+        let mut inner = operation.into_inner().into_sync();
+        let OperationOutcome::Failed(failure) = inner.wait_outcome().unwrap() else {
+            panic!("inner handle should preserve its failed outcome");
+        };
+        assert_eq!(failure.command(), "async operation command");
+        inner.wait_settlement().unwrap();
+    }
+}

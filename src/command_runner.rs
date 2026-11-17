@@ -312,6 +312,7 @@ mod tests {
     use std::io::SeekFrom;
     #[cfg(unix)]
     use std::io::Write;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -547,6 +548,102 @@ mod tests {
         assert_eq!(runner.configured_max_stdout_bytes(), Some(19));
         assert_eq!(runner.configured_max_stderr_bytes(), Some(19));
         assert_eq!(runner.configured_max_total_output_bytes(), Some(23));
+    }
+
+    #[test]
+    fn test_public_runner_builder_and_accessor_items_preserve_values() {
+        let new: fn(Duration) -> CommandRunner = std::hint::black_box(CommandRunner::new);
+        let without_timeout: fn() -> CommandRunner = std::hint::black_box(CommandRunner::without_timeout);
+        let configured_timeout: fn(&CommandRunner) -> Option<Duration> =
+            std::hint::black_box(CommandRunner::configured_timeout);
+        let configured_timer: for<'a> fn(&'a CommandRunner) -> &'a dyn qubit_clock::Timer =
+            std::hint::black_box(CommandRunner::configured_timer);
+        let set_timer: fn(CommandRunner, Arc<dyn qubit_clock::Timer>) -> CommandRunner =
+            std::hint::black_box(CommandRunner::timer);
+        let set_directory: fn(CommandRunner, PathBuf) -> CommandRunner =
+            std::hint::black_box(CommandRunner::working_directory);
+        let set_success_code: fn(CommandRunner, i32) -> CommandRunner =
+            std::hint::black_box(CommandRunner::success_exit_code);
+        let set_success_codes: fn(CommandRunner, &[i32]) -> CommandRunner =
+            std::hint::black_box(CommandRunner::success_exit_codes);
+        let is_logging_disabled: fn(&CommandRunner) -> bool = std::hint::black_box(CommandRunner::is_logging_disabled);
+        let disable_logging: fn(CommandRunner, bool) -> CommandRunner =
+            std::hint::black_box(CommandRunner::disable_logging);
+        let truncation_fails: fn(&CommandRunner) -> bool =
+            std::hint::black_box(CommandRunner::is_output_truncation_failure_enabled);
+        let fail_on_truncation: fn(CommandRunner, bool) -> CommandRunner =
+            std::hint::black_box(CommandRunner::fail_on_output_truncation);
+        let set_redaction: fn(CommandRunner, RedactionPolicy) -> CommandRunner =
+            std::hint::black_box(CommandRunner::diagnostic_redaction_policy);
+        let redaction: for<'a> fn(&'a CommandRunner) -> &'a RedactionPolicy =
+            std::hint::black_box(CommandRunner::configured_diagnostic_redaction_policy);
+        let set_stdout_limit: fn(CommandRunner, usize) -> CommandRunner =
+            std::hint::black_box(CommandRunner::max_stdout_bytes);
+        let stdout_limit: fn(&CommandRunner) -> Option<usize> =
+            std::hint::black_box(CommandRunner::configured_max_stdout_bytes);
+        let set_stderr_limit: fn(CommandRunner, usize) -> CommandRunner =
+            std::hint::black_box(CommandRunner::max_stderr_bytes);
+        let stderr_limit: fn(&CommandRunner) -> Option<usize> =
+            std::hint::black_box(CommandRunner::configured_max_stderr_bytes);
+        let set_both_limits: fn(CommandRunner, usize) -> CommandRunner =
+            std::hint::black_box(CommandRunner::max_output_bytes);
+        let bounded: fn(CommandRunner, usize) -> CommandRunner = std::hint::black_box(CommandRunner::bounded_output);
+        let unbounded: fn(CommandRunner) -> CommandRunner = std::hint::black_box(CommandRunner::unbounded_output);
+        let set_total_limit: fn(CommandRunner, u64) -> CommandRunner =
+            std::hint::black_box(CommandRunner::max_total_output_bytes);
+        let total_limit: fn(&CommandRunner) -> Option<u64> =
+            std::hint::black_box(CommandRunner::configured_max_total_output_bytes);
+        let without_total_limit: fn(CommandRunner) -> CommandRunner =
+            std::hint::black_box(CommandRunner::without_total_output_limit);
+
+        let timeout = Duration::from_millis(75);
+        let runner = new(timeout);
+        assert_eq!(configured_timeout(&runner), Some(timeout));
+        let timer = Arc::new(ManualMonotonicClock::new_shared().new_timer());
+        let timer_domain = timer.clock().now().domain();
+        let directory = std::env::temp_dir().join("runner-builder-item-test");
+        let policy = RedactionPolicy::default()
+            .to_builder()
+            .fields(|fields| {
+                fields.raise("runner_builder_token", Sensitivity::Secret);
+            })
+            .expect("test redaction field should be valid")
+            .build()
+            .expect("test redaction policy should be valid");
+        let runner = set_timer(runner, timer);
+        let runner = set_directory(runner, directory.clone());
+        let runner = set_success_code(runner, 7);
+        let runner = set_success_codes(runner, &[3, 7]);
+        let runner = disable_logging(runner, true);
+        let runner = fail_on_truncation(runner, false);
+        let runner = set_redaction(runner, policy.clone());
+        let runner = set_stdout_limit(runner, 2);
+        let runner = set_stderr_limit(runner, 4);
+        let runner = set_both_limits(runner, 6);
+        let runner = bounded(runner, 8);
+        let runner = set_total_limit(runner, 10);
+
+        assert_eq!(configured_timer(&runner).clock().now().domain(), timer_domain);
+        assert_eq!(runner.configured_working_directory(), Some(directory.as_path()));
+        assert_eq!(runner.configured_success_exit_codes(), &[3, 7]);
+        assert!(is_logging_disabled(&runner));
+        assert!(truncation_fails(&runner));
+        assert_eq!(redaction(&runner), &policy);
+        assert_eq!(stdout_limit(&runner), Some(8));
+        assert_eq!(stderr_limit(&runner), Some(8));
+        assert_eq!(total_limit(&runner), Some(10));
+
+        let unbounded = unbounded(runner.clone());
+        assert_eq!(stdout_limit(&unbounded), None);
+        assert_eq!(stderr_limit(&unbounded), None);
+        assert!(!truncation_fails(&unbounded));
+        let without_total = without_total_limit(runner);
+        assert_eq!(stdout_limit(&without_total), Some(8));
+        assert_eq!(stderr_limit(&without_total), Some(8));
+        assert_eq!(total_limit(&without_total), None);
+
+        let untimed = without_timeout();
+        assert_eq!(configured_timeout(&untimed), None);
     }
 
     fn managed_file(scope: &OperationScope, file: File) -> qubit_operation::ResourceRef<Mutex<File>> {

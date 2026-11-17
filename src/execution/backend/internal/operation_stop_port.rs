@@ -108,4 +108,38 @@ mod tests {
         assert!(operation.wait_outcome().is_ok());
         operation.wait_settlement().unwrap();
     }
+
+    #[test]
+    fn test_drop_removes_gate_from_poisoned_registry() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let operation_id = operation.id();
+        let gate = std::sync::Arc::new(StartGate::default());
+        let gates = std::sync::Arc::new(std::sync::Mutex::new(HashMap::from([(
+            operation_id,
+            std::sync::Arc::clone(&gate),
+        )])));
+        let port = OperationStopPort {
+            operation_id,
+            gate,
+            gates: std::sync::Arc::downgrade(&gates),
+        };
+
+        let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _registry = gates.lock().unwrap();
+            panic!("simulate a panic while updating the operation gate registry");
+        }));
+        assert!(poison.is_err());
+        assert!(gates.is_poisoned());
+
+        drop(port);
+
+        let registry = gates.lock().unwrap_or_else(|error| error.into_inner());
+        assert!(!registry.contains_key(&operation_id));
+        drop(registry);
+        assert!(operation.wait_outcome().is_ok());
+        operation.wait_settlement().unwrap();
+    }
 }

@@ -936,11 +936,18 @@ mod tests {
         use std::time::Duration;
 
         use qubit_io::AsyncInput;
+        use qubit_operation::ManagerOptions;
+        use qubit_operation::OperationManager;
+        use qubit_operation::OperationOptions;
         use qubit_operation::OperationOutcome;
 
         use super::ManagedCommandRunnerApi;
         use super::setup;
         use crate::Command;
+        use crate::CommandErrorKind;
+        use crate::CommandErrorReason;
+        use crate::CommandExecutionConfig;
+        use crate::CommandExecutor;
         use crate::CommandResourceRunOptions;
         use crate::CommandSession;
         use crate::session::CommandSessionApi;
@@ -1066,7 +1073,51 @@ mod tests {
                 },
             ))
             .expect("parent operation should complete");
+            assert!(matches!(outcome, OperationOutcome::Succeeded(())));
+        }
 
+        #[test]
+        fn test_async_scoped_runner_maps_group_rejection_for_standard_and_resource_calls() {
+            let (manager, _executor, runner) = setup();
+            let other_manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+            let wrong_executor =
+                CommandExecutor::new(other_manager, CommandExecutionConfig::default()).expect("executor should start");
+            let outcome = block_on(
+                manager
+                    .as_async()
+                    .run(OperationOptions::default(), move |scope| async move {
+                        let ordinary = runner
+                            .run_async_in(
+                                &scope,
+                                &wrong_executor,
+                                Command::new("__must_not_spawn_for_wrong_manager__"),
+                                Default::default(),
+                            )
+                            .await
+                            .expect_err("wrong manager should reject a standard scoped request");
+                        let resources = runner
+                            .run_async_resources_in(
+                                &scope,
+                                &wrong_executor,
+                                Command::new("__must_not_spawn_for_wrong_manager__"),
+                                CommandResourceRunOptions::new(),
+                            )
+                            .await
+                            .expect_err("wrong manager should reject a resource scoped request");
+
+                        for error in [ordinary, resources] {
+                            assert_eq!(error.kind(), CommandErrorKind::ManagedOperationFailed);
+                            assert!(matches!(
+                                error.reason(),
+                                CommandErrorReason::ManagedOperationFailed { diagnostic }
+                                    if diagnostic == "submission rejected: GroupBinding(WrongManager)"
+                            ));
+                            assert!(error.output().is_none());
+                        }
+                        Ok::<_, crate::CommandError>(())
+                    }),
+            )
+            .expect("scope should catch both rejected child submissions");
             assert!(matches!(outcome, OperationOutcome::Succeeded(())));
         }
 

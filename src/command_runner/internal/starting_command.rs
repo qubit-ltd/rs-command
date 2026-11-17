@@ -562,6 +562,141 @@ mod tests {
         assert!(bridge.stdout_incomplete());
     }
 
+    #[cfg(feature = "async")]
+    #[test]
+    fn test_managed_abort_waits_for_stderr_and_stdin_helpers_before_releasing_lease() {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+        use std::time::Instant;
+
+        use super::super::captured_output::CapturedOutput;
+        use super::super::io_cancellation::IoCancellation;
+        use super::super::output_reader::OutputReader;
+        use super::super::stdin_writer::StdinWriter;
+        use crate::execution::backend::ReaperObserver;
+        use crate::execution::contracts::ReservationLease;
+        use crate::session::channel::SessionChannels;
+        use crate::session::contracts::SessionBridge;
+
+        let channels = SessionChannels::new();
+        let bridge: Arc<dyn SessionBridge> = channels.bridge.clone();
+        let chunk = vec![0x5a; 16 * 1024];
+        for _ in 0..4 {
+            bridge
+                .write_stdout(&chunk)
+                .expect("buffer should accept one complete channel capacity");
+        }
+
+        let force_release = Arc::new(AtomicBool::new(false));
+        let cancellations_seen = Arc::new(AtomicUsize::new(0));
+        let (stdout_cancel, stdout_token) = IoCancellation::pair().expect("stdout cancellation must initialize");
+        let stdout_force_release = Arc::clone(&force_release);
+        let stdout_cancellations_seen = Arc::clone(&cancellations_seen);
+        let stdout_bridge = Arc::clone(&bridge);
+        let stdout_reader = OutputReader::new(
+            std::thread::spawn(move || {
+                stdout_bridge
+                    .write_stdout(b"blocked startup output")
+                    .expect("managed startup abort should wake the blocked writer");
+                while !stdout_token.is_cancelled() && !stdout_force_release.load(Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+                if stdout_token.is_cancelled() {
+                    stdout_cancellations_seen.fetch_add(1, Ordering::AcqRel);
+                }
+                while !stdout_force_release.load(Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+                Ok(CapturedOutput::default())
+            }),
+            stdout_cancel,
+        );
+        channels.bridge.wait_for_stdout_writer_for_test();
+
+        let (stderr_cancel, stderr_token) = IoCancellation::pair().expect("stderr cancellation must initialize");
+        let stderr_force_release = Arc::clone(&force_release);
+        let stderr_cancellations_seen = Arc::clone(&cancellations_seen);
+        let stderr_reader = OutputReader::new(
+            std::thread::spawn(move || {
+                while !stderr_token.is_cancelled() && !stderr_force_release.load(Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+                if stderr_token.is_cancelled() {
+                    stderr_cancellations_seen.fetch_add(1, Ordering::AcqRel);
+                }
+                while !stderr_force_release.load(Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+                Ok(CapturedOutput::default())
+            }),
+            stderr_cancel,
+        );
+
+        let (stdin_cancel, stdin_token) = IoCancellation::pair().expect("stdin cancellation must initialize");
+        let stdin_force_release = Arc::clone(&force_release);
+        let stdin_cancellations_seen = Arc::clone(&cancellations_seen);
+        let stdin_writer = StdinWriter::new(
+            std::thread::spawn(move || {
+                while !stdin_token.is_cancelled() && !stdin_force_release.load(Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+                if stdin_token.is_cancelled() {
+                    stdin_cancellations_seen.fetch_add(1, Ordering::AcqRel);
+                }
+                while !stdin_force_release.load(Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+                Ok(())
+            }),
+            stdin_cancel,
+        );
+
+        let (observer, completed) = ReaperObserver::pair();
+        let lease_released = Arc::new(AtomicBool::new(false));
+        let lease_released_by_owner = Arc::clone(&lease_released);
+        let lease = ReservationLease::new(move || lease_released_by_owner.store(true, Ordering::Release));
+        let mut guard = StartingCommand::new_managed(
+            "redacted",
+            ManagedChildProcess::new(raw_child(), false),
+            Some(lease),
+            Some(observer.clone()),
+            Some(bridge.clone()),
+        );
+        guard.set_stdout_reader(stdout_reader);
+        guard.set_stderr_reader(stderr_reader);
+        guard.set_stdin_writer(Some(stdin_writer));
+        let error = guard.abort_managed(CommandError::from_reason(
+            "redacted",
+            CommandErrorReason::TimeFailed {
+                source: TimeError::InstantOverflow,
+            },
+            None,
+        ));
+
+        assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while cancellations_seen.load(Ordering::Acquire) < 3 && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        let all_helpers_cancelled = cancellations_seen.load(Ordering::Acquire) == 3;
+        assert!(!lease_released.load(Ordering::Acquire));
+
+        // Always release test helpers so a regression cannot strand the reaper worker.
+        force_release.store(true, Ordering::Release);
+        completed
+            .recv_timeout(Duration::from_secs(3))
+            .expect("reaper should join every started helper");
+
+        assert!(
+            all_helpers_cancelled,
+            "reaper should cancel stdout, stderr, and stdin helpers"
+        );
+        assert!(observer.is_complete());
+        assert!(lease_released.load(Ordering::Acquire));
+        assert!(bridge.stdout_incomplete());
+    }
+
     #[test]
     fn test_startup_abort_retains_primary_without_waiting_after_failed_kills() {
         let calls = Arc::new(Mutex::new(Vec::new()));
