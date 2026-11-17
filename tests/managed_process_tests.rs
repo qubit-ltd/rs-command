@@ -77,10 +77,7 @@ fn test_managed_spawn_failure_publishes_failure_and_released_settlement() {
         .unwrap();
     match operation.wait_outcome().unwrap() {
         OperationOutcome::Failed(error) => {
-            assert!(matches!(
-                error.reason(),
-                CommandErrorReason::SpawnFailed { .. }
-            ));
+            assert!(matches!(error.reason(), CommandErrorReason::SpawnFailed { .. }));
         }
         other => panic!("missing executable should fail: {other:?}"),
     }
