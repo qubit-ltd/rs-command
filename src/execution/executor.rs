@@ -1786,6 +1786,90 @@ mod executor_decision_tests {
     }
 }
 
+#[cfg(all(test, unix))]
+mod snapshot_failure_tests {
+    use std::io::Read;
+    use std::io::Seek;
+    use std::io::SeekFrom;
+    use std::io::Write;
+    use std::process::Command as ProcessCommand;
+
+    use qubit_operation::OperationManager;
+
+    use crate::Command;
+    use crate::CommandExecutionConfig;
+    use crate::CommandExecutor;
+    use crate::CommandResourceRunOptions;
+    use crate::CommandRunner;
+    use crate::execution::CommandSubmitFailureReason;
+
+    const CHILD_MARKER: &str = "QUBIT_COMMAND_SNAPSHOT_FAILURE_CHILD";
+
+    #[test]
+    fn test_resource_submission_returns_input_when_working_directory_snapshot_fails() {
+        if std::env::var_os(CHILD_MARKER).is_some() {
+            assert_snapshot_failure_returns_input();
+            return;
+        }
+
+        let output = ProcessCommand::new(std::env::current_exe().expect("test executable should be available"))
+            .arg("--exact")
+            .arg("execution::executor::snapshot_failure_tests::test_resource_submission_returns_input_when_working_directory_snapshot_fails")
+            .arg("--nocapture")
+            .env(CHILD_MARKER, "1")
+            .output()
+            .expect("isolated snapshot failure test should start");
+        assert!(
+            output.status.success(),
+            "child test failed\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn assert_snapshot_failure_returns_input() {
+        let mut input = tempfile::tempfile().expect("stdin file should be created");
+        input
+            .write_all(b"recoverable input bytes")
+            .expect("stdin fixture should be written");
+        input.seek(SeekFrom::Start(0)).expect("stdin cursor should be reset");
+
+        let manager = OperationManager::new(Default::default()).expect("manager should start");
+        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).expect("executor should start");
+        let removed_directory = tempfile::tempdir().expect("temporary directory should be created");
+        std::env::set_current_dir(removed_directory.path()).expect("current directory should change");
+        std::fs::remove_dir(removed_directory.path()).expect("current directory should be unlinked");
+
+        let failure = match executor.submit_resources(
+            CommandRunner::without_timeout(),
+            Command::new("true"),
+            CommandResourceRunOptions::new().stdin_file(input),
+        ) {
+            Ok(_) => panic!("submission must reject a missing working-directory snapshot"),
+            Err(failure) => failure,
+        };
+        match &failure.reason {
+            CommandSubmitFailureReason::Snapshot(snapshot) => {
+                assert!(snapshot.diagnostic.contains("working directory snapshot failed"));
+            }
+            other => panic!("expected snapshot failure, got {other:?}"),
+        }
+
+        let mut returned_input = failure
+            .options
+            .configured_stdin()
+            .expect("rejected submission must return its stdin owner")
+            .try_clone()
+            .expect("returned stdin should remain usable");
+        let mut bytes = Vec::new();
+        returned_input
+            .read_to_end(&mut bytes)
+            .expect("returned stdin should retain its bytes");
+        assert_eq!(bytes, b"recoverable input bytes");
+        assert_eq!(failure.command.program(), std::ffi::OsStr::new("true"));
+    }
+}
+
 #[cfg(all(test, feature = "async"))]
 fn futures_lite_block_on<F: std::future::Future>(future: F) -> F::Output {
     use std::sync::Arc;
@@ -2825,6 +2909,138 @@ mod command_executor_api_tests {
 
     #[cfg(unix)]
     #[test]
+    fn test_blocking_wait_apis_return_closed_capacity_for_root_and_scope() {
+        use super::CapacityFailure;
+        use super::CommandSubmitFailureReason;
+        use crate::execution::contracts::Scheduler;
+
+        let (manager, executor, runner) = setup();
+        executor.scheduler.close_admission();
+
+        let root_failure = match <CommandExecutor as CommandExecutorApi>::submit_wait_blocking(
+            &executor,
+            runner.clone(),
+            Command::new("must-not-run-root-wait-after-shutdown"),
+            Default::default(),
+        ) {
+            Err(failure) => failure,
+            Ok(_) => panic!("root blocking wait must return after shutdown closes admission"),
+        };
+        assert_eq!(
+            root_failure.reason,
+            CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
+        );
+        assert_eq!(root_failure.command.program(), "must-not-run-root-wait-after-shutdown");
+
+        let scoped_executor = executor.clone();
+        let scoped_result = manager
+            .run(qubit_operation::OperationOptions::default(), move |scope| {
+                let failure = match <CommandExecutor as CommandExecutorApi>::submit_wait_blocking_in(
+                    &scoped_executor,
+                    &scope,
+                    runner,
+                    Command::new("must-not-run-scoped-wait-after-shutdown"),
+                    Default::default(),
+                ) {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("scoped blocking wait must return after shutdown closes admission"),
+                };
+                assert_eq!(
+                    failure.reason,
+                    CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
+                );
+                assert_eq!(failure.command.program(), "must-not-run-scoped-wait-after-shutdown");
+                Ok::<_, crate::CommandError>(())
+            })
+            .unwrap();
+        assert!(matches!(scoped_result, OperationOutcome::Succeeded(())));
+        assert_eq!(executor.scheduler_snapshot().waiters, 0);
+        let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_blocking_resource_wait_rejects_over_budget_input_and_returns_file() {
+        use std::io::Read;
+        use std::io::Seek;
+        use std::io::Write;
+
+        use crate::execution::CapacityFailure;
+        use crate::execution::CommandSubmitFailureReason;
+
+        fn read_returned_input(failure: crate::execution::CommandResourceSubmitFailure) -> Vec<u8> {
+            assert_eq!(
+                failure.reason,
+                CommandSubmitFailureReason::Capacity(CapacityFailure::InputBytesExceeded)
+            );
+            let mut input = failure
+                .options
+                .configured_stdin()
+                .expect("rejected input owner should be returned")
+                .try_clone()
+                .unwrap();
+            input.rewind().unwrap();
+            let mut bytes = Vec::new();
+            input.read_to_end(&mut bytes).unwrap();
+            bytes
+        }
+
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let executor = CommandExecutor::new(
+            manager.clone(),
+            CommandExecutionConfig {
+                max_active: 1,
+                max_queued: 0,
+                max_waiters: 1,
+                max_queued_input_bytes: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let mut input = tempfile::tempfile().unwrap();
+        input.write_all(b"too-large").unwrap();
+        input.rewind().unwrap();
+        let failure = match <CommandExecutor as CommandExecutorApi>::submit_wait_resources_blocking(
+            &executor,
+            CommandRunner::without_timeout(),
+            Command::new("must-not-run-blocking-resource-wait"),
+            CommandResourceRunOptions::new().stdin_file(input),
+        ) {
+            Err(failure) => failure,
+            Ok(_) => panic!("over-budget input must be rejected without waiting"),
+        };
+        assert_eq!(read_returned_input(failure), b"too-large");
+
+        let mut input = tempfile::tempfile().unwrap();
+        input.write_all(b"too-large-scoped").unwrap();
+        input.rewind().unwrap();
+        let scoped_executor = executor.clone();
+        let scoped_result = manager
+            .run(qubit_operation::OperationOptions::default(), move |scope| {
+                let failure = match <CommandExecutor as CommandExecutorApi>::submit_wait_resources_blocking_in(
+                    &scoped_executor,
+                    &scope,
+                    CommandRunner::without_timeout(),
+                    Command::new("must-not-run-scoped-resource-wait"),
+                    CommandResourceRunOptions::new().stdin_file(input),
+                ) {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("over-budget scoped input must be rejected without waiting"),
+                };
+                assert_eq!(read_returned_input(failure), b"too-large-scoped");
+                Ok::<_, crate::CommandError>(())
+            })
+            .unwrap();
+        assert!(matches!(scoped_result, OperationOutcome::Succeeded(())));
+        let snapshot = executor.scheduler_snapshot();
+        assert_eq!(snapshot.active, 0);
+        assert_eq!(snapshot.queued, 0);
+        assert_eq!(snapshot.waiters, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_trait_submit_entry_points_execute_root_and_scoped_commands() {
         let (manager, executor, runner) = setup();
         assert_eq!(
@@ -3120,6 +3336,7 @@ mod command_executor_api_tests {
     #[cfg(all(feature = "async", unix))]
     mod async_tests {
         use std::future::Future;
+        use std::io::Read;
         use std::io::Seek;
         use std::io::Write;
         use std::sync::Arc;
@@ -3129,6 +3346,7 @@ mod command_executor_api_tests {
         use std::task::Waker;
 
         use super::Command;
+        use super::CommandExecutionConfig;
         use super::CommandExecutor;
         use super::CommandExecutorApi;
         use super::CommandResourceRunOptions;
@@ -3192,6 +3410,257 @@ mod command_executor_api_tests {
         #[test]
         fn test_trait_async_entry_points_run_root_and_scoped_commands() {
             block_on(async_trait_entry_points_run_root_and_scoped_commands());
+        }
+
+        #[test]
+        fn test_async_resource_wait_returns_over_budget_file_without_admission() {
+            block_on(async {
+                use crate::execution::CapacityFailure;
+                use crate::execution::CommandSubmitFailureReason;
+
+                let manager = super::super::OperationManager::new(Default::default()).unwrap();
+                let executor = CommandExecutor::new(
+                    manager,
+                    CommandExecutionConfig {
+                        max_active: 1,
+                        max_queued: 0,
+                        max_waiters: 1,
+                        max_queued_input_bytes: 2,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let mut input = tempfile::tempfile().unwrap();
+                input.write_all(b"over-budget").unwrap();
+                input.rewind().unwrap();
+
+                let failure = match <CommandExecutor as CommandExecutorApi>::submit_wait_resources(
+                    &executor,
+                    crate::CommandRunner::without_timeout(),
+                    Command::new("must-not-run-over-budget"),
+                    CommandResourceRunOptions::new().stdin_file(input),
+                )
+                .await
+                {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("an over-budget resource wait must be rejected"),
+                };
+                assert_eq!(
+                    failure.reason,
+                    CommandSubmitFailureReason::Capacity(CapacityFailure::InputBytesExceeded)
+                );
+                let mut returned_input = failure
+                    .options
+                    .configured_stdin()
+                    .expect("rejected input owner should be returned")
+                    .try_clone()
+                    .unwrap();
+                returned_input.rewind().unwrap();
+                let mut returned_bytes = Vec::new();
+                returned_input.read_to_end(&mut returned_bytes).unwrap();
+                assert_eq!(returned_bytes, b"over-budget");
+                let snapshot = executor.scheduler_snapshot();
+                assert_eq!(snapshot.active, 0);
+                assert_eq!(snapshot.queued, 0);
+                assert_eq!(snapshot.waiters, 0);
+            });
+        }
+
+        #[test]
+        fn test_async_wait_apis_return_closed_capacity_for_root_and_scope() {
+            block_on(async {
+                use crate::execution::CapacityFailure;
+                use crate::execution::CommandSubmitFailureReason;
+                use crate::execution::contracts::Scheduler;
+
+                let manager = super::super::OperationManager::new(Default::default()).unwrap();
+                let executor = CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).unwrap();
+                let runner = crate::CommandRunner::without_timeout();
+                executor.scheduler.close_admission();
+
+                let root_failure = match <CommandExecutor as CommandExecutorApi>::submit_wait(
+                    &executor,
+                    runner.clone(),
+                    Command::new("must-not-run-root-async-wait-after-shutdown"),
+                    Default::default(),
+                )
+                .await
+                {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("root async wait must return after shutdown closes admission"),
+                };
+                assert_eq!(
+                    root_failure.reason,
+                    CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
+                );
+                assert_eq!(
+                    root_failure.command.program(),
+                    "must-not-run-root-async-wait-after-shutdown"
+                );
+
+                let scoped_executor = executor.clone();
+                let scoped_result = manager
+                    .as_async()
+                    .run(Default::default(), move |scope| async move {
+                        let failure = match <CommandExecutor as CommandExecutorApi>::submit_wait_in(
+                            &scoped_executor,
+                            &scope,
+                            runner,
+                            Command::new("must-not-run-scoped-async-wait-after-shutdown"),
+                            Default::default(),
+                        )
+                        .await
+                        {
+                            Err(failure) => failure,
+                            Ok(_) => panic!("scoped async wait must return after shutdown closes admission"),
+                        };
+                        assert_eq!(
+                            failure.reason,
+                            CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
+                        );
+                        assert_eq!(
+                            failure.command.program(),
+                            "must-not-run-scoped-async-wait-after-shutdown"
+                        );
+                        Ok::<_, crate::CommandError>(())
+                    })
+                    .await
+                    .unwrap();
+                assert!(matches!(scoped_result, OperationOutcome::Succeeded(())));
+                assert_eq!(executor.scheduler_snapshot().waiters, 0);
+                let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
+            });
+        }
+
+        #[test]
+        fn test_async_wait_returns_capacity_error_when_waiter_is_closed() {
+            use std::thread;
+            use std::time::Instant;
+
+            block_on(async {
+                use crate::execution::CapacityFailure;
+                use crate::execution::CommandSubmitFailureReason;
+                use crate::execution::contracts::Scheduler;
+
+                let manager = super::super::OperationManager::new(Default::default()).unwrap();
+                let executor = CommandExecutor::new(
+                    manager,
+                    CommandExecutionConfig {
+                        max_active: 1,
+                        max_queued: 0,
+                        max_waiters: 1,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let mut active = executor
+                    .submit(
+                        crate::CommandRunner::without_timeout(),
+                        Command::new("sh").arg("-c").arg("sleep 5"),
+                        Default::default(),
+                    )
+                    .unwrap();
+                let active_deadline = Instant::now() + Duration::from_secs(2);
+                while executor.scheduler_snapshot().active == 0 {
+                    assert!(
+                        Instant::now() < active_deadline,
+                        "command did not acquire the only slot"
+                    );
+                    std::thread::yield_now();
+                }
+
+                let waiting_executor = executor.clone();
+                let waiter = thread::spawn(move || {
+                    block_on(<CommandExecutor as CommandExecutorApi>::submit_wait(
+                        &waiting_executor,
+                        crate::CommandRunner::without_timeout(),
+                        Command::new("must-not-run-after-waiter-close"),
+                        Default::default(),
+                    ))
+                });
+                let waiter_deadline = Instant::now() + Duration::from_secs(2);
+                while executor.scheduler_snapshot().waiters == 0 {
+                    assert!(
+                        Instant::now() < waiter_deadline,
+                        "async submission did not register its waiter"
+                    );
+                    thread::yield_now();
+                }
+
+                executor.scheduler.close_admission();
+                let failure = match waiter.join().expect("async wait thread should finish") {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("closed capacity must reject the waiting async submission"),
+                };
+                assert_eq!(
+                    failure.reason,
+                    CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
+                );
+                assert_eq!(failure.command.program(), "must-not-run-after-waiter-close");
+                assert_eq!(executor.scheduler_snapshot().waiters, 0);
+
+                let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
+                let outcome = active.wait_outcome().unwrap();
+                assert!(matches!(outcome, OperationOutcome::Stopped(_)));
+                assert!(active.wait_settlement().unwrap().all_released());
+            });
+        }
+
+        #[test]
+        fn test_async_wait_returns_capacity_error_when_waiter_limit_is_zero() {
+            block_on(async {
+                use crate::execution::CapacityFailure;
+                use crate::execution::CommandSubmitFailureReason;
+
+                let manager = super::super::OperationManager::new(Default::default()).unwrap();
+                let executor = CommandExecutor::new(
+                    manager,
+                    CommandExecutionConfig {
+                        max_active: 1,
+                        max_queued: 0,
+                        max_waiters: 0,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let mut active = executor
+                    .submit(
+                        crate::CommandRunner::without_timeout(),
+                        Command::new("sh").arg("-c").arg("sleep 5"),
+                        Default::default(),
+                    )
+                    .unwrap();
+                let active_deadline = std::time::Instant::now() + Duration::from_secs(2);
+                while executor.scheduler_snapshot().active == 0 {
+                    assert!(
+                        std::time::Instant::now() < active_deadline,
+                        "command did not acquire the only slot"
+                    );
+                    std::thread::yield_now();
+                }
+
+                let failure = match <CommandExecutor as CommandExecutorApi>::submit_wait(
+                    &executor,
+                    crate::CommandRunner::without_timeout(),
+                    Command::new("must-not-run-after-waiter-limit-rejection"),
+                    Default::default(),
+                )
+                .await
+                {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("waiter budget zero must reject a saturated async wait"),
+                };
+                assert_eq!(
+                    failure.reason,
+                    CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull)
+                );
+                assert_eq!(failure.command.program(), "must-not-run-after-waiter-limit-rejection");
+                assert_eq!(executor.scheduler_snapshot().waiters, 0);
+
+                let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
+                assert!(matches!(active.wait_outcome().unwrap(), OperationOutcome::Stopped(_)));
+                assert!(active.wait_settlement().unwrap().all_released());
+            });
         }
 
         #[test]

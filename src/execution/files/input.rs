@@ -211,6 +211,8 @@ fn _policy_is_exhaustive(policy: FileSinkPolicy) {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+    use std::fs::OpenOptions;
+    use std::path::Path;
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -220,6 +222,8 @@ mod tests {
     use qubit_operation::OperationOptions;
 
     use super::ResourceInput;
+    use crate::CommandRunOptions;
+    use crate::execution::contracts::ExecutionSnapshot;
     use crate::resource_run_options::CommandResourceRunOptions;
     use crate::resource_run_options::FileSinkPolicy;
     static PREPARATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -330,6 +334,53 @@ mod tests {
             completion.outcome,
             qubit_operation::OperationOutcome::Succeeded(ref state)
                 if state.contains("stderr: true") && state.contains("stdout: false")
+        ));
+    }
+
+    #[test]
+    fn test_snapshot_directory_rejects_relative_stderr_alias_without_truncating_sink() {
+        let _guard = PREPARATION_TEST_LOCK.lock().expect("test lock should be available");
+        let snapshot_dir = tempfile::tempdir().expect("snapshot directory should be created");
+        let output = tempfile::NamedTempFile::new().expect("stderr sink should be created");
+        std::fs::write(output.path(), b"must survive").expect("sink should be populated");
+        let output_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(output.path())
+            .expect("sink should be opened");
+        let alias_name = format!("stderr-sink-alias-{}", std::process::id());
+        let alias_path = snapshot_dir.path().join(&alias_name);
+        std::fs::hard_link(output.path(), &alias_path).expect("snapshot alias should be linked");
+        assert!(
+            !Path::new(&alias_name).exists(),
+            "snapshot path should be resolved explicitly"
+        );
+        let output_path = output.path().to_path_buf();
+        let snapshot = ExecutionSnapshot {
+            working_directory: snapshot_dir.path().to_path_buf(),
+            environment: Vec::new(),
+        };
+
+        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let group = manager.group(GroupOptions { capacity: 2 }).expect("group should start");
+        let completion = group
+            .run_and_settle(OperationOptions::default(), move |scope| {
+                let failure = Box::new(
+                    CommandResourceRunOptions::new()
+                        .options(CommandRunOptions::new().tee_stderr_to_file(alias_name))
+                        .stderr_sink(output_file, FileSinkPolicy::Truncate),
+                )
+                .prepare_files_with_snapshot(&scope, &snapshot)
+                .expect_err("snapshot-relative stderr alias must be rejected");
+                assert!(failure.input.is_some(), "the stderr owner must remain recoverable");
+                assert!(failure.prepared.is_none(), "validation must fail before registration");
+                assert_eq!(std::fs::read(output_path).unwrap(), b"must survive");
+                Ok::<_, ()>(())
+            })
+            .expect("operation should be accepted");
+        assert!(matches!(
+            completion.outcome,
+            qubit_operation::OperationOutcome::Succeeded(())
         ));
     }
 }
