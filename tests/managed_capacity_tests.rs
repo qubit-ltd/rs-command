@@ -161,16 +161,9 @@ fn test_active_resource_admission_obeys_file_byte_estimate() {
 
     assert_eq!(
         failure.reason,
-        qubit_command::execution::CommandSubmitFailureReason::Capacity(
-            CapacityFailure::InputBytesExceeded
-        )
+        qubit_command::execution::CommandSubmitFailureReason::Capacity(CapacityFailure::InputBytesExceeded)
     );
-    let mut returned = failure
-        .options
-        .configured_stdin()
-        .unwrap()
-        .try_clone()
-        .unwrap();
+    let mut returned = failure.options.configured_stdin().unwrap().try_clone().unwrap();
     returned.seek(SeekFrom::Start(0)).unwrap();
     let mut contents = Vec::new();
     returned.read_to_end(&mut contents).unwrap();
@@ -194,9 +187,7 @@ fn test_existing_output_length_counts_before_truncate() {
 
     assert_eq!(
         failure.reason,
-        qubit_command::execution::CommandSubmitFailureReason::Capacity(
-            CapacityFailure::InputBytesExceeded
-        )
+        qubit_command::execution::CommandSubmitFailureReason::Capacity(CapacityFailure::InputBytesExceeded)
     );
     observer.seek(SeekFrom::Start(0)).unwrap();
     let mut contents = Vec::new();
