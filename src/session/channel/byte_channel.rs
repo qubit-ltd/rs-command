@@ -134,9 +134,6 @@ impl ByteChannel {
                 "stream reader was dropped",
             )));
         }
-        if s.writer_closed {
-            return Poll::Ready(Err(io::Error::new(io::ErrorKind::BrokenPipe, "stream is closed")));
-        }
         if s.stop_writes {
             s.incomplete = true;
             if let Some(budget) = s.budget.clone() {
@@ -147,6 +144,9 @@ impl ByteChannel {
                 }
             }
             return Poll::Ready(Ok(input.len()));
+        }
+        if s.writer_closed {
+            return Poll::Ready(Err(io::Error::new(io::ErrorKind::BrokenPipe, "stream is closed")));
         }
         if s.policy == SessionStreamPolicy::Discard {
             let n = input.len().min(CHANNEL_CAPACITY - s.bytes.len());
@@ -1178,10 +1178,7 @@ mod tests {
     #[test]
     fn test_stop_output_accepts_and_accounts_for_later_poll_writes() {
         let budget = Arc::new(OutputBudget::new(5));
-        let channel = ByteChannel::with_policy(
-            SessionStreamPolicy::TerminateAfterBytes(5),
-            Some(budget.clone()),
-        );
+        let channel = ByteChannel::with_policy(SessionStreamPolicy::TerminateAfterBytes(5), Some(budget.clone()));
         let counter = Arc::new(CountWake(AtomicUsize::new(0)));
         let waker = std::task::Waker::from(counter);
         let mut context = std::task::Context::from_waker(&waker);
@@ -1213,10 +1210,7 @@ mod tests {
     #[test]
     fn test_exceeded_budget_counts_all_later_async_output_without_buffering() {
         let budget = Arc::new(OutputBudget::new(2));
-        let channel = ByteChannel::with_policy(
-            SessionStreamPolicy::TerminateAfterBytes(2),
-            Some(budget.clone()),
-        );
+        let channel = ByteChannel::with_policy(SessionStreamPolicy::TerminateAfterBytes(2), Some(budget.clone()));
         let counter = Arc::new(CountWake(AtomicUsize::new(0)));
         let waker = std::task::Waker::from(counter);
         let mut context = std::task::Context::from_waker(&waker);
