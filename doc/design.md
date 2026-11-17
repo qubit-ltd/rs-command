@@ -332,7 +332,8 @@ stateDiagram-v2
     Reserved --> PreparedAdapter: operation manager accepts
     Reserved --> Rejected: manager rejects; request restored
     PreparedAdapter --> Activated: scheduler activates
-    PreparedAdapter --> Rejected: activation fails / abandoned
+    PreparedAdapter --> ActivationFailed: scheduler activation fails; ExecutionFailed published
+    PreparedAdapter --> Abandoned: accepted operation abandoned; inputs dropped
     Activated --> FilePreparation
     FilePreparation --> FailedRecovery: owned-file preparation fails
     FilePreparation --> Running: files prepared; start authorized
@@ -343,12 +344,19 @@ stateDiagram-v2
     Outcome --> Settlement: input released, cleanup known
     Outcome --> Pending: cleanup still owned by recovery
     Pending --> Recovery
+    ActivationFailed --> Settlement: released settlement
+    Abandoned --> Settlement: released settlement
     Rejected --> [*]
     Settlement --> [*]
 ```
 
 Admission rejection occurs before process execution and the submit failure
-retains the unaccepted request. Resource preparation happens after activation;
+retains the unaccepted request. Once `OperationManager` accepts the operation,
+activation failure is a distinct terminal operation result: the adapter
+publishes `ExecutionFailed` and a released settlement, and it drops the
+unavailable or rejected inputs. Abandoning a prepared, accepted operation
+also drops its inputs and releases its reservation; it is not a submit
+rejection and does not restore the request. Resource preparation happens after activation;
 it can fail after ownership transfer, so the failure path retains the original
 resource input and a capacity lease for recovery. Once the runner commits file
 resources, truncation and later spawn failures can have filesystem side
@@ -359,7 +367,7 @@ settled. `CommandOperation` callers observe settlement separately; a
 
 | Owner | Handoff | Release condition |
 | --- | --- | --- |
-| Executor request and reservation | Executor to prepared adapter, then scheduler on activation | Rejected/unactivated input is restored or dropped; activated reservation record is removed after its owner and all leases are released |
+| Executor request and reservation | Executor to prepared adapter, then scheduler on activation | Manager rejection restores the unaccepted request; accepted activation failure or abandon drops its inputs and settles released; an activated reservation record is removed after its owner and all leases are released |
 | Child process and I/O helpers | Runner to `RunningCommand`; uncertain cleanup moves the owner to the reaper | Helpers and child are joined/reaped, or retained recovery ownership completes; a successful Windows cancellation request alone does not release the helper |
 | Owned stdin/stdout/stderr files | Resource input to `PreparedFiles`, then runner I/O state | Normal finalization closes them; preparation failure retains them for recovery; file commit may already have changed output contents |
 | Reservation owner and lease | Reservation owner retains a lease for runner/recovery cleanup | Accounting is released only when the scheduler record is removed after the final lease; releasing the operation owner alone may leave a lease active |
