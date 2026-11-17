@@ -2967,6 +2967,7 @@ mod command_executor_api_tests {
         use super::Duration;
         use super::OperationOutcome;
         use super::setup;
+        use crate::session::CommandSessionApi;
 
         struct ThreadWake(std::thread::Thread);
         impl Wake for ThreadWake {
@@ -2987,6 +2988,18 @@ mod command_executor_api_tests {
                     return value;
                 }
                 std::thread::park_timeout(Duration::from_secs(2));
+            }
+        }
+
+        async fn read_all(reader: &mut (impl qubit_io::AsyncInput<Item = u8> + Unpin)) -> std::io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            let mut buffer = [0_u8; 128];
+            loop {
+                let count = reader.read_async(&mut buffer).await?;
+                if count == 0 {
+                    return Ok(bytes);
+                }
+                bytes.extend_from_slice(&buffer[..count]);
             }
         }
 
@@ -3011,6 +3024,106 @@ mod command_executor_api_tests {
         #[test]
         fn test_trait_async_entry_points_run_root_and_scoped_commands() {
             block_on(async_trait_entry_points_run_root_and_scoped_commands());
+        }
+
+        #[test]
+        fn test_scoped_managed_sessions_settle_and_release_resource_admission() {
+            block_on(async {
+                let (manager, executor, runner) = setup();
+                let scoped_executor = executor.clone();
+                let scoped_runner = runner.clone();
+                let result = manager
+                    .as_async()
+                    .run(Default::default(), move |scope| async move {
+                        let mut standard = scoped_executor
+                            .start_session_managed_in(
+                                &scope,
+                                scoped_runner.clone(),
+                                Command::new("sh").arg("-c").arg("printf scoped-session"),
+                                Default::default(),
+                            )
+                            .map_err(|error| {
+                                crate::CommandError::from_reason(
+                                    "start_session_managed_in",
+                                    crate::CommandErrorReason::ManagedOperationFailed {
+                                        diagnostic: error.to_string(),
+                                    },
+                                    None,
+                                )
+                            })?;
+                        let mut resources = scoped_executor
+                            .start_session_resources_managed_in(
+                                &scope,
+                                scoped_runner,
+                                Command::new("sh").arg("-c").arg("printf scoped-resource-session"),
+                                CommandResourceRunOptions::new(),
+                            )
+                            .map_err(|error| {
+                                crate::CommandError::from_reason(
+                                    "start_session_resources_managed_in",
+                                    crate::CommandErrorReason::ManagedOperationFailed {
+                                        diagnostic: error.to_string(),
+                                    },
+                                    None,
+                                )
+                            })?;
+                        let mut standard_stdin = standard.take_stdin().expect("session stdin should be present");
+                        qubit_io::AsyncClose::close_async(&mut standard_stdin)
+                            .await
+                            .expect("session stdin should close");
+                        let mut standard_stdout = standard.take_stdout().expect("session stdout should be present");
+                        let mut standard_stderr = standard.take_stderr().expect("session stderr should be present");
+                        let standard_output = read_all(&mut standard_stdout)
+                            .await
+                            .expect("session stdout should be readable");
+                        let standard_error = read_all(&mut standard_stderr)
+                            .await
+                            .expect("session stderr should be readable");
+                        let mut standard_operation = standard
+                            .take_operation()
+                            .expect("standard session should own its operation");
+                        assert!(matches!(
+                            standard_operation.wait_outcome().expect("session should have an outcome"),
+                            OperationOutcome::Succeeded(_)
+                        ));
+                        standard_operation.wait_settlement().expect("standard session should settle");
+
+                        let mut resource_stdin = resources.take_stdin().expect("resource session stdin should be present");
+                        qubit_io::AsyncClose::close_async(&mut resource_stdin)
+                            .await
+                            .expect("resource session stdin should close");
+                        let mut resource_stdout = resources.take_stdout().expect("resource session stdout should be present");
+                        let mut resource_stderr = resources.take_stderr().expect("resource session stderr should be present");
+                        let resource_output = read_all(&mut resource_stdout)
+                            .await
+                            .expect("resource session stdout should be readable");
+                        let resource_error = read_all(&mut resource_stderr)
+                            .await
+                            .expect("resource session stderr should be readable");
+                        let mut resource_operation = resources
+                            .take_operation()
+                            .expect("resource session should own its operation");
+                        assert!(matches!(
+                            resource_operation.wait_outcome().expect("resource session should have an outcome"),
+                            OperationOutcome::Succeeded(_)
+                        ));
+                        resource_operation.wait_settlement().expect("resource session should settle");
+                        Ok::<_, crate::CommandError>((standard_output, standard_error, resource_output, resource_error))
+                    })
+                    .await
+                    .expect("both scoped sessions should complete");
+                match result {
+                    OperationOutcome::Succeeded((standard, standard_error, resource, resource_error)) => {
+                        assert_eq!(standard, b"scoped-session");
+                        assert!(standard_error.is_empty());
+                        assert_eq!(resource, b"scoped-resource-session");
+                        assert!(resource_error.is_empty());
+                    }
+                    _ => panic!("scoped sessions failed"),
+                }
+                assert_eq!(executor.scheduler_snapshot().active, 0);
+                assert_eq!(executor.scheduler_snapshot().queued, 0);
+            });
         }
 
         async fn async_trait_entry_points_run_root_and_scoped_commands() {
