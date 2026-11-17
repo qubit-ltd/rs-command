@@ -773,4 +773,109 @@ mod tests {
         drop(reservation);
         assert_eq!((scheduler.snapshot().active, scheduler.snapshot().input_bytes,), (0, 0));
     }
+
+    #[test]
+    fn test_reservation_rejections_report_byte_and_queue_limits() {
+        let scheduler = BoundedScheduler::new(config(1, 1)).unwrap();
+        let active = scheduler.try_reserve(8).unwrap();
+        assert_eq!(
+            scheduler.try_reserve(1).unwrap_err(),
+            CapacityFailure::InputBytesExceeded
+        );
+        drop(active);
+
+        let active = scheduler.try_reserve(0).unwrap();
+        let queued = scheduler.try_reserve(0).unwrap();
+        assert_eq!(
+            scheduler.try_reserve(0).unwrap_err(),
+            CapacityFailure::QueueFull
+        );
+
+        scheduler.close_admission();
+        assert_eq!(
+            scheduler.try_reserve(0).unwrap_err(),
+            CapacityFailure::Closed
+        );
+        drop((active, queued));
+    }
+
+    #[test]
+    fn test_waiter_limit_and_release_notification_preserve_capacity() {
+        let scheduler = BoundedScheduler::new(config(0, 1)).unwrap();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = Waker::from(counter.clone());
+
+        scheduler.register_waiter(Some(&waker)).unwrap();
+        assert_eq!(
+            scheduler.register_waiter(None),
+            Err(CapacityFailure::QueueFull)
+        );
+        drop(permit);
+        assert_eq!(counter.0.load(Ordering::SeqCst), 1);
+        assert_eq!(scheduler.snapshot().waiters, 0);
+        assert_eq!(scheduler.register_waiter_if_full(0, &waker), Ok(None));
+    }
+
+    #[test]
+    fn test_blocking_capacity_wait_succeeds_after_release_notification() {
+        let scheduler = BoundedScheduler::new(config(0, 1)).unwrap();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let waiting = scheduler.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            done_tx.send(waiting.wait_for_capacity(0, None)).unwrap();
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while scheduler.snapshot().waiters == 0 && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        drop(permit);
+
+        assert!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        thread.join().unwrap();
+        assert_eq!(scheduler.snapshot().waiters, 0);
+    }
+
+    struct NoopStop;
+
+    impl crate::execution::contracts::StopPort for NoopStop {
+        fn request_stop(&self, _reason: qubit_operation::StopReason) {}
+    }
+
+    #[test]
+    fn test_try_next_dispatches_enqueued_job_and_releases_its_permit() {
+        use std::sync::atomic::AtomicBool;
+
+        use crate::execution::contracts::ScheduledJob;
+        use crate::execution::contracts::Scheduler;
+
+        let scheduler = BoundedScheduler::new(config(0, 1)).unwrap();
+        let permit = scheduler.try_reserve(3).unwrap();
+        let invoked = Arc::new(AtomicBool::new(false));
+        let callback_invoked = Arc::clone(&invoked);
+        scheduler
+            .enqueue(
+                ScheduledJob {
+                    run: Box::new(move |_permit| {
+                        callback_invoked.store(true, Ordering::SeqCst);
+                    }),
+                    stop: Arc::new(NoopStop),
+                },
+                permit,
+            )
+            .unwrap();
+
+        let (job, permit) = scheduler
+            .try_next()
+            .expect("enqueued job should be available");
+        (job.run)(permit);
+
+        assert!(invoked.load(Ordering::SeqCst));
+        assert_eq!(scheduler.snapshot().active, 0);
+        assert_eq!(scheduler.snapshot().input_bytes, 0);
+        assert!(scheduler.try_next().is_none());
+    }
 }
