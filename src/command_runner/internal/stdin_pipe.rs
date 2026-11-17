@@ -546,6 +546,23 @@ mod tests {
         child.wait().expect("test child should be waitable");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_session_stdin_reports_missing_child_pipe() {
+        let bridge = Arc::new(TestSessionBridge::new([], false));
+        let mut child = ProcessCommand::new("rustc")
+            .arg("--version")
+            .stdin(Stdio::null())
+            .spawn()
+            .expect("test child should spawn");
+
+        let error = write_stdin_session("command", &mut child, None, Some(bridge))
+            .expect_err("a session cannot start without a child stdin pipe");
+
+        assert_eq!(error.kind(), CommandErrorKind::WriteInputFailed);
+        child.wait().expect("test child should be waitable");
+    }
+
     #[test]
     fn test_write_stdin_bytes_delivers_payload_and_closes_child_stdin() {
         let mut child = ProcessCommand::new("sh")

@@ -314,13 +314,21 @@ mod tests {
 
     use qubit_clock::ManualMonotonicClock;
     use qubit_clock::MonotonicClock;
+    use qubit_operation::ClockDomainId;
+    use qubit_operation::ClockSource;
+    use qubit_operation::ContextOptions;
+    use qubit_operation::Deadline;
     use qubit_operation::ManagerOptions;
+    use qubit_operation::MonotonicTime;
+    use qubit_operation::OperationContext;
     use qubit_operation::OperationManager;
     use qubit_operation::OperationOutcome;
     use qubit_operation::OperationScope;
+    use qubit_operation::TimerRegistration;
     use qubit_redact::RedactionPolicy;
 
     use super::CommandRunner;
+    use super::RunTreePolicy;
     use super::apply_prepared_files;
     use super::start_output_reader;
     use super::take_output_pipe;
@@ -349,6 +357,56 @@ mod tests {
             false,
         )
         .expect("test command should prepare")
+    }
+
+    struct FixedClock(MonotonicTime);
+
+    impl ClockSource for FixedClock {
+        fn now(&self) -> MonotonicTime {
+            self.0
+        }
+
+        fn register_deadline(
+            &self,
+            _at: MonotonicTime,
+            _waker: std::task::Waker,
+        ) -> Box<dyn TimerRegistration> {
+            Box::new(NoopTimerRegistration)
+        }
+    }
+
+    struct NoopTimerRegistration;
+
+    impl TimerRegistration for NoopTimerRegistration {
+        fn cancel(self: Box<Self>) {}
+    }
+
+    #[test]
+    fn test_expired_operation_context_stops_before_command_spawn() {
+        let domain = ClockDomainId::new_unique();
+        let context = OperationContext::new(ContextOptions {
+            clock: Some(Arc::new(FixedClock(MonotonicTime::new(domain, 1)))),
+            deadline: Some(Deadline::at(MonotonicTime::new(domain, 0))),
+            budget: None,
+        })
+        .expect("clock and deadline should share a domain");
+
+        let error = CommandRunner::without_timeout()
+            .run_with_tree_policy(
+                crate::Command::new("__expired_operation_must_not_spawn__"),
+                CommandRunOptions::new(),
+                RunTreePolicy {
+                    operation_context: Some(context.clone()),
+                    ..Default::default()
+                },
+            )
+            .expect_err("an expired operation context should stop before spawning");
+
+        assert_eq!(error.kind(), CommandErrorKind::CancelledBeforeStart);
+        assert_eq!(
+            context.stop_reason(),
+            Some(qubit_operation::StopReason::Timeout)
+        );
     }
 
     #[test]
