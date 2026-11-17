@@ -2,8 +2,11 @@
 //    Copyright (c) 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-//! Behavior tests for [`CommandRunner`](qubit_command::CommandRunner) configuration.
+//! Behavior tests for [`CommandRunner`](qubit_command::CommandRunner)
+//! configuration.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -54,14 +57,8 @@ fn test_runner_working_directory_and_timer_builders_are_observable() {
         .working_directory(directory.clone())
         .timer(Arc::new(clock.new_timer()));
 
-    assert_eq!(
-        runner.configured_working_directory(),
-        Some(directory.as_path())
-    );
-    assert_eq!(
-        runner.configured_timer().clock().now().domain(),
-        expected_domain
-    );
+    assert_eq!(runner.configured_working_directory(), Some(directory.as_path()));
+    assert_eq!(runner.configured_timer().clock().now().domain(), expected_domain);
 }
 
 #[cfg(unix)]
@@ -111,10 +108,7 @@ fn test_runner_output_configuration_builders_keep_independent_policies() {
     assert_eq!(shared.configured_max_stderr_bytes(), Some(6));
     assert_eq!(shared.configured_max_total_output_bytes(), Some(9));
 
-    let bounded = shared
-        .clone()
-        .fail_on_output_truncation(false)
-        .bounded_output(5);
+    let bounded = shared.clone().fail_on_output_truncation(false).bounded_output(5);
     assert_eq!(bounded.configured_max_stdout_bytes(), Some(5));
     assert_eq!(bounded.configured_max_stderr_bytes(), Some(5));
     assert!(bounded.is_output_truncation_failure_enabled());

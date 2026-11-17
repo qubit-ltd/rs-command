@@ -120,10 +120,7 @@ fn test_managed_stop_after_child_start_waits_for_tree_settlement() {
 
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     while !ready.exists() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "child process should start"
-        );
+        assert!(std::time::Instant::now() < deadline, "child process should start");
         std::thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(
