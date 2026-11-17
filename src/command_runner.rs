@@ -396,6 +396,61 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_runner_policy_accessors_preserve_independent_limits_and_builder_order() {
+        let clock = ManualMonotonicClock::new_shared();
+        let timer_domain = clock.now().domain();
+        let working_directory = std::env::temp_dir().join("runner-policy-accessor-test");
+        let runner = CommandRunner::new(Duration::from_millis(125))
+            .timer(Arc::new(clock.new_timer()))
+            .working_directory(working_directory.clone())
+            .success_exit_code(7)
+            .success_exit_codes(&[3, 7])
+            .max_stdout_bytes(2)
+            .max_stderr_bytes(4)
+            .fail_on_output_truncation(false)
+            .max_total_output_bytes(19)
+            .disable_logging(true)
+            .bounded_output(6);
+
+        assert_eq!(
+            runner.configured_timeout(),
+            Some(Duration::from_millis(125))
+        );
+        assert_eq!(
+            runner.configured_timer().clock().now().domain(),
+            timer_domain
+        );
+        assert_eq!(
+            runner.configured_working_directory(),
+            Some(working_directory.as_path())
+        );
+        assert_eq!(runner.configured_success_exit_codes(), &[3, 7]);
+        assert!(runner.is_logging_disabled());
+        assert!(runner.is_output_truncation_failure_enabled());
+        assert_eq!(runner.configured_max_stdout_bytes(), Some(6));
+        assert_eq!(runner.configured_max_stderr_bytes(), Some(6));
+        assert_eq!(runner.configured_max_total_output_bytes(), Some(19));
+
+        let without_memory_limits = runner.clone().unbounded_output();
+        assert_eq!(without_memory_limits.configured_max_stdout_bytes(), None);
+        assert_eq!(without_memory_limits.configured_max_stderr_bytes(), None);
+        assert!(!without_memory_limits.is_output_truncation_failure_enabled());
+        assert_eq!(
+            without_memory_limits.configured_max_total_output_bytes(),
+            Some(19)
+        );
+
+        let without_total_budget = runner.without_total_output_limit();
+        assert_eq!(without_total_budget.configured_max_stdout_bytes(), Some(6));
+        assert_eq!(without_total_budget.configured_max_stderr_bytes(), Some(6));
+        assert_eq!(
+            without_total_budget.configured_max_total_output_bytes(),
+            None
+        );
+        assert!(without_total_budget.is_output_truncation_failure_enabled());
+    }
+
     fn managed_file(scope: &OperationScope, file: File) -> qubit_operation::ResourceRef<Mutex<File>> {
         scope
             .manage(Mutex::new(file))
