@@ -464,10 +464,71 @@ mod activation_failure_tests {
     use crate::CommandRunner;
     use crate::execution::adapter::command_control::CommandControl;
     use crate::execution::contracts::ExecutionSnapshot;
+    use crate::execution::contracts::FactSink;
     use crate::execution::contracts::IoPathSnapshot;
     use crate::execution::contracts::Request;
     use crate::execution::contracts::RequestOptions;
     use crate::execution::contracts::Scheduler;
+
+    struct InlineScheduler;
+
+    impl Scheduler for InlineScheduler {
+        fn try_reserve(
+            &self,
+            _input_bytes: usize,
+        ) -> Result<crate::execution::Reservation, crate::execution::contracts::CapacityFailure>
+        {
+            Ok(crate::execution::Reservation::new(
+                7,
+                11,
+                |_| {},
+                |_| crate::execution::contracts::ReservationLease::new(|| {}),
+            ))
+        }
+
+        fn enqueue(
+            &self,
+            job: crate::execution::contracts::ScheduledJob,
+            permit: crate::execution::Reservation,
+        ) -> Result<(), crate::execution::contracts::EnqueueFailure> {
+            (job.run)(permit);
+            Ok(())
+        }
+
+        fn wait_next(
+            &self,
+        ) -> Option<(
+            crate::execution::contracts::ScheduledJob,
+            crate::execution::Reservation,
+        )> {
+            None
+        }
+
+        fn close_admission(&self) {}
+    }
+
+    struct ExecutingBackend;
+
+    impl crate::execution::contracts::Backend for ExecutingBackend {
+        fn run(
+            &self,
+            activated: crate::execution::ActivatedRequest,
+            sink: Arc<dyn crate::execution::contracts::FactSink>,
+        ) {
+            assert_eq!(activated.request.operation_id, Some(activated.operation_id));
+            assert!(activated.request.deadline.is_some());
+            let output = activated
+                .request
+                .runner
+                .run(activated.request.command)
+                .unwrap();
+            sink.publish_outcome(OperationOutcome::Succeeded(output))
+                .unwrap();
+            sink.confirm_input_release().unwrap();
+            sink.publish_settlement(Arc::new(super::released_report(activated.operation_id)))
+                .unwrap();
+        }
+    }
     use crate::execution::scheduler::BoundedScheduler;
 
     struct FailedBinder(AtomicBool, CommandControl);
@@ -484,7 +545,10 @@ mod activation_failure_tests {
         fn poll_release(&self, cx: &mut Context<'_>) -> Poll<qubit_operation::ChildRelease> {
             OperationControl::poll_release(&self.1, cx)
         }
-        fn poll_settlement(&self, cx: &mut Context<'_>) -> Poll<Arc<qubit_operation::SettlementReport>> {
+        fn poll_settlement(
+            &self,
+            cx: &mut Context<'_>,
+        ) -> Poll<Arc<qubit_operation::SettlementReport>> {
             OperationControl::poll_settlement(&self.1, cx)
         }
     }
@@ -502,7 +566,10 @@ mod activation_failure_tests {
         fn abandon(self: Arc<Self>) {
             self.0.store(true, Ordering::SeqCst);
         }
-        fn poll_take_outcome(&self, _: &mut Context<'_>) -> Poll<OperationOutcome<CommandOutput, CommandError>> {
+        fn poll_take_outcome(
+            &self,
+            _: &mut Context<'_>,
+        ) -> Poll<OperationOutcome<CommandOutput, CommandError>> {
             Poll::Pending
         }
     }
@@ -522,7 +589,10 @@ mod activation_failure_tests {
         }
     }
 
-    fn make_state(scheduler: Arc<BoundedScheduler>, permit: crate::execution::Reservation) -> Arc<AdapterState> {
+    fn make_state(
+        scheduler: Arc<BoundedScheduler>,
+        permit: crate::execution::Reservation,
+    ) -> Arc<AdapterState> {
         let backend = Arc::new(ProcessBackend::new());
         let recovery = super::super::cleanup::start_recovery_worker(1).unwrap();
         Arc::new(AdapterState::new(
@@ -572,7 +642,10 @@ mod activation_failure_tests {
         let mut handle = manager
             .try_submit(OperationOptions::default(), move |scope| {
                 assert!(state.bind(scope.id()).is_ok());
-                assert!(matches!(state.bind(scope.id()), Err(ExternalBindError::AlreadyBound)));
+                assert!(matches!(
+                    state.bind(scope.id()),
+                    Err(ExternalBindError::AlreadyBound)
+                ));
                 Ok::<_, ()>(())
             })
             .unwrap();
@@ -581,6 +654,39 @@ mod activation_failure_tests {
             OperationOutcome::Succeeded(())
         ));
         handle.wait_settlement().unwrap();
+    }
+
+    #[test]
+    fn test_activation_enqueues_and_runs_bound_request_before_settlement() {
+        let scheduler = Arc::new(InlineScheduler);
+        let permit = scheduler.try_reserve(0).unwrap();
+        let process_backend = Arc::new(ProcessBackend::new());
+        let state = Arc::new(AdapterState::new(
+            request(),
+            permit,
+            scheduler,
+            Arc::new(ExecutingBackend),
+            process_backend,
+            super::super::cleanup::start_recovery_worker(1).unwrap(),
+            None,
+        ));
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut handle = manager
+            .try_submit_external(OperationOptions::default(), Arc::clone(&state))
+            .unwrap();
+
+        assert!(matches!(
+            handle.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(_)
+        ));
+        let report = handle.wait_settlement().unwrap();
+        assert_eq!(report.operation_id, handle.id());
+        assert_eq!(report.status, qubit_operation::SettlementStatus::Released);
+        assert!(OperationControl::snapshot(&*state).input_released);
+        assert!(
+            state.restore().is_none(),
+            "activation transfers the request to the backend"
+        );
     }
 
     #[test]
@@ -601,8 +707,12 @@ mod activation_failure_tests {
         assert_eq!(report.recovery_count, 0);
 
         let second_manager = OperationManager::new(Default::default()).unwrap();
-        match second_manager.try_submit_external(OperationOptions::default(), Arc::clone(&prepared)) {
-            Err(error) => assert_eq!(error.reason(), qubit_operation::AdmissionError::AlreadyBound),
+        match second_manager.try_submit_external(OperationOptions::default(), Arc::clone(&prepared))
+        {
+            Err(error) => assert_eq!(
+                error.reason(),
+                qubit_operation::AdmissionError::AlreadyBound
+            ),
             Ok(_) => panic!("a prepared adapter must not bind through another manager"),
         }
     }
@@ -610,7 +720,10 @@ mod activation_failure_tests {
     #[test]
     fn test_bind_failure_becomes_execution_failure_without_activation() {
         let manager = OperationManager::new(Default::default()).unwrap();
-        let prepared = Arc::new(FailedBinder(AtomicBool::new(false), CommandControl::default()));
+        let prepared = Arc::new(FailedBinder(
+            AtomicBool::new(false),
+            CommandControl::default(),
+        ));
         let mut handle = manager
             .try_submit_external(OperationOptions::default(), Arc::clone(&prepared))
             .unwrap();
@@ -631,7 +744,10 @@ mod activation_failure_tests {
 
         drive_activation(Arc::clone(&state));
 
-        assert!(state.restore().is_none(), "request must not survive published release");
+        assert!(
+            state.restore().is_none(),
+            "request must not survive published release"
+        );
         assert!(OperationControl::snapshot(&*state).input_released);
     }
 
@@ -644,7 +760,10 @@ mod activation_failure_tests {
 
         drive_activation(Arc::clone(&state));
 
-        assert!(state.restore().is_none(), "request must not survive published release");
+        assert!(
+            state.restore().is_none(),
+            "request must not survive published release"
+        );
         assert!(OperationControl::snapshot(&*state).input_released);
     }
 
@@ -669,7 +788,10 @@ mod activation_failure_tests {
             OperationOutcome::Succeeded(())
         ));
         handle.wait_settlement().unwrap();
-        assert!(state.restore().is_none(), "abandoned request must not be restorable");
+        assert!(
+            state.restore().is_none(),
+            "abandoned request must not be restorable"
+        );
         let snapshot = OperationControl::snapshot(&*state);
         assert!(snapshot.input_released);
         assert_eq!(snapshot.execution, qubit_operation::ExecutionPhase::Queued);
@@ -687,7 +809,9 @@ mod activation_failure_tests {
         let permit = scheduler.try_reserve(0).unwrap();
         let state = make_state(Arc::clone(&scheduler), permit);
 
-        let request = state.restore().expect("prepared request should be recoverable");
+        let request = state
+            .restore()
+            .expect("prepared request should be recoverable");
         assert!(request.operation_id.is_none());
         let output = request.runner.run(request.command).unwrap();
         assert!(output.exit_status().success());
