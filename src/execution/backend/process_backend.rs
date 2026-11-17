@@ -488,6 +488,26 @@ mod tests {
     }
 
     #[test]
+    fn test_runner_stop_becomes_failure_when_diagnostic_cannot_be_retained() {
+        let cancellation = CommandError::from_reason("command", CommandErrorReason::Cancelled, None);
+        let outcome = runner_result_outcome(Err(cancellation), Some(StopReason::Timeout), |_| {
+            Err(CommandError::from_reason(
+                "operation",
+                CommandErrorReason::ManagedOperationFailed {
+                    diagnostic: "injected diagnostic storage failure".into(),
+                },
+                None,
+            ))
+        });
+
+        assert!(matches!(
+            outcome,
+            OperationOutcome::Failed(error)
+                if error.kind() == crate::CommandErrorKind::ManagedOperationFailed
+        ));
+    }
+
+    #[test]
     fn test_late_stop_does_not_replace_runner_timeout() {
         let error = CommandError::from_reason(
             "command",
@@ -895,6 +915,75 @@ mod tests {
         ));
         assert!(sink.released.load(Ordering::SeqCst));
         assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_prepared_resource_input_reaches_child_and_releases_reservation() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::new());
+        let sink = Arc::new(RecordingSink::default());
+        let capacity_released = Arc::new(AtomicBool::new(false));
+        let operation_backend = Arc::clone(&backend);
+        let operation_sink = Arc::clone(&sink);
+        let operation_capacity_released = Arc::clone(&capacity_released);
+        let mut input = tempfile::tempfile().unwrap();
+        std::io::Write::write_all(&mut input, b"resource-input").unwrap();
+        std::io::Seek::rewind(&mut input).unwrap();
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    |_| {},
+                    move |_| {
+                        let released = Arc::clone(&operation_capacity_released);
+                        crate::execution::contracts::ReservationLease::new(move || {
+                            released.store(true, Ordering::SeqCst);
+                        })
+                    },
+                );
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout(),
+                    command: Command::new("sh").arg("-c").arg("cat"),
+                    options: RequestOptions::Resources(CommandResourceRunOptions::new().stdin_file(input)),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
+                    },
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: None,
+                };
+                operation_backend.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: operation_sink.clone(),
+                        session_bridge: None,
+                    },
+                    operation_sink,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        operation.wait_settlement().unwrap();
+        assert!(matches!(
+            sink.outcome.lock().unwrap().take(),
+            Some(OperationOutcome::Succeeded(output)) if output.stdout() == b"resource-input"
+        ));
+        assert!(sink.released.load(Ordering::SeqCst));
+        assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
+        assert!(capacity_released.load(Ordering::SeqCst));
     }
 
     #[cfg(unix)]
