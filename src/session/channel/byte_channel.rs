@@ -622,6 +622,26 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_reader_drop_marks_loss_only_when_output_is_attempted() {
+        let channel = ByteChannel::new();
+        channel.drop_reader();
+
+        assert!(!channel.incomplete());
+        assert!(!channel.broken_pipe());
+
+        let waker = std::task::Waker::noop();
+        let mut context = std::task::Context::from_waker(waker);
+        assert!(matches!(
+            channel.poll_write(&mut context, b"unpublished"),
+            std::task::Poll::Ready(Err(ref error)) if error.kind() == io::ErrorKind::BrokenPipe
+        ));
+
+        assert!(channel.incomplete());
+        assert!(channel.broken_pipe());
+        assert_eq!(channel.blocking_read(&mut [0; 16]).unwrap(), 0);
+    }
+
+    #[test]
     fn test_pending_reader_is_woken_and_streams_are_independent() {
         let stdout = Arc::new(ByteChannel::new());
         let stderr = Arc::new(ByteChannel::new());
