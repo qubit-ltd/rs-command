@@ -879,6 +879,47 @@ fn resource_option_bytes(options: &CommandResourceRunOptions) -> usize {
         sum.saturating_add(usize::try_from(n).unwrap_or(usize::MAX))
     })
 }
+
+#[cfg(test)]
+mod resource_byte_tests {
+    use std::io::Write;
+
+    use super::{RequestOptions, resource_bytes, resource_option_bytes};
+    use crate::CommandResourceRunOptions;
+    use crate::resource_run_options::FileSinkPolicy;
+
+    #[test]
+    fn resource_byte_estimates_sum_all_present_files() {
+        let mut stdin = tempfile::tempfile().unwrap();
+        stdin.write_all(b"input").unwrap();
+        let mut stdout = tempfile::tempfile().unwrap();
+        stdout.write_all(b"out").unwrap();
+        let mut stderr = tempfile::tempfile().unwrap();
+        stderr.write_all(b"error!").unwrap();
+        let options = CommandResourceRunOptions::new()
+            .stdin_file(stdin)
+            .stdout_sink(stdout, FileSinkPolicy::Preserve)
+            .stderr_sink(stderr, FileSinkPolicy::Truncate);
+
+        assert_eq!(resource_option_bytes(&options), 14);
+        assert_eq!(resource_bytes(&RequestOptions::Resources(options)), 14);
+        assert_eq!(resource_bytes(&RequestOptions::Standard(Default::default())), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resource_byte_estimates_skip_files_whose_metadata_fails() {
+        use std::os::fd::FromRawFd;
+
+        // SAFETY: -1 is not an owned descriptor; File's drop closes it harmlessly.
+        let invalid_file = unsafe { std::fs::File::from_raw_fd(-1) };
+        let options = CommandResourceRunOptions::new().stdin_file(invalid_file);
+
+        assert_eq!(resource_option_bytes(&options), 0);
+        assert_eq!(resource_bytes(&RequestOptions::Resources(options)), 0);
+    }
+}
+
 /// Performs the retry wait step in the managed command execution lifecycle.
 ///
 /// # Parameters
@@ -2334,6 +2375,87 @@ mod command_executor_api_tests {
             }
             other => panic!("scoped trait submission failed: {other:?}"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_trait_wait_methods_and_foreign_scope_rejection() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let executor = CommandExecutor::new(
+            manager,
+            CommandExecutionConfig {
+                max_active: 1,
+                max_queued: 0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let runner = CommandRunner::new(Duration::from_secs(5));
+        let occupy_capacity = || {
+            let operation = executor
+                .submit(
+                    runner.clone(),
+                    Command::new("sh").arg("-c").arg("sleep 0.3"),
+                    Default::default(),
+                )
+                .unwrap();
+            let until = std::time::Instant::now() + Duration::from_secs(2);
+            while executor.scheduler_snapshot().active == 0 {
+                assert!(std::time::Instant::now() < until, "command worker did not acquire capacity");
+                std::thread::yield_now();
+            }
+            operation
+        };
+        let first = occupy_capacity();
+        assert_eq!(
+            output_and_settle(
+                <CommandExecutor as CommandExecutorApi>::submit_wait_blocking(
+                    &executor,
+                    runner.clone(),
+                    Command::new("sh").arg("-c").arg("printf trait-wait"),
+                    Default::default(),
+                )
+                .unwrap(),
+            ),
+            b"trait-wait"
+        );
+        assert!(output_and_settle(first).is_empty());
+        let second = occupy_capacity();
+        assert_eq!(
+            output_and_settle(
+                <CommandExecutor as CommandExecutorApi>::submit_wait_resources_blocking(
+                    &executor,
+                    runner.clone(),
+                    Command::new("sh").arg("-c").arg("printf trait-wait-owned"),
+                    CommandResourceRunOptions::new(),
+                )
+                .unwrap(),
+            ),
+            b"trait-wait-owned"
+        );
+        assert!(output_and_settle(second).is_empty());
+
+        let other_manager = OperationManager::new(Default::default()).unwrap();
+        let result = other_manager.run(Default::default(), |scope| {
+            assert!(<CommandExecutor as CommandExecutorApi>::submit_in(
+                &executor,
+                &scope,
+                runner.clone(),
+                Command::new("sh").arg("-c").arg("true"),
+                Default::default(),
+            )
+            .is_err());
+            assert!(<CommandExecutor as CommandExecutorApi>::submit_resources_in(
+                &executor,
+                &scope,
+                runner,
+                Command::new("sh").arg("-c").arg("true"),
+                CommandResourceRunOptions::new(),
+            )
+            .is_err());
+            Ok::<_, crate::CommandError>(())
+        });
+        assert!(matches!(result.unwrap(), OperationOutcome::Succeeded(())));
     }
 
     #[cfg(all(feature = "async", unix))]
