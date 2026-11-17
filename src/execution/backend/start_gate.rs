@@ -369,6 +369,28 @@ mod tests {
     }
 
     #[test]
+    fn test_poisoned_start_gate_state_keeps_stop_and_authorization_contracts() {
+        let gate = Arc::new(StartGate::default());
+        let poison_gate = Arc::clone(&gate);
+        let _ = thread::spawn(move || {
+            let _state = poison_gate.state.lock().unwrap();
+            panic!("poison the gate state for recovery coverage");
+        })
+        .join();
+
+        let cancellation = gate.cancellation();
+        assert!(gate.authorize().is_some());
+        assert!(!gate.request_stop(StopReason::Timeout));
+        assert!(gate.stop_requested());
+        assert_eq!(gate.stop_reason(), Some(StopReason::Timeout));
+        assert!(cancellation.is_cancelled());
+
+        let external = crate::CommandCancellation::new();
+        gate.attach_external_cancellation(Some(external.clone()));
+        assert!(external.is_cancelled());
+    }
+
+    #[test]
     fn test_authorization_and_stop_race_has_one_linearized_winner() {
         for _ in 0..64 {
             let gate = Arc::new(StartGate::default());
