@@ -884,12 +884,14 @@ fn resource_option_bytes(options: &CommandResourceRunOptions) -> usize {
 mod resource_byte_tests {
     use std::io::Write;
 
-    use super::{RequestOptions, resource_bytes, resource_option_bytes};
+    use super::RequestOptions;
+    use super::resource_bytes;
+    use super::resource_option_bytes;
     use crate::CommandResourceRunOptions;
     use crate::resource_run_options::FileSinkPolicy;
 
     #[test]
-    fn resource_byte_estimates_sum_all_present_files() {
+    fn test_resource_byte_estimates_sum_all_present_files() {
         let mut stdin = tempfile::tempfile().unwrap();
         stdin.write_all(b"input").unwrap();
         let mut stdout = tempfile::tempfile().unwrap();
@@ -2378,22 +2380,28 @@ mod command_executor_api_tests {
         )
         .unwrap();
         let runner = CommandRunner::new(Duration::from_secs(5));
-        let occupy_capacity = || {
-            let operation = executor
+        let capacity_executor = executor.clone();
+        let capacity_runner = runner.clone();
+        let occupy_capacity = move || {
+            let operation = capacity_executor
                 .submit(
-                    runner.clone(),
+                    capacity_runner.clone(),
                     Command::new("sh").arg("-c").arg("sleep 0.3"),
                     Default::default(),
                 )
                 .unwrap();
             let until = std::time::Instant::now() + Duration::from_secs(2);
-            while executor.scheduler_snapshot().active == 0 {
-                assert!(std::time::Instant::now() < until, "command worker did not acquire capacity");
+            while capacity_executor.scheduler_snapshot().active == 0 {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "command worker did not acquire capacity"
+                );
                 std::thread::yield_now();
             }
             operation
         };
         let first = occupy_capacity();
+        let first_waiter = std::thread::spawn(move || output_and_settle(first));
         assert_eq!(
             output_and_settle(
                 <CommandExecutor as CommandExecutorApi>::submit_wait_blocking(
@@ -2406,8 +2414,9 @@ mod command_executor_api_tests {
             ),
             b"trait-wait"
         );
-        assert!(output_and_settle(first).is_empty());
+        assert!(first_waiter.join().unwrap().is_empty());
         let second = occupy_capacity();
+        let second_waiter = std::thread::spawn(move || output_and_settle(second));
         assert_eq!(
             output_and_settle(
                 <CommandExecutor as CommandExecutorApi>::submit_wait_resources_blocking(
@@ -2420,26 +2429,30 @@ mod command_executor_api_tests {
             ),
             b"trait-wait-owned"
         );
-        assert!(output_and_settle(second).is_empty());
+        assert!(second_waiter.join().unwrap().is_empty());
 
         let other_manager = OperationManager::new(Default::default()).unwrap();
-        let result = other_manager.run(Default::default(), |scope| {
-            assert!(<CommandExecutor as CommandExecutorApi>::submit_in(
-                &executor,
-                &scope,
-                runner.clone(),
-                Command::new("sh").arg("-c").arg("true"),
-                Default::default(),
-            )
-            .is_err());
-            assert!(<CommandExecutor as CommandExecutorApi>::submit_resources_in(
-                &executor,
-                &scope,
-                runner,
-                Command::new("sh").arg("-c").arg("true"),
-                CommandResourceRunOptions::new(),
-            )
-            .is_err());
+        let result = other_manager.run(Default::default(), move |scope| {
+            assert!(
+                <CommandExecutor as CommandExecutorApi>::submit_in(
+                    &executor,
+                    &scope,
+                    runner.clone(),
+                    Command::new("sh").arg("-c").arg("true"),
+                    Default::default(),
+                )
+                .is_err()
+            );
+            assert!(
+                <CommandExecutor as CommandExecutorApi>::submit_resources_in(
+                    &executor,
+                    &scope,
+                    runner,
+                    Command::new("sh").arg("-c").arg("true"),
+                    CommandResourceRunOptions::new(),
+                )
+                .is_err()
+            );
             Ok::<_, crate::CommandError>(())
         });
         assert!(matches!(result.unwrap(), OperationOutcome::Succeeded(())));

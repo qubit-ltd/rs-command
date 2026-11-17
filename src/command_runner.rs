@@ -413,18 +413,9 @@ mod tests {
             .disable_logging(true)
             .bounded_output(6);
 
-        assert_eq!(
-            runner.configured_timeout(),
-            Some(Duration::from_millis(125))
-        );
-        assert_eq!(
-            runner.configured_timer().clock().now().domain(),
-            timer_domain
-        );
-        assert_eq!(
-            runner.configured_working_directory(),
-            Some(working_directory.as_path())
-        );
+        assert_eq!(runner.configured_timeout(), Some(Duration::from_millis(125)));
+        assert_eq!(runner.configured_timer().clock().now().domain(), timer_domain);
+        assert_eq!(runner.configured_working_directory(), Some(working_directory.as_path()));
         assert_eq!(runner.configured_success_exit_codes(), &[3, 7]);
         assert!(runner.is_logging_disabled());
         assert!(runner.is_output_truncation_failure_enabled());
@@ -436,18 +427,12 @@ mod tests {
         assert_eq!(without_memory_limits.configured_max_stdout_bytes(), None);
         assert_eq!(without_memory_limits.configured_max_stderr_bytes(), None);
         assert!(!without_memory_limits.is_output_truncation_failure_enabled());
-        assert_eq!(
-            without_memory_limits.configured_max_total_output_bytes(),
-            Some(19)
-        );
+        assert_eq!(without_memory_limits.configured_max_total_output_bytes(), Some(19));
 
         let without_total_budget = runner.without_total_output_limit();
         assert_eq!(without_total_budget.configured_max_stdout_bytes(), Some(6));
         assert_eq!(without_total_budget.configured_max_stderr_bytes(), Some(6));
-        assert_eq!(
-            without_total_budget.configured_max_total_output_bytes(),
-            None
-        );
+        assert_eq!(without_total_budget.configured_max_total_output_bytes(), None);
         assert!(without_total_budget.is_output_truncation_failure_enabled());
     }
 

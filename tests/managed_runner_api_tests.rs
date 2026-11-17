@@ -45,8 +45,7 @@ fn test_sync_managed_runner_methods_capture_output_and_write_owned_sinks() {
     assert_eq!(ordinary.stdout(), b"ordinary");
 
     let mut sink = tempfile::tempfile().unwrap();
-    let resources = CommandResourceRunOptions::new()
-        .stdout_sink(sink.try_clone().unwrap(), FileSinkPolicy::Preserve);
+    let resources = CommandResourceRunOptions::new().stdout_sink(sink.try_clone().unwrap(), FileSinkPolicy::Preserve);
     let output = runner()
         .run_managed_resources(
             &executor,
@@ -213,8 +212,7 @@ mod async_tests {
         assert_eq!(output.stdout(), b"asynchronous");
 
         let mut sink = tempfile::tempfile().unwrap();
-        let options = CommandResourceRunOptions::new()
-            .stdout_sink(sink.try_clone().unwrap(), FileSinkPolicy::Preserve);
+        let options = CommandResourceRunOptions::new().stdout_sink(sink.try_clone().unwrap(), FileSinkPolicy::Preserve);
         let output = block_on(runner().run_async_resources(
             &executor,
             Command::new("sh").arg("-c").arg("printf async-resource"),
@@ -264,16 +262,12 @@ mod async_tests {
                     Command::new("sh").arg("-c").arg("printf async-scoped"),
                     Default::default(),
                 ))?;
-                let resources = block_on(
-                    runner().run_async_resources_in(
-                        &scope,
-                        &executor,
-                        Command::new("sh")
-                            .arg("-c")
-                            .arg("printf async-resource-scoped"),
-                        CommandResourceRunOptions::new(),
-                    ),
-                )?;
+                let resources = block_on(runner().run_async_resources_in(
+                    &scope,
+                    &executor,
+                    Command::new("sh").arg("-c").arg("printf async-resource-scoped"),
+                    CommandResourceRunOptions::new(),
+                ))?;
                 assert_eq!(resources.stdout(), b"async-resource-scoped");
                 Ok::<_, qubit_command::CommandError>(ordinary)
             })
@@ -316,11 +310,7 @@ mod async_tests {
         let manager = OperationManager::new(ManagerOptions::default()).unwrap();
         let executor = executor(&manager);
         for result in [
-            block_on(runner().start_session(
-                &executor,
-                Command::new("rustc").arg("--version"),
-                Default::default(),
-            )),
+            block_on(runner().start_session(&executor, Command::new("rustc").arg("--version"), Default::default())),
             block_on(runner().start_session_resources(
                 &executor,
                 Command::new("rustc").arg("--version"),

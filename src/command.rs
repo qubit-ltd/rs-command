@@ -713,10 +713,7 @@ mod data_api_tests {
             .env("AFTER_CLEAR", "kept");
 
         assert_eq!(command.program(), OsStr::new("worker"));
-        assert_eq!(
-            command.working_directory_override(),
-            Some(Path::new("/tmp/work"))
-        );
+        assert_eq!(command.working_directory_override(), Some(Path::new("/tmp/work")));
         assert!(command.clears_environment());
         assert_eq!(
             command.arguments().collect::<Vec<_>>(),
@@ -801,10 +798,7 @@ mod data_api_tests {
             .env_remove_os(OsStr::new("REPLACE"));
 
         assert_eq!(command.program(), program);
-        assert_eq!(
-            command.working_directory_override(),
-            Some(working_directory)
-        );
+        assert_eq!(command.working_directory_override(), Some(working_directory));
         assert!(!command.clears_environment());
         assert_eq!(
             command.arguments().collect::<Vec<_>>(),

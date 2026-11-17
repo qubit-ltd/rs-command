@@ -637,11 +637,19 @@ fn unexpected_exit_detail(exit_code: &Option<i32>, output: Option<&CommandOutput
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::io;
     use std::process::ExitStatus;
     use std::time::Duration;
 
     use qubit_clock::TimeError;
+
+    use super::CommandCapturedOutput;
+    use super::CommandCleanupFailure;
+    use super::CommandError;
+    use super::CommandErrorKind;
+    use super::CommandErrorReason;
+    use super::CommandOutput;
+    use super::OutputStream;
 
     fn status(code: i32) -> ExitStatus {
         #[cfg(unix)]
@@ -686,7 +694,7 @@ mod tests {
     }
 
     #[test]
-    fn command_accessors_and_output_carriers_preserve_their_contract() {
+    fn test_command_accessors_and_output_carriers_preserve_their_contract() {
         let completed = output(7, b"completed", b"stderr");
         let captured = CommandCapturedOutput::new(
             (b"fallback".to_vec(), true, false),
@@ -716,12 +724,10 @@ mod tests {
     }
 
     #[test]
-    fn captured_output_carrier_is_used_when_no_completed_output_exists() {
-        let error = CommandError::from_reason("command", CommandErrorReason::Cancelled, None)
-            .with_captured_output(CommandCapturedOutput::new(
-                (b"partial".to_vec(), true, false),
-                (b"tail".to_vec(), false, true),
-            ));
+    fn test_captured_output_carrier_is_used_when_no_completed_output_exists() {
+        let error = CommandError::from_reason("command", CommandErrorReason::Cancelled, None).with_captured_output(
+            CommandCapturedOutput::new((b"partial".to_vec(), true, false), (b"tail".to_vec(), false, true)),
+        );
         assert!(error.output().is_none());
         assert_eq!(error.exit_code(), None);
         let capture = error.captured_output().unwrap();
@@ -730,15 +736,13 @@ mod tests {
         assert!(capture.stdout_truncated());
         assert!(!capture.stdout_complete());
 
-        let moved = error
-            .into_captured_output()
-            .expect("partial bytes are retained");
+        let moved = error.into_captured_output().expect("partial bytes are retained");
         assert_eq!(moved.stdout(), b"partial");
         assert_eq!(moved.stderr(), b"tail");
     }
 
     #[test]
-    fn unexpected_exit_uses_reason_code_and_completed_output_for_display() {
+    fn test_unexpected_exit_uses_reason_code_and_completed_output_for_display() {
         let expected = vec![0, 2];
         let error = CommandError::from_reason(
             "command",
@@ -752,7 +756,7 @@ mod tests {
         assert!(error.is_unexpected_exit());
         assert_eq!(error.exit_code(), Some(9));
         assert!(error.to_string().contains("code Some(9)"));
-        assert!(error.to_string().contains("expected [0, 2]"));
+        assert!(error.to_string().contains("expected one of [0, 2]"));
 
         let no_code = CommandError::from_reason(
             "command",
@@ -767,41 +771,40 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_failures_sort_by_resource_and_source_accessors_find_first() {
-        let error = CommandError::from_reason("command", CommandErrorReason::Cancelled, None)
-            .with_cleanup_failures([
-                CommandCleanupFailure::StdinCancellation {
-                    source: io::Error::other("stdin"),
-                },
-                CommandCleanupFailure::StderrWrite {
-                    path: "stderr.log".into(),
-                    source: io::Error::other("stderr write"),
-                },
-                CommandCleanupFailure::StdoutCancellation {
-                    source: io::Error::other("stdout cancel"),
-                },
-                CommandCleanupFailure::Time {
-                    source: TimeError::InstantOverflow,
-                },
-                CommandCleanupFailure::Wait {
-                    source: io::Error::other("wait"),
-                },
-                CommandCleanupFailure::ChildTermination {
-                    source: io::Error::other("child first"),
-                },
-                CommandCleanupFailure::ProcessTreeTermination {
-                    source: io::Error::other("tree first"),
-                },
-                CommandCleanupFailure::ChildTermination {
-                    source: io::Error::other("child second"),
-                },
-                CommandCleanupFailure::StdoutRead {
-                    source: io::Error::other("stdout read"),
-                },
-                CommandCleanupFailure::StderrCancellation {
-                    source: io::Error::other("stderr cancel"),
-                },
-            ]);
+    fn test_cleanup_failures_sort_by_resource_and_source_accessors_find_first() {
+        let error = CommandError::from_reason("command", CommandErrorReason::Cancelled, None).with_cleanup_failures([
+            CommandCleanupFailure::StdinCancellation {
+                source: io::Error::other("stdin"),
+            },
+            CommandCleanupFailure::StderrWrite {
+                path: "stderr.log".into(),
+                source: io::Error::other("stderr write"),
+            },
+            CommandCleanupFailure::StdoutCancellation {
+                source: io::Error::other("stdout cancel"),
+            },
+            CommandCleanupFailure::Time {
+                source: TimeError::InstantOverflow,
+            },
+            CommandCleanupFailure::Wait {
+                source: io::Error::other("wait"),
+            },
+            CommandCleanupFailure::ChildTermination {
+                source: io::Error::other("child first"),
+            },
+            CommandCleanupFailure::ProcessTreeTermination {
+                source: io::Error::other("tree first"),
+            },
+            CommandCleanupFailure::ChildTermination {
+                source: io::Error::other("child second"),
+            },
+            CommandCleanupFailure::StdoutRead {
+                source: io::Error::other("stdout read"),
+            },
+            CommandCleanupFailure::StderrCancellation {
+                source: io::Error::other("stderr cancel"),
+            },
+        ]);
 
         assert_eq!(
             cleanup_labels(error.cleanup_failures()),
@@ -818,10 +821,7 @@ mod tests {
                 "stdin-cancel"
             ]
         );
-        assert_eq!(
-            error.process_tree_source().unwrap().to_string(),
-            "tree first"
-        );
+        assert_eq!(error.process_tree_source().unwrap().to_string(), "tree first");
         assert_eq!(error.child_source().unwrap().to_string(), "child first");
         let empty = CommandError::from_reason("command", CommandErrorReason::Cancelled, None);
         assert!(empty.process_tree_source().is_none());
@@ -829,7 +829,7 @@ mod tests {
     }
 
     #[test]
-    fn helper_primary_reasons_convert_to_the_matching_cleanup_variant() {
+    fn test_helper_primary_reasons_convert_to_the_matching_cleanup_variant() {
         let cases = [
             (
                 CommandErrorReason::TimeFailed {
@@ -887,7 +887,7 @@ mod tests {
     }
 
     #[test]
-    fn consuming_error_cleanup_includes_primary_helper_before_sorted_secondary_failures() {
+    fn test_consuming_error_cleanup_includes_primary_helper_before_sorted_secondary_failures() {
         let error = CommandError::from_reason(
             "command",
             CommandErrorReason::ReadOutputFailed {
@@ -905,10 +905,7 @@ mod tests {
             },
         ]);
         let failures = error.into_cleanup_failures();
-        assert_eq!(
-            cleanup_labels(&failures),
-            ["stderr-read", "stdout-read", "stdin"]
-        );
+        assert_eq!(cleanup_labels(&failures), ["stderr-read", "stdout-read", "stdin"]);
         match &failures[0] {
             CommandCleanupFailure::StderrRead { source } => {
                 assert_eq!(source.to_string(), "primary read")

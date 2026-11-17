@@ -986,15 +986,9 @@ mod tests {
         let input = directory.path().join("missing-input");
         let mut process = ProcessCommand::new("unused-test-program");
 
-        let error = IoFiles::prepare(
-            "command",
-            CommandStdin::File(input.clone()),
-            None,
-            None,
-            &mut process,
-        )
-        .err()
-        .expect("a missing stdin path should be rejected");
+        let error = IoFiles::prepare("command", CommandStdin::File(input.clone()), None, None, &mut process)
+            .err()
+            .expect("a missing stdin path should be rejected");
 
         assert_eq!(error.kind(), CommandErrorKind::OpenInputFailed);
         assert!(matches!(
@@ -1043,10 +1037,10 @@ mod tests {
         )
         .expect("an output under a missing parent is deferred until commit");
 
-        let error = files
-            .commit("command", Some(&missing_parent_output), None, &mut process)
-            .err()
-            .expect("commit cannot create an output whose parent is absent");
+        let error = match files.commit("command", Some(&missing_parent_output), None, &mut process) {
+            Err(error) => error,
+            Ok(_) => panic!("commit cannot create an output whose parent is absent"),
+        };
 
         assert_eq!(error.kind(), CommandErrorKind::OpenOutputFailed);
         assert!(matches!(
