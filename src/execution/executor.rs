@@ -94,20 +94,22 @@ impl CommandExecutor {
         self.scheduler.close_admission();
         self.group.request_shutdown(mode)
     }
-    /// Attempts to submit a command without waiting for executor capacity. Use the waiting submission
-    /// methods when the caller intends to wait for local admission capacity. The returned operation has
-    /// a one-shot outcome and a separate settlement phase; observing the outcome alone does not prove
-    /// process and I/O resources are released.
+    /// Attempts to submit a command without waiting for executor capacity. Use
+    /// the waiting submission methods when the caller intends to wait for
+    /// local admission capacity. The returned operation has a one-shot
+    /// outcome and a separate settlement phase; observing the outcome alone
+    /// does not prove process and I/O resources are released.
     ///
     /// # Parameters
     /// * `runner`: Configures how the child process is launched and managed.
-    /// * `command`: Describes the program, arguments, and standard stream configuration.
+    /// * `command`: Describes the program, arguments, and standard stream
+    ///   configuration.
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandSubmitFailure`] when request snapshot creation fails, executor capacity is full
-    /// or closed, or operation-manager admission is denied. The failure carries the runner, command,
-    /// and options.
+    /// Returns [`CommandSubmitFailure`] when request snapshot creation fails,
+    /// executor capacity is full or closed, or operation-manager admission
+    /// is denied. The failure carries the runner, command, and options.
     pub fn submit(
         &self,
         runner: CommandRunner,
@@ -116,24 +118,29 @@ impl CommandExecutor {
     ) -> Result<CommandOperation, CommandSubmitFailure> {
         self.submit_in_manager(&self.manager, runner, command, options, None)
     }
-    /// Attempts to submit a command without waiting for executor capacity. Use the waiting submission
-    /// methods when the caller intends to wait for local admission capacity. The returned operation has
-    /// a one-shot outcome and a separate settlement phase; observing the outcome alone does not prove
-    /// process and I/O resources are released. On success, ownership of supplied stdin, stdout, and
-    /// stderr files transfers to the operation. Reservation precedes worker-side preparation, which may
-    /// truncate outputs. Rejected admission returns the handles; later preparation or execution
-    /// failures use operation outcome and recovery paths and do not promise unchanged files.
+    /// Attempts to submit a command without waiting for executor capacity. Use
+    /// the waiting submission methods when the caller intends to wait for
+    /// local admission capacity. The returned operation has a one-shot
+    /// outcome and a separate settlement phase; observing the outcome alone
+    /// does not prove process and I/O resources are released. On success,
+    /// ownership of supplied stdin, stdout, and stderr files transfers to
+    /// the operation. Reservation precedes worker-side preparation, which may
+    /// truncate outputs. Rejected admission returns the handles; later
+    /// preparation or execution failures use operation outcome and recovery
+    /// paths and do not promise unchanged files.
     ///
     /// # Parameters
     /// * `runner`: Configures how the child process is launched and managed.
-    /// * `command`: Describes the program, arguments, and standard stream configuration.
+    /// * `command`: Describes the program, arguments, and standard stream
+    ///   configuration.
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandResourceSubmitFailure`] when request snapshot creation fails, the estimated
-    /// file bytes exceed the configured budget, executor capacity is full or closed, or operation-
-    /// manager admission is denied. The failure carries the runner and command; its options retain the
-    /// owned file handles on rejected admission.
+    /// Returns [`CommandResourceSubmitFailure`] when request snapshot creation
+    /// fails, the estimated file bytes exceed the configured budget,
+    /// executor capacity is full or closed, or operation manager admission
+    /// is denied. The failure carries the runner and command; its options
+    /// retain the owned file handles on rejected admission.
     pub fn submit_resources(
         &self,
         runner: CommandRunner,
@@ -142,20 +149,23 @@ impl CommandExecutor {
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
         self.submit_resources_manager(&self.manager, runner, command, options, None)
     }
-    /// Attempts local admission and returns an asynchronous view of the submitted operation without
-    /// waiting for executor capacity. Use the async waiting methods when capacity waiting is required.
-    /// The returned operation has a one-shot outcome and a separate settlement phase; observing the
-    /// outcome alone does not prove process and I/O resources are released.
+    /// Attempts local admission and returns an asynchronous view of the
+    /// submitted operation without waiting for executor capacity. Use the
+    /// async waiting methods when capacity waiting is required.
+    /// The returned operation has a one-shot outcome and a separate settlement
+    /// phase; observing the outcome alone does not prove process and I/O
+    /// resources are released.
     ///
     /// # Parameters
     /// * `runner`: Configures how the child process is launched and managed.
-    /// * `command`: Describes the program, arguments, and standard stream configuration.
+    /// * `command`: Describes the program, arguments, and standard stream
+    ///   configuration.
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandSubmitFailure`] when request snapshot creation fails, executor capacity is full
-    /// or closed, or operation-manager admission is denied. The failure carries the runner, command,
-    /// and options.
+    /// Returns [`CommandSubmitFailure`] when request snapshot creation fails,
+    /// executor capacity is full or closed, or operation-manager admission
+    /// is denied. The failure carries the runner, command, and options.
     #[cfg(feature = "async")]
     pub fn submit_async(
         &self,
@@ -171,25 +181,30 @@ impl CommandExecutor {
             AsyncSubmissionContext::plain(None),
         )
     }
-    /// Attempts local admission and returns an asynchronous view of the submitted operation without
-    /// waiting for executor capacity. Use the async waiting methods when capacity waiting is required.
-    /// The returned operation has a one-shot outcome and a separate settlement phase; observing the
-    /// outcome alone does not prove process and I/O resources are released. On success, ownership of
-    /// supplied stdin, stdout, and stderr files transfers to the operation. Reservation precedes
-    /// worker-side preparation, which may truncate outputs. Rejected admission returns the handles;
-    /// later preparation or execution failures use operation outcome and recovery paths and do not
+    /// Attempts local admission and returns an asynchronous view of the
+    /// submitted operation without waiting for executor capacity. Use the
+    /// async waiting methods when capacity waiting is required.
+    /// The returned operation has a one-shot outcome and a separate settlement
+    /// phase; observing the outcome alone does not prove process and I/O
+    /// resources are released. On success, ownership of supplied stdin,
+    /// stdout, and stderr files transfers to the operation. Reservation
+    /// precedes worker-side preparation, which may truncate outputs.
+    /// Rejected admission returns the handles; later preparation or
+    /// execution failures use operation outcome and recovery paths and do not
     /// promise unchanged files.
     ///
     /// # Parameters
     /// * `runner`: Configures how the child process is launched and managed.
-    /// * `command`: Describes the program, arguments, and standard stream configuration.
+    /// * `command`: Describes the program, arguments, and standard stream
+    ///   configuration.
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandResourceSubmitFailure`] when request snapshot creation fails, the estimated
-    /// file bytes exceed the configured budget, executor capacity is full or closed, or operation-
-    /// manager admission is denied. The failure carries the runner and command; its options retain the
-    /// owned file handles on rejected admission.
+    /// Returns [`CommandResourceSubmitFailure`] when request snapshot creation
+    /// fails, the estimated file bytes exceed the configured budget,
+    /// executor capacity is full or closed, or operation manager admission
+    /// is denied. The failure carries the runner and command; its options
+    /// retain the owned file handles on rejected admission.
     #[cfg(feature = "async")]
     pub fn submit_async_resources(
         &self,
@@ -205,23 +220,28 @@ impl CommandExecutor {
             AsyncSubmissionContext::plain(None),
         )
     }
-    /// Attempts local admission and returns an asynchronous view of the submitted operation without
-    /// waiting for executor capacity. Use the async waiting methods when capacity waiting is required.
-    /// The returned operation has a one-shot outcome and a separate settlement phase; observing the
-    /// outcome alone does not prove process and I/O resources are released. The scope binds the
-    /// operation to this executor group and supplies its context and deadline.
+    /// Attempts local admission and returns an asynchronous view of the
+    /// submitted operation without waiting for executor capacity. Use the
+    /// async waiting methods when capacity waiting is required.
+    /// The returned operation has a one-shot outcome and a separate settlement
+    /// phase; observing the outcome alone does not prove process and I/O
+    /// resources are released. The scope binds the operation to this
+    /// executor group and supplies its context and deadline.
     ///
     /// # Parameters
-    /// * `scope`: Identifies the operation group and supplies its context and deadline.
+    /// * `scope`: Identifies the operation group and supplies its context and
+    ///   deadline.
     /// * `runner`: Configures how the child process is launched and managed.
-    /// * `command`: Describes the program, arguments, and standard stream configuration.
+    /// * `command`: Describes the program, arguments, and standard stream
+    ///   configuration.
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandSubmitFailure`] when request snapshot creation fails, executor capacity is full
-    /// or closed, or operation-manager admission is denied. Scoped variants can also fail to bind the
-    /// operation group or reach the scope deadline. The failure carries the runner, command, and
-    /// options.
+    /// Returns [`CommandSubmitFailure`] when request snapshot creation fails,
+    /// executor capacity is full or closed, or operation-manager admission
+    /// is denied. Scoped variants can also fail to bind the operation group
+    /// or reach the scope deadline. The failure carries the runner, command,
+    /// and options.
     #[cfg(feature = "async")]
     pub fn submit_async_in(
         &self,
@@ -249,28 +269,35 @@ impl CommandExecutor {
             AsyncSubmissionContext::plain(Some(scope.context())),
         )
     }
-    /// Attempts local admission and returns an asynchronous view of the submitted operation without
-    /// waiting for executor capacity. Use the async waiting methods when capacity waiting is required.
-    /// The returned operation has a one-shot outcome and a separate settlement phase; observing the
-    /// outcome alone does not prove process and I/O resources are released. On success, ownership of
-    /// supplied stdin, stdout, and stderr files transfers to the operation. Reservation precedes
-    /// worker-side preparation, which may truncate outputs. Rejected admission returns the handles;
-    /// later preparation or execution failures use operation outcome and recovery paths and do not
-    /// promise unchanged files. The scope binds the operation to this executor group and supplies its
-    /// context and deadline.
+    /// Attempts local admission and returns an asynchronous view of the
+    /// submitted operation without waiting for executor capacity. Use the
+    /// async waiting methods when capacity waiting is required.
+    /// The returned operation has a one-shot outcome and a separate settlement
+    /// phase; observing the outcome alone does not prove process and I/O
+    /// resources are released. On success, ownership of supplied stdin,
+    /// stdout, and stderr files transfers to the operation. Reservation
+    /// precedes worker-side preparation, which may truncate outputs.
+    /// Rejected admission returns the handles; later preparation or
+    /// execution failures use operation outcome and recovery paths and do not
+    /// promise unchanged files. The scope binds the operation to this executor
+    /// group and supplies its context and deadline.
     ///
     /// # Parameters
-    /// * `scope`: Identifies the operation group and supplies its context and deadline.
+    /// * `scope`: Identifies the operation group and supplies its context and
+    ///   deadline.
     /// * `runner`: Configures how the child process is launched and managed.
-    /// * `command`: Describes the program, arguments, and standard stream configuration.
+    /// * `command`: Describes the program, arguments, and standard stream
+    ///   configuration.
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandResourceSubmitFailure`] when request snapshot creation fails, the estimated
-    /// file bytes exceed the configured budget, executor capacity is full or closed, or operation-
-    /// manager admission is denied. Scoped variants can also fail to bind the operation group or reach
-    /// the scope deadline. The failure carries the runner and command; its options retain the owned
-    /// file handles on rejected admission.
+    /// Returns [`CommandResourceSubmitFailure`] when request snapshot creation
+    /// fails, the estimated file bytes exceed the configured budget,
+    /// executor capacity is full or closed, or operation manager admission
+    /// is denied. Scoped variants can also fail to bind the operation group or
+    /// reach the scope deadline. The failure carries the runner and
+    /// command; its options retain the owned file handles on rejected
+    /// admission.
     #[cfg(feature = "async")]
     pub fn submit_async_resources_in(
         &self,
@@ -298,23 +325,28 @@ impl CommandExecutor {
             AsyncSubmissionContext::plain(Some(scope.context())),
         )
     }
-    /// Attempts to submit a command without waiting for executor capacity. Use the waiting submission
-    /// methods when the caller intends to wait for local admission capacity. The returned operation has
-    /// a one-shot outcome and a separate settlement phase; observing the outcome alone does not prove
-    /// process and I/O resources are released. The scope binds the operation to this executor group and
-    /// supplies its context and deadline.
+    /// Attempts to submit a command without waiting for executor capacity. Use
+    /// the waiting submission methods when the caller intends to wait for
+    /// local admission capacity. The returned operation has a one-shot
+    /// outcome and a separate settlement phase; observing the outcome alone
+    /// does not prove process and I/O resources are released. The scope
+    /// binds the operation to this executor group and supplies its context
+    /// and deadline.
     ///
     /// # Parameters
-    /// * `scope`: Identifies the operation group and supplies its context and deadline.
+    /// * `scope`: Identifies the operation group and supplies its context and
+    ///   deadline.
     /// * `runner`: Configures how the child process is launched and managed.
-    /// * `command`: Describes the program, arguments, and standard stream configuration.
+    /// * `command`: Describes the program, arguments, and standard stream
+    ///   configuration.
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandSubmitFailure`] when request snapshot creation fails, executor capacity is full
-    /// or closed, or operation-manager admission is denied. Scoped variants can also fail to bind the
-    /// operation group or reach the scope deadline. The failure carries the runner, command, and
-    /// options.
+    /// Returns [`CommandSubmitFailure`] when request snapshot creation fails,
+    /// executor capacity is full or closed, or operation-manager admission
+    /// is denied. Scoped variants can also fail to bind the operation group
+    /// or reach the scope deadline. The failure carries the runner, command,
+    /// and options.
     pub fn submit_in(
         &self,
         scope: &OperationScope,
@@ -335,27 +367,35 @@ impl CommandExecutor {
         };
         self.submit_in_manager(&manager, runner, command, options, Some(scope.context()))
     }
-    /// Attempts to submit a command without waiting for executor capacity. Use the waiting submission
-    /// methods when the caller intends to wait for local admission capacity. The returned operation has
-    /// a one-shot outcome and a separate settlement phase; observing the outcome alone does not prove
-    /// process and I/O resources are released. On success, ownership of supplied stdin, stdout, and
-    /// stderr files transfers to the operation. Reservation precedes worker-side preparation, which may
-    /// truncate outputs. Rejected admission returns the handles; later preparation or execution
-    /// failures use operation outcome and recovery paths and do not promise unchanged files. The scope
-    /// binds the operation to this executor group and supplies its context and deadline.
+    /// Attempts to submit a command without waiting for executor capacity. Use
+    /// the waiting submission methods when the caller intends to wait for
+    /// local admission capacity. The returned operation has a one-shot
+    /// outcome and a separate settlement phase; observing the outcome alone
+    /// does not prove process and I/O resources are released. On success,
+    /// ownership of supplied stdin, stdout, and stderr files transfers to
+    /// the operation. Reservation precedes worker-side preparation, which may
+    /// truncate outputs. Rejected admission returns the handles; later
+    /// preparation or execution failures use operation outcome and recovery
+    /// paths and do not promise unchanged files. The scope
+    /// binds the operation to this executor group and supplies its context and
+    /// deadline.
     ///
     /// # Parameters
-    /// * `scope`: Identifies the operation group and supplies its context and deadline.
+    /// * `scope`: Identifies the operation group and supplies its context and
+    ///   deadline.
     /// * `runner`: Configures how the child process is launched and managed.
-    /// * `command`: Describes the program, arguments, and standard stream configuration.
+    /// * `command`: Describes the program, arguments, and standard stream
+    ///   configuration.
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
-    /// Returns [`CommandResourceSubmitFailure`] when request snapshot creation fails, the estimated
-    /// file bytes exceed the configured budget, executor capacity is full or closed, or operation-
-    /// manager admission is denied. Scoped variants can also fail to bind the operation group or reach
-    /// the scope deadline. The failure carries the runner and command; its options retain the owned
-    /// file handles on rejected admission.
+    /// Returns [`CommandResourceSubmitFailure`] when request snapshot creation
+    /// fails, the estimated file bytes exceed the configured budget,
+    /// executor capacity is full or closed, or operation manager admission
+    /// is denied. Scoped variants can also fail to bind the operation group or
+    /// reach the scope deadline. The failure carries the runner and
+    /// command; its options retain the owned file handles on rejected
+    /// admission.
     pub fn submit_resources_in(
         &self,
         scope: &OperationScope,
@@ -641,19 +681,22 @@ impl CommandExecutor {
             }
         }
     }
-    /// Starts a managed asynchronous command session and returns its stdin, stdout, and stderr
-    /// endpoints with the operation handle. Admission is attempted immediately; use the async waiting
-    /// submission methods when capacity waiting is required. Session outcome and settlement are
+    /// Starts a managed asynchronous command session and returns its stdin,
+    /// stdout, and stderr endpoints with the operation handle. Admission is
+    /// attempted immediately; use the async waiting submission methods when
+    /// capacity waiting is required. Session outcome and settlement are
     /// separate observations.
     ///
     /// # Parameters
     /// * `runner`: Configures how the child process is launched and managed.
-    /// * `command`: Describes the program, arguments, and standard stream configuration.
+    /// * `command`: Describes the program, arguments, and standard stream
+    ///   configuration.
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
     ///
-    /// Returns [`CommandError`] for snapshot creation, capacity, or operation-manager admission failures.
+    /// Returns [`CommandError`] for snapshot creation, capacity, or
+    /// operation-manager admission failures.
     #[cfg(feature = "async")]
     pub(crate) fn start_session_managed(
         &self,
@@ -663,21 +706,25 @@ impl CommandExecutor {
     ) -> Result<crate::session::CommandSession, CommandError> {
         self.start_session_managed_in_manager(&self.manager, runner, command, options, None)
     }
-    /// Starts a managed asynchronous command session and returns its stdin, stdout, and stderr
-    /// endpoints with the operation handle. Admission is attempted immediately; use the async waiting
-    /// submission methods when capacity waiting is required. Session outcome and settlement are
-    /// separate observations. The supplied scope binds the operation to this executor group and
-    /// supplies its original context and deadline.
+    /// Starts a managed asynchronous command session and returns its stdin,
+    /// stdout, and stderr endpoints with the operation handle. Admission is
+    /// attempted immediately; use the async waiting submission methods when
+    /// capacity waiting is required. Session outcome and settlement are
+    /// separate observations. The supplied scope binds the operation to this
+    /// executor group and supplies its original context and deadline.
     ///
     /// # Parameters
-    /// * `scope`: Identifies the operation group and supplies its context and deadline.
+    /// * `scope`: Identifies the operation group and supplies its context and
+    ///   deadline.
     /// * `runner`: Configures how the child process is launched and managed.
-    /// * `command`: Describes the program, arguments, and standard stream configuration.
+    /// * `command`: Describes the program, arguments, and standard stream
+    ///   configuration.
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
     ///
-    /// Returns [`CommandError`] for snapshot creation, capacity, group binding, deadline, or operation-manager admission failures.
+    /// Returns [`CommandError`] for snapshot creation, capacity, group binding,
+    /// deadline, or operation-manager admission failures.
     #[cfg(feature = "async")]
     pub(crate) fn start_session_managed_in(
         &self,
@@ -692,22 +739,26 @@ impl CommandExecutor {
             .map_err(|e| managed_failure(format!("group binding failed: {e}")))?;
         self.start_session_managed_in_manager(&manager, runner, command, options, Some(scope.context()))
     }
-    /// Starts a managed asynchronous command session and returns its stdin, stdout, and stderr
-    /// endpoints with the operation handle. Admission is attempted immediately; use the async waiting
-    /// submission methods when capacity waiting is required. Session outcome and settlement are
-    /// separate observations. Owned file reservation precedes worker-side preparation, which may
-    /// truncate outputs. This helper maps admission rejection to [`CommandError`], so the returned
-    /// error does not recover the supplied file handles; later preparation failures follow operation
-    /// and recovery paths.
+    /// Starts a managed asynchronous command session and returns its stdin,
+    /// stdout, and stderr endpoints with the operation handle. Admission is
+    /// attempted immediately; use the async waiting submission methods when
+    /// capacity waiting is required. Session outcome and settlement are
+    /// separate observations. Owned file reservation precedes worker-side
+    /// preparation, which may truncate outputs. This helper maps admission
+    /// rejection to [`CommandError`], so the returned error does not
+    /// recover the supplied file handles; later preparation failures follow
+    /// operation and recovery paths.
     ///
     /// # Parameters
     /// * `runner`: Configures how the child process is launched and managed.
-    /// * `command`: Describes the program, arguments, and standard stream configuration.
+    /// * `command`: Describes the program, arguments, and standard stream
+    ///   configuration.
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
     ///
-    /// Returns [`CommandError`] for snapshot creation, file-byte capacity, or operation-manager admission failures.
+    /// Returns [`CommandError`] for snapshot creation, file-byte capacity, or
+    /// operation-manager admission failures.
     #[cfg(feature = "async")]
     pub(crate) fn start_session_resources_managed(
         &self,
@@ -717,24 +768,30 @@ impl CommandExecutor {
     ) -> Result<crate::session::CommandSession, CommandError> {
         self.start_session_resources_managed_in_manager(&self.manager, runner, command, options, None)
     }
-    /// Starts a managed asynchronous command session and returns its stdin, stdout, and stderr
-    /// endpoints with the operation handle. Admission is attempted immediately; use the async waiting
-    /// submission methods when capacity waiting is required. Session outcome and settlement are
-    /// separate observations. Owned file reservation precedes worker-side preparation, which may
-    /// truncate outputs. This helper maps admission rejection to [`CommandError`], so the returned
-    /// error does not recover the supplied file handles; later preparation failures follow operation
-    /// and recovery paths. The supplied scope binds the operation to this executor group and
-    /// supplies its original context and deadline.
+    /// Starts a managed asynchronous command session and returns its stdin,
+    /// stdout, and stderr endpoints with the operation handle. Admission is
+    /// attempted immediately; use the async waiting submission methods when
+    /// capacity waiting is required. Session outcome and settlement are
+    /// separate observations. Owned file reservation precedes worker-side
+    /// preparation, which may truncate outputs. This helper maps admission
+    /// rejection to [`CommandError`], so the returned error does not
+    /// recover the supplied file handles; later preparation failures follow
+    /// operation and recovery paths. The supplied scope binds the operation
+    /// to this executor group and supplies its original context and
+    /// deadline.
     ///
     /// # Parameters
-    /// * `scope`: Identifies the operation group and supplies its context and deadline.
+    /// * `scope`: Identifies the operation group and supplies its context and
+    ///   deadline.
     /// * `runner`: Configures how the child process is launched and managed.
-    /// * `command`: Describes the program, arguments, and standard stream configuration.
+    /// * `command`: Describes the program, arguments, and standard stream
+    ///   configuration.
     /// * `options`: Selects standard streams and command execution behavior.
     ///
     /// # Errors
     ///
-    /// Returns [`CommandError`] for snapshot creation, file-byte capacity, group binding, deadline, or operation-manager admission failures.
+    /// Returns [`CommandError`] for snapshot creation, file-byte capacity,
+    /// group binding, deadline, or operation-manager admission failures.
     #[cfg(feature = "async")]
     pub(crate) fn start_session_resources_managed_in(
         &self,
@@ -2768,6 +2825,87 @@ mod command_executor_api_tests {
 
     #[cfg(unix)]
     #[test]
+    fn test_blocking_resource_wait_rejects_over_budget_input_and_returns_file() {
+        use std::io::Read;
+        use std::io::Seek;
+        use std::io::Write;
+
+        use crate::execution::CapacityFailure;
+        use crate::execution::CommandSubmitFailureReason;
+
+        fn read_returned_input(failure: crate::execution::CommandResourceSubmitFailure) -> Vec<u8> {
+            assert_eq!(
+                failure.reason,
+                CommandSubmitFailureReason::Capacity(CapacityFailure::InputBytesExceeded)
+            );
+            let mut input = failure
+                .options
+                .configured_stdin()
+                .expect("rejected input owner should be returned")
+                .try_clone()
+                .unwrap();
+            input.rewind().unwrap();
+            let mut bytes = Vec::new();
+            input.read_to_end(&mut bytes).unwrap();
+            bytes
+        }
+
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let executor = CommandExecutor::new(
+            manager.clone(),
+            CommandExecutionConfig {
+                max_active: 1,
+                max_queued: 0,
+                max_waiters: 1,
+                max_queued_input_bytes: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let mut input = tempfile::tempfile().unwrap();
+        input.write_all(b"too-large").unwrap();
+        input.rewind().unwrap();
+        let failure = match <CommandExecutor as CommandExecutorApi>::submit_wait_resources_blocking(
+            &executor,
+            CommandRunner::without_timeout(),
+            Command::new("must-not-run-blocking-resource-wait"),
+            CommandResourceRunOptions::new().stdin_file(input),
+        ) {
+            Err(failure) => failure,
+            Ok(_) => panic!("over-budget input must be rejected without waiting"),
+        };
+        assert_eq!(read_returned_input(failure), b"too-large");
+
+        let mut input = tempfile::tempfile().unwrap();
+        input.write_all(b"too-large-scoped").unwrap();
+        input.rewind().unwrap();
+        let scoped_executor = executor.clone();
+        let scoped_result = manager
+            .run(qubit_operation::OperationOptions::default(), move |scope| {
+                let failure = match <CommandExecutor as CommandExecutorApi>::submit_wait_resources_blocking_in(
+                    &scoped_executor,
+                    &scope,
+                    CommandRunner::without_timeout(),
+                    Command::new("must-not-run-scoped-resource-wait"),
+                    CommandResourceRunOptions::new().stdin_file(input),
+                ) {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("over-budget scoped input must be rejected without waiting"),
+                };
+                assert_eq!(read_returned_input(failure), b"too-large-scoped");
+                Ok::<_, crate::CommandError>(())
+            })
+            .unwrap();
+        assert!(matches!(scoped_result, OperationOutcome::Succeeded(())));
+        let snapshot = executor.scheduler_snapshot();
+        assert_eq!(snapshot.active, 0);
+        assert_eq!(snapshot.queued, 0);
+        assert_eq!(snapshot.waiters, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_trait_submit_entry_points_execute_root_and_scoped_commands() {
         let (manager, executor, runner) = setup();
         assert_eq!(
@@ -3063,6 +3201,7 @@ mod command_executor_api_tests {
     #[cfg(all(feature = "async", unix))]
     mod async_tests {
         use std::future::Future;
+        use std::io::Read;
         use std::io::Seek;
         use std::io::Write;
         use std::sync::Arc;
@@ -3072,6 +3211,7 @@ mod command_executor_api_tests {
         use std::task::Waker;
 
         use super::Command;
+        use super::CommandExecutionConfig;
         use super::CommandExecutor;
         use super::CommandExecutorApi;
         use super::CommandResourceRunOptions;
@@ -3135,6 +3275,60 @@ mod command_executor_api_tests {
         #[test]
         fn test_trait_async_entry_points_run_root_and_scoped_commands() {
             block_on(async_trait_entry_points_run_root_and_scoped_commands());
+        }
+
+        #[test]
+        fn test_async_resource_wait_returns_over_budget_file_without_admission() {
+            block_on(async {
+                use crate::execution::CapacityFailure;
+                use crate::execution::CommandSubmitFailureReason;
+
+                let manager = super::super::OperationManager::new(Default::default()).unwrap();
+                let executor = CommandExecutor::new(
+                    manager,
+                    CommandExecutionConfig {
+                        max_active: 1,
+                        max_queued: 0,
+                        max_waiters: 1,
+                        max_queued_input_bytes: 2,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let mut input = tempfile::tempfile().unwrap();
+                input.write_all(b"over-budget").unwrap();
+                input.rewind().unwrap();
+
+                let failure = match <CommandExecutor as CommandExecutorApi>::submit_wait_resources(
+                    &executor,
+                    crate::CommandRunner::without_timeout(),
+                    Command::new("must-not-run-over-budget"),
+                    CommandResourceRunOptions::new().stdin_file(input),
+                )
+                .await
+                {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("an over-budget resource wait must be rejected"),
+                };
+                assert_eq!(
+                    failure.reason,
+                    CommandSubmitFailureReason::Capacity(CapacityFailure::InputBytesExceeded)
+                );
+                let mut returned_input = failure
+                    .options
+                    .configured_stdin()
+                    .expect("rejected input owner should be returned")
+                    .try_clone()
+                    .unwrap();
+                returned_input.rewind().unwrap();
+                let mut returned_bytes = Vec::new();
+                returned_input.read_to_end(&mut returned_bytes).unwrap();
+                assert_eq!(returned_bytes, b"over-budget");
+                let snapshot = executor.scheduler_snapshot();
+                assert_eq!(snapshot.active, 0);
+                assert_eq!(snapshot.queued, 0);
+                assert_eq!(snapshot.waiters, 0);
+            });
         }
 
         #[test]
