@@ -303,7 +303,14 @@ fn owned_file_error(command: &str, stream: OutputStream, path: &str, source: io:
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::sync::Arc;
+    use std::time::Duration;
 
+    use qubit_clock::ManualMonotonicClock;
+    use qubit_clock::MonotonicClock;
+    use qubit_redact::RedactionPolicy;
+
+    use super::CommandRunner;
     use super::start_output_reader;
     use super::take_output_pipe;
     use crate::CommandErrorKind;
@@ -344,6 +351,106 @@ mod tests {
                 } if *actual == stream
             ));
         }
+    }
+
+    #[test]
+    fn test_runner_configuration_accessors_and_builders() {
+        let default = CommandRunner::new(Duration::from_secs(4));
+        assert_eq!(default.configured_timeout(), Some(Duration::from_secs(4)));
+        assert_eq!(default.configured_success_exit_codes(), &[0]);
+        assert!(default.configured_working_directory().is_none());
+        assert!(!default.is_logging_disabled());
+        assert!(default.is_output_truncation_failure_enabled());
+        assert_eq!(
+            default.configured_max_stdout_bytes(),
+            Some(super::DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM),
+        );
+        assert_eq!(
+            default.configured_max_stderr_bytes(),
+            Some(super::DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM),
+        );
+        assert_eq!(default.configured_max_total_output_bytes(), None);
+
+        let clock = ManualMonotonicClock::new_shared();
+        let timer_domain = clock.now().domain();
+        let configured = default
+            .working_directory("runner/working-directory")
+            .timer(Arc::new(clock.new_timer()))
+            .success_exit_code(7)
+            .success_exit_codes(&[3, 7])
+            .disable_logging(true)
+            .fail_on_output_truncation(false)
+            .diagnostic_redaction_policy(RedactionPolicy::default())
+            .max_stdout_bytes(2)
+            .max_stderr_bytes(4)
+            .max_output_bytes(6)
+            .bounded_output(5)
+            .max_total_output_bytes(9);
+
+        assert_eq!(
+            configured.configured_working_directory().unwrap(),
+            "runner/working-directory"
+        );
+        assert_eq!(
+            configured.configured_timer().clock().now().domain(),
+            timer_domain
+        );
+        assert_eq!(configured.configured_success_exit_codes(), &[3, 7]);
+        assert!(configured.is_logging_disabled());
+        assert!(configured.is_output_truncation_failure_enabled());
+        assert_eq!(
+            configured.configured_diagnostic_redaction_policy(),
+            &RedactionPolicy::default()
+        );
+        assert_eq!(configured.configured_max_stdout_bytes(), Some(5));
+        assert_eq!(configured.configured_max_stderr_bytes(), Some(5));
+        assert_eq!(configured.configured_max_total_output_bytes(), Some(9));
+
+        let unbounded = configured
+            .clone()
+            .unbounded_output()
+            .without_total_output_limit()
+            .disable_logging(false)
+            .fail_on_output_truncation(false);
+        assert_eq!(unbounded.configured_max_stdout_bytes(), None);
+        assert_eq!(unbounded.configured_max_stderr_bytes(), None);
+        assert_eq!(unbounded.configured_max_total_output_bytes(), None);
+        assert!(!unbounded.is_logging_disabled());
+        assert!(!unbounded.is_output_truncation_failure_enabled());
+        assert_eq!(configured.configured_max_stdout_bytes(), Some(5));
+        assert_eq!(configured.configured_max_total_output_bytes(), Some(9));
+
+        let untimed = CommandRunner::without_timeout();
+        assert_eq!(untimed.configured_timeout(), None);
+    }
+
+    #[cfg(unix)]
+    fn successful_test_command() -> crate::Command {
+        crate::Command::new("sh")
+            .arg("-c")
+            .arg("printf unit-runner")
+    }
+
+    #[cfg(windows)]
+    fn successful_test_command() -> crate::Command {
+        crate::Command::new("cmd").arg("/C").arg("echo unit-runner")
+    }
+
+    #[test]
+    fn test_runner_run_and_run_with_return_captured_successful_output() {
+        let output = CommandRunner::without_timeout()
+            .run(successful_test_command())
+            .expect("run should accept a default successful exit code");
+        assert_eq!(output.exit_code(), Some(0));
+        #[cfg(unix)]
+        assert_eq!(output.stdout(), b"unit-runner");
+        #[cfg(windows)]
+        assert_eq!(output.stdout_text().unwrap().trim(), "unit-runner");
+
+        let output = CommandRunner::new(Duration::from_secs(2))
+            .run_with(successful_test_command(), crate::CommandRunOptions::new())
+            .expect("run_with should accept explicit per-run options");
+        assert_eq!(output.exit_code(), Some(0));
     }
 }
 
