@@ -961,6 +961,52 @@ mod resource_byte_tests {
         assert_eq!(contents, b"larger than budget");
         let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Drain);
     }
+
+    #[test]
+    fn test_closed_executor_rejects_standard_and_resource_submissions() {
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+        let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
+
+        let standard = match executor.submit(
+            CommandRunner::without_timeout(),
+            Command::new("must-not-run-after-shutdown"),
+            Default::default(),
+        ) {
+            Ok(_) => panic!("shutdown closes admission before a command is accepted"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            standard.reason,
+            CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
+        );
+        assert_eq!(standard.command.program(), "must-not-run-after-shutdown");
+
+        let mut input = tempfile::tempfile().unwrap();
+        input.write_all(b"preserved after shutdown").unwrap();
+        let resource = match executor.submit_resources(
+            CommandRunner::without_timeout(),
+            Command::new("must-not-run-with-resource-after-shutdown"),
+            CommandResourceRunOptions::new().stdin_file(input),
+        ) {
+            Ok(_) => panic!("shutdown must return resources for rejected submissions"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            resource.reason,
+            CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
+        );
+        let mut returned_input = resource
+            .options
+            .configured_stdin()
+            .expect("rejected submission retains its original input file")
+            .try_clone()
+            .unwrap();
+        returned_input.seek(SeekFrom::Start(0)).unwrap();
+        let mut contents = Vec::new();
+        returned_input.read_to_end(&mut contents).unwrap();
+        assert_eq!(contents, b"preserved after shutdown");
+    }
 }
 
 /// Performs the retry wait step in the managed command execution lifecycle.
