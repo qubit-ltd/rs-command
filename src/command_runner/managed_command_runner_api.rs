@@ -1033,5 +1033,109 @@ mod tests {
             .expect_err("async spawn failure should be returned");
             assert!(matches!(error.reason(), crate::CommandErrorReason::SpawnFailed { .. }));
         }
+        }
+    }
+}
+
+#[cfg(test)]
+mod outcome_mapping_tests {
+    use qubit_operation::ChildFailureSummary;
+    use qubit_operation::ChildOutcomeKind;
+    use qubit_operation::ChildOutcomeSummary;
+    use qubit_operation::DiagnosticSummary;
+    use qubit_operation::ExecutionFailure;
+    use qubit_operation::ExecutionPhase;
+    use qubit_operation::ManagerOptions;
+    use qubit_operation::OperationId;
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOptions;
+    use qubit_operation::OperationOutcome;
+    use qubit_operation::PanicSummary;
+    use qubit_operation::StopReason;
+    use qubit_operation::StopReport;
+
+    use super::map_outcome;
+
+    fn operation_id() -> OperationId {
+        let manager = OperationManager::new(ManagerOptions::default())
+            .expect("test operation manager should start");
+        match manager
+            .run(OperationOptions::default(), |scope| {
+                Ok::<_, std::convert::Infallible>(scope.id())
+            })
+            .expect("test operation should complete")
+        {
+            OperationOutcome::Succeeded(id) => id,
+            other => panic!("test operation did not succeed: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_map_outcome_preserves_all_terminal_failure_details() {
+        type Outcome = OperationOutcome<crate::CommandOutput, crate::CommandError>;
+        let id = operation_id();
+
+        let stopped = map_outcome(Outcome::Stopped(StopReport {
+            reason: StopReason::UserCancelled,
+            accepted_at: None,
+        }))
+        .expect_err("a stopped operation should map to cancellation");
+        assert!(matches!(
+            stopped.reason(),
+            crate::CommandErrorReason::Cancelled
+        ));
+        assert_eq!(stopped.command(), "<managed command>");
+
+        let child_failed = map_outcome(Outcome::ChildFailed(ChildFailureSummary {
+            operation_id: id,
+            outcome: ChildOutcomeSummary {
+                operation_id: id,
+                kind: ChildOutcomeKind::Failed,
+                summary: DiagnosticSummary::new("required child failed"),
+            },
+        }))
+        .expect_err("a required child failure should become a managed error");
+        assert!(matches!(
+            child_failed.reason(),
+            crate::CommandErrorReason::ManagedOperationFailed { diagnostic }
+                if diagnostic == "required child failed"
+        ));
+
+        let panicked = map_outcome(Outcome::Panicked(PanicSummary {
+            operation_id: id,
+            phase: ExecutionPhase::Running,
+            summary: DiagnosticSummary::new("command worker panicked"),
+        }))
+        .expect_err("a panic summary should become a managed error");
+        assert!(matches!(
+            panicked.reason(),
+            crate::CommandErrorReason::ManagedOperationFailed { diagnostic }
+                if diagnostic == "command worker panicked"
+        ));
+
+        let execution_failed = map_outcome(Outcome::ExecutionFailed(ExecutionFailure {
+            operation_id: id,
+            summary: DiagnosticSummary::new("executor rejected operation body"),
+            source: None,
+        }))
+        .expect_err("an executor failure should become a managed error");
+        assert!(matches!(
+            execution_failed.reason(),
+            crate::CommandErrorReason::ManagedOperationFailed { diagnostic }
+                if diagnostic == "executor rejected operation body"
+        ));
+
+        let original = crate::CommandError::from_reason(
+            "original command",
+            crate::CommandErrorReason::Cancelled,
+            None,
+        );
+        let failed = map_outcome(Outcome::Failed(original))
+            .expect_err("an application error should be preserved");
+        assert_eq!(failed.command(), "original command");
+        assert!(matches!(
+            failed.reason(),
+            crate::CommandErrorReason::Cancelled
+        ));
     }
 }
