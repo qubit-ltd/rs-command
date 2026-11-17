@@ -718,6 +718,96 @@ mod activation_failure_tests {
     }
 
     #[test]
+    fn test_stop_before_activation_reaches_backend_and_releases_reservation() {
+        struct ReleaseTrackingScheduler(Arc<AtomicBool>);
+
+        impl Scheduler for ReleaseTrackingScheduler {
+            fn try_reserve(
+                &self,
+                _input_bytes: usize,
+            ) -> Result<crate::execution::Reservation, crate::execution::contracts::CapacityFailure> {
+                let released = Arc::clone(&self.0);
+                Ok(crate::execution::Reservation::new(
+                    23,
+                    41,
+                    move |token| {
+                        assert_eq!(token, 41);
+                        released.store(true, Ordering::SeqCst);
+                    },
+                    |_| crate::execution::contracts::ReservationLease::new(|| {}),
+                ))
+            }
+
+            fn enqueue(
+                &self,
+                job: crate::execution::contracts::ScheduledJob,
+                permit: crate::execution::Reservation,
+            ) -> Result<(), crate::execution::contracts::EnqueueFailure> {
+                (job.run)(permit);
+                Ok(())
+            }
+
+            fn wait_next(&self) -> Option<(crate::execution::contracts::ScheduledJob, crate::execution::Reservation)> {
+                None
+            }
+
+            fn close_admission(&self) {}
+        }
+
+        let released = Arc::new(AtomicBool::new(false));
+        let scheduler: Arc<dyn Scheduler> = Arc::new(ReleaseTrackingScheduler(Arc::clone(&released)));
+        let permit = scheduler.try_reserve(0).unwrap();
+        let process_backend = Arc::new(ProcessBackend::new());
+        let mut request = request();
+        request.command = Command::new("true");
+        let state = Arc::new(AdapterState::new(
+            request,
+            permit,
+            scheduler,
+            process_backend.clone(),
+            process_backend,
+            super::super::cleanup::start_recovery_worker(1).unwrap(),
+            None,
+        ));
+        let state_for_operation = Arc::clone(&state);
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut handle = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                state_for_operation.bind(scope.id()).unwrap();
+                OperationControl::request_stop(&*state_for_operation, qubit_operation::StopReason::Timeout);
+                state_for_operation.clone().activate(scope).unwrap();
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        let operation_id = handle.id();
+        assert!(matches!(
+            handle.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        handle.wait_settlement().unwrap();
+
+        let snapshot = OperationControl::snapshot(&*state);
+        assert_eq!(snapshot.operation_id, operation_id);
+        assert_eq!(snapshot.stop.unwrap().reason, qubit_operation::StopReason::Timeout);
+        assert_eq!(
+            snapshot.outcome.expect("pre-start stop should publish an outcome").kind,
+            qubit_operation::ChildOutcomeKind::Stopped
+        );
+        assert!(snapshot.input_released, "pre-start stop must release operation inputs");
+        let settlement = snapshot.settlement.expect("pre-start stop should settle");
+        assert_eq!(settlement.operation_id, operation_id);
+        assert_eq!(settlement.status, qubit_operation::SettlementStatus::Released);
+        assert!(
+            released.load(Ordering::SeqCst),
+            "the scheduler reservation must be released"
+        );
+        assert!(
+            state.restore().is_none(),
+            "activation must transfer the request out of the adapter"
+        );
+    }
+
+    #[test]
     fn test_activation_enqueues_and_runs_bound_request_before_settlement() {
         let scheduler = Arc::new(InlineScheduler);
         let permit = scheduler.try_reserve(0).unwrap();
