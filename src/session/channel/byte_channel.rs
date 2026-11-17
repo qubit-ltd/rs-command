@@ -1303,4 +1303,60 @@ mod tests {
             std::task::Poll::Ready(Ok(0))
         ));
     }
+
+    #[test]
+    fn test_blocking_writer_stopped_while_waiting_keeps_queued_bytes() {
+        let channel = Arc::new(ByteChannel::new());
+        let queued = vec![0x31; CHANNEL_CAPACITY];
+        channel.blocking_write(&queued).unwrap();
+
+        let writer_channel = channel.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            done_tx.send(writer_channel.blocking_write(b"stopped output")).unwrap();
+        });
+        channel.wait_until_blocked();
+        channel.stop_output();
+
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("stopping output must release a blocked writer")
+            .unwrap();
+        writer.join().unwrap();
+        assert!(channel.incomplete());
+
+        let mut actual = Vec::with_capacity(CHANNEL_CAPACITY);
+        let mut chunk = vec![0; MAX_BLOCK];
+        while actual.len() < CHANNEL_CAPACITY {
+            let count = channel.blocking_read(&mut chunk).unwrap();
+            assert_ne!(count, 0, "queued bytes must remain readable after stop");
+            actual.extend_from_slice(&chunk[..count]);
+        }
+        assert_eq!(actual, queued);
+        assert_eq!(channel.blocking_read(&mut chunk).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_blocking_writer_dropped_reader_while_waiting_returns_incomplete() {
+        let channel = Arc::new(ByteChannel::new());
+        channel
+            .blocking_write(&vec![0x42; CHANNEL_CAPACITY])
+            .unwrap();
+
+        let writer_channel = channel.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            done_tx.send(writer_channel.blocking_write(b"reader disappeared")).unwrap();
+        });
+        channel.wait_until_blocked();
+        channel.drop_reader();
+
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("dropping the reader must release a blocked writer")
+            .unwrap();
+        writer.join().unwrap();
+        assert!(channel.incomplete());
+        assert_eq!(channel.blocking_read(&mut [0; 1]).unwrap(), 0);
+    }
 }
