@@ -303,6 +303,55 @@ mod tests {
     }
 
     #[test]
+    fn test_effect_record_overflow_does_not_block_sink_truncation() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_owned();
+        let mut writer = file.reopen().unwrap();
+        writer.write_all(b"existing output").unwrap();
+        writer.flush().unwrap();
+        drop(writer);
+
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut options = OperationOptions::default();
+        options.limits.effect_records = 1;
+        let mut operation = manager
+            .try_submit(options, move |scope| {
+                let output = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
+                let mut reservations = vec![scope.reserve_resource().unwrap()];
+                let prepared = register_files(
+                    &scope,
+                    &mut reservations,
+                    None,
+                    Some((output, FileSinkPolicy::Truncate)),
+                    None,
+                )
+                .map_err(|error| error.0.to_string())?;
+                scope
+                    .record_effect(qubit_operation::EffectRecord {
+                        operation_id: scope.id(),
+                        resource_id: None,
+                        fact: qubit_operation::EffectFact::Known,
+                        description: qubit_operation::DiagnosticSummary::new("fill effect capacity"),
+                    })
+                    .unwrap();
+
+                truncate_sinks(&prepared, &scope).map_err(|error| error.to_string())?;
+                assert_eq!(
+                    prepared.stdout.as_ref().unwrap().file.lock().unwrap().metadata().unwrap().len(),
+                    0
+                );
+                Ok::<_, String>(())
+            })
+            .unwrap();
+
+        assert!(matches!(operation.wait_outcome().unwrap(), OperationOutcome::Succeeded(())));
+        let settlement = operation.wait_settlement().unwrap();
+        assert!(settlement.all_released());
+        assert_eq!(settlement.effects_total, 2);
+        assert_eq!(settlement.effect_overflow, 1);
+    }
+
+    #[test]
     fn test_register_files_restores_unregistered_input_when_reservation_is_missing() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let mut operation = manager
