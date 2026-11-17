@@ -210,7 +210,7 @@ mod tests {
     use crate::resource_run_options::FileSinkPolicy;
 
     #[test]
-    fn truncating_prepared_sink_records_known_effect_and_clears_file() {
+    fn test_truncating_prepared_sink_records_known_effect_and_clears_file() {
         let file = tempfile::NamedTempFile::new().unwrap();
         let path = file.path().to_owned();
         let mut writer = file.reopen().unwrap();
@@ -221,11 +221,7 @@ mod tests {
         let manager = OperationManager::new(Default::default()).unwrap();
         let mut operation = manager
             .try_submit(OperationOptions::default(), move |scope| {
-                let output = std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(&path)
-                    .unwrap();
+                let output = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
                 let mut reservations = vec![scope.reserve_resource().unwrap()];
                 let prepared = register_files(
                     &scope,
@@ -254,7 +250,10 @@ mod tests {
             })
             .unwrap();
 
-        assert!(matches!(operation.wait_outcome().unwrap(), OperationOutcome::Succeeded(())));
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
         let settlement = operation.wait_settlement().unwrap();
         assert!(settlement.all_released());
         assert_eq!(settlement.effects_total, 1);

@@ -61,7 +61,7 @@ mod tests {
     use crate::execution::contracts::StopPort;
 
     #[test]
-    fn stop_port_propagates_reason_and_removes_its_gate_when_dropped() {
+    fn test_stop_port_propagates_reason_and_removes_its_gate_when_dropped() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let mut operation = manager
             .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))

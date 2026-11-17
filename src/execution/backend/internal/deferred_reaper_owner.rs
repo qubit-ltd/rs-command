@@ -113,7 +113,7 @@ mod tests {
     use crate::execution::contracts::RecoveryOwner;
 
     #[test]
-    fn cleanup_retry_moves_owner_once_and_reports_handoff_state() {
+    fn test_cleanup_retry_moves_owner_once_and_reports_handoff_state() {
         let (observer, completed) = ReaperObserver::pair();
         observer.mark_pending();
         let (cleanup_tx, cleanup_rx) = mpsc::channel();
