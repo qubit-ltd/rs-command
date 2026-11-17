@@ -1298,6 +1298,96 @@ fn make_request(
     })
 }
 
+#[cfg(test)]
+mod executor_decision_tests {
+    use qubit_operation::ContextOptions;
+    use qubit_operation::OperationContext;
+
+    use super::deadline_failure;
+    use super::retry_wait;
+    use crate::execution::BoundedScheduler;
+    use crate::execution::CommandExecutionConfig;
+    use crate::execution::CommandSubmitFailureReason;
+    use crate::execution::SnapshotFailure;
+
+    #[test]
+    fn preserves_non_capacity_failures_and_retries_manager_busy() {
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig::default()).unwrap();
+        let context = OperationContext::new(ContextOptions::default()).unwrap();
+        let snapshot = CommandSubmitFailureReason::Snapshot(SnapshotFailure {
+            diagnostic: "invalid snapshot".to_owned(),
+        });
+
+        assert!(!retry_wait(&snapshot, &scheduler, 0, None));
+        assert_eq!(deadline_failure(snapshot.clone(), &context), snapshot);
+        assert!(retry_wait(
+            &CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy),
+            &scheduler,
+            0,
+            None,
+        ));
+    }
+
+    #[cfg(feature = "async")]
+    #[test]
+    fn classifies_only_capacity_and_busy_as_async_retryable() {
+        use crate::execution::CapacityFailure;
+
+        use super::{async_capacity_retry, retryable_async};
+
+        let active_full = CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull);
+        let queue_full = CommandSubmitFailureReason::Capacity(CapacityFailure::QueueFull);
+        let input_limit = CommandSubmitFailureReason::Capacity(CapacityFailure::InputBytesExceeded);
+        let busy = CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy);
+        let snapshot = CommandSubmitFailureReason::Snapshot(SnapshotFailure {
+            diagnostic: "invalid snapshot".to_owned(),
+        });
+
+        assert!(async_capacity_retry(&active_full));
+        assert!(async_capacity_retry(&queue_full));
+        assert!(!async_capacity_retry(&busy));
+        assert!(!async_capacity_retry(&input_limit));
+        assert!(retryable_async(&busy));
+        assert!(!retryable_async(&snapshot));
+    }
+
+    #[cfg(feature = "async")]
+    #[test]
+    fn async_capacity_wait_returns_immediately_when_scheduler_has_room() {
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig::default()).unwrap();
+        assert!(futures_lite_block_on(super::wait_capacity_async(
+            scheduler, 0, None
+        )));
+    }
+}
+
+#[cfg(all(test, feature = "async"))]
+fn futures_lite_block_on<F: std::future::Future>(future: F) -> F::Output {
+    use std::sync::Arc;
+    use std::task::Wake;
+    use std::task::Waker;
+
+    struct ThreadWake(std::thread::Thread);
+    impl Wake for ThreadWake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+    let mut context = std::task::Context::from_waker(&waker);
+    let mut future = Box::pin(future);
+    loop {
+        if let std::task::Poll::Ready(value) = future.as_mut().poll(&mut context) {
+            return value;
+        }
+        std::thread::park();
+    }
+}
+
 impl CommandExecutorApi for CommandExecutor {
     /// Performs the submit step in the managed command execution lifecycle.
     ///
