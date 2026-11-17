@@ -10,7 +10,9 @@ use std::time::Duration;
 
 #[cfg(unix)]
 use qubit_command::Command;
+#[cfg(unix)]
 use qubit_command::CommandExecutionConfig;
+#[cfg(unix)]
 use qubit_command::CommandExecutor;
 #[cfg(unix)]
 use qubit_command::CommandExecutorApi;
@@ -18,7 +20,9 @@ use qubit_command::CommandExecutorApi;
 use qubit_command::CommandResourceRunOptions;
 #[cfg(unix)]
 use qubit_command::CommandRunner;
+#[cfg(unix)]
 use qubit_operation::ManagerOptions;
+#[cfg(unix)]
 use qubit_operation::OperationManager;
 #[cfg(unix)]
 use qubit_operation::OperationOutcome;

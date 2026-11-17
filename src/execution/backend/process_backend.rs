@@ -367,18 +367,23 @@ fn released_report(operation_id: OperationId) -> SettlementReport {
 mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
+    #[cfg(unix)]
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
+    #[cfg(unix)]
     use std::task::Waker;
     use std::time::Duration;
 
+    #[cfg(unix)]
     use qubit_operation::ClockDomainId;
+    #[cfg(unix)]
     use qubit_operation::ClockSource;
     #[cfg(unix)]
     use qubit_operation::ContextOptions;
     #[cfg(unix)]
     use qubit_operation::Deadline;
+    #[cfg(unix)]
     use qubit_operation::MonotonicTime;
     #[cfg(unix)]
     use qubit_operation::OperationContext;
@@ -390,6 +395,7 @@ mod tests {
     use qubit_operation::OperationOutcome;
     use qubit_operation::SettlementReport;
     use qubit_operation::StopReason;
+    #[cfg(unix)]
     use qubit_operation::TimerRegistration;
 
     #[cfg(unix)]

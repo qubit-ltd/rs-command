@@ -131,6 +131,7 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering;
+    #[cfg(unix)]
     use std::task::Waker;
     use std::thread;
     #[cfg(unix)]
