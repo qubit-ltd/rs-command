@@ -713,7 +713,10 @@ mod data_api_tests {
             .env("AFTER_CLEAR", "kept");
 
         assert_eq!(command.program(), OsStr::new("worker"));
-        assert_eq!(command.working_directory_override(), Some(Path::new("/tmp/work")));
+        assert_eq!(
+            command.working_directory_override(),
+            Some(Path::new("/tmp/work"))
+        );
         assert!(command.clears_environment());
         assert_eq!(
             command.arguments().collect::<Vec<_>>(),
@@ -745,29 +748,31 @@ mod data_api_tests {
 
     #[test]
     fn test_os_string_inputs_and_all_stdin_modes_preserve_configuration() {
-        let root = std::env::temp_dir();
-        let input_path = root.join(format!("qubit-command-input-{}", std::process::id()));
-        std::fs::write(&input_path, b"file input").unwrap();
+        let input_file = tempfile::NamedTempFile::new().unwrap();
+        let root = input_file.path().parent().unwrap();
         let command = Command::new_os(OsString::from("worker"))
             .arg_os(OsString::from("argument"))
             .sensitive_arg_os(OsString::from("secret"))
             .args_os([OsString::from("--flag"), OsString::from("value")])
-            .working_directory(root.clone())
+            .working_directory(root.to_path_buf())
             .env_os(OsString::from("KEY"), OsString::from("value"))
             .env_remove_os(OsString::from("OLD_KEY"))
-            .stdin_file(input_path.clone());
+            .stdin_file(input_file.path().to_path_buf());
 
         assert_eq!(command.arguments().count(), 4);
-        assert_eq!(command.working_directory_override(), Some(root.as_path()));
+        assert_eq!(command.working_directory_override(), Some(root));
         assert_eq!(
             command.environment(),
             [(OsString::from("KEY"), OsString::from("value"))]
         );
         assert_eq!(command.removed_environment(), [OsString::from("OLD_KEY")]);
-        assert!(matches!(command.stdin, super::CommandStdin::File(_)));
+        assert!(matches!(
+            command.stdin,
+            super::CommandStdin::File(path) if path == input_file.path()
+        ));
 
-        let bytes = Command::new("worker").stdin_bytes(Vec::from(&b"bytes"[..]));
-        assert!(matches!(bytes.stdin, super::CommandStdin::Bytes(_)));
+        let bytes = Command::new("worker").stdin_bytes(&b"bytes"[..]);
+        assert!(matches!(bytes.stdin, super::CommandStdin::Bytes(ref data) if data == b"bytes"));
         assert!(matches!(
             Command::new("worker").stdin_null().stdin,
             super::CommandStdin::Null
@@ -777,6 +782,43 @@ mod data_api_tests {
             super::CommandStdin::Inherit
         ));
         assert_eq!(Command::shell("echo safe").arguments().len(), 2);
-        std::fs::remove_file(input_path).unwrap();
+    }
+
+    #[test]
+    fn test_os_str_builder_inputs_and_environment_updates_preserve_latest_state() {
+        let program = OsStr::new("worker");
+        let working_directory = Path::new("relative-work");
+        let command = Command::new_os(program)
+            .arg_os(OsStr::new("argument"))
+            .sensitive_arg_os(OsStr::new("secret"))
+            .args_os([OsStr::new("--mode"), OsStr::new("fast")])
+            .working_directory(working_directory)
+            .env_os(OsStr::new("REPLACE"), OsStr::new("old"))
+            .env_os(OsStr::new("REPLACE"), OsStr::new("new"))
+            .env_remove_os(OsStr::new("REMOVE"))
+            .env_remove_os(OsStr::new("REMOVE"))
+            .env_os(OsStr::new("REMOVE"), OsStr::new("restored"))
+            .env_remove_os(OsStr::new("REPLACE"));
+
+        assert_eq!(command.program(), program);
+        assert_eq!(
+            command.working_directory_override(),
+            Some(working_directory)
+        );
+        assert!(!command.clears_environment());
+        assert_eq!(
+            command.arguments().collect::<Vec<_>>(),
+            [
+                OsStr::new("argument"),
+                OsStr::new("secret"),
+                OsStr::new("--mode"),
+                OsStr::new("fast"),
+            ]
+        );
+        assert_eq!(
+            command.environment(),
+            [(OsString::from("REMOVE"), OsString::from("restored"))]
+        );
+        assert_eq!(command.removed_environment(), [OsString::from("REPLACE")]);
     }
 }
