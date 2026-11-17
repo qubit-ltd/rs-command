@@ -138,6 +138,7 @@ mod tests {
     use qubit_operation::StopReason;
 
     use super::StartGate;
+    use crate::execution::contracts::StopPort;
     use crate::Command;
     use crate::CommandErrorKind;
     use crate::CommandRunOptions;
@@ -242,6 +243,19 @@ mod tests {
         let gate = StartGate::default();
         assert!(gate.request_stop(StopReason::UserCancelled));
         assert!(gate.authorize().is_none());
+    }
+
+    #[test]
+    fn stop_port_trait_request_cancels_before_authorization_and_keeps_first_reason() {
+        let gate = StartGate::default();
+        let cancellation = gate.cancellation();
+
+        StopPort::request_stop(&gate, StopReason::Timeout);
+        StopPort::request_stop(&gate, StopReason::UserCancelled);
+
+        assert!(gate.authorize().is_none());
+        assert!(cancellation.is_cancelled());
+        assert_eq!(gate.stop_reason(), Some(StopReason::Timeout));
     }
 
     #[test]

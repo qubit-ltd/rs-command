@@ -341,22 +341,142 @@ fn released_report(operation_id: OperationId) -> SettlementReport {
 mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
+    use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
 
     use qubit_operation::OperationId;
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOptions;
     use qubit_operation::OperationOutcome;
     use qubit_operation::SettlementReport;
+    use qubit_operation::StopReason;
 
+    use super::ProcessBackend;
     use super::schedule_recovery_transfer;
+    use crate::Command;
     use crate::CommandError;
     use crate::CommandOutput;
+    use crate::CommandRunOptions;
+    use crate::CommandRunner;
+    use crate::execution::contracts::ActivatedRequest;
+    use crate::execution::contracts::Backend;
+    use crate::execution::contracts::ExecutionSnapshot;
     use crate::execution::contracts::FactPublishError;
     use crate::execution::contracts::FactSink;
+    use crate::execution::contracts::IoPathSnapshot;
+    use crate::execution::contracts::Request;
+    use crate::execution::contracts::RequestOptions;
+    use crate::execution::contracts::Reservation;
     use crate::execution::contracts::RecoveryEffectEvidence;
     use crate::execution::contracts::RecoveryOwner;
     use crate::execution::contracts::RecoveryPublishError;
     use crate::execution::contracts::RecoveryPublishFailure;
+    use crate::execution::contracts::StopPort;
+
+    #[derive(Default)]
+    struct RecordingSink {
+        outcome: Mutex<Option<OperationOutcome<CommandOutput, CommandError>>>,
+        released: AtomicBool,
+        settlement: Mutex<Option<Arc<SettlementReport>>>,
+    }
+
+    impl FactSink for RecordingSink {
+        fn publish_outcome(
+            &self,
+            outcome: OperationOutcome<CommandOutput, CommandError>,
+        ) -> Result<(), FactPublishError> {
+            *self.outcome.lock().unwrap() = Some(outcome);
+            Ok(())
+        }
+
+        fn confirm_input_release(&self) -> Result<(), FactPublishError> {
+            self.released.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn publish_settlement(&self, report: Arc<SettlementReport>) -> Result<(), FactPublishError> {
+            *self.settlement.lock().unwrap() = Some(report);
+            Ok(())
+        }
+
+        fn retain_recovery_owner(
+            &self,
+            owner: Box<dyn RecoveryOwner>,
+        ) -> Result<(), RecoveryPublishFailure> {
+            Err(RecoveryPublishFailure {
+                reason: RecoveryPublishError::CapacityExceeded,
+                owner,
+            })
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_before_backend_start_publishes_stopped_release_and_settlement() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::new());
+        let sink = Arc::new(RecordingSink::default());
+        let reservation_released = Arc::new(AtomicBool::new(false));
+        let operation_backend = Arc::clone(&backend);
+        let operation_sink = Arc::clone(&sink);
+        let operation_reservation_released = Arc::clone(&reservation_released);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("must-not-start");
+        let operation_path = path.clone();
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                let stop = operation_backend.stop_port(operation_id);
+                StopPort::request_stop(&*stop, StopReason::Timeout);
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    move |_| operation_reservation_released.store(true, Ordering::SeqCst),
+                    |_| crate::execution::contracts::ReservationLease::new(|| {}),
+                );
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout(),
+                    command: Command::new("sh")
+                        .arg("-c")
+                        .arg(&format!("touch {}", operation_path.display())),
+                    options: RequestOptions::Standard(CommandRunOptions::default()),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
+                    },
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: None,
+                };
+                operation_backend.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: operation_sink.clone(),
+                        session_bridge: None,
+                    },
+                    operation_sink,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(operation.wait_outcome().unwrap(), OperationOutcome::Succeeded(())));
+        operation.wait_settlement().unwrap();
+        assert!(!path.exists(), "a stop that wins before authorization must prevent spawn");
+        assert!(reservation_released.load(Ordering::SeqCst));
+        assert!(sink.released.load(Ordering::SeqCst));
+        assert!(matches!(
+            sink.outcome.lock().unwrap().take(),
+            Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
+        ));
+        let report = sink.settlement.lock().unwrap().take().unwrap();
+        assert!(report.all_released());
+    }
 
     struct RetrySink {
         rejections_left: AtomicUsize,

@@ -312,4 +312,21 @@ mod tests {
             .expect("deferred owner should complete cleanup");
         assert!(observer.is_complete());
     }
+
+    #[test]
+    fn completion_is_idempotent_and_signals_waiter_once() {
+        let (observer, completed) = ReaperObserver::pair();
+        assert!(!observer.is_pending());
+        assert!(!observer.is_complete());
+
+        observer.complete();
+        observer.complete();
+
+        assert!(observer.is_complete());
+        completed.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            completed.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+    }
 }
