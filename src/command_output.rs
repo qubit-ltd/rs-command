@@ -378,6 +378,62 @@ mod tests {
     use super::CommandOutput;
 
     #[test]
+    fn test_borrowed_accessors_expose_status_streams_and_collection_metadata() {
+        let elapsed = Duration::from_millis(37);
+        let output = CommandOutput::new(
+            test_status(),
+            (b"stdout".to_vec(), true, true),
+            (b"stderr".to_vec(), false, false),
+            elapsed,
+        );
+
+        assert_eq!(output.exit_code(), Some(0));
+        assert_eq!(output.exit_status().code(), Some(0));
+        assert_eq!(output.stdout(), b"stdout");
+        assert_eq!(output.stderr(), b"stderr");
+        assert_eq!(output.stdout_text(), Ok("stdout"));
+        assert_eq!(output.stderr_text(), Ok("stderr"));
+        assert!(matches!(
+            output.stdout_lossy_text(),
+            std::borrow::Cow::Borrowed("stdout")
+        ));
+        assert!(matches!(
+            output.stderr_lossy_text(),
+            std::borrow::Cow::Borrowed("stderr")
+        ));
+        assert!(output.stdout_truncated());
+        assert!(!output.stderr_truncated());
+        assert!(output.stdout_complete());
+        assert!(!output.stderr_complete());
+        assert_eq!(output.elapsed(), elapsed);
+
+        let captured = output.captured_output();
+        assert_eq!(captured.stdout(), b"stdout");
+        assert_eq!(captured.stderr(), b"stderr");
+        assert!(captured.stdout_truncated());
+        assert!(!captured.stderr_complete());
+    }
+
+    #[test]
+    fn test_lossy_text_owns_replacement_text_for_invalid_utf8() {
+        let output = CommandOutput::new(
+            test_status(),
+            (vec![b'a', 0xff], false, true),
+            (vec![0xfe], false, true),
+            Duration::ZERO,
+        );
+
+        assert!(output.stdout_text().is_err());
+        assert!(output.stderr_text().is_err());
+        assert!(
+            matches!(output.stdout_lossy_text(), std::borrow::Cow::Owned(text) if text == "a\u{fffd}")
+        );
+        assert!(
+            matches!(output.stderr_lossy_text(), std::borrow::Cow::Owned(text) if text == "\u{fffd}")
+        );
+    }
+
+    #[test]
     fn test_into_captured_output_moves_nonempty_stream_buffers() {
         let stdout = vec![1, 2, 3, 4];
         let stderr = vec![5, 6, 7];

@@ -690,3 +690,59 @@ impl Command {
         self.removed_envs.iter().map(|key| ArgvItem::plain(key.as_os_str()))
     }
 }
+
+#[cfg(test)]
+mod data_api_tests {
+    use std::ffi::OsStr;
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    use super::Command;
+
+    #[test]
+    fn test_data_accessors_report_configured_command_values() {
+        let command = Command::new_os(OsString::from("worker"))
+            .arg("visible")
+            .sensitive_arg("private")
+            .args_os([OsStr::new("--mode"), OsStr::new("fast")])
+            .working_directory("/tmp/work")
+            .env("MODE", "old")
+            .env_remove("TOKEN")
+            .env_os("MODE", "new")
+            .env_clear()
+            .env("AFTER_CLEAR", "kept");
+
+        assert_eq!(command.program(), OsStr::new("worker"));
+        assert_eq!(
+            command.working_directory_override(),
+            Some(Path::new("/tmp/work"))
+        );
+        assert!(command.clears_environment());
+        assert_eq!(
+            command.arguments().collect::<Vec<_>>(),
+            [
+                OsStr::new("visible"),
+                OsStr::new("private"),
+                OsStr::new("--mode"),
+                OsStr::new("fast"),
+            ]
+        );
+        assert_eq!(
+            command.environment(),
+            [(OsString::from("AFTER_CLEAR"), OsString::from("kept"))]
+        );
+        assert!(command.removed_environment().is_empty());
+    }
+
+    #[test]
+    fn test_data_accessors_report_unconfigured_defaults() {
+        let command = Command::new("worker");
+
+        assert_eq!(command.program(), OsStr::new("worker"));
+        assert_eq!(command.working_directory_override(), None);
+        assert!(!command.clears_environment());
+        assert_eq!(command.arguments().len(), 0);
+        assert!(command.environment().is_empty());
+        assert!(command.removed_environment().is_empty());
+    }
+}
