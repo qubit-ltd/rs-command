@@ -1126,3 +1126,100 @@ mod outcome_mapping_tests {
         assert!(matches!(failed.reason(), crate::CommandErrorReason::Cancelled));
     }
 }
+
+#[cfg(all(test, feature = "async", unix))]
+mod session_accessor_tests {
+    use std::future::Future;
+    use std::sync::Arc;
+    use std::task::Context;
+    use std::task::Poll;
+    use std::task::Wake;
+    use std::task::Waker;
+    use std::time::Duration;
+
+    use qubit_operation::ManagerOptions;
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOutcome;
+
+    use super::ManagedCommandRunnerApi;
+    use crate::Command;
+    use crate::CommandExecutionConfig;
+    use crate::CommandExecutor;
+    use crate::CommandRunner;
+    use crate::session::CommandSessionApi;
+
+    struct ThreadWake(std::thread::Thread);
+
+    impl Wake for ThreadWake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+        let mut context = Context::from_waker(&waker);
+        let mut future = Box::pin(future);
+        loop {
+            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
+                return value;
+            }
+            std::thread::park_timeout(Duration::from_millis(100));
+        }
+    }
+
+    #[test]
+    fn test_session_operation_accessor_borrows_then_transfers_handle() {
+        let manager =
+            OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default())
+            .expect("executor should start");
+        let runner = CommandRunner::without_timeout();
+        let mut session = block_on(runner.start_session(
+            &executor,
+            Command::new("sh").arg("-c").arg(":"),
+            Default::default(),
+        ))
+        .expect("session should start");
+
+        assert!(
+            session.operation().is_some(),
+            "session should expose its operation by borrow"
+        );
+        drop(
+            session
+                .take_stdin()
+                .expect("stdin endpoint should be available"),
+        );
+        drop(
+            session
+                .take_stdout()
+                .expect("stdout endpoint should be available"),
+        );
+        drop(
+            session
+                .take_stderr()
+                .expect("stderr endpoint should be available"),
+        );
+        let mut operation = session
+            .take_operation()
+            .expect("session should transfer its operation handle");
+        assert!(
+            session.operation().is_none(),
+            "taking the handle should clear the borrowed slot"
+        );
+        assert!(matches!(
+            operation
+                .wait_outcome()
+                .expect("session outcome should be available"),
+            OperationOutcome::Succeeded(_)
+        ));
+        operation
+            .wait_settlement()
+            .expect("session operation should settle");
+    }
+}

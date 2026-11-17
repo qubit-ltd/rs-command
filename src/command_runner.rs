@@ -325,8 +325,10 @@ mod tests {
     use super::start_output_reader;
     use super::take_output_pipe;
     use super::validate_prepared_files;
+    use crate::CommandCancellation;
     use crate::CommandErrorKind;
     use crate::CommandErrorReason;
+    use crate::CommandRunOptions;
     use crate::FileSinkPolicy;
     use crate::OutputStream;
     use crate::command_runner::internal::prepared_command::PreparedCommand;
@@ -487,6 +489,41 @@ mod tests {
     }
 
     #[test]
+    fn test_run_with_rejects_pre_cancelled_command_before_spawn() {
+        let cancellation = CommandCancellation::new();
+        cancellation.cancel();
+
+        let error = CommandRunner::without_timeout()
+            .run_with(
+                crate::Command::new("__qubit_cancelled_command_must_not_spawn__"),
+                CommandRunOptions::new().cancellation(cancellation),
+            )
+            .expect_err("a pre-cancelled command should be rejected before spawn");
+
+        assert_eq!(error.kind(), CommandErrorKind::CancelledBeforeStart);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_runner_enforces_combined_output_budget_on_real_command() {
+        let error = CommandRunner::without_timeout()
+            .max_total_output_bytes(1)
+            .run(crate::Command::new("sh").arg("-c").arg("printf budget"))
+            .expect_err("combined stdout and stderr should exceed the configured byte budget");
+
+        assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::OutputLimitExceeded {
+                limit: 1,
+                observed
+            } if *observed > 1
+        ));
+        assert!(error.output().is_none());
+        assert!(error.captured_output().is_some());
+    }
+
+    #[test]
     fn test_validate_prepared_files_rejects_owned_file_aliases_and_path_tees() {
         let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
         let outcome = manager
@@ -539,11 +576,33 @@ mod tests {
                     }
                 ));
 
+                let same_stdin_and_stderr = PreparedFiles::new(
+                    Some(shared.clone()),
+                    None,
+                    Some(PreparedSink {
+                        file: shared.clone(),
+                        policy: FileSinkPolicy::Preserve,
+                    }),
+                );
+                let error = validate_prepared_files(
+                    "test",
+                    &same_stdin_and_stderr,
+                    &prepared_command("unused-test-program", None, None),
+                )
+                .expect_err("stdin and stderr must not identify one file");
+                assert!(matches!(
+                    error.reason(),
+                    CommandErrorReason::WriteOutputFailed {
+                        stream: OutputStream::Stdout,
+                        ..
+                    }
+                ));
+
                 let path_tee = tempfile::NamedTempFile::new().expect("tee path should be created");
                 let owned_output = PreparedFiles::new(
                     None,
                     Some(PreparedSink {
-                        file: shared,
+                        file: shared.clone(),
                         policy: FileSinkPolicy::Preserve,
                     }),
                     None,
@@ -554,6 +613,28 @@ mod tests {
                     &prepared_command("unused-test-program", Some(path_tee.path()), None),
                 )
                 .expect_err("owned sinks cannot be combined with path tees");
+                assert!(matches!(
+                    error.reason(),
+                    CommandErrorReason::WriteOutputFailed {
+                        stream: OutputStream::Stdout,
+                        ..
+                    }
+                ));
+
+                let stderr_with_path = PreparedFiles::new(
+                    None,
+                    None,
+                    Some(PreparedSink {
+                        file: shared.clone(),
+                        policy: FileSinkPolicy::Preserve,
+                    }),
+                );
+                let error = validate_prepared_files(
+                    "test",
+                    &stderr_with_path,
+                    &prepared_command("unused-test-program", None, Some(path_tee.path())),
+                )
+                .expect_err("an owned stderr sink cannot be combined with a path tee");
                 assert!(matches!(
                     error.reason(),
                     CommandErrorReason::WriteOutputFailed {
