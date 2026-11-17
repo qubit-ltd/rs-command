@@ -239,6 +239,23 @@ mod tests {
     }
 
     #[test]
+    fn test_recording_bridge_tracks_broken_stdin_and_output_budget() {
+        let bridge = RecordingBridge::new(b"input", Some(2));
+
+        assert!(!bridge.stdin_broken_pipe());
+        bridge.record_stdin_broken_pipe();
+        assert!(bridge.stdin_broken_pipe());
+        assert_eq!(bridge.output_budget_limit(), Some(2));
+
+        bridge.write_stdout(b"ab").unwrap();
+        assert_eq!(bridge.output_bytes_observed(), 2);
+        assert!(!bridge.output_budget_exceeded());
+        bridge.write_stderr(b"c").unwrap();
+        assert_eq!(bridge.output_bytes_observed(), 3);
+        assert!(bridge.output_budget_exceeded());
+    }
+
+    #[test]
     fn test_stop_wins_start_gate() {
         let gate = StartGate::default();
         assert!(gate.request_stop(StopReason::UserCancelled));

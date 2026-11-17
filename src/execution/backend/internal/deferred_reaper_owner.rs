@@ -113,6 +113,34 @@ mod tests {
     use crate::execution::contracts::RecoveryOwner;
 
     #[test]
+    fn test_unstarted_cleanup_does_not_report_unknown_effects() {
+        let (observer, _completed) = ReaperObserver::pair();
+        let owner = DeferredReaperOwner::new(ReaperOwner::new(|| {}), observer.clone());
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+
+        assert!(!owner.is_complete());
+        assert_eq!(
+            owner.summary(),
+            "managed child and I/O helpers awaiting bounded reaper capacity"
+        );
+        assert!(owner.effect_evidence(operation.id()).effects.is_empty());
+
+        observer.mark_pending();
+        let evidence = owner.effect_evidence(operation.id());
+        assert_eq!(evidence.effects_total, 1);
+        assert_eq!(evidence.effects[0].fact, qubit_operation::EffectFact::Unknown);
+
+        observer.complete();
+        assert!(owner.is_complete());
+        assert!(owner.effect_evidence(operation.id()).effects.is_empty());
+        assert!(operation.wait_outcome().is_ok());
+        operation.wait_settlement().unwrap();
+    }
+
+    #[test]
     fn test_cleanup_retry_moves_owner_once_and_reports_handoff_state() {
         let (observer, completed) = ReaperObserver::pair();
         observer.mark_pending();
