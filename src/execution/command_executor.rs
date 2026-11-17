@@ -70,7 +70,7 @@ mod tests {
     use super::CommandExecutor;
 
     #[test]
-    fn executor_exposes_its_config_and_manager_for_future_operations() {
+    fn test_executor_exposes_its_config_and_manager_for_future_operations() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let config = CommandExecutionConfig {
             max_active: 2,
