@@ -58,6 +58,15 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
+    use std::task::Waker;
+
+    use qubit_operation::ClockDomainId;
+    use qubit_operation::ClockSource;
+    use qubit_operation::ContextOptions;
+    use qubit_operation::Deadline;
+    use qubit_operation::MonotonicTime;
+    use qubit_operation::OperationContext;
+    use qubit_operation::TimerRegistration;
 
     use super::Reservation;
     use crate::execution::contracts::CapacityFailure;
@@ -85,6 +94,47 @@ mod tests {
         fn close_admission(&self) {}
     }
 
+    struct RejectingCompatibilityScheduler {
+        calls: AtomicUsize,
+        input_bytes: AtomicUsize,
+    }
+
+    impl Scheduler for RejectingCompatibilityScheduler {
+        fn try_reserve(&self, input_bytes: usize) -> Result<Reservation, CapacityFailure> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.input_bytes.store(input_bytes, Ordering::SeqCst);
+            Err(CapacityFailure::QueueFull)
+        }
+
+        fn enqueue(&self, _job: ScheduledJob, _permit: Reservation) -> Result<(), EnqueueFailure> {
+            unreachable!("enqueue is outside this reservation forwarding test")
+        }
+
+        fn wait_next(&self) -> Option<(ScheduledJob, Reservation)> {
+            None
+        }
+
+        fn close_admission(&self) {}
+    }
+
+    struct FixedClock(ClockDomainId);
+
+    impl ClockSource for FixedClock {
+        fn now(&self) -> MonotonicTime {
+            MonotonicTime::new(self.0, 0)
+        }
+
+        fn register_deadline(&self, _deadline: MonotonicTime, _waker: Waker) -> Box<dyn TimerRegistration> {
+            Box::new(NoopRegistration)
+        }
+    }
+
+    struct NoopRegistration;
+
+    impl TimerRegistration for NoopRegistration {
+        fn cancel(self: Box<Self>) {}
+    }
+
     #[test]
     fn test_default_context_reservation_delegates_to_legacy_scheduler_method() {
         let scheduler = CompatibilityScheduler(std::sync::atomic::AtomicUsize::new(0));
@@ -93,6 +143,41 @@ mod tests {
 
         assert!(reservation.belongs_to(9));
         assert_eq!(scheduler.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_expired_context_rejects_before_legacy_reservation() {
+        let domain = ClockDomainId::new_unique();
+        let clock: Arc<dyn ClockSource> = Arc::new(FixedClock(domain));
+        let context = OperationContext::new(ContextOptions {
+            clock: Some(clock),
+            deadline: Some(Deadline::at(MonotonicTime::new(domain, 0))),
+            budget: None,
+        })
+        .unwrap();
+        let scheduler = CompatibilityScheduler(std::sync::atomic::AtomicUsize::new(0));
+
+        assert_eq!(
+            scheduler.try_reserve_until(23, Some(context)).unwrap_err(),
+            CapacityFailure::DeadlineExpired
+        );
+        assert_eq!(scheduler.0.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn test_context_reservation_forwards_legacy_capacity_failure() {
+        let scheduler = RejectingCompatibilityScheduler {
+            calls: AtomicUsize::new(0),
+            input_bytes: AtomicUsize::new(0),
+        };
+        let context = OperationContext::new(ContextOptions::default()).unwrap();
+
+        assert_eq!(
+            scheduler.try_reserve_until(29, Some(context)).unwrap_err(),
+            CapacityFailure::QueueFull
+        );
+        assert_eq!(scheduler.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(scheduler.input_bytes.load(Ordering::SeqCst), 29);
     }
 
     #[test]
