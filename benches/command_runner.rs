@@ -42,14 +42,12 @@ fn short_lived_command() -> Command {
 
 /// Builds a command that runs this benchmark executable's silent fixture.
 fn silent_command() -> Command {
-    Command::new_os(std::env::current_exe().expect("benchmark executable should resolve"))
-        .arg(SILENT_FIXTURE_ARG)
+    Command::new_os(std::env::current_exe().expect("benchmark executable should resolve")).arg(SILENT_FIXTURE_ARG)
 }
 
 /// Builds a command that runs the selected quiet-output fixture.
 fn idle_output_command(fixture: &str) -> Command {
-    Command::new_os(std::env::current_exe().expect("benchmark executable should resolve"))
-        .arg(fixture)
+    Command::new_os(std::env::current_exe().expect("benchmark executable should resolve")).arg(fixture)
 }
 
 /// Runs one quiet-output fixture and writes its expected bytes to both streams.
@@ -65,13 +63,9 @@ fn run_idle_output_fixture(intermittent: bool) {
     let mut stderr = stderr.lock();
     for _ in 0..INTERMITTENT_OUTPUT_ITERATIONS {
         std::thread::sleep(INTERMITTENT_OUTPUT_INTERVAL);
-        stdout
-            .write_all(b"o")
-            .expect("fixture stdout write should succeed");
+        stdout.write_all(b"o").expect("fixture stdout write should succeed");
         stdout.flush().expect("fixture stdout flush should succeed");
-        stderr
-            .write_all(b"e")
-            .expect("fixture stderr write should succeed");
+        stderr.write_all(b"e").expect("fixture stderr write should succeed");
         stderr.flush().expect("fixture stderr flush should succeed");
     }
 }
@@ -151,17 +145,9 @@ fn benchmark_short_lived_command_runner(criterion: &mut Criterion) {
 fn benchmark_silent_command_runner(criterion: &mut Criterion) {
     let runner = CommandRunner::new(Duration::from_secs(10));
     let command = silent_command();
-    let output = runner
-        .run(command.clone())
-        .expect("silent fixture should succeed");
-    assert!(
-        output.stdout().is_empty(),
-        "silent fixture stdout should be empty"
-    );
-    assert!(
-        output.stderr().is_empty(),
-        "silent fixture stderr should be empty"
-    );
+    let output = runner.run(command.clone()).expect("silent fixture should succeed");
+    assert!(output.stdout().is_empty(), "silent fixture stdout should be empty");
+    assert!(output.stderr().is_empty(), "silent fixture stderr should be empty");
     assert!(output.stdout_complete() && output.stderr_complete());
     assert!(!output.stdout_truncated() && !output.stderr_truncated());
     assert!(output.elapsed() >= SILENT_FIXTURE_DELAY);
@@ -169,13 +155,7 @@ fn benchmark_silent_command_runner(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("silent_command_runner");
     group.bench_function("default_timeout", |bencher| {
         let mut failures = 0;
-        bencher.iter(|| {
-            black_box(
-                runner
-                    .run(black_box(command.clone()))
-                    .inspect_err(|_| failures += 1),
-            )
-        });
+        bencher.iter(|| black_box(runner.run(black_box(command.clone())).inspect_err(|_| failures += 1)));
         assert_eq!(failures, 0, "benchmark commands must succeed");
     });
     group.finish();
@@ -258,11 +238,7 @@ fn verify_idle_output_result(result: &Result<CommandOutput, CommandError>, inter
     } else {
         (0, 0, 0)
     };
-    assert_eq!(
-        output.exit_status().code(),
-        Some(0),
-        "fixture should exit successfully"
-    );
+    assert_eq!(output.exit_status().code(), Some(0), "fixture should exit successfully");
     assert_eq!(
         output.stdout().len(),
         expected_len,
@@ -313,8 +289,7 @@ fn benchmark_idle_output_budget(criterion: &mut Criterion) {
             for (budget_name, runner) in [
                 (
                     "no_total_budget",
-                    CommandRunner::new(IDLE_OUTPUT_TIMEOUT)
-                        .max_output_bytes(IDLE_OUTPUT_RETAINED_BYTES),
+                    CommandRunner::new(IDLE_OUTPUT_TIMEOUT).max_output_bytes(IDLE_OUTPUT_RETAINED_BYTES),
                 ),
                 (
                     "total_budget_1024",
@@ -323,14 +298,9 @@ fn benchmark_idle_output_budget(criterion: &mut Criterion) {
                         .max_total_output_bytes(IDLE_OUTPUT_RETAINED_BYTES as u64),
                 ),
             ] {
-                group.bench_function(
-                    format!("{scenario}_{concurrency}_{budget_name}"),
-                    |bencher| {
-                        bencher.iter(|| {
-                            run_idle_output_group(black_box(&runner), fixture, concurrency)
-                        });
-                    },
-                );
+                group.bench_function(format!("{scenario}_{concurrency}_{budget_name}"), |bencher| {
+                    bencher.iter(|| run_idle_output_group(black_box(&runner), fixture, concurrency));
+                });
             }
         }
     }
@@ -338,11 +308,7 @@ fn benchmark_idle_output_budget(criterion: &mut Criterion) {
 }
 
 /// Classifies one benchmark result without scanning captured stream contents.
-fn classifies_budget_result(
-    result: &Result<CommandOutput, CommandError>,
-    over_limit: bool,
-    limit: u64,
-) -> bool {
+fn classifies_budget_result(result: &Result<CommandOutput, CommandError>, over_limit: bool, limit: u64) -> bool {
     if over_limit {
         matches!(
             result,

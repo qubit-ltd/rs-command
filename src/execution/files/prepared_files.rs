@@ -56,10 +56,8 @@ pub(super) fn register_files(
     stdout: Option<(File, FileSinkPolicy)>,
     stderr: Option<(File, FileSinkPolicy)>,
 ) -> Result<PreparedFiles, Box<RegistrationFailure>> {
-    let (stdout_file, stdout_policy) =
-        stdout.map_or((None, None), |(file, policy)| (Some(file), Some(policy)));
-    let (stderr_file, stderr_policy) =
-        stderr.map_or((None, None), |(file, policy)| (Some(file), Some(policy)));
+    let (stdout_file, stdout_policy) = stdout.map_or((None, None), |(file, policy)| (Some(file), Some(policy)));
+    let (stderr_file, stderr_policy) = stderr.map_or((None, None), |(file, policy)| (Some(file), Some(policy)));
     let mut values = [stdin, stdout_file, stderr_file];
     let policies = [None, stdout_policy, stderr_policy];
     let mut refs: [Option<ResourceRef<Mutex<File>>>; 3] = [None, None, None];
@@ -93,11 +91,7 @@ pub(super) fn register_files(
             }
             Err(error) => {
                 let (_, recovered_file, _) = error.into_parts();
-                values[index] = Some(
-                    recovered_file
-                        .into_inner()
-                        .unwrap_or_else(|e| e.into_inner()),
-                );
+                values[index] = Some(recovered_file.into_inner().unwrap_or_else(|e| e.into_inner()));
                 return Err(Box::new((
                     io::Error::other("resource registration failed"),
                     partial(refs, policies),
@@ -130,10 +124,7 @@ fn partial(
 /// # Parameters
 /// * `refs`: Resource references for stdin, stdout, and stderr.
 /// * `policies`: Output policies paired with stdout and stderr references.
-fn build(
-    mut refs: [Option<ResourceRef<Mutex<File>>>; 3],
-    policies: [Option<FileSinkPolicy>; 3],
-) -> PreparedFiles {
+fn build(mut refs: [Option<ResourceRef<Mutex<File>>>; 3], policies: [Option<FileSinkPolicy>; 3]) -> PreparedFiles {
     PreparedFiles::new(
         refs[0].take(),
         refs[1].take().map(|file| PreparedSink {
@@ -159,10 +150,7 @@ pub(super) fn truncate_sinks(prepared: &PreparedFiles, scope: &OperationScope) -
     ] {
         let Some(sink) = sink else { continue };
         if sink.policy == FileSinkPolicy::Truncate {
-            let mut file = sink
-                .file
-                .lock()
-                .map_err(|error| io::Error::other(error.to_string()))?;
+            let mut file = sink.file.lock().map_err(|error| io::Error::other(error.to_string()))?;
             if let Err(error) = file.set_len(0) {
                 record_effect(
                     scope,
@@ -205,8 +193,6 @@ fn record_effect(
         description: qubit_operation::DiagnosticSummary::new(&description),
     };
     if let Err(error) = scope.record_effect(record) {
-        log::warn!(
-            "file side-effect evidence was not retained ({error:?}); file owner remains registered"
-        );
+        log::warn!("file side-effect evidence was not retained ({error:?}); file owner remains registered");
     }
 }

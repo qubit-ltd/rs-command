@@ -20,10 +20,7 @@ pub trait ResourceInput: Send {
     /// # Parameters
     /// * `self`: Supplies the self value used by this operation.
     /// * `scope`: Supplies the scope value used by this operation.
-    fn prepare_files(
-        self: Box<Self>,
-        scope: &OperationScope,
-    ) -> Result<PreparedFiles, FilePreparationFailure>;
+    fn prepare_files(self: Box<Self>, scope: &OperationScope) -> Result<PreparedFiles, FilePreparationFailure>;
 
     /// Prepares files using the immutable submission-time path/environment
     /// snapshot.

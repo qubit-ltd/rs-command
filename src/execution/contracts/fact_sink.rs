@@ -25,10 +25,7 @@ pub trait FactSink: Send + Sync {
     ///
     /// # Parameters
     /// * `outcome`: Supplies the outcome value used by this operation.
-    fn publish_outcome(
-        &self,
-        outcome: OperationOutcome<CommandOutput, CommandError>,
-    ) -> Result<(), FactPublishError>;
+    fn publish_outcome(&self, outcome: OperationOutcome<CommandOutput, CommandError>) -> Result<(), FactPublishError>;
     /// Performs the confirm input release step in the managed command execution
     /// lifecycle.
     fn confirm_input_release(&self) -> Result<(), FactPublishError>;
@@ -47,8 +44,5 @@ pub trait FactSink: Send + Sync {
     ///
     /// # Parameters
     /// * `owner`: Supplies the owner value used by this operation.
-    fn retain_recovery_owner(
-        &self,
-        owner: Box<dyn RecoveryOwner>,
-    ) -> Result<(), RecoveryPublishFailure>;
+    fn retain_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) -> Result<(), RecoveryPublishFailure>;
 }

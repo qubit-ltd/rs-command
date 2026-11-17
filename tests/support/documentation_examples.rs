@@ -35,10 +35,7 @@ fn opening_fence(line: &str) -> Option<(char, usize, &str)> {
     if marker != '`' && marker != '~' {
         return None;
     }
-    let count = rest
-        .bytes()
-        .take_while(|byte| *byte == marker as u8)
-        .count();
+    let count = rest.bytes().take_while(|byte| *byte == marker as u8).count();
     if count < 3 {
         return None;
     }
@@ -55,10 +52,7 @@ fn closes_fence(line: &str, marker: char, minimum: usize) -> bool {
         return false;
     }
     let rest = &line[spaces..];
-    let count = rest
-        .bytes()
-        .take_while(|byte| *byte == marker as u8)
-        .count();
+    let count = rest.bytes().take_while(|byte| *byte == marker as u8).count();
     count >= minimum && rest[count..].trim().is_empty()
 }
 
@@ -88,31 +82,20 @@ pub(crate) fn extract_examples(markdown: &str, label: &str) -> Result<Vec<Exampl
             let (id, mode) = value
                 .split_once(':')
                 .ok_or_else(|| format!("{label}: malformed marker {value}"))?;
-            if id.is_empty()
-                || !matches!(
-                    mode,
-                    "compile" | "run" | "unix" | "windows" | "no_run" | "fragment"
-                )
-            {
+            if id.is_empty() || !matches!(mode, "compile" | "run" | "unix" | "windows" | "no_run" | "fragment") {
                 return Err(format!("{label}: unsupported marker {value}"));
             }
             marker = Some((id.to_owned(), mode.to_owned()));
         } else if let Some((fence_char, fence_len, info)) = opening_fence(line) {
             let rust_fence = is_rust_fence(info);
             if marker.is_none() && rust_fence {
-                return Err(format!(
-                    "{label}:{}: unclassified Rust fence",
-                    line_index + 1
-                ));
+                return Err(format!("{label}:{}: unclassified Rust fence", line_index + 1));
             }
             let classified = marker.take();
             if let Some((id, _)) = &classified
                 && (!rust_fence || !matches!(info, "rust" | "rust,no_run"))
             {
-                return Err(format!(
-                    "{label}: {} must precede a supported Rust fence",
-                    id
-                ));
+                return Err(format!("{label}: {} must precede a supported Rust fence", id));
             }
             let mut code = classified.as_ref().map(|_| String::new());
             let mut closed = false;
@@ -142,9 +125,7 @@ pub(crate) fn extract_examples(markdown: &str, label: &str) -> Result<Vec<Exampl
             if let Some((id, mode)) = classified {
                 let no_run = info == "rust,no_run";
                 if no_run != (mode == "no_run") {
-                    return Err(format!(
-                        "{label}: {id} mode does not match fence attributes"
-                    ));
+                    return Err(format!("{label}: {id} mode does not match fence attributes"));
                 }
                 examples.push(Example {
                     id,
@@ -153,9 +134,7 @@ pub(crate) fn extract_examples(markdown: &str, label: &str) -> Result<Vec<Exampl
                 });
             }
         } else if marker.is_some() {
-            return Err(format!(
-                "{label}: marker must be immediately followed by a Rust fence"
-            ));
+            return Err(format!("{label}: marker must be immediately followed by a Rust fence"));
         }
     }
     if marker.is_some() {
@@ -170,11 +149,7 @@ pub(crate) fn extract_examples(markdown: &str, label: &str) -> Result<Vec<Exampl
     Ok(examples)
 }
 
-pub(crate) fn require_markers(
-    examples: &[Example],
-    expected: &[(&str, &str)],
-    label: &str,
-) -> Result<(), String> {
+pub(crate) fn require_markers(examples: &[Example], expected: &[(&str, &str)], label: &str) -> Result<(), String> {
     for (id, mode) in expected {
         match examples.iter().find(|example| example.id == *id) {
             None => return Err(format!("{label}: missing required marker {id}")),
@@ -240,8 +215,7 @@ pub(crate) fn check_documents(root: &Path) {
     let mut examples = Vec::new();
     for (relative, expected) in documents {
         let path = root.join(relative);
-        let source = fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let source = fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
         let parsed = extract_examples(&source, relative).unwrap_or_else(|e| panic!("{e}"));
         require_markers(&parsed, expected, relative).unwrap_or_else(|e| panic!("{e}"));
         examples.extend(parsed.into_iter().map(|mut e| {
@@ -250,24 +224,18 @@ pub(crate) fn check_documents(root: &Path) {
         }));
     }
     let package_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target = resolve_target_dir(
-        &package_root,
-        std::env::var_os("CARGO_TARGET_DIR").as_deref(),
-    );
+    let target = resolve_target_dir(&package_root, std::env::var_os("CARGO_TARGET_DIR").as_deref());
     let parent = target.join("documentation-example-harness");
     fs::create_dir_all(&parent).expect("create harness parent");
     let harness = tempfile::tempdir_in(parent).expect("create temporary harness");
     fs::create_dir(harness.path().join("tests")).expect("create harness tests directory");
-    let dependency_path = package_root
-        .canonicalize()
-        .expect("canonicalize package root");
+    let dependency_path = package_root.canonicalize().expect("canonicalize package root");
     let manifest = format!(
         "[workspace]\n\n[package]\nname = \"documentation-example-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nqubit-command = {{ path = {:?} }}\nqubit-operation = \"^0.3\"\n",
         dependency_path.to_string_lossy()
     );
     fs::write(harness.path().join("Cargo.toml"), manifest).expect("write harness manifest");
-    let mut source =
-        String::from("#![allow(unused_imports, unused_variables, dead_code, non_snake_case)]\n");
+    let mut source = String::from("#![allow(unused_imports, unused_variables, dead_code, non_snake_case)]\n");
     for example in examples {
         let (cfg, ignored) = match example.mode.as_str() {
             "unix" => ("#[cfg(unix)]\n", false),
@@ -295,18 +263,10 @@ pub(crate) fn check_documents(root: &Path) {
         }
         source.push_str("})();\nresult.expect(\"documented example failed\");\n}\n}\n\n");
     }
-    fs::write(
-        harness.path().join("tests/documentation_examples.rs"),
-        source,
-    )
-    .expect("write harness source");
+    fs::write(harness.path().join("tests/documentation_examples.rs"), source).expect("write harness source");
     let root_lock = package_root.join("Cargo.lock");
-    let initial_lock = read_lock_seed(&root_lock).unwrap_or_else(|error| {
-        panic!(
-            "baseline lockfile unavailable at {}: {error}",
-            root_lock.display()
-        )
-    });
+    let initial_lock = read_lock_seed(&root_lock)
+        .unwrap_or_else(|error| panic!("baseline lockfile unavailable at {}: {error}", root_lock.display()));
     let harness_lock = harness.path().join("Cargo.lock");
     fs::write(&harness_lock, &initial_lock).unwrap_or_else(|error| {
         panic!(
@@ -317,17 +277,14 @@ pub(crate) fn check_documents(root: &Path) {
     });
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let run = |stage: &str, manifest: &Path, command: &mut Command| -> Vec<u8> {
-        let output = command.output().unwrap_or_else(|error| {
-            panic!(
-                "{stage} for {} could not start Cargo: {error}",
-                manifest.display()
-            )
-        });
+        let output = command
+            .output()
+            .unwrap_or_else(|error| panic!("{stage} for {} could not start Cargo: {error}", manifest.display()));
         if !output.status.success() {
-            let exit = output.status.code().map_or_else(
-                || "terminated by signal".to_owned(),
-                |code| code.to_string(),
-            );
+            let exit = output
+                .status
+                .code()
+                .map_or_else(|| "terminated by signal".to_owned(), |code| code.to_string());
             panic!(
                 "{stage} for {} failed (exit {exit}): {}",
                 manifest.display(),
@@ -347,26 +304,24 @@ pub(crate) fn check_documents(root: &Path) {
         &root_manifest,
         &mut root_metadata_command(&cargo, &package_root),
     );
-    let root_metadata: serde_json::Value =
-        serde_json::from_slice(&root_metadata).unwrap_or_else(|error| {
-            panic!(
-                "root metadata --locked --offline JSON for {} is invalid: {error}",
-                root_manifest.display()
-            )
-        });
+    let root_metadata: serde_json::Value = serde_json::from_slice(&root_metadata).unwrap_or_else(|error| {
+        panic!(
+            "root metadata --locked --offline JSON for {} is invalid: {error}",
+            root_manifest.display()
+        )
+    });
     let harness_manifest = harness.path().join("Cargo.toml");
     let harness_metadata = run(
         "harness metadata --offline",
         &harness_manifest,
         &mut harness_metadata_command(&cargo, &package_root, &harness_manifest),
     );
-    let harness_metadata: serde_json::Value = serde_json::from_slice(&harness_metadata)
-        .unwrap_or_else(|error| {
-            panic!(
-                "harness metadata --offline JSON for {} is invalid: {error}",
-                harness_manifest.display()
-            )
-        });
+    let harness_metadata: serde_json::Value = serde_json::from_slice(&harness_metadata).unwrap_or_else(|error| {
+        panic!(
+            "harness metadata --offline JSON for {} is invalid: {error}",
+            harness_manifest.display()
+        )
+    });
     compare_metadata(&root_metadata, &harness_metadata, &package_root).unwrap_or_else(|error| {
         panic!(
             "harness dependency comparison for {} failed: {error}",
@@ -385,16 +340,12 @@ pub(crate) fn check_documents(root: &Path) {
             harness_manifest.display()
         )
     });
-    let final_lock = fs::read(&root_lock)
-        .unwrap_or_else(|error| panic!("cannot reread root Cargo.lock: {error}"));
-    assert_eq!(
-        initial_lock, final_lock,
-        "documentation test changed root Cargo.lock"
-    );
-    let test_exit = test_output.status.code().map_or_else(
-        || "terminated by signal".to_owned(),
-        |code| code.to_string(),
-    );
+    let final_lock = fs::read(&root_lock).unwrap_or_else(|error| panic!("cannot reread root Cargo.lock: {error}"));
+    assert_eq!(initial_lock, final_lock, "documentation test changed root Cargo.lock");
+    let test_exit = test_output
+        .status
+        .code()
+        .map_or_else(|| "terminated by signal".to_owned(), |code| code.to_string());
     assert!(
         test_output.status.success(),
         "harness test --locked --offline for {} failed (exit {test_exit}): {}",

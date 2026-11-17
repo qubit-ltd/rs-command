@@ -90,10 +90,7 @@ impl CommandExecutor {
     ///
     /// # Parameters
     /// * `mode`: Supplies the mode value used by this operation.
-    pub fn request_shutdown(
-        &self,
-        mode: qubit_operation::ShutdownMode,
-    ) -> qubit_operation::ShutdownHandle {
+    pub fn request_shutdown(&self, mode: qubit_operation::ShutdownMode) -> qubit_operation::ShutdownHandle {
         self.scheduler.close_admission();
         self.group.request_shutdown(mode)
     }
@@ -312,21 +309,18 @@ impl CommandExecutor {
         options: CommandRunOptions,
         deadline: Option<OperationContext>,
     ) -> Result<CommandOperation, CommandSubmitFailure> {
-        let request =
-            make_request(runner, command, RequestOptions::Standard(options)).map_err(|error| {
-                let (runner, command, options, message) = *error;
-                let RequestOptions::Standard(options) = options else {
-                    unreachable!()
-                };
-                CommandSubmitFailure {
-                    runner: Box::new(runner),
-                    command: Box::new(command),
-                    options,
-                    reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure {
-                        diagnostic: message,
-                    }),
-                }
-            })?;
+        let request = make_request(runner, command, RequestOptions::Standard(options)).map_err(|error| {
+            let (runner, command, options, message) = *error;
+            let RequestOptions::Standard(options) = options else {
+                unreachable!()
+            };
+            CommandSubmitFailure {
+                runner: Box::new(runner),
+                command: Box::new(command),
+                options,
+                reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure { diagnostic: message }),
+            }
+        })?;
         let permit = match self.scheduler.try_reserve_until(0, deadline.clone()) {
             Ok(p) => p,
             Err(reason) => {
@@ -365,9 +359,7 @@ impl CommandExecutor {
             }
             Err(error) => {
                 let (reason, _) = error.into_parts();
-                let request = prepared
-                    .restore()
-                    .expect("unactivated submission retains request");
+                let request = prepared.restore().expect("unactivated submission retains request");
                 let options = match request.options {
                     RequestOptions::Standard(o) => o,
                     _ => unreachable!(),
@@ -398,21 +390,18 @@ impl CommandExecutor {
         options: CommandResourceRunOptions,
         deadline: Option<OperationContext>,
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
-        let request =
-            make_request(runner, command, RequestOptions::Resources(options)).map_err(|error| {
-                let (runner, command, options, message) = *error;
-                let RequestOptions::Resources(options) = options else {
-                    unreachable!()
-                };
-                CommandResourceSubmitFailure {
-                    runner: Box::new(runner),
-                    command: Box::new(command),
-                    options: Box::new(options),
-                    reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure {
-                        diagnostic: message,
-                    }),
-                }
-            })?;
+        let request = make_request(runner, command, RequestOptions::Resources(options)).map_err(|error| {
+            let (runner, command, options, message) = *error;
+            let RequestOptions::Resources(options) = options else {
+                unreachable!()
+            };
+            CommandResourceSubmitFailure {
+                runner: Box::new(runner),
+                command: Box::new(command),
+                options: Box::new(options),
+                reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure { diagnostic: message }),
+            }
+        })?;
         let bytes = resource_bytes(&request.options);
         let permit = match self.scheduler.try_reserve_until(bytes, deadline.clone()) {
             Ok(p) => p,
@@ -452,9 +441,7 @@ impl CommandExecutor {
             }
             Err(error) => {
                 let (reason, _) = error.into_parts();
-                let request = prepared
-                    .restore()
-                    .expect("unactivated submission retains request");
+                let request = prepared.restore().expect("unactivated submission retains request");
                 let RequestOptions::Resources(options) = request.options else {
                     unreachable!()
                 };
@@ -494,21 +481,18 @@ impl CommandExecutor {
         let RequestOptions::Standard(options) = request_options else {
             unreachable!()
         };
-        let request =
-            make_request(runner, command, RequestOptions::Standard(options)).map_err(|error| {
-                let (runner, command, options, message) = *error;
-                let RequestOptions::Standard(options) = options else {
-                    unreachable!()
-                };
-                CommandSubmitFailure {
-                    runner: Box::new(runner),
-                    command: Box::new(command),
-                    options,
-                    reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure {
-                        diagnostic: message,
-                    }),
-                }
-            })?;
+        let request = make_request(runner, command, RequestOptions::Standard(options)).map_err(|error| {
+            let (runner, command, options, message) = *error;
+            let RequestOptions::Standard(options) = options else {
+                unreachable!()
+            };
+            CommandSubmitFailure {
+                runner: Box::new(runner),
+                command: Box::new(command),
+                options,
+                reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure { diagnostic: message }),
+            }
+        })?;
         let permit = match self.scheduler.try_reserve_until(0, deadline.clone()) {
             Ok(p) => p,
             Err(reason) => {
@@ -606,13 +590,7 @@ impl CommandExecutor {
             .manager()
             .with_group(&self.group)
             .map_err(|e| managed_failure(format!("group binding failed: {e}")))?;
-        self.start_session_managed_in_manager(
-            &manager,
-            runner,
-            command,
-            options,
-            Some(scope.context()),
-        )
+        self.start_session_managed_in_manager(&manager, runner, command, options, Some(scope.context()))
     }
     /// Performs the start session resources managed step in the managed command
     /// execution lifecycle.
@@ -628,13 +606,7 @@ impl CommandExecutor {
         command: Command,
         options: CommandResourceRunOptions,
     ) -> Result<crate::session::CommandSession, CommandError> {
-        self.start_session_resources_managed_in_manager(
-            &self.manager,
-            runner,
-            command,
-            options,
-            None,
-        )
+        self.start_session_resources_managed_in_manager(&self.manager, runner, command, options, None)
     }
     /// Performs the start session resources managed in step in the managed
     /// command execution lifecycle.
@@ -656,13 +628,7 @@ impl CommandExecutor {
             .manager()
             .with_group(&self.group)
             .map_err(|e| managed_failure(format!("group binding failed: {e}")))?;
-        self.start_session_resources_managed_in_manager(
-            &manager,
-            runner,
-            command,
-            options,
-            Some(scope.context()),
-        )
+        self.start_session_resources_managed_in_manager(&manager, runner, command, options, Some(scope.context()))
     }
     /// Performs the start session managed in manager step in the managed
     /// command execution lifecycle.
@@ -708,9 +674,7 @@ impl CommandExecutor {
                     deadline,
                 },
             )
-            .map_err(|e| {
-                managed_failure(format!("managed session admission failed: {:?}", e.reason))
-            })?;
+            .map_err(|e| managed_failure(format!("managed session admission failed: {:?}", e.reason)))?;
         Ok(crate::session::CommandSession {
             operation: Some(operation.into_sync()),
             stdin: Some(stdin),
@@ -762,12 +726,7 @@ impl CommandExecutor {
                     deadline,
                 },
             )
-            .map_err(|e| {
-                managed_failure(format!(
-                    "managed resource session admission failed: {:?}",
-                    e.reason
-                ))
-            })?;
+            .map_err(|e| managed_failure(format!("managed resource session admission failed: {:?}", e.reason)))?;
         Ok(crate::session::CommandSession {
             operation: Some(operation.into_sync()),
             stdin: Some(stdin),
@@ -798,21 +757,18 @@ impl CommandExecutor {
             keepalive,
             deadline,
         } = context;
-        let request =
-            make_request(runner, command, RequestOptions::Resources(options)).map_err(|error| {
-                let (runner, command, options, message) = *error;
-                let RequestOptions::Resources(options) = options else {
-                    unreachable!()
-                };
-                CommandResourceSubmitFailure {
-                    runner: Box::new(runner),
-                    command: Box::new(command),
-                    options: Box::new(options),
-                    reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure {
-                        diagnostic: message,
-                    }),
-                }
-            })?;
+        let request = make_request(runner, command, RequestOptions::Resources(options)).map_err(|error| {
+            let (runner, command, options, message) = *error;
+            let RequestOptions::Resources(options) = options else {
+                unreachable!()
+            };
+            CommandResourceSubmitFailure {
+                runner: Box::new(runner),
+                command: Box::new(command),
+                options: Box::new(options),
+                reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure { diagnostic: message }),
+            }
+        })?;
         let bytes = resource_bytes(&request.options);
         let permit = match self.scheduler.try_reserve_until(bytes, deadline.clone()) {
             Ok(p) => p,
@@ -883,9 +839,7 @@ fn resource_bytes(options: &RequestOptions) -> usize {
     match options {
         RequestOptions::Standard(_) => 0,
         RequestOptions::Resources(o) => [
-            o.configured_stdin()
-                .and_then(|f| f.metadata().ok())
-                .map(|m| m.len()),
+            o.configured_stdin().and_then(|f| f.metadata().ok()).map(|m| m.len()),
             o.configured_stdout()
                 .and_then(|(f, _)| f.metadata().ok())
                 .map(|m| m.len()),
@@ -939,9 +893,9 @@ fn retry_wait(
     deadline: Option<OperationContext>,
 ) -> bool {
     match reason {
-        CommandSubmitFailureReason::Capacity(
-            CapacityFailure::ActiveFull | CapacityFailure::QueueFull,
-        ) => scheduler.wait_for_capacity(bytes, deadline),
+        CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull | CapacityFailure::QueueFull) => {
+            scheduler.wait_for_capacity(bytes, deadline)
+        }
         CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy) => {
             if deadline.as_ref().is_some_and(OperationContext::is_expired) {
                 return false;
@@ -958,10 +912,7 @@ fn retry_wait(
 /// # Parameters
 /// * `reason`: Supplies the reason value used by this operation.
 /// * `deadline`: Supplies the deadline value used by this operation.
-fn deadline_failure(
-    reason: CommandSubmitFailureReason,
-    deadline: &OperationContext,
-) -> CommandSubmitFailureReason {
+fn deadline_failure(reason: CommandSubmitFailureReason, deadline: &OperationContext) -> CommandSubmitFailureReason {
     if deadline.is_expired() {
         CommandSubmitFailureReason::Capacity(CapacityFailure::DeadlineExpired)
     } else {
@@ -976,9 +927,7 @@ fn deadline_failure(
 fn async_capacity_retry(reason: &CommandSubmitFailureReason) -> bool {
     matches!(
         reason,
-        CommandSubmitFailureReason::Capacity(
-            CapacityFailure::ActiveFull | CapacityFailure::QueueFull
-        )
+        CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull | CapacityFailure::QueueFull)
     )
 }
 /// Stores the retryable async value used by this execution component.
@@ -1014,18 +963,12 @@ impl std::future::Future for CapacityWait {
     /// # Parameters
     /// * `self`: Supplies the self value used by this operation.
     /// * `cx`: Supplies the cx value used by this operation.
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<bool> {
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<bool> {
         if let Some(id) = self.waiter.take() {
             self.scheduler.cancel_waiter(id);
             return std::task::Poll::Ready(true);
         }
-        match self
-            .scheduler
-            .register_waiter_if_full(self.bytes, cx.waker())
-        {
+        match self.scheduler.register_waiter_if_full(self.bytes, cx.waker()) {
             Ok(None) => std::task::Poll::Ready(true),
             Ok(Some(id)) => {
                 self.waiter = Some(id);
@@ -1052,11 +995,7 @@ impl Drop for CapacityWait {
 /// * `bytes`: Supplies the bytes value used by this operation.
 /// * `context`: Supplies the context value used by this operation.
 #[cfg(feature = "async")]
-async fn wait_capacity_async(
-    scheduler: BoundedScheduler,
-    bytes: usize,
-    context: Option<OperationContext>,
-) -> bool {
+async fn wait_capacity_async(scheduler: BoundedScheduler, bytes: usize, context: Option<OperationContext>) -> bool {
     let mut capacity = Box::pin(CapacityWait {
         scheduler,
         bytes,
@@ -1146,10 +1085,7 @@ fn retry_timer() -> Option<&'static std::sync::mpsc::SyncSender<RetryTimerMessag
                         let now = std::time::Instant::now();
                         let mut index = 0;
                         while index < pending.len() {
-                            if pending[index]
-                                .cancelled
-                                .load(std::sync::atomic::Ordering::Acquire)
-                            {
+                            if pending[index].cancelled.load(std::sync::atomic::Ordering::Acquire) {
                                 pending.swap_remove(index);
                             } else if pending[index].due <= now {
                                 let item = pending.swap_remove(index);
@@ -1206,10 +1142,7 @@ impl std::future::Future for RetryDelay {
     /// # Parameters
     /// * `self`: Supplies the self value used by this operation.
     /// * `cx`: Supplies the cx value used by this operation.
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<bool> {
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<bool> {
         if self.ready.load(std::sync::atomic::Ordering::Acquire) {
             return std::task::Poll::Ready(true);
         }
@@ -1238,8 +1171,7 @@ impl std::future::Future for RetryDelay {
 impl Drop for RetryDelay {
     /// Performs the drop step in the managed command execution lifecycle.
     fn drop(&mut self) {
-        self.cancelled
-            .store(true, std::sync::atomic::Ordering::Release)
+        self.cancelled.store(true, std::sync::atomic::Ordering::Release)
     }
 }
 /// Stores the wait retry tick value used by this execution component.
@@ -1280,9 +1212,7 @@ async fn wait_retry_tick(context: Option<OperationContext>) -> bool {
 fn managed_failure(message: String) -> CommandError {
     CommandError::from_reason(
         "<managed command>",
-        crate::CommandErrorReason::ManagedOperationFailed {
-            diagnostic: message,
-        },
+        crate::CommandErrorReason::ManagedOperationFailed { diagnostic: message },
         None,
     )
 }
@@ -1597,8 +1527,7 @@ impl CommandExecutorApi for CommandExecutor {
                             reason,
                         });
                     }
-                    if wait_retryable_async(self.scheduler.as_ref().clone(), 0, &reason, None).await
-                    {
+                    if wait_retryable_async(self.scheduler.as_ref().clone(), 0, &reason, None).await {
                         r = *runner;
                         c = *command;
                         o = options;
@@ -1647,9 +1576,7 @@ impl CommandExecutorApi for CommandExecutor {
                             reason,
                         });
                     }
-                    if wait_retryable_async(self.scheduler.as_ref().clone(), bytes, &reason, None)
-                        .await
-                    {
+                    if wait_retryable_async(self.scheduler.as_ref().clone(), bytes, &reason, None).await {
                         r = *runner;
                         c = *command;
                         o = *options;
@@ -1701,13 +1628,8 @@ impl CommandExecutorApi for CommandExecutor {
                             reason,
                         });
                     }
-                    if wait_retryable_async(
-                        self.scheduler.as_ref().clone(),
-                        bytes,
-                        &reason,
-                        Some(context.clone()),
-                    )
-                    .await
+                    if wait_retryable_async(self.scheduler.as_ref().clone(), bytes, &reason, Some(context.clone()))
+                        .await
                     {
                         r = *runner;
                         c = *command;
@@ -1827,14 +1749,7 @@ impl CommandExecutorApi for CommandExecutor {
                             reason,
                         });
                     }
-                    if wait_retryable_async(
-                        self.scheduler.as_ref().clone(),
-                        0,
-                        &reason,
-                        Some(context.clone()),
-                    )
-                    .await
-                    {
+                    if wait_retryable_async(self.scheduler.as_ref().clone(), 0, &reason, Some(context.clone())).await {
                         r = *runner;
                         c = *command;
                         o = options;
@@ -1880,13 +1795,12 @@ pub(crate) fn build_executor(
         .map_err(CommandExecutorCreateError::GroupBinding)?;
     let scheduler = BoundedScheduler::new(config.clone())?;
     let backend = ProcessBackend::new();
-    let worker_handles =
-        spawn_domain_workers_with(&scheduler, config.max_active, |index, worker| {
-            std::thread::Builder::new()
-                .name(format!("qubit-command-worker-{index}"))
-                .spawn(worker)
-        })
-        .map_err(|_| CommandExecutorCreateError::WorkerStartFailed)?;
+    let worker_handles = spawn_domain_workers_with(&scheduler, config.max_active, |index, worker| {
+        std::thread::Builder::new()
+            .name(format!("qubit-command-worker-{index}"))
+            .spawn(worker)
+    })
+    .map_err(|_| CommandExecutorCreateError::WorkerStartFailed)?;
     let recovery = match super::adapter::cleanup::start_recovery_worker(config.max_active) {
         Ok(recovery) => recovery,
         Err(_) => {
@@ -1911,10 +1825,7 @@ pub(crate) fn build_executor(
 fn spawn_domain_workers_with(
     scheduler: &BoundedScheduler,
     count: usize,
-    mut spawn: impl FnMut(
-        usize,
-        Box<dyn FnOnce() + Send + 'static>,
-    ) -> std::io::Result<std::thread::JoinHandle<()>>,
+    mut spawn: impl FnMut(usize, Box<dyn FnOnce() + Send + 'static>) -> std::io::Result<std::thread::JoinHandle<()>>,
 ) -> std::io::Result<Vec<std::thread::JoinHandle<()>>> {
     let mut workers = Vec::with_capacity(count);
     for index in 0..count {

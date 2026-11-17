@@ -192,8 +192,7 @@ mod tests {
 
         fn record(&self, output: &Mutex<Vec<u8>>, bytes: &[u8]) {
             output.lock().unwrap().extend_from_slice(bytes);
-            self.observed_output
-                .fetch_add(bytes.len() as u64, Ordering::SeqCst);
+            self.observed_output.fetch_add(bytes.len() as u64, Ordering::SeqCst);
         }
     }
 
@@ -305,9 +304,7 @@ mod tests {
         let gate = StartGate::default();
         let error = CommandRunner::without_timeout()
             .run_with_tree_policy(
-                Command::new("sh")
-                    .arg("-c")
-                    .arg("printf abc; exec sleep 30"),
+                Command::new("sh").arg("-c").arg("printf abc; exec sleep 30"),
                 CommandRunOptions::new().cancellation(gate.cancellation()),
                 crate::command_runner::RunTreePolicy {
                     managed_policy: Some(crate::ProcessTreePolicy::Managed),
@@ -321,10 +318,7 @@ mod tests {
         assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
         assert!(matches!(
             error.reason(),
-            crate::CommandErrorReason::OutputLimitExceeded {
-                limit: 2,
-                observed: 3
-            }
+            crate::CommandErrorReason::OutputLimitExceeded { limit: 2, observed: 3 }
         ));
     }
 
@@ -342,9 +336,9 @@ mod tests {
         });
         let context = qubit_operation::OperationContext::new(qubit_operation::ContextOptions {
             clock: Some(clock),
-            deadline: Some(qubit_operation::Deadline::at(
-                qubit_operation::MonotonicTime::new(domain, 1),
-            )),
+            deadline: Some(qubit_operation::Deadline::at(qubit_operation::MonotonicTime::new(
+                domain, 1,
+            ))),
             budget: None,
         })
         .unwrap();
@@ -403,10 +397,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(
-            result.unwrap_err().kind(),
-            CommandErrorKind::CancelledBeforeStart
-        );
+        assert_eq!(result.unwrap_err().kind(), CommandErrorKind::CancelledBeforeStart);
         assert!(!marker.exists());
         assert_eq!(fs::read(&tee).unwrap(), b"keep");
     }
@@ -439,10 +430,7 @@ mod tests {
         while !ready_path.exists() && started.elapsed() < Duration::from_secs(5) {
             thread::yield_now();
         }
-        assert!(
-            ready_path.exists(),
-            "child did not reach its readiness marker"
-        );
+        assert!(ready_path.exists(), "child did not reach its readiness marker");
         gate.request_stop(StopReason::UserCancelled);
         let result = runner.join().expect("runner thread should join");
         assert_eq!(result.unwrap_err().kind(), CommandErrorKind::Cancelled);

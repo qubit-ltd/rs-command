@@ -2,6 +2,8 @@
 //    Copyright (c) 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 use std::io::Read;
 use std::time::Duration;
@@ -41,8 +43,7 @@ fn test_sync_managed_runner_methods_capture_output_and_write_owned_sinks() {
     assert_eq!(ordinary.stdout(), b"ordinary");
 
     let mut sink = tempfile::tempfile().unwrap();
-    let resources = CommandResourceRunOptions::new()
-        .stdout_sink(sink.try_clone().unwrap(), FileSinkPolicy::Preserve);
+    let resources = CommandResourceRunOptions::new().stdout_sink(sink.try_clone().unwrap(), FileSinkPolicy::Preserve);
     let output = runner()
         .run_managed_resources(
             &executor,
@@ -91,13 +92,26 @@ fn test_scoped_managed_runner_methods_return_process_results() {
 
 #[cfg(all(feature = "async", unix))]
 mod async_tests {
-    use super::*;
     use std::future::Future;
+    use std::io::Read;
     use std::sync::Arc;
     use std::task::Context;
     use std::task::Poll;
     use std::task::Wake;
     use std::task::Waker;
+    use std::time::Duration;
+
+    use qubit_command::Command;
+    use qubit_command::CommandResourceRunOptions;
+    use qubit_command::FileSinkPolicy;
+    use qubit_command::ManagedCommandRunnerApi;
+    use qubit_operation::ManagerOptions;
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOptions;
+    use qubit_operation::OperationOutcome;
+
+    use super::executor;
+    use super::runner;
 
     struct ThreadWake(std::thread::Thread);
     impl Wake for ThreadWake {
@@ -134,8 +148,7 @@ mod async_tests {
         assert_eq!(output.stdout(), b"asynchronous");
 
         let mut sink = tempfile::tempfile().unwrap();
-        let options = CommandResourceRunOptions::new()
-            .stdout_sink(sink.try_clone().unwrap(), FileSinkPolicy::Preserve);
+        let options = CommandResourceRunOptions::new().stdout_sink(sink.try_clone().unwrap(), FileSinkPolicy::Preserve);
         let output = block_on(runner().run_async_resources(
             &executor,
             Command::new("sh").arg("-c").arg("printf async-resource"),
@@ -164,16 +177,12 @@ mod async_tests {
                     Command::new("sh").arg("-c").arg("printf async-scoped"),
                     Default::default(),
                 ))?;
-                let resources = block_on(
-                    runner().run_async_resources_in(
-                        &scope,
-                        &executor,
-                        Command::new("sh")
-                            .arg("-c")
-                            .arg("printf async-resource-scoped"),
-                        CommandResourceRunOptions::new(),
-                    ),
-                )?;
+                let resources = block_on(runner().run_async_resources_in(
+                    &scope,
+                    &executor,
+                    Command::new("sh").arg("-c").arg("printf async-resource-scoped"),
+                    CommandResourceRunOptions::new(),
+                ))?;
                 assert_eq!(resources.stdout(), b"async-resource-scoped");
                 Ok::<_, qubit_command::CommandError>(ordinary)
             })

@@ -42,10 +42,7 @@ fn test_options_preserve_clone_and_managed_default() {
     assert_clone::<CommandRunOptions>();
     let options = CommandRunOptions::default();
     assert_eq!(options.process_tree_policy(), ProcessTreePolicy::Managed);
-    assert_eq!(
-        options.clone().process_tree_policy(),
-        ProcessTreePolicy::Managed
-    );
+    assert_eq!(options.clone().process_tree_policy(), ProcessTreePolicy::Managed);
     let resources = CommandResourceRunOptions::new().options(options.clone());
     assert_eq!(
         resources.ordinary_options().process_tree_policy(),

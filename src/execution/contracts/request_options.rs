@@ -13,12 +13,7 @@ use crate::CommandRunOptions;
 #[derive(Debug)]
 pub enum RequestOptions {
     /// Describes the standard case handled by managed command execution.
-    Standard(
-        #[doc = "Cloneable command options retained by the scheduled request."] CommandRunOptions,
-    ),
+    Standard(#[doc = "Cloneable command options retained by the scheduled request."] CommandRunOptions),
     /// Describes the resources case handled by managed command execution.
-    Resources(
-        #[doc = "Uniquely owned input and output resources retained by the request."]
-        CommandResourceRunOptions,
-    ),
+    Resources(#[doc = "Uniquely owned input and output resources retained by the request."] CommandResourceRunOptions),
 }

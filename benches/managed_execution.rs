@@ -148,8 +148,8 @@ async fn read_all(reader: &mut (impl AsyncInput<Item = u8> + Unpin)) -> io::Resu
 
 fn stream_once(executor: &CommandExecutor) {
     let runner = CommandRunner::without_timeout();
-    let mut session = block_on(runner.start_session(executor, fixture(), CommandRunOptions::new()))
-        .expect("start managed session");
+    let mut session =
+        block_on(runner.start_session(executor, fixture(), CommandRunOptions::new())).expect("start managed session");
     let mut stdin = session.take_stdin().expect("stdin endpoint");
     let mut stdout = session.take_stdout().expect("stdout endpoint");
     let mut stderr = session.take_stderr().expect("stderr endpoint");
@@ -158,10 +158,7 @@ fn stream_once(executor: &CommandExecutor) {
     let (out, err) = thread::scope(|scope| {
         let out_reader = scope.spawn(|| block_on(read_all(&mut stdout)));
         let err_reader = scope.spawn(|| block_on(read_all(&mut stderr)));
-        block_on(std::future::poll_fn(|cx| {
-            Pin::new(&mut stdin).poll_close(cx)
-        }))
-        .expect("close session stdin");
+        block_on(std::future::poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).expect("close session stdin");
         (
             out_reader.join().expect("stdout reader").expect("stdout"),
             err_reader.join().expect("stderr reader").expect("stderr"),
@@ -198,11 +195,7 @@ fn batch_once(executor: &CommandExecutor, count: usize) {
             OperationOutcome::Succeeded(ref output) => output.elapsed(),
             other => panic!("batch command failed: {other:?}"),
         };
-        queue.push(
-            observed_at
-                .duration_since(*submitted_at)
-                .saturating_sub(run_elapsed),
-        );
+        queue.push(observed_at.duration_since(*submitted_at).saturating_sub(run_elapsed));
         run.push(run_elapsed);
         outcome_at.push(observed_at);
         let _ = black_box(outcome);
@@ -244,10 +237,7 @@ fn cancel_batch_once(executor: &CommandExecutor) {
             cancellation.push(settled_at.duration_since(requested_at));
         }
     }
-    report_distribution(
-        "cancel_batch_8/request_to_settlement".to_owned(),
-        &mut cancellation,
-    );
+    report_distribution("cancel_batch_8/request_to_settlement".to_owned(), &mut cancellation);
 }
 
 fn managed_execution(c: &mut Criterion) {
@@ -269,15 +259,10 @@ fn managed_execution(c: &mut Criterion) {
     });
     single.bench_function("managed_async_capture", |b| {
         b.iter(|| {
-            black_box(
-                block_on(runner.run_async(&managed, fixture(), CommandRunOptions::new()))
-                    .expect("async command"),
-            )
+            black_box(block_on(runner.run_async(&managed, fixture(), CommandRunOptions::new())).expect("async command"))
         })
     });
-    single.bench_function("managed_stream_two_pipes", |b| {
-        b.iter(|| stream_once(&managed))
-    });
+    single.bench_function("managed_stream_two_pipes", |b| b.iter(|| stream_once(&managed)));
     single.finish();
 
     let mut concurrency = c.benchmark_group("managed_execution_concurrency");

@@ -33,10 +33,7 @@ pub trait RecoveryOwner: Send + Sync {
     /// # Parameters
     /// * `_operation_id`: Supplies the  operation id value used by this
     ///   operation.
-    fn effect_evidence(
-        &self,
-        _operation_id: qubit_operation::OperationId,
-    ) -> RecoveryEffectEvidence {
+    fn effect_evidence(&self, _operation_id: qubit_operation::OperationId) -> RecoveryEffectEvidence {
         RecoveryEffectEvidence::default()
     }
 

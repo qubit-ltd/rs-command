@@ -35,9 +35,7 @@ fn test_managed_backend_resolves_relative_tee_paths_from_runner_directory() {
     let mut operation = executor
         .submit(
             CommandRunner::new(Duration::from_secs(5)).working_directory(directory.path()),
-            Command::new("sh")
-                .arg("-c")
-                .arg("printf stdout; printf stderr >&2"),
+            Command::new("sh").arg("-c").arg("printf stdout; printf stderr >&2"),
             CommandRunOptions::new()
                 .tee_stdout_to_file("stdout.log")
                 .tee_stderr_to_file("stderr.log"),
@@ -50,12 +48,6 @@ fn test_managed_backend_resolves_relative_tee_paths_from_runner_directory() {
         }
         other => panic!("managed command failed: {other:?}"),
     }
-    assert_eq!(
-        std::fs::read(directory.path().join("stdout.log")).unwrap(),
-        b"stdout"
-    );
-    assert_eq!(
-        std::fs::read(directory.path().join("stderr.log")).unwrap(),
-        b"stderr"
-    );
+    assert_eq!(std::fs::read(directory.path().join("stdout.log")).unwrap(), b"stdout");
+    assert_eq!(std::fs::read(directory.path().join("stderr.log")).unwrap(), b"stderr");
 }

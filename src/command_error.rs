@@ -356,12 +356,10 @@ impl CommandError {
     /// not report one.
     #[must_use]
     pub fn process_tree_source(&self) -> Option<&io::Error> {
-        self.cleanup_failures
-            .iter()
-            .find_map(|failure| match failure {
-                CommandCleanupFailure::ProcessTreeTermination { source } => Some(source),
-                _ => None,
-            })
+        self.cleanup_failures.iter().find_map(|failure| match failure {
+            CommandCleanupFailure::ProcessTreeTermination { source } => Some(source),
+            _ => None,
+        })
     }
 
     /// Returns the first direct-child termination source from cleanup
@@ -373,12 +371,10 @@ impl CommandError {
     /// not report one.
     #[must_use]
     pub fn child_source(&self) -> Option<&io::Error> {
-        self.cleanup_failures
-            .iter()
-            .find_map(|failure| match failure {
-                CommandCleanupFailure::ChildTermination { source } => Some(source),
-                _ => None,
-            })
+        self.cleanup_failures.iter().find_map(|failure| match failure {
+            CommandCleanupFailure::ChildTermination { source } => Some(source),
+            _ => None,
+        })
     }
 }
 
@@ -394,18 +390,12 @@ impl CommandError {
 fn primary_cleanup_failure(reason: CommandErrorReason) -> Option<CommandCleanupFailure> {
     match reason {
         CommandErrorReason::TimeFailed { source } => Some(CommandCleanupFailure::Time { source }),
-        CommandErrorReason::WriteInputFailed { source } => {
-            Some(CommandCleanupFailure::Stdin { source })
-        }
+        CommandErrorReason::WriteInputFailed { source } => Some(CommandCleanupFailure::Stdin { source }),
         CommandErrorReason::ReadOutputFailed { stream, source } => match stream {
             OutputStream::Stdout => Some(CommandCleanupFailure::StdoutRead { source }),
             OutputStream::Stderr => Some(CommandCleanupFailure::StderrRead { source }),
         },
-        CommandErrorReason::WriteOutputFailed {
-            stream,
-            path,
-            source,
-        } => match stream {
+        CommandErrorReason::WriteOutputFailed { stream, path, source } => match stream {
             OutputStream::Stdout => Some(CommandCleanupFailure::StdoutWrite { path, source }),
             OutputStream::Stderr => Some(CommandCleanupFailure::StderrWrite { path, source }),
         },
@@ -462,10 +452,7 @@ impl fmt::Display for CommandError {
                 )
             }
             (CommandErrorReason::CancelledBeforeStart, _) => {
-                write!(
-                    formatter,
-                    "command `{command}` was cancelled before it started"
-                )
+                write!(formatter, "command `{command}` was cancelled before it started")
             }
             (CommandErrorReason::ReadOutputFailed { stream, source }, _) => {
                 write!(
@@ -556,24 +543,14 @@ impl fmt::Display for CommandError {
                 formatter,
                 "command `{command}` exceeded its combined output limit of {limit} bytes (observed {observed})"
             ),
-            (
-                CommandErrorReason::UnexpectedExit {
-                    exit_code,
-                    expected,
-                },
-                output,
-            ) => write!(
+            (CommandErrorReason::UnexpectedExit { exit_code, expected }, output) => write!(
                 formatter,
                 "command `{command}` exited with {}; expected one of {expected:?}",
                 unexpected_exit_detail(exit_code, output),
             ),
         }?;
         if !self.cleanup_failures.is_empty() {
-            write!(
-                formatter,
-                "; {} cleanup failure(s)",
-                self.cleanup_failures.len()
-            )?;
+            write!(formatter, "; {} cleanup failure(s)", self.cleanup_failures.len())?;
         }
         Ok(())
     }

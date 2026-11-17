@@ -55,9 +55,7 @@ impl ProcessTerminationError {
                 command,
                 CommandErrorReason::WaitFailed {
                     source: source.unwrap_or_else(|| {
-                        std::io::Error::other(
-                            "process termination failed without recorded evidence",
-                        )
+                        std::io::Error::other("process termination failed without recorded evidence")
                     }),
                 },
                 None,

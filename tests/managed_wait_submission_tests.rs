@@ -2,6 +2,8 @@
 //    Copyright (c) 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 use std::time::Duration;
 
@@ -62,10 +64,7 @@ fn test_blocking_wait_submission_runs_after_active_slot_is_released() {
         tx.send(operation).unwrap();
     });
 
-    assert!(matches!(
-        first.wait_outcome().unwrap(),
-        OperationOutcome::Succeeded(_)
-    ));
+    assert!(matches!(first.wait_outcome().unwrap(), OperationOutcome::Succeeded(_)));
     let mut second = rx
         .recv_timeout(Duration::from_secs(3))
         .expect("wait submission should resume");
@@ -100,10 +99,7 @@ fn test_owned_wait_submission_preserves_input_until_capacity_is_available() {
         tx.send(operation).unwrap();
     });
 
-    assert!(matches!(
-        first.wait_outcome().unwrap(),
-        OperationOutcome::Succeeded(_)
-    ));
+    assert!(matches!(first.wait_outcome().unwrap(), OperationOutcome::Succeeded(_)));
     let mut second = rx
         .recv_timeout(Duration::from_secs(3))
         .expect("owned wait submission should resume");
@@ -172,10 +168,7 @@ fn test_async_owned_wait_submission_resumes_after_capacity_release() {
         );
         std::thread::yield_now();
     }
-    assert!(matches!(
-        first.wait_outcome().unwrap(),
-        OperationOutcome::Succeeded(_)
-    ));
+    assert!(matches!(first.wait_outcome().unwrap(), OperationOutcome::Succeeded(_)));
     let mut second = rx
         .recv_timeout(Duration::from_secs(3))
         .expect("async submission should resume");

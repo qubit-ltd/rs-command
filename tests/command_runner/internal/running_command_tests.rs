@@ -81,11 +81,7 @@ fn test_running_command_rejects_inconsistent_timer_before_waiting() {
     let started = Instant::now();
     let error = CommandRunner::without_timeout()
         .timer(Arc::new(SwitchingTimer::new()))
-        .run(
-            Command::new("sleep")
-                .arg("5")
-                .stdin_bytes(b"ignored".to_vec()),
-        )
+        .run(Command::new("sleep").arg("5").stdin_bytes(b"ignored".to_vec()))
         .expect_err("inconsistent timer should be rejected during startup");
 
     assert_eq!(error.kind(), CommandErrorKind::TimeFailed);

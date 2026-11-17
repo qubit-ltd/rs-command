@@ -135,9 +135,7 @@ fn test_cleanup_failure_preserves_raw_os_error() {
     let failure = CommandCleanupFailure::Wait {
         source: io::Error::from_raw_os_error(13),
     };
-    assert!(
-        matches!(failure, CommandCleanupFailure::Wait { source } if source.raw_os_error() == Some(13))
-    );
+    assert!(matches!(failure, CommandCleanupFailure::Wait { source } if source.raw_os_error() == Some(13)));
 }
 
 #[test]

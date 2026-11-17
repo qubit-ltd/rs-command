@@ -19,26 +19,22 @@ use qubit_operation::OperationOutcome;
 
 pub fn run() {
     let manager = OperationManager::new(ManagerOptions::default()).expect("manager");
-    let executor =
-        CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).expect("executor");
+    let executor = CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).expect("executor");
     let child_executor = executor.clone();
     let child_runner = CommandRunner::without_timeout();
 
     // The parent scope submits the command as its child and returns its handle.
     let mut parent = manager
-        .submit::<qubit_command::CommandOperation, String, _>(
-            OperationOptions::default(),
-            move |scope| {
-                child_executor
-                    .submit_in(
-                        &scope,
-                        child_runner,
-                        Command::new("rustc").arg("--version"),
-                        CommandRunOptions::new(),
-                    )
-                    .map_err(|failure| format!("submission rejected: {:?}", failure.reason))
-            },
-        )
+        .submit::<qubit_command::CommandOperation, String, _>(OperationOptions::default(), move |scope| {
+            child_executor
+                .submit_in(
+                    &scope,
+                    child_runner,
+                    Command::new("rustc").arg("--version"),
+                    CommandRunOptions::new(),
+                )
+                .map_err(|failure| format!("submission rejected: {:?}", failure.reason))
+        })
         .expect("submit parent operation");
 
     let command = match parent.wait_outcome().expect("parent outcome") {

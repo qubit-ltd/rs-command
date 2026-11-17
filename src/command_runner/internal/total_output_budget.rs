@@ -116,10 +116,7 @@ impl TotalOutputBudget {
         ready_capacity: usize,
         stream: OutputStream,
     ) -> std::io::Result<usize> {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.halted {
             return Ok(0);
         }
@@ -155,10 +152,7 @@ impl TotalOutputBudget {
 
     /// Returns the configured limit and observed count after the sentinel.
     pub(in crate::command_runner) fn exceeded(&self) -> Option<(u64, u128)> {
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.exceeded.then_some((self.limit, state.used))
     }
 
@@ -176,10 +170,7 @@ impl TotalOutputBudget {
     ///
     /// * `stream` - Stdout or stderr whose EOF was observed.
     pub(in crate::command_runner) fn mark_complete(&self, stream: OutputStream) {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match stream {
             OutputStream::Stdout => state.stdout_complete = true,
             OutputStream::Stderr => state.stderr_complete = true,
@@ -188,21 +179,10 @@ impl TotalOutputBudget {
 
     /// Clones a point-in-time snapshot; a live reader may still be appending.
     pub(in crate::command_runner) fn captured_output(&self) -> CommandCapturedOutput {
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         CommandCapturedOutput::new(
-            (
-                state.stdout.clone(),
-                state.stdout_truncated,
-                state.stdout_complete,
-            ),
-            (
-                state.stderr.clone(),
-                state.stderr_truncated,
-                state.stderr_complete,
-            ),
+            (state.stdout.clone(), state.stdout_truncated, state.stdout_complete),
+            (state.stderr.clone(), state.stderr_truncated, state.stderr_complete),
         )
     }
 
@@ -227,10 +207,7 @@ impl TotalOutputBudget {
         &self,
         joined: Option<CommandCapturedOutput>,
     ) -> CommandCapturedOutput {
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (
             joined_stdout,
             joined_stderr,
@@ -262,11 +239,7 @@ impl TotalOutputBudget {
                 None => (Vec::new(), state.stdout_truncated, false),
             }
         } else {
-            (
-                state.stdout.clone(),
-                state.stdout_truncated,
-                state.stdout_complete,
-            )
+            (state.stdout.clone(), state.stdout_truncated, state.stdout_complete)
         };
         let (stderr_bytes, stderr_truncated, stderr_complete) = if state.stderr_transferred {
             match joined_stderr {
@@ -274,11 +247,7 @@ impl TotalOutputBudget {
                 None => (Vec::new(), state.stderr_truncated, false),
             }
         } else {
-            (
-                state.stderr.clone(),
-                state.stderr_truncated,
-                state.stderr_complete,
-            )
+            (state.stderr.clone(), state.stderr_truncated, state.stderr_complete)
         };
         CommandCapturedOutput::new(
             (stdout_bytes, stdout_truncated, stdout_complete),
@@ -295,14 +264,8 @@ impl TotalOutputBudget {
     /// # Parameters
     ///
     /// * `stream` - Stdout or stderr whose current retained snapshot is cloned.
-    pub(in crate::command_runner) fn captured_stream(
-        &self,
-        stream: OutputStream,
-    ) -> CapturedOutput {
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    pub(in crate::command_runner) fn captured_stream(&self, stream: OutputStream) -> CapturedOutput {
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match stream {
             OutputStream::Stdout => CapturedOutput {
                 bytes: state.stdout.clone(),
@@ -327,14 +290,8 @@ impl TotalOutputBudget {
     ///
     /// * `stream` - Stdout or stderr whose retained bytes are transferred. Its
     ///   reader must have been joined so no more bytes can be appended.
-    pub(in crate::command_runner) fn take_captured_stream(
-        &self,
-        stream: OutputStream,
-    ) -> CapturedOutput {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    pub(in crate::command_runner) fn take_captured_stream(&self, stream: OutputStream) -> CapturedOutput {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match stream {
             OutputStream::Stdout => {
                 let truncated = state.stdout_truncated;
@@ -379,14 +336,8 @@ impl TotalOutputBudget {
     ///
     /// * `stream` - Stdout or stderr whose truncation and completion flags are
     ///   returned; the retained bytes are not copied.
-    pub(in crate::command_runner) fn captured_stream_metadata(
-        &self,
-        stream: OutputStream,
-    ) -> CapturedOutput {
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    pub(in crate::command_runner) fn captured_stream_metadata(&self, stream: OutputStream) -> CapturedOutput {
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (truncated, complete) = match stream {
             OutputStream::Stdout => (state.stdout_truncated, state.stdout_complete),
             OutputStream::Stderr => (state.stderr_truncated, state.stderr_complete),
@@ -506,20 +457,14 @@ mod tests {
         assert!(!second.complete);
         assert!(budget.captured_output().stdout().is_empty());
 
-        let joined = CommandCapturedOutput::new(
-            (b"joined".to_vec(), false, true),
-            (b"err".to_vec(), false, true),
-        );
+        let joined = CommandCapturedOutput::new((b"joined".to_vec(), false, true), (b"err".to_vec(), false, true));
         let merged = budget.captured_output_with_joined(Some(joined));
         assert_eq!(merged.stdout(), b"joined");
         assert!(merged.stdout_complete());
         assert!(merged.stderr().is_empty());
         assert!(!merged.stderr_complete());
         {
-            let mut state = budget
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = budget.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             state.stdout_truncated = true;
             state.stdout_complete = true;
         }

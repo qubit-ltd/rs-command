@@ -143,11 +143,7 @@ impl AdapterState {
     }
     /// Performs the restore step in the managed command execution lifecycle.
     pub(crate) fn restore(&self) -> Option<Request> {
-        self.owned
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .request
-            .take()
+        self.owned.lock().unwrap_or_else(|e| e.into_inner()).request.take()
     }
     /// Stores the set operation observer value used by this execution
     /// component.
@@ -207,10 +203,7 @@ impl FactSink for AdapterState {
     ///
     /// # Parameters
     /// * `owner`: Supplies the owner value used by this operation.
-    fn retain_recovery_owner(
-        &self,
-        owner: Box<dyn RecoveryOwner>,
-    ) -> Result<(), RecoveryPublishFailure> {
+    fn retain_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) -> Result<(), RecoveryPublishFailure> {
         let Some(id) = self.control.operation_id() else {
             return Err(RecoveryPublishFailure {
                 reason: crate::execution::contracts::RecoveryPublishError::StoreUnavailable,
@@ -225,8 +218,9 @@ impl FactSink for AdapterState {
         };
         self.recovery.try_send(item).map_err(|error| {
             let owner = match error {
-                std::sync::mpsc::TrySendError::Full(item)
-                | std::sync::mpsc::TrySendError::Disconnected(item) => item.owner,
+                std::sync::mpsc::TrySendError::Full(item) | std::sync::mpsc::TrySendError::Disconnected(item) => {
+                    item.owner
+                }
             };
             RecoveryPublishFailure {
                 reason: crate::execution::contracts::RecoveryPublishError::CapacityExceeded,
@@ -261,10 +255,7 @@ impl PreparedExternalOperation<CommandOutput, CommandError> for AdapterState {
         };
         let permit = {
             let mut owned = self.owned.lock().unwrap_or_else(|e| e.into_inner());
-            if owned.phase != AdapterPhase::Prepared
-                || owned.request.is_none()
-                || owned.reservation.is_none()
-            {
+            if owned.phase != AdapterPhase::Prepared || owned.request.is_none() || owned.reservation.is_none() {
                 owned.phase = AdapterPhase::ActivationFailed;
                 None
             } else {
@@ -286,25 +277,17 @@ impl PreparedExternalOperation<CommandOutput, CommandError> for AdapterState {
                 .control
                 .publish_outcome(OperationOutcome::ExecutionFailed(failure.clone()));
             let _ = self.control.release();
-            let _ = self
-                .control
-                .settlement(Arc::new(released_report(operation_id)));
+            let _ = self.control.settlement(Arc::new(released_report(operation_id)));
             return Err(failure);
         };
         self.control.running();
         let stop = self.process_backend.stop_port(operation_id);
-        *self.stop.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(Arc::clone(&stop) as Arc<dyn StopPort>);
+        *self.stop.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&stop) as Arc<dyn StopPort>);
         let state = Arc::clone(&self);
         let job = ScheduledJob {
             stop,
             run: Box::new(move |permit| {
-                let request = state
-                    .owned
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .request
-                    .take();
+                let request = state.owned.lock().unwrap_or_else(|e| e.into_inner()).request.take();
                 let Some(request) = request else {
                     return;
                 };
@@ -331,11 +314,7 @@ impl PreparedExternalOperation<CommandOutput, CommandError> for AdapterState {
         match self.scheduler.enqueue(job, permit) {
             Ok(()) => Ok(()),
             Err(failure) => {
-                let crate::execution::contracts::EnqueueFailure {
-                    reason,
-                    job,
-                    permit,
-                } = failure;
+                let crate::execution::contracts::EnqueueFailure { reason, job, permit } = failure;
                 drop(permit);
                 let discarded = {
                     let mut owned = self.owned.lock().unwrap_or_else(|e| e.into_inner());
@@ -349,9 +328,7 @@ impl PreparedExternalOperation<CommandOutput, CommandError> for AdapterState {
                     .control
                     .publish_outcome(OperationOutcome::ExecutionFailed(failure.clone()));
                 let _ = self.control.release();
-                let _ = self
-                    .control
-                    .settlement(Arc::new(released_report(operation_id)));
+                let _ = self.control.settlement(Arc::new(released_report(operation_id)));
                 let _ = reason;
                 Err(failure)
             }
@@ -386,10 +363,7 @@ impl PreparedExternalOperation<CommandOutput, CommandError> for AdapterState {
     ///
     /// # Parameters
     /// * `cx`: Supplies the cx value used by this operation.
-    fn poll_take_outcome(
-        &self,
-        cx: &mut Context<'_>,
-    ) -> Poll<OperationOutcome<CommandOutput, CommandError>> {
+    fn poll_take_outcome(&self, cx: &mut Context<'_>) -> Poll<OperationOutcome<CommandOutput, CommandError>> {
         self.control.take(cx)
     }
 }
@@ -510,10 +484,7 @@ mod activation_failure_tests {
         fn poll_release(&self, cx: &mut Context<'_>) -> Poll<qubit_operation::ChildRelease> {
             OperationControl::poll_release(&self.1, cx)
         }
-        fn poll_settlement(
-            &self,
-            cx: &mut Context<'_>,
-        ) -> Poll<Arc<qubit_operation::SettlementReport>> {
+        fn poll_settlement(&self, cx: &mut Context<'_>) -> Poll<Arc<qubit_operation::SettlementReport>> {
             OperationControl::poll_settlement(&self.1, cx)
         }
     }
@@ -531,10 +502,7 @@ mod activation_failure_tests {
         fn abandon(self: Arc<Self>) {
             self.0.store(true, Ordering::SeqCst);
         }
-        fn poll_take_outcome(
-            &self,
-            _: &mut Context<'_>,
-        ) -> Poll<OperationOutcome<CommandOutput, CommandError>> {
+        fn poll_take_outcome(&self, _: &mut Context<'_>) -> Poll<OperationOutcome<CommandOutput, CommandError>> {
             Poll::Pending
         }
     }
@@ -554,10 +522,7 @@ mod activation_failure_tests {
         }
     }
 
-    fn make_state(
-        scheduler: Arc<BoundedScheduler>,
-        permit: crate::execution::Reservation,
-    ) -> Arc<AdapterState> {
+    fn make_state(scheduler: Arc<BoundedScheduler>, permit: crate::execution::Reservation) -> Arc<AdapterState> {
         let backend = Arc::new(ProcessBackend::new());
         let recovery = super::super::cleanup::start_recovery_worker(1).unwrap();
         Arc::new(AdapterState::new(
@@ -607,10 +572,7 @@ mod activation_failure_tests {
         let mut handle = manager
             .try_submit(OperationOptions::default(), move |scope| {
                 assert!(state.bind(scope.id()).is_ok());
-                assert!(matches!(
-                    state.bind(scope.id()),
-                    Err(ExternalBindError::AlreadyBound)
-                ));
+                assert!(matches!(state.bind(scope.id()), Err(ExternalBindError::AlreadyBound)));
                 Ok::<_, ()>(())
             })
             .unwrap();
@@ -639,12 +601,8 @@ mod activation_failure_tests {
         assert_eq!(report.recovery_count, 0);
 
         let second_manager = OperationManager::new(Default::default()).unwrap();
-        match second_manager.try_submit_external(OperationOptions::default(), Arc::clone(&prepared))
-        {
-            Err(error) => assert_eq!(
-                error.reason(),
-                qubit_operation::AdmissionError::AlreadyBound
-            ),
+        match second_manager.try_submit_external(OperationOptions::default(), Arc::clone(&prepared)) {
+            Err(error) => assert_eq!(error.reason(), qubit_operation::AdmissionError::AlreadyBound),
             Ok(_) => panic!("a prepared adapter must not bind through another manager"),
         }
     }
@@ -652,10 +610,7 @@ mod activation_failure_tests {
     #[test]
     fn test_bind_failure_becomes_execution_failure_without_activation() {
         let manager = OperationManager::new(Default::default()).unwrap();
-        let prepared = Arc::new(FailedBinder(
-            AtomicBool::new(false),
-            CommandControl::default(),
-        ));
+        let prepared = Arc::new(FailedBinder(AtomicBool::new(false), CommandControl::default()));
         let mut handle = manager
             .try_submit_external(OperationOptions::default(), Arc::clone(&prepared))
             .unwrap();
@@ -676,10 +631,7 @@ mod activation_failure_tests {
 
         drive_activation(Arc::clone(&state));
 
-        assert!(
-            state.restore().is_none(),
-            "request must not survive published release"
-        );
+        assert!(state.restore().is_none(), "request must not survive published release");
         assert!(OperationControl::snapshot(&*state).input_released);
     }
 
@@ -692,10 +644,7 @@ mod activation_failure_tests {
 
         drive_activation(Arc::clone(&state));
 
-        assert!(
-            state.restore().is_none(),
-            "request must not survive published release"
-        );
+        assert!(state.restore().is_none(), "request must not survive published release");
         assert!(OperationControl::snapshot(&*state).input_released);
     }
 }

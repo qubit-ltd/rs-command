@@ -28,12 +28,8 @@ use qubit_operation::ScopeLimits;
 #[test]
 fn test_owned_file_options_keep_current_cursor_and_explicit_policy() {
     let mut input = tempfile::tempfile().expect("input file should be created");
-    input
-        .write_all(b"prefix-payload")
-        .expect("fixture should be written");
-    input
-        .seek(SeekFrom::Start(7))
-        .expect("cursor should be positioned");
+    input.write_all(b"prefix-payload").expect("fixture should be written");
+    input.seek(SeekFrom::Start(7)).expect("cursor should be positioned");
 
     let output = tempfile::NamedTempFile::new().expect("output file should be created");
     std::fs::write(output.path(), b"existing contents").expect("output should be populated");
@@ -47,15 +43,11 @@ fn test_owned_file_options_keep_current_cursor_and_explicit_policy() {
         .stdin_file(input)
         .stdout_sink(output, FileSinkPolicy::Preserve);
     assert!(options.configured_stdin().is_some());
-    let (_, policy) = options
-        .configured_stdout()
-        .expect("stdout sink should be retained");
+    let (_, policy) = options.configured_stdout().expect("stdout sink should be retained");
     assert_eq!(policy, FileSinkPolicy::Preserve);
     assert!(options.configured_stderr().is_none());
 
-    let mut configured_input = options
-        .configured_stdin()
-        .expect("stdin should remain owned");
+    let mut configured_input = options.configured_stdin().expect("stdin should remain owned");
     let mut payload = Vec::new();
     configured_input
         .read_to_end(&mut payload)
@@ -73,9 +65,7 @@ where
     F: FnOnce(qubit_operation::OperationScope) + Send + 'static,
 {
     let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
-    let group = manager
-        .group(GroupOptions { capacity: 4 })
-        .expect("group should start");
+    let group = manager.group(GroupOptions { capacity: 4 }).expect("group should start");
     let completion = group
         .run_and_settle(
             OperationOptions {
@@ -88,10 +78,7 @@ where
             },
         )
         .expect("operation should be accepted");
-    assert!(matches!(
-        completion.outcome,
-        OperationOutcome::Succeeded(())
-    ));
+    assert!(matches!(completion.outcome, OperationOutcome::Succeeded(())));
     completion.settlement
 }
 
@@ -169,15 +156,10 @@ fn test_resource_reservation_failure_keeps_sink_contents_and_returns_input_owner
             reservations.push(reservation);
         }
         assert!(!reservations.is_empty());
-        let failure = Box::new(
-            CommandResourceRunOptions::new().stdout_sink(output_file, FileSinkPolicy::Truncate),
-        )
-        .prepare_files(&scope)
-        .expect_err("zero resource capacity must reject preparation");
-        assert!(
-            failure.input.is_some(),
-            "the owned options must be recoverable"
-        );
+        let failure = Box::new(CommandResourceRunOptions::new().stdout_sink(output_file, FileSinkPolicy::Truncate))
+            .prepare_files(&scope)
+            .expect_err("zero resource capacity must reject preparation");
+        assert!(failure.input.is_some(), "the owned options must be recoverable");
         assert!(failure.prepared.is_none());
         assert_eq!(std::fs::read(output_path).unwrap(), b"must survive");
     });
@@ -268,14 +250,8 @@ fn test_partial_truncation_failure_retains_prepared_owners_and_effects() {
         )
         .prepare_files(&scope)
         .expect_err("read-only second sink should fail truncation");
-        assert!(
-            failure.prepared.is_some(),
-            "registered owners must remain available"
-        );
-        assert!(
-            failure.input.is_none(),
-            "prepared owners retain the consumed files"
-        );
+        assert!(failure.prepared.is_some(), "registered owners must remain available");
+        assert!(failure.input.is_none(), "prepared owners retain the consumed files");
         assert_eq!(std::fs::read(first_path).unwrap(), b"");
         assert_eq!(std::fs::read(second_path).unwrap(), b"second data");
     });
@@ -310,10 +286,9 @@ fn test_effect_record_overflow_does_not_prevent_sink_truncation_or_owner_retenti
     };
 
     let settlement = with_scope(limits, move |scope| {
-        let prepared =
-            Box::new(CommandResourceRunOptions::new().stdout_sink(file, FileSinkPolicy::Truncate))
-                .prepare_files(&scope)
-                .expect("effect overflow must not fail preparation");
+        let prepared = Box::new(CommandResourceRunOptions::new().stdout_sink(file, FileSinkPolicy::Truncate))
+            .prepare_files(&scope)
+            .expect("effect overflow must not fail preparation");
         assert!(format!("{prepared:?}").contains("stdout: true"));
         assert_eq!(std::fs::read(path).unwrap(), b"");
     });

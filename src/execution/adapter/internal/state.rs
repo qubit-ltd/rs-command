@@ -29,8 +29,7 @@ pub(in crate::execution::adapter) struct State {
     /// Stores the stop value used by this execution component.
     pub(in crate::execution::adapter) stop: Option<StopReport>,
     /// Stores the outcome value used by this execution component.
-    pub(in crate::execution::adapter) outcome:
-        Option<OperationOutcome<CommandOutput, CommandError>>,
+    pub(in crate::execution::adapter) outcome: Option<OperationOutcome<CommandOutput, CommandError>>,
     /// Stores the summary value used by this execution component.
     pub(in crate::execution::adapter) summary: Option<ChildOutcomeSummary>,
     /// Stores the release value used by this execution component.

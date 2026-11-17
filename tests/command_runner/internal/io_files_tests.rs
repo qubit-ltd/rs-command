@@ -39,8 +39,7 @@ fn unspawnable_command() -> Command {
 ///
 /// An armed temporary-directory guard.
 fn temp_dir() -> LocalTempDir {
-    LocalTempDir::with_prefix("qubit-command-io-files-")
-        .expect("command I/O test temp directory should be created")
+    LocalTempDir::with_prefix("qubit-command-io-files-").expect("command I/O test temp directory should be created")
 }
 
 /// Verifies stdin and tee paths use the parent process directory for each
@@ -62,10 +61,8 @@ fn assert_relative_file_paths_use_parent_cwd(configuration: &str) {
     fs::create_dir_all(&relative_files).expect("parent relative-path directory should be created");
     fs::create_dir_all(&child_directory).expect("child working directory should be created");
     fs::create_dir_all(&runner_directory).expect("runner working directory should be created");
-    let child_directory =
-        fs::canonicalize(child_directory).expect("child directory should be absolute");
-    let runner_directory =
-        fs::canonicalize(runner_directory).expect("runner directory should be absolute");
+    let child_directory = fs::canonicalize(child_directory).expect("child directory should be absolute");
+    let runner_directory = fs::canonicalize(runner_directory).expect("runner directory should be absolute");
     let child_working_directory = if configuration == "runner default" {
         &runner_directory
     } else {
@@ -73,10 +70,8 @@ fn assert_relative_file_paths_use_parent_cwd(configuration: &str) {
     };
     let child_files = child_working_directory.join(&relative_files);
     fs::create_dir_all(&child_files).expect("child relative-path directory should be created");
-    fs::write(relative_files.join("input.txt"), b"parent-input")
-        .expect("parent stdin fixture should be written");
-    fs::write(child_files.join("input.txt"), b"child-input")
-        .expect("child stdin fixture should be written");
+    fs::write(relative_files.join("input.txt"), b"parent-input").expect("parent stdin fixture should be written");
+    fs::write(child_files.join("input.txt"), b"child-input").expect("child stdin fixture should be written");
 
     let command = platform_stdin_command().stdin_file(relative_files.join("input.txt"));
     let runner = CommandRunner::new(Duration::from_secs(10));
@@ -119,12 +114,7 @@ fn assert_relative_file_paths_use_parent_cwd(configuration: &str) {
             .working_directory(&runner_directory)
             .run(platform_current_dir_command().working_directory(&child_directory))
             .expect("command working directory should override runner default");
-        let actual = PathBuf::from(
-            output
-                .stdout_text()
-                .expect("cwd should be valid UTF-8")
-                .trim(),
-        );
+        let actual = PathBuf::from(output.stdout_text().expect("cwd should be valid UTF-8").trim());
         assert_eq!(
             fs::canonicalize(actual).expect("reported cwd should exist"),
             fs::canonicalize(child_directory).expect("override cwd should exist")
@@ -318,10 +308,7 @@ fn test_runner_stdout_is_created_when_stderr_open_fails() {
             ..
         }
     ));
-    assert_eq!(
-        fs::read(stdout_path).expect("stdout should have been created"),
-        b"",
-    );
+    assert_eq!(fs::read(stdout_path).expect("stdout should have been created"), b"",);
 }
 
 #[test]
@@ -338,10 +325,7 @@ fn test_runner_spawn_failure_keeps_truncated_tee() {
         .expect_err("the missing command should fail to spawn");
 
     assert_eq!(error.kind(), CommandErrorKind::SpawnFailed);
-    assert_eq!(
-        fs::read(stdout_path).expect("tee file should remain readable"),
-        b"",
-    );
+    assert_eq!(fs::read(stdout_path).expect("tee file should remain readable"), b"",);
 }
 
 #[cfg(unix)]
@@ -351,8 +335,7 @@ fn test_runner_rejects_symlinked_input_output_conflict() {
     let input_path = temp_dir.path().join("symlink-conflict-input");
     let output_path = temp_dir.path().join("symlink-conflict-output");
     fs::write(&input_path, b"preserve-me").expect("stdin fixture should be written");
-    std::os::unix::fs::symlink(&input_path, &output_path)
-        .expect("symlink fixture should be created");
+    std::os::unix::fs::symlink(&input_path, &output_path).expect("symlink fixture should be created");
 
     let error = CommandRunner::new(Duration::from_secs(10))
         .run_with(

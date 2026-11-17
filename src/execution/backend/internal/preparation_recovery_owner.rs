@@ -18,8 +18,7 @@ pub(crate) struct PreparationRecoveryOwner {
     pub(in crate::execution::backend) retained:
         Mutex<Option<(FilePreparationFailure, qubit_operation::OperationScope)>>,
     /// Stores the  capacity lease value used by this execution component.
-    pub(in crate::execution::backend) _capacity_lease:
-        Mutex<Option<crate::execution::contracts::ReservationLease>>,
+    pub(in crate::execution::backend) _capacity_lease: Mutex<Option<crate::execution::contracts::ReservationLease>>,
 }
 
 impl RecoveryOwner for PreparationRecoveryOwner {
@@ -30,10 +29,7 @@ impl RecoveryOwner for PreparationRecoveryOwner {
 
     /// Stores the retry cleanup value used by this execution component.
     fn retry_cleanup(&self) -> Result<(), crate::execution::contracts::RecoveryRetryError> {
-        let mut retained = self
-            .retained
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut retained = self.retained.lock().unwrap_or_else(|error| error.into_inner());
         let Some((failure, scope)) = retained.take() else {
             return Err(crate::execution::contracts::RecoveryRetryError::OwnerAlreadyConsumed);
         };

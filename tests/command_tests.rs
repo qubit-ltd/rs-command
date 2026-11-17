@@ -25,9 +25,7 @@ fn test_command_new_stores_program() {
 
 #[test]
 fn test_command_args_appends_in_order() {
-    let command = Command::new("git")
-        .arg("status")
-        .args(&["--short", "--branch"]);
+    let command = Command::new("git").arg("status").args(&["--short", "--branch"]);
 
     let args = command
         .arguments()
@@ -79,10 +77,7 @@ fn test_command_env_os_removes_prior_removal() {
 
     assert!(command.removed_environment().is_empty());
     assert_eq!(command.environment().len(), 1);
-    assert_eq!(
-        command.environment()[0].0.to_string_lossy(),
-        "QUBIT_COMMAND_TEST",
-    );
+    assert_eq!(command.environment()[0].0.to_string_lossy(), "QUBIT_COMMAND_TEST",);
 }
 
 #[test]
@@ -92,10 +87,7 @@ fn test_command_env_remove_records_removal() {
         .env_remove("QUBIT_COMMAND_TEST");
 
     assert!(command.environment().is_empty());
-    assert_eq!(
-        command.removed_environment()[0].to_string_lossy(),
-        "QUBIT_COMMAND_TEST",
-    );
+    assert_eq!(command.removed_environment()[0].to_string_lossy(), "QUBIT_COMMAND_TEST",);
 }
 
 #[test]
@@ -105,10 +97,7 @@ fn test_command_env_remove_deduplicates_removals() {
         .env_remove("QUBIT_COMMAND_TEST");
 
     assert_eq!(command.removed_environment().len(), 1);
-    assert_eq!(
-        command.removed_environment()[0].to_string_lossy(),
-        "QUBIT_COMMAND_TEST",
-    );
+    assert_eq!(command.removed_environment()[0].to_string_lossy(), "QUBIT_COMMAND_TEST",);
 }
 
 #[test]
@@ -120,14 +109,8 @@ fn test_command_env_names_are_case_sensitive_on_unix() {
         .env_remove("QUBIT_COMMAND_TEST");
 
     assert_eq!(command.environment().len(), 1);
-    assert_eq!(
-        command.environment()[0].0.to_string_lossy(),
-        "qubit_command_test",
-    );
-    assert_eq!(
-        command.removed_environment()[0].to_string_lossy(),
-        "QUBIT_COMMAND_TEST",
-    );
+    assert_eq!(command.environment()[0].0.to_string_lossy(), "qubit_command_test",);
+    assert_eq!(command.removed_environment()[0].to_string_lossy(), "QUBIT_COMMAND_TEST",);
 }
 
 #[test]
@@ -139,10 +122,7 @@ fn test_command_env_names_are_case_insensitive_on_windows() {
         .env_remove("QUBIT_COMMAND_TEST");
 
     assert!(command.environment().is_empty());
-    assert_eq!(
-        command.removed_environment()[0].to_string_lossy(),
-        "QUBIT_COMMAND_TEST",
-    );
+    assert_eq!(command.removed_environment()[0].to_string_lossy(), "QUBIT_COMMAND_TEST",);
 }
 
 #[test]
@@ -246,9 +226,7 @@ fn test_command_explicitly_sensitive_interpreter_scripts_never_leak() {
 
 #[test]
 fn test_command_unmarked_manual_interpreter_script_marker_remains_visible() {
-    let command = Command::new("/bin/sh")
-        .arg("-c")
-        .arg("printf RSC_FIXED_PAYLOAD_7F3A");
+    let command = Command::new("/bin/sh").arg("-c").arg("printf RSC_FIXED_PAYLOAD_7F3A");
 
     let debug = format!("{command:?}");
 
@@ -271,9 +249,7 @@ fn test_command_debug_marks_truncated_output() {
 fn test_command_debug_fails_closed_for_non_utf8_argument_and_environment() {
     let argument = OsString::from_vec(b"argument-secret-\xFF-suffix".to_vec());
     let environment = OsString::from_vec(b"environment-secret-\xFF-suffix".to_vec());
-    let command = Command::new("tool")
-        .arg_os(&argument)
-        .env_os("MODE", &environment);
+    let command = Command::new("tool").arg_os(&argument).env_os("MODE", &environment);
 
     let debug = format!("{command:?}");
 
@@ -287,10 +263,7 @@ fn test_command_debug_redacts_credential_containers() {
     let command = Command::new("worker")
         .arg("--redis-url")
         .arg("redis://:argv-password@example.com")
-        .env(
-            "HTTPS_PROXY",
-            "http://proxy-user:proxy-password@example.com",
-        )
+        .env("HTTPS_PROXY", "http://proxy-user:proxy-password@example.com")
         .env("DOCKER_AUTH_CONFIG", r#"{"auths":{"secret":"value"}}"#);
 
     let debug = format!("{command:?}");

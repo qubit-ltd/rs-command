@@ -26,24 +26,15 @@ impl OperationObserverSlot {
     /// # Parameters
     /// * `observer`: Supplies the observer value used by this operation.
     pub(crate) fn set(&self, observer: OperationObserver) {
-        *self
-            .observer
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(observer);
+        *self.observer.lock().unwrap_or_else(|error| error.into_inner()) = Some(observer);
         self.available.notify_all();
     }
 
     /// Stores the wait value used by this execution component.
     pub(crate) fn wait(&self) -> OperationObserver {
-        let mut observer = self
-            .observer
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut observer = self.observer.lock().unwrap_or_else(|error| error.into_inner());
         while observer.is_none() {
-            observer = self
-                .available
-                .wait(observer)
-                .unwrap_or_else(|error| error.into_inner());
+            observer = self.available.wait(observer).unwrap_or_else(|error| error.into_inner());
         }
         observer.as_ref().expect("observer is set").clone()
     }

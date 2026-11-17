@@ -47,14 +47,8 @@ pub(in crate::command_runner) fn next_poll_interval(poll_count: usize) -> Durati
 /// The lesser of the adaptive polling interval and the remaining timeout.
 #[must_use]
 #[inline]
-pub(in crate::command_runner) fn next_sleep(
-    timeout: Duration,
-    elapsed: Duration,
-    poll_count: usize,
-) -> Duration {
-    timeout
-        .saturating_sub(elapsed)
-        .min(next_poll_interval(poll_count))
+pub(in crate::command_runner) fn next_sleep(timeout: Duration, elapsed: Duration, poll_count: usize) -> Duration {
+    timeout.saturating_sub(elapsed).min(next_poll_interval(poll_count))
 }
 
 #[cfg(test)]

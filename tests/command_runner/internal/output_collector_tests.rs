@@ -19,9 +19,7 @@ use qubit_command::CommandRunner;
 #[test]
 fn test_output_collector_keeps_streams_separate() {
     let output = CommandRunner::new(Duration::from_secs(10))
-        .run(Command::shell(
-            "printf stdout-bytes; printf stderr-bytes >&2",
-        ))
+        .run(Command::shell("printf stdout-bytes; printf stderr-bytes >&2"))
         .expect("command should run successfully");
 
     assert_eq!(output.stdout(), b"stdout-bytes");

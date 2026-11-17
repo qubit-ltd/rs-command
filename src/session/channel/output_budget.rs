@@ -37,18 +37,12 @@ impl OutputBudget {
 
     /// Reports whether observed output has reached the limit.
     pub(crate) fn exceeded(&self) -> bool {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .exceeded
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).exceeded
     }
 
     /// Returns the number of output bytes counted against the budget.
     pub(crate) fn observed(&self) -> u64 {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .observed
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).observed
     }
 
     /// Returns the configured aggregate byte limit.
