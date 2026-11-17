@@ -1488,6 +1488,49 @@ mod tests {
     }
 
     #[test]
+    fn test_output_budget_exceeded_as_readers_finish_is_reported_after_join() {
+        let budget = Arc::new(TotalOutputBudget::new(0, None, None));
+        let mut input = Cursor::new(b"sentinel");
+        let mut byte = [0_u8; 1];
+        budget
+            .read_ready(&mut input, &mut byte, 1, OutputStream::Stdout)
+            .expect("the sentinel byte should be charged to the output budget");
+        assert_eq!(budget.exceeded(), Some((0, 1)));
+
+        let clock = ManualMonotonicClock::new_shared();
+        let started_at = clock.now();
+        let io = CommandIo::new(immediate_successful_reader(), immediate_successful_reader(), None);
+        while !io.is_finished() {
+            thread::yield_now();
+        }
+        let mut running = RunningCommand::new_with_reaper(
+            "post-join output budget".to_owned(),
+            terminating_child(status(0)),
+            io,
+            started_at,
+            clock.new_timer(),
+            RunningCommandResources {
+                cancellation_token: None,
+                total_budget: Some(budget),
+                capacity_lease: None,
+                reaper_observer: None,
+                session_bridge: None,
+                operation_context: None,
+            },
+        );
+
+        assert!(matches!(
+            running.wait_for_io_event(status(0), None),
+            RunEvent::OutputLimitExceeded {
+                limit: 0,
+                observed: 1,
+                status: Some(value),
+            } if value.success()
+        ));
+        assert!(running.io.cancel_and_join(&running.command_text).is_empty());
+    }
+
+    #[test]
     fn test_post_try_wait_budget_crossing_precedes_cached_read_failure() {
         let budget = Arc::new(TotalOutputBudget::new(0, None, None));
         let child = BudgetTripChild {

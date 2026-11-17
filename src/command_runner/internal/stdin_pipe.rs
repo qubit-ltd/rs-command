@@ -818,4 +818,23 @@ mod tests {
         assert!(bridge.stdin_broken_pipe.load(std::sync::atomic::Ordering::SeqCst));
         assert!(bridge.stdin_closed.load(std::sync::atomic::Ordering::SeqCst));
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_session_stdin_records_broken_pipe_while_draining_queued_bytes() {
+        let bridge = Arc::new(TestSessionBridge::new(std::iter::repeat_n(vec![b'x'; 8192], 512), false));
+        let mut child = ProcessCommand::new("sh")
+            .arg("-c")
+            .arg("sleep 0.1; exit 0")
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("test child should spawn");
+        let writer = write_stdin_session("command", &mut child, None, Some(bridge.clone()))
+            .expect("session stdin writer should start");
+        child.wait().expect("child should exit while queued input is written");
+        join_stdin_writer("command", writer).expect("broken pipe is accepted after child exit");
+
+        assert!(bridge.stdin_broken_pipe.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(bridge.stdin_closed.load(std::sync::atomic::Ordering::SeqCst));
+    }
 }
