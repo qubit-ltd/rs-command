@@ -547,6 +547,31 @@ mod tests {
         assert!(error.captured_output().is_some());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_runner_truncation_policy_controls_successful_command_result() {
+        let command = || {
+            crate::Command::new("sh")
+                .arg("-c")
+                .arg("printf truncate-me")
+        };
+        let error = CommandRunner::without_timeout()
+            .max_stdout_bytes(3)
+            .fail_on_output_truncation(true)
+            .run(command())
+            .expect_err("enabled truncation failure should reject truncated output");
+        assert_eq!(error.kind(), CommandErrorKind::OutputTruncated);
+        assert!(error.captured_output().is_some());
+
+        let output = CommandRunner::without_timeout()
+            .max_stdout_bytes(3)
+            .fail_on_output_truncation(false)
+            .run(command())
+            .expect("disabled truncation failure should return captured output");
+        assert_eq!(output.stdout(), b"tru");
+        assert!(output.stdout_truncated());
+    }
+
     #[test]
     fn test_validate_prepared_files_rejects_owned_file_aliases_and_path_tees() {
         let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");

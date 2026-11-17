@@ -473,6 +473,24 @@ mod tests {
     }
 
     #[test]
+    fn test_join_stdin_writer_accepts_child_closing_stdin_early() {
+        let mut child = ProcessCommand::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("test child should spawn");
+
+        let writer = write_stdin_bytes("command", &mut child, Some(vec![b'x'; 1024 * 1024]))
+            .expect("stdin writer should start");
+        join_stdin_writer("command", writer)
+            .expect("early child stdin closure should be accepted as a broken pipe");
+        let status = child.wait().expect("test child should be waitable");
+
+        assert!(status.success());
+    }
+
+    #[test]
     fn test_write_stdin_bytes_maps_injected_spawn_failure() {
         let mut child = ProcessCommand::new("rustc")
             .arg("--version")

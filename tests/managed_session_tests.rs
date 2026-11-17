@@ -31,6 +31,7 @@ use qubit_io::AsyncInput;
 use qubit_io::AsyncOutput;
 use qubit_operation::ManagerOptions;
 use qubit_operation::OperationManager;
+use qubit_operation::OperationOptions;
 use qubit_operation::OperationOutcome;
 
 struct ThreadWake(thread::Thread);
@@ -150,6 +151,54 @@ fn test_managed_resource_session_returns_streams_and_operation() {
         OperationOutcome::Succeeded(_)
     ));
     operation.wait_settlement().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn test_scoped_managed_resource_session_finishes_with_parent_scope() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let child_manager = manager.clone();
+    let result = manager
+        .run(OperationOptions::default(), move |scope| {
+            let executor =
+                CommandExecutor::new(child_manager, CommandExecutionConfig::default()).unwrap();
+            let mut session =
+                block_on(CommandRunner::without_timeout().start_session_resources_in(
+                    &scope,
+                    &executor,
+                    Command::new("sh").arg("-c").arg("cat"),
+                    CommandResourceRunOptions::new(),
+                ))?;
+            let mut stdin = session.take_stdin().unwrap();
+            block_on(poll_fn(|cx| {
+                Pin::new(&mut stdin).poll_write(cx, b"scoped resource")
+            }))
+            .expect("session stdin should accept bytes");
+            block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx)))
+                .expect("session stdin should close");
+            drop(stdin);
+
+            let mut stdout = session.take_stdout().unwrap();
+            let mut stderr = session.take_stderr().unwrap();
+            let output = block_on(read_all(&mut stdout)).expect("stdout should finish");
+            assert!(
+                block_on(read_all(&mut stderr))
+                    .expect("stderr should finish")
+                    .is_empty()
+            );
+            let mut operation = session.take_operation().unwrap();
+            assert!(matches!(
+                operation.wait_outcome().unwrap(),
+                OperationOutcome::Succeeded(_)
+            ));
+            operation.wait_settlement().unwrap();
+            Ok::<_, qubit_command::CommandError>(output)
+        })
+        .unwrap();
+    match result {
+        OperationOutcome::Succeeded(output) => assert_eq!(output, b"scoped resource"),
+        other => panic!("scoped managed session failed: {other:?}"),
+    }
 }
 
 #[cfg(unix)]

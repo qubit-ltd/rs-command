@@ -981,6 +981,50 @@ mod tests {
     }
 
     #[test]
+    fn test_prepare_rejects_non_regular_paths_and_input_output_aliases() {
+        let directory = tempfile::tempdir().expect("directory fixture should be created");
+        let mut process = ProcessCommand::new("unused-test-program");
+        let error = IoFiles::prepare(
+            "command",
+            CommandStdin::File(directory.path().to_path_buf()),
+            None,
+            None,
+            &mut process,
+        )
+        .err()
+        .expect("directory cannot be configured as stdin");
+        assert_eq!(error.kind(), crate::CommandErrorKind::NonRegularInputFile);
+
+        let error = IoFiles::prepare(
+            "command",
+            CommandStdin::Null,
+            Some(directory.path()),
+            None,
+            &mut process,
+        )
+        .err()
+        .expect("directory cannot be configured as stdout");
+        assert_eq!(error.kind(), crate::CommandErrorKind::NonRegularOutputFile);
+
+        let input = tempfile::NamedTempFile::new().expect("input fixture should be created");
+        std::fs::write(input.path(), b"preserve input").expect("input fixture should be populated");
+        let error = IoFiles::prepare(
+            "command",
+            CommandStdin::File(input.path().to_path_buf()),
+            Some(input.path()),
+            None,
+            &mut process,
+        )
+        .err()
+        .expect("stdin and stdout cannot share a normalized path");
+        assert_eq!(error.kind(), crate::CommandErrorKind::InputOutputConflict);
+        assert_eq!(
+            std::fs::read(input.path()).expect("input should remain readable"),
+            b"preserve input",
+        );
+    }
+
+    #[test]
     fn test_truncate_output_maps_injected_set_len_failure() {
         let output = tempfile::NamedTempFile::new().expect("output fixture should be created");
         std::fs::write(output.path(), b"preserve-on-failure").expect("output fixture should be populated");

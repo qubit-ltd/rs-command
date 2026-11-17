@@ -9,6 +9,7 @@ use std::io::Read;
 use std::time::Duration;
 
 use qubit_command::Command;
+use qubit_command::CommandErrorKind;
 use qubit_command::CommandExecutionConfig;
 use qubit_command::CommandExecutor;
 use qubit_command::CommandResourceRunOptions;
@@ -90,6 +91,27 @@ fn test_scoped_managed_runner_methods_return_process_results() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn test_sync_managed_runner_preserves_failed_command_output() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = executor(&manager);
+    let error = runner()
+        .run_managed(
+            &executor,
+            Command::new("sh")
+                .arg("-c")
+                .arg("printf managed-out; printf managed-err >&2; exit 7"),
+            Default::default(),
+        )
+        .expect_err("managed command should report its unexpected exit");
+
+    assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
+    assert_eq!(error.exit_code(), Some(7));
+    assert_eq!(error.output().unwrap().stdout(), b"managed-out");
+    assert_eq!(error.output().unwrap().stderr(), b"managed-err");
+}
+
 #[cfg(all(feature = "async", unix))]
 mod async_tests {
     use std::future::Future;
@@ -164,6 +186,27 @@ mod async_tests {
         let mut bytes = Vec::new();
         sink.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, b"async-resource");
+    }
+
+    #[test]
+    fn test_async_managed_runner_preserves_failed_command_output() {
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let executor = executor(&manager);
+        let error = block_on(
+            runner().run_async(
+                &executor,
+                Command::new("sh")
+                    .arg("-c")
+                    .arg("printf async-managed-out; printf async-managed-err >&2; exit 9"),
+                Default::default(),
+            ),
+        )
+        .expect_err("async managed command should report its unexpected exit");
+
+        assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
+        assert_eq!(error.exit_code(), Some(9));
+        assert_eq!(error.output().unwrap().stdout(), b"async-managed-out");
+        assert_eq!(error.output().unwrap().stderr(), b"async-managed-err");
     }
 
     #[test]

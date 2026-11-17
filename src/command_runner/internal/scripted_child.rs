@@ -137,3 +137,41 @@ pub(super) fn raw_child() -> Box<dyn ChildWrapper> {
     child.wait().expect("test child should be reaped");
     Box::new(child)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+    use std::process::Stdio;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    use process_wrap::std::ChildWrapper;
+
+    use super::ScriptedChild;
+
+    #[test]
+    fn test_inner_access_and_unwrap_preserve_real_child_lifecycle() {
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("child should spawn");
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut scripted = ScriptedChild::new("child", Box::new(child), Arc::clone(&calls));
+
+        let status = scripted
+            .inner_mut()
+            .wait()
+            .expect("mutable inner access should retain child behavior");
+        assert!(status.success());
+        assert!(calls.lock().unwrap().is_empty());
+
+        let status = Box::new(scripted)
+            .into_inner()
+            .wait()
+            .expect("unwrapped child should remain waitable");
+        assert!(status.success());
+    }
+}
