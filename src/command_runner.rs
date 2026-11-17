@@ -325,7 +325,7 @@ mod tests {
     use qubit_operation::OperationOutcome;
     use qubit_operation::OperationScope;
     use qubit_operation::TimerRegistration;
-    use qubit_redact::RedactionPolicy;
+    use qubit_redact::{RedactionPolicy, Sensitivity};
 
     use super::CommandRunner;
     use super::RunTreePolicy;
@@ -410,6 +410,14 @@ mod tests {
 
         let working_directory = std::env::temp_dir();
         let timer = Arc::new(qubit_clock::StdTimer::new());
+        let redaction_policy = RedactionPolicy::default()
+            .to_builder()
+            .fields(|fields| {
+                fields.raise("runner_token", Sensitivity::Secret);
+            })
+            .expect("test redaction field should be valid")
+            .build()
+            .expect("test redaction policy should be valid");
         let runner = CommandRunner::without_timeout()
             .working_directory(working_directory.clone())
             .success_exit_codes(&[0, 7])
@@ -421,7 +429,7 @@ mod tests {
             .bounded_output(11)
             .max_total_output_bytes(17)
             .timer(timer)
-            .diagnostic_redaction_policy(RedactionPolicy::default());
+            .diagnostic_redaction_policy(redaction_policy.clone());
 
         assert_eq!(runner.configured_working_directory(), Some(working_directory.as_path()));
         assert_eq!(runner.configured_success_exit_codes(), &[0, 7]);
@@ -431,7 +439,7 @@ mod tests {
         assert_eq!(runner.configured_max_stderr_bytes(), Some(11));
         assert_eq!(runner.configured_max_total_output_bytes(), Some(17));
         let _ = runner.configured_timer();
-        let _ = runner.configured_diagnostic_redaction_policy();
+        assert_eq!(runner.configured_diagnostic_redaction_policy(), &redaction_policy);
 
         let unbounded = runner.unbounded_output().without_total_output_limit();
         assert_eq!(unbounded.configured_max_stdout_bytes(), None);
