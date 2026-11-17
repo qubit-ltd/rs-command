@@ -1984,8 +1984,8 @@ mod command_executor_api_tests {
 
     fn setup() -> (OperationManager, CommandExecutor, CommandRunner) {
         let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
-        let executor = CommandExecutor::new(manager.clone(), CommandExecutionConfig::default())
-            .expect("executor should start");
+        let executor =
+            CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).expect("executor should start");
         (manager, executor, CommandRunner::new(Duration::from_secs(5)))
     }
 
@@ -1994,18 +1994,27 @@ mod command_executor_api_tests {
             OperationOutcome::Succeeded(output) => output,
             other => panic!("command did not succeed: {other:?}"),
         };
-        assert!(operation.wait_settlement().expect("command should settle").all_released());
+        assert!(
+            operation
+                .wait_settlement()
+                .expect("command should settle")
+                .all_released()
+        );
         output.stdout().to_vec()
     }
 
     #[cfg(unix)]
     #[test]
-    fn sync_submit_and_blocking_wait_variants_run_and_settle_commands() {
+    fn test_sync_submit_and_blocking_wait_variants_run_and_settle_commands() {
         let (manager, executor, runner) = setup();
         assert_eq!(
             output_and_settle(
                 executor
-                    .submit(runner.clone(), Command::new("sh").arg("-c").arg("printf submit"), Default::default())
+                    .submit(
+                        runner.clone(),
+                        Command::new("sh").arg("-c").arg("printf submit"),
+                        Default::default()
+                    )
                     .unwrap(),
             ),
             b"submit"
@@ -2066,13 +2075,15 @@ mod command_executor_api_tests {
                             Command::new("sh").arg("-c").arg("printf submit-in"),
                             Default::default(),
                         )
-                        .map_err(|_| crate::CommandError::from_reason(
-                            "submit_in",
-                            crate::CommandErrorReason::ManagedOperationFailed {
-                                diagnostic: "scoped submission rejected".into(),
-                            },
-                            None,
-                        ))?,
+                        .map_err(|_| {
+                            crate::CommandError::from_reason(
+                                "submit_in",
+                                crate::CommandErrorReason::ManagedOperationFailed {
+                                    diagnostic: "scoped submission rejected".into(),
+                                },
+                                None,
+                            )
+                        })?,
                 );
                 let owned = output_and_settle(
                     scoped_executor
@@ -2082,13 +2093,15 @@ mod command_executor_api_tests {
                             Command::new("sh").arg("-c").arg("printf submit-resources-in"),
                             CommandResourceRunOptions::new(),
                         )
-                        .map_err(|_| crate::CommandError::from_reason(
-                            "submit_resources_in",
-                            crate::CommandErrorReason::ManagedOperationFailed {
-                                diagnostic: "scoped resource submission rejected".into(),
-                            },
-                            None,
-                        ))?,
+                        .map_err(|_| {
+                            crate::CommandError::from_reason(
+                                "submit_resources_in",
+                                crate::CommandErrorReason::ManagedOperationFailed {
+                                    diagnostic: "scoped resource submission rejected".into(),
+                                },
+                                None,
+                            )
+                        })?,
                 );
                 let waited = output_and_settle(
                     scoped_executor
@@ -2098,13 +2111,15 @@ mod command_executor_api_tests {
                             Command::new("sh").arg("-c").arg("printf wait-in"),
                             Default::default(),
                         )
-                        .map_err(|_| crate::CommandError::from_reason(
-                            "submit_wait_blocking_in",
-                            crate::CommandErrorReason::ManagedOperationFailed {
-                                diagnostic: "scoped wait submission rejected".into(),
-                            },
-                            None,
-                        ))?,
+                        .map_err(|_| {
+                            crate::CommandError::from_reason(
+                                "submit_wait_blocking_in",
+                                crate::CommandErrorReason::ManagedOperationFailed {
+                                    diagnostic: "scoped wait submission rejected".into(),
+                                },
+                                None,
+                            )
+                        })?,
                 );
                 let waited_owned = output_and_settle(
                     scoped_executor
@@ -2114,13 +2129,15 @@ mod command_executor_api_tests {
                             Command::new("sh").arg("-c").arg("printf wait-resources-in"),
                             CommandResourceRunOptions::new(),
                         )
-                        .map_err(|_| crate::CommandError::from_reason(
-                            "submit_wait_resources_blocking_in",
-                            crate::CommandErrorReason::ManagedOperationFailed {
-                                diagnostic: "scoped resource wait rejected".into(),
-                            },
-                            None,
-                        ))?,
+                        .map_err(|_| {
+                            crate::CommandError::from_reason(
+                                "submit_wait_resources_blocking_in",
+                                crate::CommandErrorReason::ManagedOperationFailed {
+                                    diagnostic: "scoped resource wait rejected".into(),
+                                },
+                                None,
+                            )
+                        })?,
                 );
                 Ok::<_, crate::CommandError>((direct, owned, waited, waited_owned))
             })
@@ -2147,7 +2164,12 @@ mod command_executor_api_tests {
         use std::task::Wake;
         use std::task::Waker;
 
-        use super::*;
+        use super::Command;
+        use super::CommandExecutorApi;
+        use super::CommandResourceRunOptions;
+        use super::Duration;
+        use super::OperationOutcome;
+        use super::setup;
 
         struct ThreadWake(std::thread::Thread);
         impl Wake for ThreadWake {
@@ -2172,7 +2194,11 @@ mod command_executor_api_tests {
         }
 
         async fn output_and_settle(mut operation: crate::AsyncCommandOperation) -> Vec<u8> {
-            let output = match operation.wait_outcome().await.expect("async outcome should be observable") {
+            let output = match operation
+                .wait_outcome()
+                .await
+                .expect("async outcome should be observable")
+            {
                 OperationOutcome::Succeeded(output) => output,
                 other => panic!("async command did not succeed: {other:?}"),
             };
@@ -2181,7 +2207,7 @@ mod command_executor_api_tests {
         }
 
         #[test]
-        fn async_submit_and_wait_variants_run_and_settle_commands() {
+        fn test_async_submit_and_wait_variants_run_and_settle_commands() {
             block_on(async_submit_and_wait_variants_run_and_settle_commands_inner());
         }
 
@@ -2221,7 +2247,11 @@ mod command_executor_api_tests {
             assert_eq!(
                 output_and_settle(
                     executor
-                        .submit_wait(runner.clone(), Command::new("sh").arg("-c").arg("printf async-wait"), Default::default())
+                        .submit_wait(
+                            runner.clone(),
+                            Command::new("sh").arg("-c").arg("printf async-wait"),
+                            Default::default()
+                        )
                         .await
                         .unwrap(),
                 )
@@ -2249,9 +2279,9 @@ mod command_executor_api_tests {
 
             let scoped_executor = executor.clone();
             let scoped_runner = runner.clone();
-            let result = manager.as_async().run(
-                qubit_operation::OperationOptions::default(),
-                move |scope| async move {
+            let result = manager
+                .as_async()
+                .run(qubit_operation::OperationOptions::default(), move |scope| async move {
                     let direct = output_and_settle(
                         scoped_executor
                             .submit_async_in(
@@ -2260,13 +2290,15 @@ mod command_executor_api_tests {
                                 Command::new("sh").arg("-c").arg("printf async-in"),
                                 Default::default(),
                             )
-                            .map_err(|_| crate::CommandError::from_reason(
-                                "submit_async_in",
-                                crate::CommandErrorReason::ManagedOperationFailed {
-                                    diagnostic: "async scoped submission rejected".into(),
-                                },
-                                None,
-                            ))?,
+                            .map_err(|_| {
+                                crate::CommandError::from_reason(
+                                    "submit_async_in",
+                                    crate::CommandErrorReason::ManagedOperationFailed {
+                                        diagnostic: "async scoped submission rejected".into(),
+                                    },
+                                    None,
+                                )
+                            })?,
                     )
                     .await;
                     let direct_owned = output_and_settle(
@@ -2277,13 +2309,15 @@ mod command_executor_api_tests {
                                 Command::new("sh").arg("-c").arg("printf async-resources-in"),
                                 CommandResourceRunOptions::new(),
                             )
-                            .map_err(|_| crate::CommandError::from_reason(
-                                "submit_async_resources_in",
-                                crate::CommandErrorReason::ManagedOperationFailed {
-                                    diagnostic: "async scoped resource submission rejected".into(),
-                                },
-                                None,
-                            ))?,
+                            .map_err(|_| {
+                                crate::CommandError::from_reason(
+                                    "submit_async_resources_in",
+                                    crate::CommandErrorReason::ManagedOperationFailed {
+                                        diagnostic: "async scoped resource submission rejected".into(),
+                                    },
+                                    None,
+                                )
+                            })?,
                     )
                     .await;
                     let waited = output_and_settle(
@@ -2295,13 +2329,15 @@ mod command_executor_api_tests {
                                 Default::default(),
                             )
                             .await
-                            .map_err(|_| crate::CommandError::from_reason(
-                                "submit_wait_in",
-                                crate::CommandErrorReason::ManagedOperationFailed {
-                                    diagnostic: "async scoped wait rejected".into(),
-                                },
-                                None,
-                            ))?,
+                            .map_err(|_| {
+                                crate::CommandError::from_reason(
+                                    "submit_wait_in",
+                                    crate::CommandErrorReason::ManagedOperationFailed {
+                                        diagnostic: "async scoped wait rejected".into(),
+                                    },
+                                    None,
+                                )
+                            })?,
                     )
                     .await;
                     let mut input = tempfile::tempfile().expect("scoped async input should be created");
@@ -2316,20 +2352,21 @@ mod command_executor_api_tests {
                                 CommandResourceRunOptions::new().stdin_file(input),
                             )
                             .await
-                            .map_err(|_| crate::CommandError::from_reason(
-                                "submit_wait_resources_in",
-                                crate::CommandErrorReason::ManagedOperationFailed {
-                                    diagnostic: "async scoped resource wait rejected".into(),
-                                },
-                                None,
-                            ))?,
+                            .map_err(|_| {
+                                crate::CommandError::from_reason(
+                                    "submit_wait_resources_in",
+                                    crate::CommandErrorReason::ManagedOperationFailed {
+                                        diagnostic: "async scoped resource wait rejected".into(),
+                                    },
+                                    None,
+                                )
+                            })?,
                     )
                     .await;
                     Ok::<_, crate::CommandError>((direct, direct_owned, waited, waited_owned))
-                },
-            )
-            .await
-            .expect("async parent operation should complete");
+                })
+                .await
+                .expect("async parent operation should complete");
             match result {
                 OperationOutcome::Succeeded((direct, direct_owned, waited, waited_owned)) => {
                     assert_eq!(direct, b"async-in");
