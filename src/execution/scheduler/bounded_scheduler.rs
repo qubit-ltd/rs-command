@@ -776,6 +776,19 @@ mod tests {
     }
 
     #[test]
+    fn test_reservation_bytes_remain_until_last_lease_is_dropped() {
+        let scheduler = BoundedScheduler::new(config(0, 1)).unwrap();
+        let reservation = scheduler.try_reserve(6).unwrap();
+        let lease = reservation.retain();
+
+        drop(reservation);
+        assert_eq!(scheduler.snapshot().input_bytes, 6);
+
+        drop(lease);
+        assert_eq!(scheduler.snapshot().input_bytes, 0);
+    }
+
+    #[test]
     fn test_reservation_rejections_report_byte_and_queue_limits() {
         let scheduler = BoundedScheduler::new(config(1, 1)).unwrap();
         let active = scheduler.try_reserve(8).unwrap();
