@@ -356,4 +356,42 @@ mod tests {
         owner.run_inline();
         assert_eq!(completed.load(Ordering::SeqCst), 1);
     }
+
+    #[test]
+    fn test_rejected_handoff_retains_cleanup_owner_until_single_completion() {
+        let (sender, primary) = sync_channel(1);
+        let (overflow_sender, overflow) = sync_channel(1);
+        let reaper = Reaper {
+            sender,
+            overflow_sender,
+        };
+        reaper.handoff(ReaperOwner::new(|| {})).unwrap();
+        reaper.handoff(ReaperOwner::new(|| {})).unwrap();
+
+        let (observer, completed) = ReaperObserver::pair();
+        observer.mark_pending();
+        let cleanups = Arc::new(AtomicUsize::new(0));
+        let cleanups_by_owner = Arc::clone(&cleanups);
+        let cleanup_observer = observer.clone();
+        let owner = reaper
+            .handoff(ReaperOwner::new(move || {
+                cleanups_by_owner.fetch_add(1, Ordering::SeqCst);
+                cleanup_observer.complete();
+            }))
+            .expect_err("full queues must retain cleanup ownership with the caller");
+
+        assert_eq!(cleanups.load(Ordering::SeqCst), 0);
+        assert!(completed.try_recv().is_err());
+
+        owner.run_inline();
+        completed
+            .recv_timeout(Duration::from_secs(3))
+            .expect("inline cleanup should publish completion");
+        observer.complete();
+
+        assert_eq!(cleanups.load(Ordering::SeqCst), 1);
+        assert!(completed.try_recv().is_err());
+        drop(primary);
+        drop(overflow);
+    }
 }
