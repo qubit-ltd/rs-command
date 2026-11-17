@@ -536,6 +536,23 @@ mod activation_failure_tests {
             Ok(())
         }
     }
+
+    struct CompleteRecoveryOwner(Arc<AtomicBool>);
+
+    impl RecoveryOwner for CompleteRecoveryOwner {
+        fn summary(&self) -> String {
+            "completed test recovery owner".to_owned()
+        }
+
+        fn retry_cleanup(&self) -> Result<(), crate::execution::contracts::RecoveryRetryError> {
+            self.0.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn is_complete(&self) -> bool {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
     use crate::execution::scheduler::BoundedScheduler;
 
     struct FailedBinder(AtomicBool, CommandControl);
@@ -932,5 +949,91 @@ mod activation_failure_tests {
         assert_eq!(failure.owner.summary(), "test recovery owner");
         drop(failure);
         assert!(dropped.load(Ordering::SeqCst), "returned owner remains caller-owned");
+    }
+
+    #[test]
+    fn test_disconnected_recovery_store_returns_bound_owner_to_caller() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let (recovery, receiver) =
+            std::sync::mpsc::sync_channel::<super::super::RecoveryItem>(1);
+        drop(receiver);
+        let backend = Arc::new(ProcessBackend::new());
+        let state = AdapterState::new(
+            request(),
+            permit,
+            scheduler,
+            backend.clone(),
+            backend,
+            recovery,
+            None,
+        );
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let id = operation.id();
+        let _ = operation.wait_outcome().unwrap();
+        operation.wait_settlement().unwrap();
+        state.bind(id).unwrap();
+        let dropped = Arc::new(AtomicBool::new(false));
+
+        let failure = crate::execution::contracts::FactSink::retain_recovery_owner(
+            &state,
+            Box::new(DropObservedRecoveryOwner(Arc::clone(&dropped))),
+        )
+        .expect_err("a disconnected recovery store must reject the owner");
+
+        assert_eq!(
+            failure.reason,
+            crate::execution::contracts::RecoveryPublishError::CapacityExceeded
+        );
+        assert!(!dropped.load(Ordering::SeqCst));
+        assert_eq!(failure.owner.summary(), "test recovery owner");
+        drop(failure);
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_bound_adapter_hands_recovery_owner_to_worker_and_publishes_settlement() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let state = make_state(scheduler, permit);
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut handle = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let id = handle.id();
+        let observer = handle.observer();
+        let _ = handle.wait_outcome().unwrap();
+        handle.wait_settlement().unwrap();
+
+        state.bind(id).unwrap();
+        state.set_operation_observer(observer);
+        let cleanup_finished = Arc::new(AtomicBool::new(false));
+        crate::execution::contracts::FactSink::retain_recovery_owner(
+            &*state,
+            Box::new(CompleteRecoveryOwner(Arc::clone(&cleanup_finished))),
+        )
+        .expect("a bound adapter should transfer its owner to the recovery worker");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let settlement = loop {
+            if let Some(report) = OperationControl::snapshot(&*state).settlement {
+                break report;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "recovery worker did not publish settlement"
+            );
+            std::thread::yield_now();
+        };
+        assert!(cleanup_finished.load(Ordering::SeqCst));
+        assert_eq!(settlement.operation_id, id);
+        assert_eq!(
+            settlement.status,
+            qubit_operation::SettlementStatus::RecoveryRequired
+        );
+        assert_eq!(settlement.recovery_count, 1);
     }
 }

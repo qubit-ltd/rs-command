@@ -196,6 +196,24 @@ mod tests {
     }
 
     #[test]
+    fn test_unexpired_context_delegates_reservation_with_original_byte_count() {
+        let domain = ClockDomainId::new_unique();
+        let clock: Arc<dyn ClockSource> = Arc::new(FixedClock(domain));
+        let context = OperationContext::new(ContextOptions {
+            clock: Some(clock),
+            deadline: Some(Deadline::at(MonotonicTime::new(domain, 1))),
+            budget: None,
+        })
+        .unwrap();
+        let scheduler = CompatibilityScheduler(AtomicUsize::new(0));
+
+        let reservation = scheduler.try_reserve_until(37, Some(context)).unwrap();
+
+        assert!(reservation.belongs_to(9));
+        assert_eq!(scheduler.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
     fn test_dropping_reservation_releases_its_token_once() {
         let releases = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&releases);
