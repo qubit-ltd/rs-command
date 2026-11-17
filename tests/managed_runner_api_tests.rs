@@ -7,16 +7,22 @@
 // =============================================================================
 #[cfg(unix)]
 use std::io::Read;
+#[cfg(unix)]
 use std::time::Duration;
 
 #[cfg(unix)]
 use qubit_command::Command;
+#[cfg(unix)]
 use qubit_command::CommandErrorKind;
+#[cfg(unix)]
 use qubit_command::CommandErrorReason;
+#[cfg(unix)]
 use qubit_command::CommandExecutionConfig;
+#[cfg(unix)]
 use qubit_command::CommandExecutor;
 #[cfg(unix)]
 use qubit_command::CommandResourceRunOptions;
+#[cfg(unix)]
 use qubit_command::CommandRunner;
 #[cfg(unix)]
 use qubit_command::FileSinkPolicy;
@@ -24,6 +30,7 @@ use qubit_command::FileSinkPolicy;
 use qubit_command::ManagedCommandRunnerApi;
 #[cfg(unix)]
 use qubit_operation::ManagerOptions;
+#[cfg(unix)]
 use qubit_operation::OperationManager;
 #[cfg(unix)]
 use qubit_operation::OperationOptions;
