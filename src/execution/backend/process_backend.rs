@@ -344,13 +344,21 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
+    use std::task::Waker;
 
+    use qubit_operation::ClockDomainId;
+    use qubit_operation::ClockSource;
+    use qubit_operation::ContextOptions;
+    use qubit_operation::Deadline;
+    use qubit_operation::MonotonicTime;
     use qubit_operation::OperationId;
+    use qubit_operation::OperationContext;
     use qubit_operation::OperationManager;
     use qubit_operation::OperationOptions;
     use qubit_operation::OperationOutcome;
     use qubit_operation::SettlementReport;
     use qubit_operation::StopReason;
+    use qubit_operation::TimerRegistration;
 
     use super::ProcessBackend;
     use super::normalize_tee_paths;
@@ -378,6 +386,28 @@ mod tests {
     use crate::execution::contracts::StopPort;
     use crate::resource_run_options::CommandResourceRunOptions;
     use crate::resource_run_options::FileSinkPolicy;
+
+    struct ExpiredClock(ClockDomainId);
+
+    impl ClockSource for ExpiredClock {
+        fn now(&self) -> MonotonicTime {
+            MonotonicTime::new(self.0, 1)
+        }
+
+        fn register_deadline(
+            &self,
+            _deadline: MonotonicTime,
+            _waker: Waker,
+        ) -> Box<dyn TimerRegistration> {
+            Box::new(NoopRegistration)
+        }
+    }
+
+    struct NoopRegistration;
+
+    impl TimerRegistration for NoopRegistration {
+        fn cancel(self: Box<Self>) {}
+    }
 
     #[derive(Default)]
     struct RecordingSink {
@@ -549,6 +579,84 @@ mod tests {
         assert!(matches!(
             sink.outcome.lock().unwrap().take(),
             Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::UserCancelled
+        ));
+        assert!(sink.released.load(Ordering::SeqCst));
+        assert!(
+            sink.settlement
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .all_released()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_expired_deadline_stops_backend_before_spawn() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::new());
+        let sink = Arc::new(RecordingSink::default());
+        let operation_backend = Arc::clone(&backend);
+        let operation_sink = Arc::clone(&sink);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("must-not-start-after-deadline");
+        let operation_path = path.clone();
+        let domain = ClockDomainId::new_unique();
+        let deadline = OperationContext::new(ContextOptions {
+            clock: Some(Arc::new(ExpiredClock(domain))),
+            deadline: Some(Deadline::at(MonotonicTime::new(domain, 0))),
+            budget: None,
+        })
+        .unwrap();
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    |_| {},
+                    |_| crate::execution::contracts::ReservationLease::new(|| {}),
+                );
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout(),
+                    command: Command::new("sh")
+                        .arg("-c")
+                        .arg(&format!("touch {}", operation_path.display())),
+                    options: RequestOptions::Standard(CommandRunOptions::default()),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
+                    },
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: Some(deadline),
+                };
+                operation_backend.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: operation_sink.clone(),
+                        session_bridge: None,
+                    },
+                    operation_sink,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        operation.wait_settlement().unwrap();
+        assert!(!path.exists(), "an expired request must not spawn");
+        assert!(matches!(
+            sink.outcome.lock().unwrap().take(),
+            Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
         ));
         assert!(sink.released.load(Ordering::SeqCst));
         assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
