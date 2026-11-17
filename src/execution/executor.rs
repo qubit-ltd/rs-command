@@ -2098,7 +2098,11 @@ mod retry_wait_tests {
     use qubit_operation::StopReason;
     use qubit_operation::TimerRegistration;
 
+    use super::wait_capacity_async;
     use super::wait_retry_tick;
+    use crate::CommandExecutionConfig;
+    use crate::execution::contracts::Scheduler;
+    use crate::execution::scheduler::BoundedScheduler;
 
     struct NoopRegistration;
     impl TimerRegistration for NoopRegistration {
@@ -2155,6 +2159,72 @@ mod retry_wait_tests {
         clock.ticks.store(5, Ordering::SeqCst);
         assert!(matches!(retry.as_mut().poll(&mut cx), Poll::Ready(false)));
         assert_eq!(context.stop_reason(), Some(StopReason::Timeout));
+    }
+
+    #[test]
+    fn test_capacity_wait_observes_stop_and_removes_its_waiter() {
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig {
+            max_active: 1,
+            max_queued: 0,
+            max_waiters: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let reservation = scheduler.try_reserve(0).unwrap();
+        let context = OperationContext::new(ContextOptions::default()).unwrap();
+        let mut wait = Box::pin(wait_capacity_async(scheduler.clone(), 0, Some(context.clone())));
+        let mut cx = Context::from_waker(&Waker::noop());
+
+        assert!(wait.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        assert!(context.request_stop(StopReason::UserCancelled));
+        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(false)));
+        assert_eq!(scheduler.snapshot().waiters, 0, "cancellation must unregister capacity waiter");
+        drop(reservation);
+    }
+
+    #[test]
+    fn test_capacity_wait_rejects_closed_scheduler_and_expired_context() {
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig {
+            max_active: 1,
+            max_queued: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let reservation = scheduler.try_reserve(0).unwrap();
+        scheduler.close_admission();
+        let mut wait = Box::pin(wait_capacity_async(scheduler.clone(), 0, None));
+        let mut cx = Context::from_waker(&Waker::noop());
+
+        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(false)));
+        assert_eq!(scheduler.snapshot().waiters, 0);
+        drop(reservation);
+
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig {
+            max_active: 1,
+            max_queued: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let reservation = scheduler.try_reserve(0).unwrap();
+        let clock = Arc::new(ManualClock {
+            domain: ClockDomainId::new_unique(),
+            ticks: AtomicU64::new(0),
+        });
+        let source: Arc<dyn ClockSource> = clock.clone();
+        let context = OperationContext::new(ContextOptions {
+            clock: Some(source),
+            deadline: Some(Deadline::at(MonotonicTime::new(clock.domain, 5))),
+            budget: None,
+        })
+        .unwrap();
+        let mut wait = Box::pin(wait_capacity_async(scheduler.clone(), 0, Some(context)));
+        assert!(wait.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        clock.ticks.store(5, Ordering::SeqCst);
+        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(false)));
+        assert_eq!(scheduler.snapshot().waiters, 0, "deadline must unregister capacity waiter");
+        drop(reservation);
     }
 }
 

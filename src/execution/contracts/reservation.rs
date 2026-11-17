@@ -87,3 +87,19 @@ impl Drop for Reservation {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Reservation;
+    use crate::execution::contracts::ReservationLease;
+
+    #[test]
+    fn test_debug_identifies_permit_without_formatting_callbacks() {
+        let permit = Reservation::new(17, 29, |_| {}, |_| ReservationLease::new(|| {}));
+
+        assert_eq!(
+            format!("{permit:?}"),
+            "Reservation { scheduler_id: 17, token: 29, active: true }"
+        );
+    }
+}
