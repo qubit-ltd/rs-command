@@ -116,6 +116,18 @@ impl CommandError {
         self
     }
 
+    /// Adds the operation-manager stop cause while retaining captured output
+    /// and cleanup diagnostics.
+    ///
+    /// # Parameters
+    /// * `reason`: The operation-manager stop cause.
+    pub(crate) fn with_managed_stop_reason(mut self, reason: qubit_operation::StopReason) -> Self {
+        if reason != qubit_operation::StopReason::UserCancelled {
+            self.reason = Box::new(CommandErrorReason::Stopped { reason });
+        }
+        self
+    }
+
     /// Converts a helper error into its cleanup representation.
     pub(crate) fn into_cleanup_failure(self) -> Option<CommandCleanupFailure> {
         primary_cleanup_failure(*self.reason)

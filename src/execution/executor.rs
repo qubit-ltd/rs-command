@@ -355,7 +355,7 @@ impl CommandExecutor {
         match manager.try_submit_external(OperationOptions::default(), Arc::clone(&prepared)) {
             Ok(handle) => {
                 prepared.set_operation_observer(handle.observer());
-                Ok(handle)
+                Ok(CommandOperation::new(handle, prepared.stop_diagnostic_slot()))
             }
             Err(error) => {
                 let (reason, _) = error.into_parts();
@@ -437,7 +437,7 @@ impl CommandExecutor {
         match manager.try_submit_external(OperationOptions::default(), Arc::clone(&prepared)) {
             Ok(handle) => {
                 prepared.set_operation_observer(handle.observer());
-                Ok(handle)
+                Ok(CommandOperation::new(handle, prepared.stop_diagnostic_slot()))
             }
             Err(error) => {
                 let (reason, _) = error.into_parts();
@@ -535,7 +535,10 @@ impl CommandExecutor {
         {
             Ok(handle) => {
                 prepared.set_operation_observer(handle.observer().as_sync());
-                Ok(handle)
+                Ok(super::AsyncCommandOperation::new(
+                    handle,
+                    prepared.stop_diagnostic_slot(),
+                ))
             }
             Err(error) => {
                 let (reason, _) = error.into_parts();
@@ -811,7 +814,10 @@ impl CommandExecutor {
         {
             Ok(handle) => {
                 prepared.set_operation_observer(handle.observer().as_sync());
-                Ok(handle)
+                Ok(super::AsyncCommandOperation::new(
+                    handle,
+                    prepared.stop_diagnostic_slot(),
+                ))
             }
             Err(error) => {
                 let (reason, _) = error.into_parts();

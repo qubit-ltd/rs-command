@@ -705,7 +705,8 @@ fn collect(mut handle: crate::CommandOperation) -> Result<crate::CommandOutput, 
     let _settlement = handle
         .wait_settlement()
         .map_err(|e| managed_error(format!("operation settlement unavailable: {e}")))?;
-    map_outcome(outcome)
+    let stop_diagnostic = handle.take_stop_diagnostic();
+    map_outcome_with_stop_diagnostic(outcome, stop_diagnostic)
 }
 /// Asynchronously waits for operation completion and settlement.
 ///
@@ -727,7 +728,26 @@ async fn collect_async(mut handle: crate::AsyncCommandOperation) -> Result<crate
         .await
         .map_err(|e| managed_error(format!("operation outcome unavailable: {e}")))?;
     let _settlement = handle.wait_settlement().await;
-    map_outcome(outcome)
+    let stop_diagnostic = handle.take_stop_diagnostic();
+    map_outcome_with_stop_diagnostic(outcome, stop_diagnostic)
+}
+
+/// Converts a stopped outcome using its retained command diagnostics when any
+/// are available.
+///
+/// # Parameters
+/// * `outcome`: Terminal operation result.
+/// * `stop_diagnostic`: Runner error retained alongside a stopped result.
+fn map_outcome_with_stop_diagnostic(
+    outcome: qubit_operation::OperationOutcome<crate::CommandOutput, CommandError>,
+    stop_diagnostic: Option<CommandError>,
+) -> Result<crate::CommandOutput, CommandError> {
+    match (outcome, stop_diagnostic) {
+        (qubit_operation::OperationOutcome::Stopped(report), Some(error)) => {
+            Err(error.with_managed_stop_reason(report.reason))
+        }
+        (outcome, _) => map_outcome(outcome),
+    }
 }
 /// Converts executor lifecycle outcomes into the command API result.
 ///
@@ -1292,6 +1312,7 @@ mod outcome_mapping_coverage_tests {
     use qubit_operation::StopReport;
 
     use super::map_outcome;
+    use super::map_outcome_with_stop_diagnostic;
     use crate::Command;
     use crate::CommandError;
     use crate::CommandErrorReason;
@@ -1343,6 +1364,32 @@ mod outcome_mapping_coverage_tests {
 
             assert!(matches!(actual.reason(), CommandErrorReason::Stopped { reason: actual } if *actual == reason));
         }
+    }
+
+    #[test]
+    fn test_managed_stop_mapping_preserves_runner_output_and_stop_cause() {
+        let diagnostic =
+            CommandError::from_reason("command", CommandErrorReason::Cancelled, None).with_captured_output(
+                crate::CommandCapturedOutput::new((b"partial".to_vec(), false, true), (b"tail".to_vec(), false, true)),
+            );
+        let actual = map_outcome_with_stop_diagnostic(
+            OperationOutcome::Stopped(StopReport {
+                reason: StopReason::ManagerShutdown,
+                accepted_at: None,
+            }),
+            Some(diagnostic),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            actual.reason(),
+            CommandErrorReason::Stopped {
+                reason: StopReason::ManagerShutdown
+            }
+        ));
+        let captured = actual.captured_output().expect("captured bytes should survive");
+        assert_eq!(captured.stdout(), b"partial");
+        assert_eq!(captured.stderr(), b"tail");
     }
 
     #[test]

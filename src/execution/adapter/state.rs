@@ -45,6 +45,8 @@ pub(crate) struct AdapterState {
     process_backend: Arc<ProcessBackend>,
     /// Stores the control value used by this execution component.
     control: Arc<CommandControl>,
+    /// Stores command diagnostics associated with a typed stopped outcome.
+    stop_diagnostic: Arc<Mutex<Option<CommandError>>>,
     /// Stores the stop value used by this execution component.
     stop: Mutex<Option<Arc<dyn StopPort>>>,
     /// Stores the recovery value used by this execution component.
@@ -124,6 +126,7 @@ impl AdapterState {
             backend,
             process_backend,
             control: Arc::new(CommandControl::default()),
+            stop_diagnostic: Arc::new(Mutex::new(None)),
             stop: Mutex::new(None),
             recovery,
             observer: Arc::new(super::OperationObserverSlot::default()),
@@ -145,6 +148,10 @@ impl AdapterState {
     pub(crate) fn restore(&self) -> Option<Request> {
         self.owned.lock().unwrap_or_else(|e| e.into_inner()).request.take()
     }
+    /// Shares the diagnostics retained for a stopped command outcome.
+    pub(crate) fn stop_diagnostic_slot(&self) -> Arc<Mutex<Option<CommandError>>> {
+        Arc::clone(&self.stop_diagnostic)
+    }
     /// Stores the set operation observer value used by this execution
     /// component.
     ///
@@ -155,6 +162,18 @@ impl AdapterState {
     }
 }
 impl FactSink for AdapterState {
+    /// Retains the command error that explains a typed stopped outcome.
+    ///
+    /// # Parameters
+    /// * `error`: Runner error and retained command diagnostics.
+    fn publish_stop_diagnostic(&self, error: CommandError) -> Result<(), CommandError> {
+        let mut diagnostic = self.stop_diagnostic.lock().unwrap_or_else(|error| error.into_inner());
+        if diagnostic.is_some() {
+            return Err(error);
+        }
+        *diagnostic = Some(error);
+        Ok(())
+    }
     /// Performs the publish outcome step in the managed command execution
     /// lifecycle.
     ///

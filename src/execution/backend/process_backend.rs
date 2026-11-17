@@ -56,17 +56,41 @@ fn schedule_recovery_transfer(sink: Arc<dyn FactSink>, mut owner: Box<dyn Recove
     }
 }
 
-/// Keeps the runner-selected result even if a stop arrives afterward.
+/// Preserves runner-selected errors while reporting runner-observed stops.
+///
+/// # Type Parameters
+/// * `F`: Diagnostic retention callback used before publishing a typed stop.
 ///
 /// # Parameters
 /// * `result`: The terminal result chosen by the process runner.
-/// * `late_stop`: A stop observed after the runner chose its terminal result.
-fn runner_result_outcome(
+/// * `stop`: A stop accepted by the operation or request cancellation source.
+/// * `retain_diagnostic`: Stores a cancellation error alongside a typed stop.
+fn runner_result_outcome<F>(
     result: Result<crate::CommandOutput, CommandError>,
-    _late_stop: Option<StopReason>,
-) -> OperationOutcome<crate::CommandOutput, CommandError> {
+    stop: Option<StopReason>,
+    retain_diagnostic: F,
+) -> OperationOutcome<crate::CommandOutput, CommandError>
+where
+    F: FnOnce(CommandError) -> Result<(), CommandError>,
+{
     match result {
         Ok(output) => OperationOutcome::Succeeded(output),
+        Err(error)
+            if stop.is_some()
+                && matches!(
+                    error.kind(),
+                    crate::CommandErrorKind::Cancelled | crate::CommandErrorKind::TimedOut
+                ) =>
+        {
+            let reason = stop.expect("guard checked that the stop cause is present");
+            match retain_diagnostic(error) {
+                Ok(()) => OperationOutcome::Stopped(qubit_operation::StopReport {
+                    reason,
+                    accepted_at: None,
+                }),
+                Err(error) => OperationOutcome::Failed(error),
+            }
+        }
         Err(error) => OperationOutcome::Failed(error),
     }
 }
@@ -255,7 +279,7 @@ impl Backend for ProcessBackend {
             .or_else(|| request.deadline.as_ref().and_then(|context| context.stop_reason()));
         // Keep the runner's selected terminal result. A later stop must not
         // replace its error, partial output, or cleanup diagnostics.
-        let outcome = runner_result_outcome(output, late_stop);
+        let outcome = runner_result_outcome(output, late_stop, |error| sink.publish_stop_diagnostic(error));
         if let Err(error) = sink.publish_outcome(outcome) {
             log::error!("failed to publish command outcome: {error:?}");
         }
@@ -411,12 +435,34 @@ mod tests {
             (b"partial stderr".to_vec(), false, true),
         ));
 
-        let outcome = runner_result_outcome(Err(error), Some(StopReason::Timeout));
+        let outcome = runner_result_outcome(Err(error), Some(StopReason::Timeout), |_| Ok(()));
         let OperationOutcome::Failed(error) = outcome else {
             panic!("a later stop must not replace the runner's terminal failure");
         };
         assert_eq!(error.kind(), crate::CommandErrorKind::UnexpectedExit);
         let captured = error.captured_output().expect("partial capture should survive");
+        assert_eq!(captured.stdout(), b"partial stdout");
+        assert_eq!(captured.stderr(), b"partial stderr");
+    }
+
+    #[test]
+    fn test_runner_observed_stop_keeps_typed_stop_and_diagnostic() {
+        let error = CommandError::from_reason("command", CommandErrorReason::Cancelled, None).with_captured_output(
+            crate::CommandCapturedOutput::new(
+                (b"partial stdout".to_vec(), false, true),
+                (b"partial stderr".to_vec(), false, true),
+            ),
+        );
+        let retained = Mutex::new(None);
+
+        let outcome = runner_result_outcome(Err(error), Some(StopReason::UserCancelled), |error| {
+            *retained.lock().unwrap() = Some(error);
+            Ok(())
+        });
+
+        assert!(matches!(outcome, OperationOutcome::Stopped(report) if report.reason == StopReason::UserCancelled));
+        let retained = retained.into_inner().unwrap().expect("stop error should be retained");
+        let captured = retained.captured_output().expect("partial capture should survive");
         assert_eq!(captured.stdout(), b"partial stdout");
         assert_eq!(captured.stderr(), b"partial stderr");
     }
@@ -442,12 +488,18 @@ mod tests {
     #[derive(Default)]
     struct RecordingSink {
         outcome: Mutex<Option<OperationOutcome<CommandOutput, CommandError>>>,
+        stop_diagnostic: Mutex<Option<CommandError>>,
         released: AtomicBool,
         settlement: Mutex<Option<Arc<SettlementReport>>>,
         recovery_owner: Mutex<Option<Box<dyn RecoveryOwner>>>,
     }
 
     impl FactSink for RecordingSink {
+        fn publish_stop_diagnostic(&self, error: CommandError) -> Result<(), CommandError> {
+            *self.stop_diagnostic.lock().unwrap() = Some(error);
+            Ok(())
+        }
+
         fn publish_outcome(
             &self,
             outcome: OperationOutcome<CommandOutput, CommandError>,

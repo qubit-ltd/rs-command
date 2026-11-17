@@ -107,7 +107,7 @@ fn test_managed_stop_after_child_start_waits_for_tree_settlement() {
 
     let directory = tempfile::tempdir().unwrap();
     let ready = directory.path().join("child-ready");
-    let script = format!("sleep 30 & echo ready > '{}' ; wait", ready.display());
+    let script = format!("printf partial; sleep 30 & echo ready > '{}' ; wait", ready.display());
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
     let mut operation = executor
@@ -132,6 +132,11 @@ fn test_managed_stop_after_child_start_waits_for_tree_settlement() {
         other => panic!("running managed process should stop: {other:?}"),
     }
     let settlement = operation.wait_settlement().unwrap();
+    let diagnostic = operation
+        .take_stop_diagnostic()
+        .expect("settled stopped command should retain its runner diagnostics");
+    assert_eq!(diagnostic.kind(), qubit_command::CommandErrorKind::Cancelled);
+    assert_eq!(diagnostic.captured_output().unwrap().stdout(), b"partial");
     assert!(settlement.all_released());
     assert_eq!(
         settlement.external_settlement.as_ref().unwrap().status,

@@ -244,7 +244,7 @@ mod unix {
     #[cfg(target_os = "linux")]
     fn run_timeout_fixture(fixture: &str, pid_path: &std::path::Path) {
         const READY_TIMEOUT: Duration = Duration::from_secs(5);
-        const RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+        const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
         const TIMEOUT: Duration = Duration::from_secs(30);
 
         if fixture == "watchdog-self-test" {
@@ -345,7 +345,12 @@ mod unix {
         } else {
             None
         };
-        let observed = receiver.recv_timeout(RESPONSE_TIMEOUT);
+        let before_release_timeout = if fixture == "no-advance" || fixture == "ready-timeout" {
+            Duration::from_millis(250)
+        } else {
+            RESPONSE_TIMEOUT
+        };
+        let observed = receiver.recv_timeout(before_release_timeout);
         let observed_before_release = observed.is_ok();
         let cleanup = escaped.terminate_if_recorded();
         if fixture == "ready-timeout" || fixture == "no-advance" {

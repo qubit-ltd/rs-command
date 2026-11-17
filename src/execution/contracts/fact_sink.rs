@@ -20,6 +20,16 @@ use crate::CommandOutput;
 /// Domain publication port. Implementations reject duplicate publication and
 /// keep the three facts independent.
 pub trait FactSink: Send + Sync {
+    /// Retains the command error associated with a typed stopped outcome.
+    /// Implementations that cannot retain it return the error for publication
+    /// as a normal failed outcome instead.
+    ///
+    /// # Parameters
+    /// * `error`: Runner error and retained command diagnostics.
+    fn publish_stop_diagnostic(&self, error: CommandError) -> Result<(), CommandError> {
+        Err(error)
+    }
+
     /// Performs the publish outcome step in the managed command execution
     /// lifecycle.
     ///
