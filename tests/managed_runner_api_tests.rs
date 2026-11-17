@@ -105,6 +105,8 @@ mod async_tests {
     use qubit_command::CommandResourceRunOptions;
     use qubit_command::FileSinkPolicy;
     use qubit_command::ManagedCommandRunnerApi;
+    use qubit_command::session::CommandSessionApi;
+    use qubit_operation::GroupOptions;
     use qubit_operation::ManagerOptions;
     use qubit_operation::OperationManager;
     use qubit_operation::OperationOptions;
@@ -191,5 +193,46 @@ mod async_tests {
             OperationOutcome::Succeeded(output) => assert_eq!(output.stdout(), b"async-scoped"),
             other => panic!("managed child operation failed: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_session_runner_methods_start_root_and_scoped_sessions() {
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let executor = executor(&manager);
+        for result in [
+            block_on(runner().start_session(&executor, Command::new("rustc").arg("--version"), Default::default())),
+            block_on(runner().start_session_resources(
+                &executor,
+                Command::new("rustc").arg("--version"),
+                CommandResourceRunOptions::new(),
+            )),
+        ] {
+            let session = result.unwrap();
+            assert!(session.operation().is_some());
+            drop(session);
+        }
+
+        let group = manager.group(GroupOptions { capacity: 4 }).unwrap();
+        let _completion = group
+            .run_and_settle(OperationOptions::default(), move |scope| {
+                let session = block_on(runner().start_session_in(
+                    &scope,
+                    &executor,
+                    Command::new("rustc").arg("--version"),
+                    Default::default(),
+                ))?;
+                assert!(session.operation().is_some());
+                drop(session);
+                let session = block_on(runner().start_session_resources_in(
+                    &scope,
+                    &executor,
+                    Command::new("rustc").arg("--version"),
+                    CommandResourceRunOptions::new(),
+                ))?;
+                assert!(session.operation().is_some());
+                drop(session);
+                Ok::<_, qubit_command::CommandError>(())
+            })
+            .unwrap();
     }
 }
