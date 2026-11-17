@@ -10,7 +10,7 @@
 
 ```toml
 [dependencies]
-qubit-command = "^0.12"
+qubit-command = "0.12"
 qubit-operation = "^0.3"
 ```
 
@@ -82,7 +82,7 @@ Windows 上的 helper cancellation 限制仍然适用：取消请求成功并不
 
 ```toml
 [dependencies]
-qubit-command = "0.11"
+qubit-command = "0.12"
 ```
 
 ### 构造并运行命令

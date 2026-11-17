@@ -17,7 +17,7 @@ The crate is published as `qubit-command` and requires Rust 1.94 or newer:
 
 ```toml
 [dependencies]
-qubit-command = "^0.12"
+qubit-command = "0.12"
 qubit-operation = "^0.3"
 ```
 

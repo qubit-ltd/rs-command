@@ -10,7 +10,7 @@ Use the managed API when a service needs bounded command admission, process-tree
 
 ```toml
 [dependencies]
-qubit-command = "^0.12"
+qubit-command = "0.12"
 qubit-operation = "^0.3"
 ```
 
@@ -82,7 +82,7 @@ Add the crate to the application using Rust 1.94 or newer:
 
 ```toml
 [dependencies]
-qubit-command = "0.11"
+qubit-command = "0.12"
 ```
 
 ### Build and Run the Command
