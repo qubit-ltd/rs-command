@@ -706,8 +706,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_write_stdin_until_cancelled_stops_when_pipe_is_not_ready() {
-        let (_cancellation, token) =
-            IoCancellation::pair().expect("cancellation pair should be created");
+        let (_cancellation, token) = IoCancellation::pair().expect("cancellation pair should be created");
         let mut stdin = ScriptedStdin::new(false, []);
 
         write_stdin_until_cancelled(&mut stdin, b"deferred", &token)
@@ -721,12 +720,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_write_stdin_until_cancelled_does_not_wait_for_empty_input() {
-        let (_cancellation, token) =
-            IoCancellation::pair().expect("cancellation pair should be created");
+        let (_cancellation, token) = IoCancellation::pair().expect("cancellation pair should be created");
         let mut stdin = ScriptedStdin::new(false, []);
 
-        write_stdin_until_cancelled(&mut stdin, b"", &token)
-            .expect("empty input needs no pipe readiness");
+        write_stdin_until_cancelled(&mut stdin, b"", &token).expect("empty input needs no pipe readiness");
 
         assert_eq!(stdin.wait_calls.get(), 0);
         assert_eq!(stdin.write_calls, 0);

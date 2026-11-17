@@ -1705,11 +1705,18 @@ mod tests {
             IoCancellation::pair().expect("stderr cancellation should initialize").0,
         );
 
-        let output = super::collect_output("command", status(0), || {
-            assert!(stdout_done.load(Ordering::Acquire));
-            assert!(stderr_done.load(Ordering::Acquire));
-            Ok(Duration::from_millis(7))
-        }, stdout, stderr, None)
+        let output = super::collect_output(
+            "command",
+            status(0),
+            || {
+                assert!(stdout_done.load(Ordering::Acquire));
+                assert!(stderr_done.load(Ordering::Acquire));
+                Ok(Duration::from_millis(7))
+            },
+            stdout,
+            stderr,
+            None,
+        )
         .expect("successful reader threads should be collected");
 
         assert_eq!(output.stdout(), b"out");

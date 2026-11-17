@@ -882,11 +882,8 @@ mod tests {
             .status()
             .expect("rustc should provide an exit status");
 
-        let (result, failures) = CommandIo::new(stdout, stderr, None).cancel_and_collect(
-            "command",
-            status,
-            || Ok(Duration::ZERO),
-        );
+        let (result, failures) =
+            CommandIo::new(stdout, stderr, None).cancel_and_collect("command", status, || Ok(Duration::ZERO));
         release.store(true, Ordering::Release);
         let output = result.expect("detaching a reader should still produce a command result");
 

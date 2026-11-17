@@ -507,7 +507,10 @@ mod tests {
 
         let snapshot = OperationControl::snapshot(&control);
         assert_eq!(snapshot.execution, ExecutionPhase::Queued);
-        assert_eq!(snapshot.stop.expect("stop request should be retained").reason, StopReason::Timeout);
+        assert_eq!(
+            snapshot.stop.expect("stop request should be retained").reason,
+            StopReason::Timeout
+        );
         assert!(snapshot.outcome.is_none());
         assert!(!snapshot.input_released);
         assert!(snapshot.settlement.is_none());
