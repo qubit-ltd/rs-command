@@ -624,7 +624,12 @@ mod tests {
             ));
             assert_eq!(error.kind(), CommandErrorKind::TimeFailed);
             assert_eq!(finished.load(Ordering::SeqCst), stage);
-            assert_eq!(error.cleanup_failures().len(), stage);
+            assert_eq!(
+                error.cleanup_failures().len(),
+                stage,
+                "unexpected startup helper cleanup failures: {:?}",
+                error.cleanup_failures()
+            );
             assert_eq!(
                 calls
                     .lock()
