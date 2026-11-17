@@ -691,10 +691,7 @@ mod tests {
 
         assert_eq!(scheduler.register_waiter_if_full(0, &waker), Ok(None));
         let permit = scheduler.try_reserve(0).unwrap();
-        let id = scheduler
-            .register_waiter_if_full(0, &waker)
-            .unwrap()
-            .unwrap();
+        let id = scheduler.register_waiter_if_full(0, &waker).unwrap().unwrap();
         assert_eq!(scheduler.snapshot().waiters, 1);
         scheduler.cancel_waiter(id);
         drop(permit);
@@ -702,10 +699,7 @@ mod tests {
         assert_eq!(scheduler.snapshot().waiters, 0);
 
         scheduler.close_admission();
-        assert_eq!(
-            scheduler.register_waiter(None),
-            Err(CapacityFailure::Closed)
-        );
+        assert_eq!(scheduler.register_waiter(None), Err(CapacityFailure::Closed));
         assert_eq!(
             scheduler.register_waiter_if_full(0, &waker),
             Err(CapacityFailure::Closed)
@@ -774,21 +768,9 @@ mod tests {
     fn test_reservation_without_inherited_deadline_releases_on_owner_drop() {
         let scheduler = BoundedScheduler::new(config(0, 1)).unwrap();
         let reservation = scheduler.try_reserve_until(6, None).unwrap();
-        assert_eq!(
-            (
-                scheduler.snapshot().active,
-                scheduler.snapshot().input_bytes,
-            ),
-            (1, 6)
-        );
+        assert_eq!((scheduler.snapshot().active, scheduler.snapshot().input_bytes,), (1, 6));
 
         drop(reservation);
-        assert_eq!(
-            (
-                scheduler.snapshot().active,
-                scheduler.snapshot().input_bytes,
-            ),
-            (0, 0)
-        );
+        assert_eq!((scheduler.snapshot().active, scheduler.snapshot().input_bytes,), (0, 0));
     }
 }
