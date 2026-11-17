@@ -800,10 +800,12 @@ mod tests {
         let counter = Arc::new(CountWake(AtomicUsize::new(0)));
         let waker = Waker::from(counter.clone());
 
-        scheduler.register_waiter(Some(&waker)).unwrap();
+        let waiter_id = scheduler.register_waiter(Some(&waker)).unwrap();
         assert_eq!(scheduler.register_waiter(None), Err(CapacityFailure::QueueFull));
         drop(permit);
         assert_eq!(counter.0.load(Ordering::SeqCst), 1);
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        scheduler.cancel_waiter(waiter_id);
         assert_eq!(scheduler.snapshot().waiters, 0);
         assert_eq!(scheduler.register_waiter_if_full(0, &waker), Ok(None));
     }
