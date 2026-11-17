@@ -336,3 +336,103 @@ fn released_report(operation_id: OperationId) -> SettlementReport {
         external_settlement: None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    use qubit_operation::OperationId;
+    use qubit_operation::OperationOutcome;
+    use qubit_operation::SettlementReport;
+
+    use super::schedule_recovery_transfer;
+    use crate::CommandError;
+    use crate::CommandOutput;
+    use crate::execution::contracts::FactPublishError;
+    use crate::execution::contracts::FactSink;
+    use crate::execution::contracts::RecoveryEffectEvidence;
+    use crate::execution::contracts::RecoveryOwner;
+    use crate::execution::contracts::RecoveryPublishError;
+    use crate::execution::contracts::RecoveryPublishFailure;
+
+    struct RetrySink {
+        rejections_left: AtomicUsize,
+        attempts: AtomicUsize,
+        retained: Mutex<Option<Box<dyn RecoveryOwner>>>,
+    }
+
+    impl FactSink for RetrySink {
+        fn publish_outcome(
+            &self,
+            _: OperationOutcome<CommandOutput, CommandError>,
+        ) -> Result<(), FactPublishError> {
+            Ok(())
+        }
+
+        fn confirm_input_release(&self) -> Result<(), FactPublishError> {
+            Ok(())
+        }
+
+        fn publish_settlement(&self, _: Arc<SettlementReport>) -> Result<(), FactPublishError> {
+            Ok(())
+        }
+
+        fn retain_recovery_owner(
+            &self,
+            owner: Box<dyn RecoveryOwner>,
+        ) -> Result<(), RecoveryPublishFailure> {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            if self
+                .rejections_left
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return Err(RecoveryPublishFailure {
+                    reason: RecoveryPublishError::StoreUnavailable,
+                    owner,
+                });
+            }
+            *self.retained.lock().unwrap() = Some(owner);
+            Ok(())
+        }
+    }
+
+    struct TestOwner;
+    impl RecoveryOwner for TestOwner {
+        fn summary(&self) -> String {
+            "transiently rejected owner".into()
+        }
+        fn effect_evidence(&self, _: OperationId) -> RecoveryEffectEvidence {
+            RecoveryEffectEvidence::default()
+        }
+        fn retry_cleanup(&self) -> Result<(), crate::execution::contracts::RecoveryRetryError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn recovery_transfer_retries_rejected_owner_until_store_accepts_it() {
+        let sink = Arc::new(RetrySink {
+            rejections_left: AtomicUsize::new(1),
+            attempts: AtomicUsize::new(0),
+            retained: Mutex::new(None),
+        });
+        let sink_port: Arc<dyn FactSink> = sink.clone();
+
+        schedule_recovery_transfer(sink_port, Box::new(TestOwner));
+
+        assert_eq!(sink.attempts.load(Ordering::SeqCst), 2);
+        let retained = sink
+            .retained
+            .lock()
+            .unwrap()
+            .take()
+            .expect("accepted owner should remain in store");
+        assert_eq!(retained.summary(), "transiently rejected owner");
+    }
+}

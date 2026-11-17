@@ -146,3 +146,179 @@ impl ReaperObserver {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use qubit_operation::OperationManager;
+    use qubit_operation::OperationOptions;
+    use qubit_operation::OperationOutcome;
+    use qubit_operation::SettlementReport;
+
+    use super::ReaperObserver;
+    use crate::CommandError;
+    use crate::CommandOutput;
+    use crate::execution::backend::ReaperOwner;
+    use crate::execution::contracts::FactPublishError;
+    use crate::execution::contracts::FactSink;
+    use crate::execution::contracts::RecoveryOwner;
+    use crate::execution::contracts::RecoveryPublishError;
+    use crate::execution::contracts::RecoveryPublishFailure;
+
+    struct RecoverySink {
+        reject: bool,
+        owners: Mutex<Vec<Box<dyn RecoveryOwner>>>,
+    }
+
+    impl FactSink for RecoverySink {
+        fn publish_outcome(
+            &self,
+            _: OperationOutcome<CommandOutput, CommandError>,
+        ) -> Result<(), FactPublishError> {
+            Ok(())
+        }
+
+        fn confirm_input_release(&self) -> Result<(), FactPublishError> {
+            Ok(())
+        }
+
+        fn publish_settlement(&self, _: Arc<SettlementReport>) -> Result<(), FactPublishError> {
+            Ok(())
+        }
+
+        fn retain_recovery_owner(
+            &self,
+            owner: Box<dyn RecoveryOwner>,
+        ) -> Result<(), RecoveryPublishFailure> {
+            if self.reject {
+                return Err(RecoveryPublishFailure {
+                    reason: RecoveryPublishError::CapacityExceeded,
+                    owner,
+                });
+            }
+            self.owners.lock().unwrap().push(owner);
+            Ok(())
+        }
+    }
+
+    fn sink(reject: bool) -> Arc<RecoverySink> {
+        Arc::new(RecoverySink {
+            reject,
+            owners: Mutex::new(Vec::new()),
+        })
+    }
+
+    #[test]
+    fn accepted_recovery_transfer_marks_handoff_and_completes_cleanup() {
+        let sink = sink(false);
+        let (observer, completed) = ReaperObserver::pair_with_recovery_sink(sink.clone());
+        assert!(observer.recovery_sink().is_some());
+        observer.mark_pending();
+        assert!(observer.is_pending());
+        let (cleaned_tx, cleaned_rx) = mpsc::channel();
+        let cleanup_observer = observer.clone();
+
+        observer.retain_or_defer_reaper_owner(ReaperOwner::new(move || {
+            cleaned_tx.send(()).unwrap();
+            cleanup_observer.complete();
+        }));
+
+        assert!(observer.recovery_was_transferred());
+        assert!(observer.take_deferred_recovery_owner().is_none());
+        let owner = sink
+            .owners
+            .lock()
+            .unwrap()
+            .pop()
+            .expect("sink should own transferred recovery");
+        assert_eq!(
+            owner.summary(),
+            "managed child and I/O helpers awaiting bounded reaper capacity"
+        );
+        owner
+            .retry_cleanup()
+            .expect("owner should transfer to the reaper");
+        cleaned_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("reaper should run cleanup");
+        completed
+            .recv_timeout(Duration::from_secs(3))
+            .expect("observer completion should be signaled");
+        assert!(observer.is_complete());
+    }
+
+    #[test]
+    fn rejected_recovery_transfer_returns_owner_for_backend_retry() {
+        let sink = sink(true);
+        let (observer, completed) = ReaperObserver::pair_with_recovery_sink(sink);
+        observer.mark_pending();
+        let (cleaned_tx, cleaned_rx) = mpsc::channel();
+        let cleanup_observer = observer.clone();
+        observer.retain_or_defer_reaper_owner(ReaperOwner::new(move || {
+            cleaned_tx.send(()).unwrap();
+            cleanup_observer.complete();
+        }));
+
+        assert!(!observer.recovery_was_transferred());
+        let owner = observer
+            .take_deferred_recovery_owner()
+            .expect("rejected owner should remain with the backend");
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let evidence = owner.effect_evidence(operation.id());
+        assert_eq!(evidence.effects_total, 1);
+        assert_eq!(
+            evidence.effects[0].fact,
+            qubit_operation::EffectFact::Unknown
+        );
+        assert_eq!(
+            evidence.effects[0].description.as_str(),
+            "managed process/helper cleanup awaits reaper handoff"
+        );
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        operation.wait_settlement().unwrap();
+
+        owner
+            .retry_cleanup()
+            .expect("rejected owner should be retryable through the reaper");
+        cleaned_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("reaper should run returned owner cleanup");
+        completed
+            .recv_timeout(Duration::from_secs(3))
+            .expect("deferred owner should signal completion");
+        assert!(observer.is_complete());
+        assert!(observer.recovery_sink().is_some());
+    }
+
+    #[test]
+    fn owner_is_deferred_when_no_recovery_sink_is_configured() {
+        let (observer, completed) = ReaperObserver::pair();
+        assert!(observer.recovery_sink().is_none());
+        observer.mark_pending();
+        let cleanup_observer = observer.clone();
+        observer.retain_or_defer_reaper_owner(ReaperOwner::new(move || cleanup_observer.complete()));
+        assert!(!observer.recovery_was_transferred());
+        let owner = observer
+            .take_deferred_recovery_owner()
+            .expect("owner should remain available for caller handoff");
+        assert_eq!(
+            owner.summary(),
+            "managed child and I/O helpers awaiting bounded reaper capacity"
+        );
+        owner.retry_cleanup().expect("deferred owner should be handed to the reaper");
+        completed
+            .recv_timeout(Duration::from_secs(3))
+            .expect("deferred owner should complete cleanup");
+        assert!(observer.is_complete());
+    }
+}
