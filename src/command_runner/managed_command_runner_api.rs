@@ -964,6 +964,29 @@ mod tests {
         assert!(matches!(error.reason(), crate::CommandErrorReason::SpawnFailed { .. }));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_sync_managed_runner_preserves_truncation_error_and_captured_output() {
+        let (_manager, executor, _) = setup();
+        let runner = CommandRunner::without_timeout()
+            .max_stdout_bytes(3)
+            .fail_on_output_truncation(true);
+
+        let error = runner
+            .run_managed(
+                &executor,
+                Command::new("sh").arg("-c").arg("printf truncate-me"),
+                Default::default(),
+            )
+            .expect_err("managed execution should preserve the configured truncation failure");
+
+        assert_eq!(error.kind(), crate::CommandErrorKind::OutputTruncated);
+        assert!(matches!(error.reason(), crate::CommandErrorReason::OutputTruncated));
+        let captured = error.captured_output().expect("truncated bytes should be retained");
+        assert_eq!(captured.stdout(), b"tru");
+        assert!(captured.stdout_truncated());
+    }
+
     #[cfg(all(feature = "async", unix))]
     mod async_tests {
         use std::future::Future;
