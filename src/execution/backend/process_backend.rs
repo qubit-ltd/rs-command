@@ -261,7 +261,7 @@ impl Backend for ProcessBackend {
             Err(error) => Err(error),
         };
         let deferred_owner = reaper_observer.take_deferred_recovery_owner();
-        let mut recovery_transferred = reaper_observer.recovery_was_transferred();
+        let recovery_transferred = reaper_observer.recovery_was_transferred();
         let late_stop = stop
             .stop_reason()
             .or_else(|| {
@@ -277,31 +277,60 @@ impl Backend for ProcessBackend {
         if let Err(error) = sink.publish_outcome(outcome) {
             log::error!("failed to publish command outcome: {error:?}");
         }
-        if let Some(owner) = deferred_owner {
-            schedule_recovery_transfer(Arc::clone(&sink), owner);
-            recovery_transferred = true;
-        }
-        if reaper_observer.is_pending() && !recovery_transferred && reaper_completion.recv().is_err() {
-            log::error!("process reaper completion channel disconnected");
-        }
-        drop(session_bridge);
-        drop(scope);
-        if recovery_transferred {
-            // T6 owns release and RecoveryRequired settlement after the retained
-            // child/helper recovery owner completes. Publishing either fact
-            // here would claim cleanup early.
-            drop(reservation);
-            return;
-        }
-        if let Err(error) = sink.confirm_input_release() {
-            log::error!("failed to publish command input release: {error:?}");
-        }
-        let report = Arc::new(released_report(operation_id));
-        if let Err(error) = sink.publish_settlement(report) {
-            log::error!("failed to publish command settlement: {error:?}");
-        }
-        drop(reservation);
+        finish_backend_tail(
+            operation_id,
+            sink,
+            reaper_observer,
+            reaper_completion,
+            deferred_owner,
+            recovery_transferred,
+            session_bridge,
+            scope,
+            reservation,
+        );
     }
+}
+
+/// Completes publication and ownership transfer after the runner returns.
+///
+/// Reaper recovery can keep backend ownership after the runner has returned.
+/// Keeping this tail in one helper makes the transfer-before-release rule
+/// explicit for both accepted and deferred reaper owners.
+fn finish_backend_tail(
+    operation_id: OperationId,
+    sink: Arc<dyn FactSink>,
+    reaper_observer: ReaperObserver,
+    reaper_completion: std::sync::mpsc::Receiver<()>,
+    deferred_owner: Option<Box<dyn RecoveryOwner>>,
+    mut recovery_transferred: bool,
+    session_bridge: Option<Arc<dyn crate::session::contracts::SessionBridge>>,
+    scope: qubit_operation::OperationScope,
+    reservation: crate::execution::contracts::Reservation,
+) {
+    if let Some(owner) = deferred_owner {
+        schedule_recovery_transfer(Arc::clone(&sink), owner);
+        recovery_transferred = true;
+    }
+    if reaper_observer.is_pending() && !recovery_transferred && reaper_completion.recv().is_err() {
+        log::error!("process reaper completion channel disconnected");
+    }
+    drop(session_bridge);
+    drop(scope);
+    if recovery_transferred {
+        // T6 owns release and RecoveryRequired settlement after the retained
+        // child/helper recovery owner completes. Publishing either fact
+        // here would claim cleanup early.
+        drop(reservation);
+        return;
+    }
+    if let Err(error) = sink.confirm_input_release() {
+        log::error!("failed to publish command input release: {error:?}");
+    }
+    let report = Arc::new(released_report(operation_id));
+    if let Err(error) = sink.publish_settlement(report) {
+        log::error!("failed to publish command settlement: {error:?}");
+    }
+    drop(reservation);
 }
 
 /// Performs the normalize tee paths step in the managed command execution
@@ -399,6 +428,8 @@ mod tests {
     use qubit_operation::TimerRegistration;
 
     #[cfg(unix)]
+    use super::finish_backend_tail;
+    #[cfg(unix)]
     use super::ProcessBackend;
     use super::normalize_tee_paths;
     use super::runner_result_outcome;
@@ -411,6 +442,10 @@ mod tests {
     use crate::CommandRunOptions;
     #[cfg(unix)]
     use crate::CommandRunner;
+    #[cfg(unix)]
+    use crate::execution::backend::ReaperObserver;
+    #[cfg(unix)]
+    use crate::execution::backend::ReaperOwner;
     #[cfg(unix)]
     use crate::execution::contracts::ActivatedRequest;
     #[cfg(unix)]
@@ -433,6 +468,8 @@ mod tests {
     use crate::execution::contracts::RequestOptions;
     #[cfg(unix)]
     use crate::execution::contracts::Reservation;
+    #[cfg(unix)]
+    use crate::execution::contracts::ReservationLease;
     #[cfg(unix)]
     use crate::execution::contracts::StopPort;
     #[cfg(unix)]
@@ -1794,6 +1831,103 @@ mod tests {
         drop(owner);
         assert!(capacity_released.load(Ordering::SeqCst));
         assert!(operation.wait_settlement().unwrap().all_released());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_deferred_reaper_owner_transfers_before_backend_release_and_settlement() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let sink = Arc::new(RecordingSink::default());
+        sink.reject_recovery_once.store(true, Ordering::SeqCst);
+        let capacity_released = Arc::new(AtomicBool::new(false));
+        let reservation_released = Arc::new(AtomicBool::new(false));
+        let operation_sink = Arc::clone(&sink);
+        let operation_capacity_released = Arc::clone(&capacity_released);
+        let operation_reservation_released = Arc::clone(&reservation_released);
+        let (cleanup_tx, cleanup_rx) = std::sync::mpsc::channel();
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    move |_| operation_reservation_released.store(true, Ordering::SeqCst),
+                    move |_| {
+                        let released = Arc::clone(&operation_capacity_released);
+                        ReservationLease::new(move || {
+                            released.store(true, Ordering::SeqCst);
+                        })
+                    },
+                );
+                let lease = reservation.retain();
+                let sink_port: Arc<dyn FactSink> = operation_sink.clone();
+                let (observer, completion) = ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink_port));
+                observer.mark_pending();
+                let cleanup_observer = observer.clone();
+                let operation_cleanup_tx = cleanup_tx.clone();
+                observer.retain_or_defer_reaper_owner(ReaperOwner::new(move || {
+                    drop(lease);
+                    cleanup_observer.complete();
+                    operation_cleanup_tx.send(()).unwrap();
+                }));
+                let deferred_owner = observer
+                    .take_deferred_recovery_owner()
+                    .expect("first recovery transfer should be rejected and deferred");
+                let transferred = observer.recovery_was_transferred();
+                assert!(!transferred);
+                operation_sink
+                    .publish_outcome(OperationOutcome::Failed(CommandError::from_reason(
+                        "backend test",
+                        CommandErrorReason::ManagedOperationFailed {
+                            diagnostic: "injected command result".into(),
+                        },
+                        None,
+                    )))
+                    .unwrap();
+
+                finish_backend_tail(
+                    operation_id,
+                    sink_port,
+                    observer,
+                    completion,
+                    Some(deferred_owner),
+                    transferred,
+                    None,
+                    scope,
+                    reservation,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        assert_eq!(sink.recovery_attempts.load(Ordering::SeqCst), 2);
+        assert!(reservation_released.load(Ordering::SeqCst));
+        assert!(!capacity_released.load(Ordering::SeqCst));
+        assert!(!sink.released.load(Ordering::SeqCst));
+        assert!(sink.settlement.lock().unwrap().is_none());
+        operation.wait_settlement().unwrap();
+
+        let owner = sink
+            .recovery_owner
+            .lock()
+            .unwrap()
+            .take()
+            .expect("retried reaper owner should stay in recovery storage");
+        assert_eq!(
+            owner.summary(),
+            "managed child and I/O helpers awaiting bounded reaper capacity"
+        );
+        assert!(!owner.is_complete());
+        owner.retry_cleanup().expect("cleanup should hand off to reaper");
+        cleanup_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(owner.is_complete());
+        drop(owner);
+        assert!(capacity_released.load(Ordering::SeqCst));
     }
 
     struct RetrySink {
