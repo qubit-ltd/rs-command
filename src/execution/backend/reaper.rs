@@ -372,6 +372,58 @@ mod tests {
     }
 
     #[test]
+    fn test_disconnected_primary_queue_falls_back_to_overflow_queue() {
+        let (sender, primary) = sync_channel(1);
+        let (overflow_sender, overflow) = sync_channel(1);
+        drop(primary);
+        let reaper = Reaper {
+            sender,
+            overflow_sender,
+        };
+        let completed = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&completed);
+
+        reaper
+            .handoff(ReaperOwner::new(move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+            }))
+            .expect("a disconnected primary queue should fall back to overflow capacity");
+        overflow
+            .try_recv()
+            .expect("fallback should retain the cleanup owner in overflow")
+            .run_inline();
+
+        assert_eq!(completed.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_full_primary_and_disconnected_overflow_return_cleanup_owner() {
+        let (sender, primary) = sync_channel(1);
+        let (overflow_sender, overflow) = sync_channel(1);
+        sender
+            .try_send(ReaperOwner::new(|| {}))
+            .expect("test primary queue should accept its blocker");
+        drop(overflow);
+        let reaper = Reaper {
+            sender,
+            overflow_sender,
+        };
+        let completed = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&completed);
+
+        let owner = reaper
+            .handoff(ReaperOwner::new(move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+            }))
+            .expect_err("when fallback is disconnected, caller must retain ownership");
+        assert_eq!(completed.load(Ordering::SeqCst), 0);
+        owner.run_inline();
+
+        assert_eq!(completed.load(Ordering::SeqCst), 1);
+        drop(primary);
+    }
+
+    #[test]
     fn test_rejected_handoff_retains_cleanup_owner_until_single_completion() {
         let (sender, primary) = sync_channel(1);
         let (overflow_sender, overflow) = sync_channel(1);
