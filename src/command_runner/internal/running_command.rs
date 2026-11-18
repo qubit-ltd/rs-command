@@ -679,7 +679,6 @@ mod tests {
     use crate::execution::contracts::ReservationLease;
     #[cfg(feature = "async")]
     use crate::session::channel::SessionChannels;
-    use crate::session::contracts::SessionBridge;
     #[cfg(feature = "async")]
     use crate::session::contracts::SessionBridge;
     #[cfg(feature = "async")]
