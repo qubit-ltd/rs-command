@@ -6,7 +6,64 @@
 
 ## Latest evidence summary / 最新证据摘要 (2026-11-17)
 
-### Implementation-stage bounded audit at SHA `e8c7e8a0fc2a4da33b85ab98d172f9aca1112fa8` (2026-11-17)
+### Current implementation audit at SHA `fcdccb7` (2026-11-18)
+
+The RC-007 through RC-011 implementation at source commit `fcdccb7` passed
+`./.infra/bin/align-ci.sh`, `./.infra/bin/style-check.sh`,
+`cargo check --workspace --all-targets`, and the final
+`./.infra/bin/ci-check.sh` (all exit 0). The CI run covered build, default and
+async tests, feature matrix, doctests, documentation examples, package
+verification, Clippy, and security audit. A standalone coverage run using
+`./.infra/bin/coverage.sh --output <external JSON path>` exited 0: functions
+95.09% (890/936), lines 95.98%, regions 96.12%. The
+repository's wrapper does not accept a positional `json` argument; `--output`
+produced the JSON report outside the worktree. No threshold was changed.
+
+The Windows-specific source comparison against the implementation baseline
+`23085b070bd42c7e77c14f22390a7df7eafae767` exited 0 for the production
+cancellation/cleanup, output, stdin, Windows probe, workflow, and identity-gate
+paths. `uname -a` and `rustc --version` confirmed Linux x86_64 and Rust
+`1.94.0`; `command -v pwsh` and `command -v powershell` both exited 1. Windows
+runtime tests and the PowerShell identity gate were not run. The updated
+session channel's `stop_output` notification wakes user-space channel waiters;
+it is not evidence about native Windows I/O cancellation or helper-join
+completion. RC-006 remains unresolved: this audit found no new production
+interleaving hypothesis and does not establish Windows safety.
+
+Validation recovery notes: an earlier CI run failed its unchanged function
+coverage threshold at 94.21% (879/933). JSON inspection identified unexercised
+poison-recovery/wakeup paths in the changed session channel and retry timer;
+targeted tests were added without changing thresholds. A subsequent coverage
+run passed at the values above. An initial concurrent `style-check.sh` and
+`cargo check --workspace --all-targets` caused the style wrapper to clean the
+check's target directory; the serialized rerun of `cargo check` exited 0. The
+final CI run after those repairs exited 0.
+
+### 当前实现核查（源码 SHA `fcdccb7`，2026-11-18）
+
+RC-007 至 RC-011 实现提交 `fcdccb7` 通过 `./.infra/bin/align-ci.sh`、
+`./.infra/bin/style-check.sh`、`cargo check --workspace --all-targets` 和最终
+`./.infra/bin/ci-check.sh`（均退出码 0）。CI 覆盖构建、默认及 async 测试、
+feature matrix、doctest、文档示例、打包、Clippy 和安全审计。独立覆盖率命令
+`./.infra/bin/coverage.sh --output <工作树外的 JSON 路径>` 退出码为 0：函数
+95.09%（890/936）、行 95.98%、区域 96.12%。仓库 wrapper
+不接受位置参数 `json`；`--output` 在工作树外生成了 JSON 报告。未调整覆盖率阈值。
+
+针对生产取消/收尾、输出、stdin、Windows 探针、workflow 和身份门禁路径，
+与实施基线 `23085b070bd42c7e77c14f22390a7df7eafae767` 执行源码比较，退出码为 0。
+`uname -a` 和 `rustc --version` 确认为 Linux x86_64、Rust `1.94.0`；
+`command -v pwsh` 与 `command -v powershell` 均退出码为 1。未运行 Windows runtime
+测试和 PowerShell 身份门禁。本轮 session channel 的 `stop_output` 通知唤醒的是
+用户态 channel 等待者，不能证明 Windows 原生 I/O 取消或 helper join 已完成。
+RC-006 仍为 unresolved：本次核查未发现新的生产可达交错假设，也不证明 Windows 安全。
+
+验证过程记录：早期 CI 曾因函数覆盖率低于原阈值失败，函数覆盖率为 94.21%
+（879/933）。检查 JSON 后，为修改过的 session channel 和 retry timer 中未覆盖的
+poison 恢复及唤醒路径补充了测试，没有修改阈值；后续覆盖率通过。初次并行运行
+`style-check.sh` 和 `cargo check --workspace --all-targets` 时，style wrapper 清理了
+check 使用的 target 目录；串行重跑 `cargo check` 退出码为 0。其后最终 CI 退出码为 0。
+
+### Previous implementation-stage bounded audit at SHA `e8c7e8a0fc2a4da33b85ab98d172f9aca1112fa8` (2026-11-17)
 
 This audit ran on Linux x86_64 with Rust `1.94.0`. A targeted `git diff --exit-code fa506a6fb75bc6bcfd3537c5be54b4cda911815e -- <production cancellation/cleanup, output, stdin, Windows probe, workflow, and identity-gate paths>` exited 0. Targeted source reads and `rg -n` searches covered `command_io.rs`, `output_collector.rs`, `stdin_pipe.rs`, `io_cancellation.rs`, `io_cancellation_token.rs`, `cancel.rs`, `windows_cancel_interleaving_tests.rs`, `windows_probe_tests.rs`, the Windows workflow, and both PowerShell identity scripts. Both `command -v pwsh` and `command -v powershell` exited 1. The Windows test filters and PowerShell gate were not run; this host has no Windows runtime.
 

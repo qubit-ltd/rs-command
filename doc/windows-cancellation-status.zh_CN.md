@@ -10,7 +10,16 @@
 
 调用方应保留主错误及其 `cleanup_failures()`，并在把保留输出视为完整内容前检查 `stdout_complete()` 和 `stderr_complete()`。必须保证硬返回期限的应用应通过独立进程边界监督 runner；runner 的 timeout 不提供该保证。
 
-## 当前实现源码有界核查（源码 SHA `e8c7e8a0fc2a4da33b85ab98d172f9aca1112fa8`，2026-11-17）
+## 当前实现源码有界核查（源码 SHA `fcdccb7`，2026-11-18）
+
+本次核查在 Linux x86_64、Rust `1.94.0` 环境进行。针对生产取消/收尾、输出、stdin、Windows 探针、workflow 和身份门禁路径执行
+`git diff --exit-code 23085b070bd42c7e77c14f22390a7df7eafae767 -- <上述路径>`，退出码为 0。源码阅读及 `rg -n` 检查覆盖 `command_io.rs`、`io_cancellation.rs`、`stdin_pipe.rs`、`output_collector.rs`，以及本轮修改的 session channel 停止与背压路径。`command -v pwsh` 和 `command -v powershell` 均退出码为 1。本 SHA 未运行 Windows runtime 测试、PowerShell 身份门禁，也未生成新的 Windows trace。
+
+生产取消控制流仍如以下历史证据所述：Windows `CancelSynchronousIo` 成功时，output-reader 或 stdin-writer join 仍可能尚未返回。output reader 在读取后、tee I/O 前检查取消状态；生产 tee 是普通文件。stdin 在每轮 readiness/write 前检查取消状态。本轮将 managed-session 字节通道改为容量背压以保留已排队字节，并在停止输出时唤醒阻塞 writer。用户态 channel 通知与 Windows 原生同步 I/O 取消相互独立，不改变 helper join 的证据。
+
+**结论：** 未发现新的生产可达交错假设。RC-006 仍为 **unresolved（未解决）**；本次源码核查既未证实也未排除生产挂起，也不证明 Windows 安全。未修改 Windows 专用代码或探针。
+
+## 前一版实现源码有界核查（源码 SHA `e8c7e8a0fc2a4da33b85ab98d172f9aca1112fa8`，2026-11-17）
 
 本次核查在 Linux x86_64、Rust `1.94.0` 环境进行。针对生产取消/收尾、输出、stdin、Windows 探针、workflow 和身份门禁路径，与评审基线 `fa506a6fb75bc6bcfd3537c5be54b4cda911815e` 执行源码比较，退出码为 0。系统未安装 `pwsh` 或 `powershell`（两条 `command -v` 均退出码为 1）。本 SHA 未运行 Windows runtime 测试、PowerShell 身份门禁，也未生成新的 Windows trace。
 

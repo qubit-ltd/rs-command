@@ -10,7 +10,32 @@ On Windows, successful `CancelSynchronousIo` means that the cancellation request
 
 Callers should preserve the primary error and its `cleanup_failures()`, then check `stdout_complete()` and `stderr_complete()` before treating retained output as complete. Applications that require a hard return deadline should supervise the runner in a separate process boundary; the runner's timeout does not provide that guarantee.
 
-## Current implementation source audit at SHA `e8c7e8a0fc2a4da33b85ab98d172f9aca1112fa8` (2026-11-17)
+## Current implementation source audit at SHA `fcdccb7` (2026-11-18)
+
+This bounded audit ran on Linux x86_64 with Rust `1.94.0`. A targeted
+`git diff --exit-code 23085b070bd42c7e77c14f22390a7df7eafae767 -- <production cancellation/cleanup, output, stdin, Windows probe, workflow, and identity-gate paths>`
+exited 0. Source reads and `rg -n` checks covered `command_io.rs`,
+`io_cancellation.rs`, `stdin_pipe.rs`, `output_collector.rs`, and the updated
+session channel stop/backpressure paths. Both `command -v pwsh` and
+`command -v powershell` exited 1. No Windows runtime test, PowerShell identity
+gate, or new Windows trace was run for this SHA.
+
+The production cancellation control flow remains as described below: Windows
+`CancelSynchronousIo` can succeed before the output-reader or stdin-writer join
+returns. The output reader checks cancellation after a read and before tee I/O;
+the production tee is a regular file. Stdin checks cancellation before each
+readiness/write cycle. This implementation changes the managed-session byte
+channel to preserve queued bytes under capacity backpressure and wake blocked
+writers when output is stopped. That user-space channel notification is
+separate from native Windows synchronous-I/O cancellation and does not change
+the evidence about helper joins.
+
+**Decision:** no new production-reachable interleaving hypothesis was found.
+RC-006 remains **unresolved**; this source audit neither confirms nor excludes
+a production hang and does not establish Windows safety. No Windows-specific
+code or probe was changed.
+
+## Previous implementation source audit at SHA `e8c7e8a0fc2a4da33b85ab98d172f9aca1112fa8` (2026-11-17)
 
 This bounded audit ran on Linux x86_64 with Rust `1.94.0`. A targeted source comparison against the review baseline `fa506a6fb75bc6bcfd3537c5be54b4cda911815e` exited 0 for the production cancellation/cleanup, output, stdin, Windows probe, workflow, and identity-gate paths. Neither `pwsh` nor `powershell` is installed (each `command -v` exited 1). No Windows runtime test, PowerShell identity gate, or new Windows trace was run for this SHA.
 
