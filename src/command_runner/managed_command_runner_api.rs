@@ -1375,14 +1375,30 @@ mod session_accessor_tests {
             "session should expose its operation by borrow"
         );
         drop(session.take_stdin().expect("stdin endpoint should be available"));
+        assert!(
+            session.take_stdin().is_none(),
+            "stdin ownership can only be transferred once"
+        );
         drop(session.take_stdout().expect("stdout endpoint should be available"));
+        assert!(
+            session.take_stdout().is_none(),
+            "stdout ownership can only be transferred once"
+        );
         drop(session.take_stderr().expect("stderr endpoint should be available"));
+        assert!(
+            session.take_stderr().is_none(),
+            "stderr ownership can only be transferred once"
+        );
         let mut operation = session
             .take_operation()
             .expect("session should transfer its operation handle");
         assert!(
             session.operation().is_none(),
             "taking the handle should clear the borrowed slot"
+        );
+        assert!(
+            session.take_operation().is_none(),
+            "operation ownership can only be transferred once"
         );
         assert!(matches!(
             operation.wait_outcome().expect("session outcome should be available"),
