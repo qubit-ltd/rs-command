@@ -786,12 +786,18 @@ mod tests {
 
     struct FailingReader {
         prefix: Cursor<Vec<u8>>,
+        would_block_once: bool,
+        fail_after_prefix: bool,
     }
 
     impl Read for FailingReader {
         fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if self.would_block_once {
+                self.would_block_once = false;
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
             let read = self.prefix.read(buffer)?;
-            if read == 0 {
+            if read == 0 && self.fail_after_prefix {
                 Err(io::Error::other("injected read failure"))
             } else {
                 Ok(read)
@@ -1178,6 +1184,8 @@ mod tests {
         let error = read_output(
             &mut FailingReader {
                 prefix: Cursor::new(b"partial".to_vec()),
+                would_block_once: false,
+                fail_after_prefix: true,
             },
             OutputCaptureOptions::new(None, None),
         )
@@ -1188,6 +1196,22 @@ mod tests {
         };
         assert_eq!(output.bytes, b"partial");
         assert!(!output.complete);
+    }
+
+    #[test]
+    fn test_output_collector_retries_would_block_without_cancellation() {
+        let output = read_output(
+            &mut FailingReader {
+                prefix: Cursor::new(b"payload".to_vec()),
+                would_block_once: true,
+                fail_after_prefix: false,
+            },
+            OutputCaptureOptions::new(None, None),
+        )
+        .expect("a temporary would-block result should retry until EOF");
+
+        assert_eq!(output.bytes, b"payload");
+        assert!(output.complete);
     }
 
     #[test]
@@ -1261,6 +1285,8 @@ mod tests {
         let error = read_output(
             &mut FailingReader {
                 prefix: Cursor::new(b"partial".to_vec()),
+                would_block_once: false,
+                fail_after_prefix: true,
             },
             options,
         )
@@ -1338,6 +1364,8 @@ mod tests {
         assert_budget_error_defers_capture_until_join(
             FailingReader {
                 prefix: Cursor::new(b"partial".to_vec()),
+                would_block_once: false,
+                fail_after_prefix: true,
             },
             None,
             "injected read failure",
@@ -1363,6 +1391,8 @@ mod tests {
         assert_budget_error_defers_capture_until_join(
             FailingReader {
                 prefix: Cursor::new(b"partial".to_vec()),
+                would_block_once: false,
+                fail_after_prefix: true,
             },
             Some(OutputTee::new(
                 Box::new(FailingWriter { fail_write: true }),
