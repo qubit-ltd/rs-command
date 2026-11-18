@@ -127,4 +127,43 @@ mod tests {
 
         assert_eq!(slot.wait().id(), expected_id);
     }
+
+    #[test]
+    fn test_wait_recovers_poisoned_mutex_after_condvar_wait() {
+        let slot = Arc::new(OperationObserverSlot::default());
+        let waiter_slot = Arc::clone(&slot);
+        let (started_tx, started_rx) = mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            waiter_slot.wait().id()
+        });
+        started_rx.recv().unwrap();
+
+        // Observe the waiter holding the mutex, then acquire it only after the
+        // Condvar wait releases it. This makes poisoning happen while the
+        // waiter is parked in `Condvar::wait`, without timing sleeps.
+        let mut saw_waiter_lock = false;
+        loop {
+            match slot.observer.try_lock() {
+                Ok(observer) if saw_waiter_lock => {
+                    drop(observer);
+                    break;
+                }
+                Ok(observer) => drop(observer),
+                Err(std::sync::TryLockError::WouldBlock) => saw_waiter_lock = true,
+                Err(std::sync::TryLockError::Poisoned(_)) => panic!("observer lock poisoned too early"),
+            }
+            std::thread::yield_now();
+        }
+
+        let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _observer = slot.observer.try_lock().expect("waiter released observer mutex");
+            panic!("poison observer mutex while waiter is on its condition variable");
+        }));
+        assert!(poison.is_err());
+
+        let (observer, expected_id) = completed_observer();
+        slot.set(observer);
+        assert_eq!(waiter.join().unwrap(), expected_id);
+    }
 }
