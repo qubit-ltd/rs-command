@@ -951,4 +951,41 @@ mod tests {
             .into_cleanup_failures();
         assert_eq!(cleanup_labels(&no_helper), ["time"]);
     }
+
+    #[test]
+    fn test_finalization_keeps_primary_and_output_while_appending_cleanup_in_order() {
+        let primary_capture = CommandCapturedOutput::new(
+            (b"primary".to_vec(), false, true),
+            (Vec::new(), false, true),
+        );
+        let primary = CommandError::from_reason(
+            "<redacted command>",
+            CommandErrorReason::Cancelled,
+            None,
+        )
+        .with_captured_output(primary_capture);
+        let finalization = CommandError::from_reason(
+            "<redacted command>",
+            CommandErrorReason::ReadOutputFailed {
+                stream: OutputStream::Stdout,
+                source: io::Error::other("final read"),
+            },
+            Some(Box::new(output(5, b"final", b"err"))),
+        )
+        .with_cleanup_failures([CommandCleanupFailure::Stdin {
+            source: io::Error::other("stdin cleanup"),
+        }]);
+
+        let mut error = primary.with_finalization_error(finalization);
+        assert!(matches!(error.reason(), CommandErrorReason::Cancelled));
+        assert_eq!(error.captured_output().unwrap().stdout(), b"primary");
+        assert_eq!(cleanup_labels(error.cleanup_failures()), ["stdout-read", "stdin"]);
+        match &error.cleanup_failures()[0] {
+            CommandCleanupFailure::StdoutRead { source } => assert_eq!(source.to_string(), "final read"),
+            _ => panic!("finalization read error should remain available as cleanup evidence"),
+        }
+        let moved = error.take_captured_output().unwrap();
+        assert_eq!(moved.stdout(), b"primary");
+        assert!(error.take_captured_output().is_none());
+    }
 }
