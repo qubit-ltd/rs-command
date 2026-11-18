@@ -1071,6 +1071,34 @@ mod activation_failure_tests {
     }
 
     #[test]
+    fn test_abandon_after_restore_releases_reservation_once_and_preserves_request() {
+        let releases = Arc::new(AtomicUsize::new(0));
+        let scheduler: Arc<dyn Scheduler> = Arc::new(ReleaseTrackingInlineScheduler(Arc::clone(&releases)));
+        let permit = scheduler.try_reserve(0).unwrap();
+        let process_backend = Arc::new(ProcessBackend::new());
+        let mut prepared_request = request();
+        prepared_request.command = Command::new("true");
+        let state = Arc::new(AdapterState::new(
+            prepared_request,
+            permit,
+            Arc::clone(&scheduler),
+            process_backend.clone(),
+            process_backend,
+            super::super::cleanup::start_recovery_worker(1).unwrap(),
+            None,
+        ));
+
+        let restored = state.restore().expect("prepared request should transfer to caller");
+        state.clone().abandon();
+        state.clone().abandon();
+
+        assert_eq!(releases.load(Ordering::SeqCst), 1, "abandon should release the retained reservation once");
+        assert!(state.restore().is_none(), "restored request must not reappear in adapter state");
+        let output = restored.runner.run(restored.command).unwrap();
+        assert!(output.exit_status().success(), "restored request remains usable after abandon");
+    }
+
+    #[test]
     fn test_fact_sink_rejects_duplicate_and_mismatched_publications() {
         let scheduler = scheduler();
         let permit = scheduler.try_reserve(0).unwrap();
