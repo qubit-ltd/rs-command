@@ -853,6 +853,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_scoped_sync_managed_runner_maps_wrong_manager_rejection_for_both_request_kinds() {
+        let (manager, _executor, runner) = setup();
+        let other_manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let wrong_executor =
+            CommandExecutor::new(other_manager, CommandExecutionConfig::default()).expect("executor should start");
+
+        let outcome = manager
+            .run(qubit_operation::OperationOptions::default(), move |scope| {
+                let ordinary = runner
+                    .run_managed_in(
+                        &scope,
+                        &wrong_executor,
+                        Command::new("__must_not_run_for_wrong_managed_manager__"),
+                        Default::default(),
+                    )
+                    .expect_err("wrong manager should reject a scoped managed request");
+                let resources = runner
+                    .run_managed_resources_in(
+                        &scope,
+                        &wrong_executor,
+                        Command::new("__must_not_run_for_wrong_managed_manager__"),
+                        CommandResourceRunOptions::new(),
+                    )
+                    .expect_err("wrong manager should reject a scoped resource request");
+
+                for error in [ordinary, resources] {
+                    assert_eq!(error.kind(), crate::CommandErrorKind::ManagedOperationFailed);
+                    assert!(matches!(
+                        error.reason(),
+                        crate::CommandErrorReason::ManagedOperationFailed { diagnostic }
+                            if diagnostic == "submission rejected: GroupBinding(WrongManager)"
+                    ));
+                    assert!(error.output().is_none());
+                }
+                Ok::<_, std::convert::Infallible>(())
+            })
+            .expect("parent operation should complete");
+        assert!(matches!(outcome, OperationOutcome::Succeeded(())));
+    }
+
     fn setup() -> (OperationManager, CommandExecutor, CommandRunner) {
         let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
         let executor =
