@@ -1265,6 +1265,52 @@ mod activation_failure_tests {
     }
 
     #[test]
+    fn test_full_recovery_store_returns_new_owner_without_displacing_accepted_owner() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let (recovery, receiver) = std::sync::mpsc::sync_channel::<super::super::RecoveryItem>(1);
+        let backend = Arc::new(ProcessBackend::new());
+        let state = AdapterState::new(request(), permit, scheduler, backend.clone(), backend, recovery, None);
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let id = operation.id();
+        let _ = operation.wait_outcome().unwrap();
+        operation.wait_settlement().unwrap();
+        state.bind(id).unwrap();
+
+        let cleanup_finished = Arc::new(AtomicBool::new(false));
+        crate::execution::contracts::FactSink::retain_recovery_owner(
+            &state,
+            Box::new(CompleteRecoveryOwner(Arc::clone(&cleanup_finished))),
+        )
+        .expect("the first owner should occupy the recovery slot");
+
+        let rejected_owner_dropped = Arc::new(AtomicBool::new(false));
+        let failure = crate::execution::contracts::FactSink::retain_recovery_owner(
+            &state,
+            Box::new(DropObservedRecoveryOwner(Arc::clone(&rejected_owner_dropped))),
+        )
+        .expect_err("a full recovery slot must return the new owner");
+        assert_eq!(
+            failure.reason,
+            crate::execution::contracts::RecoveryPublishError::CapacityExceeded
+        );
+        assert!(!rejected_owner_dropped.load(Ordering::SeqCst));
+        assert_eq!(failure.owner.summary(), "test recovery owner");
+        drop(failure);
+        assert!(rejected_owner_dropped.load(Ordering::SeqCst));
+
+        let item = receiver.try_recv().expect("the accepted owner should remain queued");
+        assert_eq!(item.id, id);
+        assert_eq!(item.owner.summary(), "completed test recovery owner");
+        item.owner.retry_cleanup().unwrap();
+        assert!(item.owner.is_complete());
+        assert!(cleanup_finished.load(Ordering::SeqCst));
+    }
+
+    #[test]
     fn test_bound_adapter_hands_recovery_owner_to_worker_and_publishes_settlement() {
         let scheduler = scheduler();
         let permit = scheduler.try_reserve(0).unwrap();
