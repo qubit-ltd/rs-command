@@ -1269,16 +1269,24 @@ mod tests {
             let (_manager, executor, runner) = setup();
             let directory = tempfile::tempdir().expect("readiness directory should be created");
             let ready = directory.path().join("child-ready");
+            let tee = directory.path().join("captured-stdout");
             let script = format!("printf partial; touch {}; exec sleep 30", ready.display());
             let operation = executor
-                .submit_async(runner, Command::new("sh").arg("-c").arg(&script), Default::default())
+                .submit_async(
+                    runner,
+                    Command::new("sh").arg("-c").arg(&script),
+                    crate::CommandRunOptions::new().tee_stdout_to_file(&tee),
+                )
                 .expect("async command should be admitted");
 
             let deadline = Instant::now() + Duration::from_secs(5);
-            while !ready.exists() && Instant::now() < deadline {
+            while (!ready.exists() || std::fs::read(&tee).ok().as_deref() != Some(b"partial"))
+                && Instant::now() < deadline
+            {
                 std::thread::sleep(Duration::from_millis(5));
             }
             assert!(ready.exists(), "child should signal readiness before stop is requested");
+            assert_eq!(std::fs::read(&tee).expect("stdout tee should be readable"), b"partial");
             assert_eq!(
                 operation.request_stop(qubit_operation::StopReason::UserCancelled),
                 qubit_operation::StopRequestStatus::Accepted
