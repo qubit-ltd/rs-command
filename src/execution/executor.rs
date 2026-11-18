@@ -3092,6 +3092,136 @@ mod command_executor_api_tests {
 
     #[cfg(unix)]
     #[test]
+    fn test_sync_trait_submission_entry_points_return_closed_capacity_and_owned_input() {
+        use std::io::Read;
+        use std::io::Seek;
+        use std::io::Write;
+
+        use super::CapacityFailure;
+        use super::CommandSubmitFailureReason;
+        use crate::execution::contracts::Scheduler;
+
+        fn rejected<T, E>(result: Result<T, E>, message: &str) -> E {
+            match result {
+                Err(error) => error,
+                Ok(_) => panic!("{message}"),
+            }
+        }
+
+        fn resource_input(failure: crate::execution::CommandResourceSubmitFailure, expected: &[u8]) {
+            assert_eq!(
+                failure.reason,
+                CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
+            );
+            let mut input = failure
+                .options
+                .configured_stdin()
+                .expect("closed admission must return stdin ownership")
+                .try_clone()
+                .unwrap();
+            input.rewind().unwrap();
+            let mut bytes = Vec::new();
+            input.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, expected);
+        }
+
+        let (manager, executor, runner) = setup();
+        executor.scheduler.close_admission();
+
+        let root = rejected(<CommandExecutor as CommandExecutorApi>::submit(
+            &executor,
+            runner.clone(),
+            Command::new("must-not-run-root-submit"),
+            Default::default(),
+        ), "closed root submit must return its capacity error");
+        assert_eq!(root.reason, CommandSubmitFailureReason::Capacity(CapacityFailure::Closed));
+
+        let mut input = tempfile::tempfile().unwrap();
+        input.write_all(b"root resource").unwrap();
+        input.rewind().unwrap();
+        let root_resources = rejected(<CommandExecutor as CommandExecutorApi>::submit_resources(
+            &executor,
+            runner.clone(),
+            Command::new("must-not-run-root-resource-submit"),
+            CommandResourceRunOptions::new().stdin_file(input),
+        ), "closed root resource submit must return its capacity error");
+        resource_input(root_resources, b"root resource");
+
+        let root_wait = rejected(<CommandExecutor as CommandExecutorApi>::submit_wait_blocking(
+            &executor,
+            runner.clone(),
+            Command::new("must-not-run-root-wait"),
+            Default::default(),
+        ), "closed root wait must return without waiting");
+        assert_eq!(root_wait.reason, CommandSubmitFailureReason::Capacity(CapacityFailure::Closed));
+
+        let mut input = tempfile::tempfile().unwrap();
+        input.write_all(b"root wait resource").unwrap();
+        input.rewind().unwrap();
+        let root_wait_resources = rejected(<CommandExecutor as CommandExecutorApi>::submit_wait_resources_blocking(
+            &executor,
+            runner.clone(),
+            Command::new("must-not-run-root-resource-wait"),
+            CommandResourceRunOptions::new().stdin_file(input),
+        ), "closed root resource wait must return ownership without waiting");
+        resource_input(root_wait_resources, b"root wait resource");
+
+        let scoped_executor = executor.clone();
+        let scoped_result = manager
+            .run(qubit_operation::OperationOptions::default(), move |scope| {
+                let scoped = rejected(<CommandExecutor as CommandExecutorApi>::submit_in(
+                    &scoped_executor,
+                    &scope,
+                    runner.clone(),
+                    Command::new("must-not-run-scoped-submit"),
+                    Default::default(),
+                ), "closed scoped submit must return its capacity error");
+                assert_eq!(scoped.reason, CommandSubmitFailureReason::Capacity(CapacityFailure::Closed));
+
+                let mut input = tempfile::tempfile().unwrap();
+                input.write_all(b"scoped resource").unwrap();
+                input.rewind().unwrap();
+                let scoped_resources = rejected(<CommandExecutor as CommandExecutorApi>::submit_resources_in(
+                    &scoped_executor,
+                    &scope,
+                    runner.clone(),
+                    Command::new("must-not-run-scoped-resource-submit"),
+                    CommandResourceRunOptions::new().stdin_file(input),
+                ), "closed scoped resource submit must return its capacity error");
+                resource_input(scoped_resources, b"scoped resource");
+
+                let scoped_wait = rejected(<CommandExecutor as CommandExecutorApi>::submit_wait_blocking_in(
+                    &scoped_executor,
+                    &scope,
+                    runner.clone(),
+                    Command::new("must-not-run-scoped-wait"),
+                    Default::default(),
+                ), "closed scoped wait must return without waiting");
+                assert_eq!(scoped_wait.reason, CommandSubmitFailureReason::Capacity(CapacityFailure::Closed));
+
+                let mut input = tempfile::tempfile().unwrap();
+                input.write_all(b"scoped wait resource").unwrap();
+                input.rewind().unwrap();
+                let scoped_wait_resources = rejected(
+                    <CommandExecutor as CommandExecutorApi>::submit_wait_resources_blocking_in(
+                        &scoped_executor,
+                        &scope,
+                        runner,
+                        Command::new("must-not-run-scoped-resource-wait"),
+                        CommandResourceRunOptions::new().stdin_file(input),
+                    ),
+                    "closed scoped resource wait must return ownership without waiting",
+                );
+                resource_input(scoped_wait_resources, b"scoped wait resource");
+                Ok::<_, crate::CommandError>(())
+            })
+            .unwrap();
+        assert!(matches!(scoped_result, OperationOutcome::Succeeded(())));
+        assert_eq!(executor.scheduler_snapshot().waiters, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_blocking_resource_wait_rejects_over_budget_input_and_returns_file() {
         use std::io::Read;
         use std::io::Seek;
@@ -3617,6 +3747,86 @@ mod command_executor_api_tests {
                 assert!(!resource_marker.exists());
                 assert_eq!(executor.scheduler_snapshot().active, 0);
                 assert_eq!(executor.scheduler_snapshot().queued, 0);
+                assert_eq!(executor.scheduler_snapshot().waiters, 0);
+            });
+        }
+
+        #[test]
+        fn test_session_admission_failure_maps_standard_and_resource_errors() {
+            block_on(async {
+                use crate::CommandErrorKind;
+                use crate::execution::contracts::Scheduler;
+
+                let (manager, executor, runner) = setup();
+                executor.scheduler.close_admission();
+
+                let standard = match executor.start_session_managed(
+                    runner.clone(),
+                    Command::new("must-not-start-standard-session"),
+                    Default::default(),
+                ) {
+                    Err(error) => error,
+                    Ok(_) => panic!("closed scheduler must reject standard session admission"),
+                };
+                assert_eq!(standard.kind(), CommandErrorKind::ManagedOperationFailed);
+                assert!(matches!(
+                    standard.reason(),
+                    crate::CommandErrorReason::ManagedOperationFailed { diagnostic }
+                        if diagnostic.starts_with("managed session admission failed:")
+                ));
+
+                let resource = match executor.start_session_resources_managed(
+                    runner.clone(),
+                    Command::new("must-not-start-resource-session"),
+                    CommandResourceRunOptions::new(),
+                ) {
+                    Err(error) => error,
+                    Ok(_) => panic!("closed scheduler must reject resource session admission"),
+                };
+                assert_eq!(resource.kind(), CommandErrorKind::ManagedOperationFailed);
+                assert!(matches!(
+                    resource.reason(),
+                    crate::CommandErrorReason::ManagedOperationFailed { diagnostic }
+                        if diagnostic.starts_with("managed resource session admission failed:")
+                ));
+
+                let scoped_executor = executor.clone();
+                let scoped = manager
+                    .run(Default::default(), move |scope| {
+                        let standard = match scoped_executor.start_session_managed_in(
+                            &scope,
+                            runner.clone(),
+                            Command::new("must-not-start-scoped-standard-session"),
+                            Default::default(),
+                        ) {
+                            Err(error) => error,
+                            Ok(_) => panic!("closed scheduler must reject scoped standard session"),
+                        };
+                        assert!(matches!(
+                            standard.reason(),
+                            crate::CommandErrorReason::ManagedOperationFailed { diagnostic }
+                                if diagnostic.starts_with("managed session admission failed:")
+                        ));
+
+                        let resource = match scoped_executor.start_session_resources_managed_in(
+                            &scope,
+                            runner,
+                            Command::new("must-not-start-scoped-resource-session"),
+                            CommandResourceRunOptions::new(),
+                        ) {
+                            Err(error) => error,
+                            Ok(_) => panic!("closed scheduler must reject scoped resource session"),
+                        };
+                        assert!(matches!(
+                            resource.reason(),
+                            crate::CommandErrorReason::ManagedOperationFailed { diagnostic }
+                                if diagnostic.starts_with("managed resource session admission failed:")
+                        ));
+                        Ok::<_, crate::CommandError>(())
+                    })
+                    .unwrap();
+                assert!(matches!(scoped, OperationOutcome::Succeeded(())));
+                assert_eq!(executor.scheduler_snapshot().active, 0);
                 assert_eq!(executor.scheduler_snapshot().waiters, 0);
             });
         }
