@@ -1543,6 +1543,15 @@ mod tests {
         let sink = Arc::new(RecordingSink::default());
         let operation_backend = Arc::clone(&backend);
         let operation_sink = Arc::clone(&sink);
+        let domain = ClockDomainId::new_unique();
+        // The clock is at tick 1 while the deadline is at tick 2. This drives
+        // the backend's late-stop check with a live, unexpired context.
+        let deadline = OperationContext::new(ContextOptions {
+            clock: Some(Arc::new(ExpiredClock(domain))),
+            deadline: Some(Deadline::at(MonotonicTime::new(domain, 2))),
+            budget: None,
+        })
+        .unwrap();
 
         let mut operation = manager
             .try_submit(OperationOptions::default(), move |scope| {
@@ -1557,7 +1566,7 @@ mod tests {
                         environment: Vec::new(),
                     },
                     io_paths: IoPathSnapshot::default(),
-                    deadline: None,
+                    deadline: Some(deadline),
                 };
                 let reservation = Reservation::new(
                     1,
