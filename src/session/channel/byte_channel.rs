@@ -1381,6 +1381,26 @@ mod tests {
     }
 
     #[test]
+    fn test_stop_output_discards_unbudgeted_later_writes_and_retains_queued_bytes() {
+        let channel = ByteChannel::new();
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        let mut output = [0; 8];
+
+        channel.blocking_write(b"keep").unwrap();
+        channel.stop_output();
+
+        channel.blocking_write(b"discard").unwrap();
+        assert!(matches!(
+            channel.poll_write(&mut context, b"also discard"),
+            std::task::Poll::Ready(Ok(12))
+        ));
+        assert!(channel.incomplete());
+        assert_eq!(channel.blocking_read(&mut output).unwrap(), 4);
+        assert_eq!(&output[..4], b"keep");
+        assert_eq!(channel.blocking_read(&mut output).unwrap(), 0);
+    }
+
+    #[test]
     fn test_exceeded_budget_counts_all_later_async_output_without_buffering() {
         let budget = Arc::new(OutputBudget::new(2));
         let channel = ByteChannel::with_policy(SessionStreamPolicy::TerminateAfterBytes(2), Some(budget.clone()));
