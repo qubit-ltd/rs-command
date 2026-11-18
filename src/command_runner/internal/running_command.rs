@@ -1412,6 +1412,40 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn test_output_budget_stop_terminates_child_and_retains_captured_output() {
+        let io = CommandIo::new(
+            completed_reader(Ok(CapturedOutput {
+                bytes: b"ab".to_vec(),
+                truncated: false,
+                complete: true,
+            })),
+            successful_reader(),
+            None,
+        );
+        let result = running_with_budget(
+            terminating_child(status(0)),
+            io,
+            exceeded_total_budget(),
+        )
+        .wait_for_completion(None);
+
+        let error = expect_error(result, "an exceeded output budget should stop the command");
+        assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::OutputLimitExceeded {
+                limit: 1,
+                observed: 2,
+            }
+        ));
+        let captured = error
+            .captured_output()
+            .expect("output collected during cleanup should remain attached to the error");
+        assert_eq!(captured.stdout(), b"ab");
+        assert!(captured.stdout_complete());
+    }
+
     #[cfg(feature = "async")]
     #[test]
     fn test_session_output_budget_stops_child_and_post_exit_io_monitoring() {
