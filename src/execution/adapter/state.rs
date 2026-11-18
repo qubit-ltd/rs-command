@@ -986,7 +986,27 @@ mod activation_failure_tests {
     fn test_abandon_prepared_adapter_releases_inputs_and_scheduler_capacity() {
         let scheduler = scheduler();
         let permit = scheduler.try_reserve(0).unwrap();
-        let state = make_state(Arc::clone(&scheduler), permit);
+        struct MustNotRunBackend;
+        impl crate::execution::contracts::Backend for MustNotRunBackend {
+            fn run(
+                &self,
+                _activated: crate::execution::ActivatedRequest,
+                _sink: Arc<dyn crate::execution::contracts::FactSink>,
+            ) {
+                panic!("abandoned prepared input must not reach the backend");
+            }
+        }
+
+        let process_backend = Arc::new(ProcessBackend::new());
+        let state = Arc::new(AdapterState::new(
+            request(),
+            permit,
+            scheduler.clone(),
+            Arc::new(MustNotRunBackend),
+            process_backend.clone(),
+            super::super::cleanup::start_recovery_worker(1).unwrap(),
+            None,
+        ));
         let state_for_operation = Arc::clone(&state);
         let manager = OperationManager::new(Default::default()).unwrap();
         let mut handle = manager
@@ -1005,9 +1025,12 @@ mod activation_failure_tests {
         handle.wait_settlement().unwrap();
         assert!(state.restore().is_none(), "abandoned request must not be restorable");
         let snapshot = OperationControl::snapshot(&*state);
+        assert_eq!(snapshot.operation_id, handle.id());
         assert!(snapshot.input_released);
         assert_eq!(snapshot.execution, qubit_operation::ExecutionPhase::Queued);
-        assert!(snapshot.settlement.is_some());
+        let settlement = snapshot.settlement.expect("abandonment should publish settlement");
+        assert_eq!(settlement.operation_id, handle.id());
+        assert_eq!(settlement.status, qubit_operation::SettlementStatus::Released);
         assert!(
             scheduler.try_reserve(0).is_ok(),
             "abandon should return the reservation"
