@@ -1981,7 +1981,10 @@ mod snapshot_failure_tests {
                 Ok::<_, crate::CommandError>(())
             })
             .expect("snapshot rejections should not fail the parent operation");
-        assert!(matches!(scoped_result, qubit_operation::OperationOutcome::Succeeded(())));
+        assert!(matches!(
+            scoped_result,
+            qubit_operation::OperationOutcome::Succeeded(())
+        ));
 
         #[cfg(feature = "async")]
         {
