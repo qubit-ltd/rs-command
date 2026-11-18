@@ -1053,6 +1053,45 @@ mod activation_failure_tests {
     }
 
     #[test]
+    fn test_activation_recovers_poisoned_inputs_and_runs_prepared_request() {
+        let scheduler: Arc<dyn Scheduler> = Arc::new(InlineScheduler);
+        let permit = scheduler.try_reserve(0).unwrap();
+        let process_backend = Arc::new(ProcessBackend::new());
+        let mut command_request = request();
+        command_request.command = Command::new("true");
+        let state = Arc::new(AdapterState::new(
+            command_request,
+            permit,
+            scheduler,
+            Arc::new(ExecutingBackend),
+            process_backend.clone(),
+            super::super::cleanup::start_recovery_worker(1).unwrap(),
+            None,
+        ));
+        let poisoned_state = Arc::clone(&state);
+        let poisoner = std::thread::spawn(move || {
+            let _owned = poisoned_state.owned.lock().unwrap();
+            panic!("poison prepared inputs before activation");
+        });
+        assert!(poisoner.join().is_err());
+
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit_external(OperationOptions::default(), Arc::clone(&state))
+            .unwrap();
+        let operation_id = operation.id();
+        let output = match operation.wait_outcome().unwrap() {
+            OperationOutcome::Succeeded(output) => output,
+            other => panic!("activation should recover and execute prepared input: {other:?}"),
+        };
+        assert!(output.exit_status().success());
+        let settlement = operation.wait_settlement().unwrap();
+        assert_eq!(settlement.operation_id, operation_id);
+        assert_eq!(settlement.status, qubit_operation::SettlementStatus::Released);
+        assert!(state.restore().is_none(), "activation transfers the request to the backend");
+    }
+
+    #[test]
     fn test_abandon_after_activation_does_not_release_resources_twice() {
         let releases = Arc::new(AtomicUsize::new(0));
         let scheduler = Arc::new(ReleaseTrackingInlineScheduler(Arc::clone(&releases)));
