@@ -1071,42 +1071,43 @@ mod tests {
             let wrong_executor =
                 CommandExecutor::new(other_manager, CommandExecutionConfig::default()).expect("executor should start");
 
-            let outcome = block_on(manager.as_async().run(
-                OperationOptions::default(),
-                move |scope| async move {
-                    let ordinary = runner
-                        .start_session_in(
-                            &scope,
-                            &wrong_executor,
-                            Command::new("__must_not_start_for_wrong_session_manager__"),
-                            Default::default(),
-                        )
-                        .await
-                        .err()
-                        .expect("wrong manager should reject a scoped session");
-                    let resources = runner
-                        .start_session_resources_in(
-                            &scope,
-                            &wrong_executor,
-                            Command::new("__must_not_start_for_wrong_session_manager__"),
-                            CommandResourceRunOptions::new(),
-                        )
-                        .await
-                        .err()
-                        .expect("wrong manager should reject a scoped resource session");
+            let outcome = block_on(
+                manager
+                    .as_async()
+                    .run(OperationOptions::default(), move |scope| async move {
+                        let ordinary = runner
+                            .start_session_in(
+                                &scope,
+                                &wrong_executor,
+                                Command::new("__must_not_start_for_wrong_session_manager__"),
+                                Default::default(),
+                            )
+                            .await
+                            .err()
+                            .expect("wrong manager should reject a scoped session");
+                        let resources = runner
+                            .start_session_resources_in(
+                                &scope,
+                                &wrong_executor,
+                                Command::new("__must_not_start_for_wrong_session_manager__"),
+                                CommandResourceRunOptions::new(),
+                            )
+                            .await
+                            .err()
+                            .expect("wrong manager should reject a scoped resource session");
 
-                    for error in [ordinary, resources] {
-                        assert_eq!(error.kind(), CommandErrorKind::ManagedOperationFailed);
-                        assert!(matches!(
-                            error.reason(),
-                            CommandErrorReason::ManagedOperationFailed { diagnostic }
-                                if diagnostic.starts_with("group binding failed:")
-                        ));
-                        assert!(error.output().is_none());
-                    }
-                    Ok::<_, std::convert::Infallible>(())
-                },
-            ))
+                        for error in [ordinary, resources] {
+                            assert_eq!(error.kind(), CommandErrorKind::ManagedOperationFailed);
+                            assert!(matches!(
+                                error.reason(),
+                                CommandErrorReason::ManagedOperationFailed { diagnostic }
+                                    if diagnostic.starts_with("group binding failed:")
+                            ));
+                            assert!(error.output().is_none());
+                        }
+                        Ok::<_, std::convert::Infallible>(())
+                    }),
+            )
             .expect("parent operation should complete");
             assert!(matches!(outcome, OperationOutcome::Succeeded(())));
         }
