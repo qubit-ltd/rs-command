@@ -1359,7 +1359,9 @@ mod tests {
         let operation_reservation_released = Arc::clone(&reservation_released);
         let operation_lease_created = Arc::clone(&lease_created);
         let directory = tempfile::tempdir().unwrap();
-        let marker = directory.path().join("must-not-start-after-deadline-publication-errors");
+        let marker = directory
+            .path()
+            .join("must-not-start-after-deadline-publication-errors");
         let operation_marker = marker.clone();
         let domain = ClockDomainId::new_unique();
         let clock_calls = Arc::new(AtomicUsize::new(0));

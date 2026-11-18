@@ -785,21 +785,12 @@ mod tests {
             .timer(timer);
 
         assert_eq!(configured.configured_timeout(), Some(timeout));
-        assert_eq!(
-            configured.configured_timer().clock().now().domain(),
-            timer_domain
-        );
-        assert_eq!(
-            configured.configured_working_directory(),
-            Some(directory.as_path())
-        );
+        assert_eq!(configured.configured_timer().clock().now().domain(), timer_domain);
+        assert_eq!(configured.configured_working_directory(), Some(directory.as_path()));
         assert_eq!(configured.configured_success_exit_codes(), &[0, 7]);
         assert!(configured.is_logging_disabled());
         assert!(!configured.is_output_truncation_failure_enabled());
-        assert_eq!(
-            configured.configured_diagnostic_redaction_policy(),
-            &redaction
-        );
+        assert_eq!(configured.configured_diagnostic_redaction_policy(), &redaction);
         assert_eq!(configured.configured_max_stdout_bytes(), Some(4));
         assert_eq!(configured.configured_max_stderr_bytes(), Some(4));
         assert_eq!(configured.configured_max_total_output_bytes(), Some(9));
@@ -815,10 +806,7 @@ mod tests {
         assert_eq!(reset.configured_max_stderr_bytes(), None);
         assert_eq!(reset.configured_max_total_output_bytes(), None);
         assert!(!reset.is_output_truncation_failure_enabled());
-        assert_eq!(
-            CommandRunner::new(timeout).configured_timeout(),
-            Some(timeout)
-        );
+        assert_eq!(CommandRunner::new(timeout).configured_timeout(), Some(timeout));
         assert_eq!(CommandRunner::without_timeout().configured_timeout(), None);
     }
 
