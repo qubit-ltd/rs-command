@@ -2826,6 +2826,61 @@ mod retry_wait_tests {
     }
 
     #[test]
+    fn test_capacity_wait_stop_and_deadline_win_simultaneous_capacity_release() {
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig {
+            max_active: 1,
+            max_queued: 0,
+            max_waiters: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let reservation = scheduler.try_reserve(0).unwrap();
+        let context = OperationContext::new(ContextOptions::default()).unwrap();
+        let mut wait = Box::pin(wait_capacity_async(scheduler.clone(), 0, Some(context.clone())));
+        let mut cx = Context::from_waker(Waker::noop());
+
+        assert!(wait.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        assert!(context.request_stop(StopReason::UserCancelled));
+        drop(reservation);
+
+        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(false)));
+        assert_eq!(scheduler.snapshot().waiters, 0);
+        assert_eq!(scheduler.snapshot().active, 0);
+
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig {
+            max_active: 1,
+            max_queued: 0,
+            max_waiters: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let reservation = scheduler.try_reserve(0).unwrap();
+        let clock = Arc::new(ManualClock {
+            domain: ClockDomainId::new_unique(),
+            ticks: AtomicU64::new(0),
+        });
+        let source: Arc<dyn ClockSource> = clock.clone();
+        let context = OperationContext::new(ContextOptions {
+            clock: Some(source),
+            deadline: Some(Deadline::at(MonotonicTime::new(clock.domain, 5))),
+            budget: None,
+        })
+        .unwrap();
+        let mut wait = Box::pin(wait_capacity_async(scheduler.clone(), 0, Some(context.clone())));
+
+        assert!(wait.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        clock.ticks.store(5, Ordering::SeqCst);
+        drop(reservation);
+
+        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(false)));
+        assert_eq!(scheduler.snapshot().waiters, 0);
+        assert_eq!(scheduler.snapshot().active, 0);
+        assert_eq!(context.stop_reason(), Some(StopReason::Timeout));
+    }
+
+    #[test]
     fn test_capacity_wait_rejects_closed_scheduler_and_expired_context() {
         let scheduler = BoundedScheduler::new(CommandExecutionConfig {
             max_active: 1,
