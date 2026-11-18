@@ -765,6 +765,44 @@ mod tests {
     }
 
     #[test]
+    fn test_closing_admission_rejects_and_unregisters_all_blocked_waiters() {
+        let waiter_count = 3;
+        let scheduler = BoundedScheduler::new(config(0, waiter_count)).unwrap();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let mut threads = Vec::new();
+
+        for _ in 0..waiter_count {
+            let waiting = scheduler.clone();
+            let done = done_tx.clone();
+            threads.push(std::thread::spawn(move || {
+                done.send(waiting.wait_for_capacity(0, None)).unwrap();
+            }));
+        }
+        drop(done_tx);
+
+        let registration_deadline = Instant::now() + Duration::from_secs(2);
+        while scheduler.snapshot().waiters != waiter_count && Instant::now() < registration_deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(scheduler.snapshot().waiters, waiter_count);
+
+        scheduler.close_admission();
+        for _ in 0..waiter_count {
+            assert!(!done_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("closing admission should wake every capacity waiter"));
+        }
+        for thread in threads {
+            thread.join().expect("capacity waiter should exit after close");
+        }
+        assert_eq!(scheduler.snapshot().waiters, 0);
+        assert_eq!(scheduler.snapshot().active, 1);
+        drop(permit);
+        assert_eq!(scheduler.snapshot().active, 0);
+    }
+
+    #[test]
     fn test_queued_reservation_promotes_then_releases_capacity_and_bytes() {
         let scheduler = BoundedScheduler::new(config(1, 1)).unwrap();
         let active = scheduler.try_reserve(5).unwrap();
