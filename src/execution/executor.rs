@@ -2587,6 +2587,33 @@ mod retry_wait_tests {
     }
 
     #[test]
+    fn test_capacity_wait_retries_after_reservation_release() {
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig {
+            max_active: 1,
+            max_queued: 0,
+            max_waiters: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let reservation = scheduler.try_reserve(0).unwrap();
+        let mut wait = Box::pin(wait_capacity_async(scheduler.clone(), 0, None));
+        let mut cx = Context::from_waker(Waker::noop());
+
+        assert!(wait.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        drop(reservation);
+
+        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(true)));
+        assert_eq!(scheduler.snapshot().waiters, 0);
+        let retried = scheduler
+            .try_reserve(0)
+            .expect("released capacity should admit the waiting request");
+        assert_eq!(scheduler.snapshot().active, 1);
+        drop(retried);
+        assert_eq!(scheduler.snapshot().active, 0);
+    }
+
+    #[test]
     fn test_capacity_wait_rejects_closed_scheduler_and_expired_context() {
         let scheduler = BoundedScheduler::new(CommandExecutionConfig {
             max_active: 1,
