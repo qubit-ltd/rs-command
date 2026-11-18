@@ -1559,14 +1559,20 @@ impl std::future::Future for RetryDelay {
     /// * `self`: Supplies the self value used by this operation.
     /// * `cx`: Supplies the cx value used by this operation.
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<bool> {
-        self.as_mut().get_mut().poll_with_schedule(cx, |item| {
-            retry_timer().is_some_and(|tx| tx.try_send(item).is_ok())
-        })
+        self.as_mut()
+            .get_mut()
+            .poll_with_schedule(cx, |item| retry_timer().is_some_and(|tx| tx.try_send(item).is_ok()))
     }
 }
 #[cfg(feature = "async")]
 impl RetryDelay {
     /// Polls the retry delay while delegating timer message scheduling.
+    ///
+    /// # Parameters
+    /// * `self`: Supplies the retry delay state used by this operation.
+    /// * `cx`: Supplies the task context and current waker.
+    /// * `schedule`: Schedules the constructed timer message and reports
+    ///   success.
     fn poll_with_schedule(
         &mut self,
         cx: &mut std::task::Context<'_>,
@@ -2714,6 +2720,10 @@ mod retry_wait_tests {
     use crate::execution::contracts::Scheduler;
     use crate::execution::scheduler::BoundedScheduler;
 
+    fn reject_retry_schedule(_: RetryTimerMessage) -> bool {
+        false
+    }
+
     struct CountWake(AtomicUsize);
 
     impl Wake for CountWake {
@@ -2757,23 +2767,25 @@ mod retry_wait_tests {
         let mut second_context = Context::from_waker(&second_waker);
         let mut scheduled = None;
 
-        assert!(delay
-            .poll_with_schedule(&mut first_context, |item| {
-                scheduled = Some(item);
-                true
-            })
-            .is_pending());
-        assert!(delay
-            .poll_with_schedule(&mut second_context, |_| {
-                panic!("an already scheduled retry must not schedule again")
-            })
-            .is_pending());
+        assert!(
+            delay
+                .poll_with_schedule(&mut first_context, |item| {
+                    scheduled = Some(item);
+                    true
+                })
+                .is_pending()
+        );
+        assert!(
+            delay
+                .poll_with_schedule(&mut second_context, reject_retry_schedule)
+                .is_pending()
+        );
         complete_retry_timer(scheduled.take().expect("first poll must schedule a message"));
 
         assert_eq!(first.0.load(Ordering::SeqCst), 0);
         assert_eq!(second.0.load(Ordering::SeqCst), 1);
         assert!(matches!(
-            delay.poll_with_schedule(&mut second_context, |_| panic!("ready retry must not schedule")),
+            delay.poll_with_schedule(&mut second_context, reject_retry_schedule),
             Poll::Ready(true)
         ));
     }
@@ -2785,16 +2797,21 @@ mod retry_wait_tests {
         let waker = Waker::from(wake_count.clone());
         let mut cx = Context::from_waker(&waker);
 
-        assert!(matches!(delay.poll_with_schedule(&mut cx, |_| false), Poll::Ready(false)));
+        assert!(matches!(
+            delay.poll_with_schedule(&mut cx, reject_retry_schedule),
+            Poll::Ready(false)
+        ));
         assert!(!delay.scheduled);
 
         let mut scheduled = None;
-        assert!(delay
-            .poll_with_schedule(&mut cx, |item| {
-                scheduled = Some(item);
-                true
-            })
-            .is_pending());
+        assert!(
+            delay
+                .poll_with_schedule(&mut cx, |item| {
+                    scheduled = Some(item);
+                    true
+                })
+                .is_pending()
+        );
         let item = scheduled.take().expect("retry poll must construct timer message");
         let cancelled = Arc::clone(&item.cancelled);
         let waker_slot = Arc::clone(&item.waker);
@@ -2813,9 +2830,10 @@ mod retry_wait_tests {
             let _ = tx.send(completed);
         });
 
-        assert!(rx
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("production retry timer must complete"));
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(2))
+                .expect("production retry timer must complete")
+        );
     }
 
     #[test]
@@ -2824,12 +2842,14 @@ mod retry_wait_tests {
         let waker = Waker::noop().clone();
         let mut context = Context::from_waker(&waker);
         let mut scheduled = None;
-        assert!(delay
-            .poll_with_schedule(&mut context, |item| {
-                scheduled = Some(item);
-                true
-            })
-            .is_pending());
+        assert!(
+            delay
+                .poll_with_schedule(&mut context, |item| {
+                    scheduled = Some(item);
+                    true
+                })
+                .is_pending()
+        );
 
         let slot = Arc::clone(&delay.waker);
         let poison = std::thread::spawn(move || {
@@ -2838,11 +2858,11 @@ mod retry_wait_tests {
         })
         .join();
         assert!(poison.is_err());
-        assert!(delay
-            .poll_with_schedule(&mut context, |_| {
-                panic!("an already scheduled retry must not schedule again")
-            })
-            .is_pending());
+        assert!(
+            delay
+                .poll_with_schedule(&mut context, reject_retry_schedule)
+                .is_pending()
+        );
         drop(delay);
         complete_retry_timer(scheduled.take().expect("first poll must schedule a message"));
 
