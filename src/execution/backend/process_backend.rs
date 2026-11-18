@@ -1536,10 +1536,7 @@ mod tests {
             .unwrap()
             .take()
             .expect("accepted retry should retain the preparation recovery owner");
-        assert_eq!(
-            owner.summary(),
-            "command file preparation retained partial resources"
-        );
+        assert_eq!(owner.summary(), "command file preparation retained partial resources");
         assert!(!owner.is_complete());
         owner
             .retry_cleanup()

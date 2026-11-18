@@ -1423,21 +1423,14 @@ mod tests {
             successful_reader(),
             None,
         );
-        let result = running_with_budget(
-            terminating_child(status(0)),
-            io,
-            exceeded_total_budget(),
-        )
-        .wait_for_completion(None);
+        let result =
+            running_with_budget(terminating_child(status(0)), io, exceeded_total_budget()).wait_for_completion(None);
 
         let error = expect_error(result, "an exceeded output budget should stop the command");
         assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
         assert!(matches!(
             error.reason(),
-            CommandErrorReason::OutputLimitExceeded {
-                limit: 1,
-                observed: 2,
-            }
+            CommandErrorReason::OutputLimitExceeded { limit: 1, observed: 2 }
         ));
         let captured = error
             .captured_output()
