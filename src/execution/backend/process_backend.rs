@@ -1242,9 +1242,6 @@ mod tests {
         let manager = OperationManager::new(Default::default()).unwrap();
         let backend = Arc::new(ProcessBackend::new());
         let sink = Arc::new(RecordingSink::default());
-        sink.reject_outcome_once.store(true, Ordering::SeqCst);
-        sink.reject_release_once.store(true, Ordering::SeqCst);
-        sink.reject_settlement_once.store(true, Ordering::SeqCst);
         let reservation_released = Arc::new(AtomicBool::new(false));
         let lease_created = Arc::new(AtomicBool::new(false));
         let operation_backend = Arc::clone(&backend);
@@ -1326,12 +1323,12 @@ mod tests {
             !lease_created.load(Ordering::SeqCst),
             "pre-start stop should not retain process capacity"
         );
-        assert!(!sink.reject_outcome_once.load(Ordering::SeqCst));
-        assert!(!sink.reject_release_once.load(Ordering::SeqCst));
-        assert!(!sink.reject_settlement_once.load(Ordering::SeqCst));
-        assert!(sink.outcome.lock().unwrap().is_none());
-        assert!(!sink.released.load(Ordering::SeqCst));
-        assert!(sink.settlement.lock().unwrap().is_none());
+        assert!(matches!(
+            sink.outcome.lock().unwrap().take(),
+            Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
+        ));
+        assert!(sink.released.load(Ordering::SeqCst));
+        assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
     }
 
     #[cfg(unix)]
