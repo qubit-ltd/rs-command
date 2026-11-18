@@ -827,7 +827,8 @@ mod tests {
     }
 
     fn immediate_successful_reader() -> OutputReader {
-        let (cancellation, _token) = IoCancellation::pair().expect("reader cancellation should create");
+        let (cancellation, _token) =
+            IoCancellation::pair().expect("reader cancellation should create");
         OutputReader::new(thread::spawn(|| Ok(CapturedOutput::default())), cancellation)
     }
 
@@ -1598,6 +1599,48 @@ mod tests {
         command.cancellation_token = Some(cancellation);
 
         assert!(matches!(command.wait_for_event(None), RunEvent::Exited(value) if value.code() == Some(7)));
+    }
+
+    #[test]
+    fn test_exited_child_reader_failure_preserves_status_and_partial_output() {
+        let child = ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new())))
+            .try_wait_results([Ok(Some(status(0)))])
+            .wait_status(status(0));
+        let (cancellation, _token) = IoCancellation::pair().expect("reader cancellation should create");
+        let stdout = OutputReader::new(
+            thread::spawn(|| {
+                Err(OutputCaptureError::Read {
+                    source: io::Error::other("stdout read failed"),
+                    output: CapturedOutput {
+                        bytes: b"partial stdout".to_vec(),
+                        truncated: false,
+                        complete: false,
+                    },
+                })
+            }),
+            cancellation,
+        );
+        let command = running(
+            ManagedChildProcess::new(Box::new(child), false),
+            CommandIo::new(stdout, immediate_successful_reader(), None),
+        );
+
+        let error = expect_error(
+            command.wait_for_completion(None),
+            "reader failure after child exit should remain observable",
+        );
+
+        assert_eq!(error.kind(), CommandErrorKind::ReadOutputFailed);
+        assert!(
+            error
+                .output()
+                .is_some_and(|output| output.exit_status().success())
+        );
+        let captured = error
+            .captured_output()
+            .expect("the failed reader should retain its partial capture");
+        assert_eq!(captured.stdout(), b"partial stdout");
+        assert!(!captured.stdout_complete());
     }
 
     #[test]
