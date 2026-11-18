@@ -531,6 +531,42 @@ mod tests {
     }
 
     #[test]
+    fn test_oversized_poll_write_preserves_buffer_and_channel_state() {
+        let channel = ByteChannel::new();
+        let counter = Arc::new(CountWake(AtomicUsize::new(0)));
+        let waker = std::task::Waker::from(counter);
+        let mut context = std::task::Context::from_waker(&waker);
+
+        assert!(matches!(
+            channel.poll_write(&mut context, b"queued"),
+            std::task::Poll::Ready(Ok(6))
+        ));
+        let oversized = vec![b'x'; MAX_BLOCK + 1];
+        assert!(matches!(
+            channel.poll_write(&mut context, &oversized),
+            std::task::Poll::Ready(Err(ref error)) if error.kind() == io::ErrorKind::InvalidInput
+        ));
+        assert!(!channel.incomplete());
+        assert!(!channel.broken_pipe());
+
+        assert!(matches!(
+            channel.poll_write(&mut context, b"tail"),
+            std::task::Poll::Ready(Ok(4))
+        ));
+        channel.close_writer();
+        let mut output = [0; 16];
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Ready(Ok(10))
+        ));
+        assert_eq!(&output[..10], b"queuedtail");
+        assert!(matches!(
+            channel.poll_read(&mut context, &mut output),
+            std::task::Poll::Ready(Ok(0))
+        ));
+    }
+
+    #[test]
     fn test_closed_writer_rejects_writes_and_reader_observes_eof() {
         let channel = ByteChannel::new();
         let counter = Arc::new(CountWake(AtomicUsize::new(0)));
