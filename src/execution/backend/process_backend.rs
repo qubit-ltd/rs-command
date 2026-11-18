@@ -1996,7 +1996,7 @@ mod tests {
     #[test]
     fn test_recovery_transfer_retries_rejected_owner_until_store_accepts_it() {
         let sink = Arc::new(RetrySink {
-            rejections_left: AtomicUsize::new(1),
+            rejections_left: AtomicUsize::new(3),
             attempts: AtomicUsize::new(0),
             retained: Mutex::new(None),
         });
@@ -2004,7 +2004,7 @@ mod tests {
 
         schedule_recovery_transfer(sink_port, Box::new(TestOwner));
 
-        assert_eq!(sink.attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(sink.attempts.load(Ordering::SeqCst), 4);
         let retained = sink
             .retained
             .lock()
