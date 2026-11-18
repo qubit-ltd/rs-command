@@ -1088,7 +1088,10 @@ mod activation_failure_tests {
         let settlement = operation.wait_settlement().unwrap();
         assert_eq!(settlement.operation_id, operation_id);
         assert_eq!(settlement.status, qubit_operation::SettlementStatus::Released);
-        assert!(state.restore().is_none(), "activation transfers the request to the backend");
+        assert!(
+            state.restore().is_none(),
+            "activation transfers the request to the backend"
+        );
     }
 
     #[test]

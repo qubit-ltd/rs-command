@@ -745,10 +745,7 @@ mod tests {
         assert_eq!(configured.configured_success_exit_codes(), &[3, 7]);
         assert!(configured.is_logging_disabled());
         assert!(configured.is_output_truncation_failure_enabled());
-        assert_eq!(
-            configured.configured_diagnostic_redaction_policy(),
-            &redaction_policy
-        );
+        assert_eq!(configured.configured_diagnostic_redaction_policy(), &redaction_policy);
         assert_eq!(configured.configured_max_stdout_bytes(), Some(5));
         assert_eq!(configured.configured_max_stderr_bytes(), Some(5));
         assert_eq!(configured.configured_max_total_output_bytes(), Some(9));

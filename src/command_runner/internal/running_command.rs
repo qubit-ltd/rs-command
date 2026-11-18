@@ -2175,10 +2175,7 @@ mod tests {
             if retry_wait_started {
                 break;
             }
-            assert!(
-                Instant::now() < deadline,
-                "reaper should reach its first wait retry"
-            );
+            assert!(Instant::now() < deadline, "reaper should reach its first wait retry");
             thread::yield_now();
         }
         assert_eq!(releases.load(Ordering::SeqCst), 0);
