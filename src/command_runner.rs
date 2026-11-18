@@ -692,10 +692,16 @@ mod tests {
     fn test_runner_configuration_accessors_and_builders() {
         let default = CommandRunner::new(Duration::from_secs(4));
         assert_eq!(default.configured_timeout(), Some(Duration::from_secs(4)));
+        let default_timer_domain = default.configured_timer().clock().now().domain();
+        assert_eq!(default.configured_timer().clock().now().domain(), default_timer_domain);
         assert_eq!(default.configured_success_exit_codes(), &[0]);
         assert!(default.configured_working_directory().is_none());
         assert!(!default.is_logging_disabled());
         assert!(default.is_output_truncation_failure_enabled());
+        assert_eq!(
+            default.configured_diagnostic_redaction_policy(),
+            qubit_redact::Redactor::application_default().policy(),
+        );
         assert_eq!(
             default.configured_max_stdout_bytes(),
             Some(super::DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM),
@@ -708,6 +714,14 @@ mod tests {
 
         let clock = ManualMonotonicClock::new_shared();
         let timer_domain = clock.now().domain();
+        let redaction_policy = RedactionPolicy::default()
+            .to_builder()
+            .fields(|fields| {
+                fields.raise("runner_configuration_token", Sensitivity::Secret);
+            })
+            .expect("test redaction field should be valid")
+            .build()
+            .expect("test redaction policy should be valid");
         let configured = default
             .working_directory("runner/working-directory")
             .timer(Arc::new(clock.new_timer()))
@@ -715,7 +729,7 @@ mod tests {
             .success_exit_codes(&[3, 7])
             .disable_logging(true)
             .fail_on_output_truncation(false)
-            .diagnostic_redaction_policy(RedactionPolicy::default())
+            .diagnostic_redaction_policy(redaction_policy.clone())
             .max_stdout_bytes(2)
             .max_stderr_bytes(4)
             .max_output_bytes(6)
@@ -732,7 +746,7 @@ mod tests {
         assert!(configured.is_output_truncation_failure_enabled());
         assert_eq!(
             configured.configured_diagnostic_redaction_policy(),
-            &RedactionPolicy::default()
+            &redaction_policy
         );
         assert_eq!(configured.configured_max_stdout_bytes(), Some(5));
         assert_eq!(configured.configured_max_stderr_bytes(), Some(5));
