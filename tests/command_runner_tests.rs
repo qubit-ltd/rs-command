@@ -1084,12 +1084,12 @@ mod unix {
             let ready =
                 started_path.exists() && fs::read(&captured_path).ok().as_deref() == Some(b"started".as_slice());
             cancellation.cancel();
-            let result = receiver.recv_timeout(Duration::from_secs(2));
+            let result = receiver
+                .recv_timeout(Duration::from_secs(2))
+                .expect("cancelled runner should return promptly");
             let join = worker.join();
             assert!(ready, "command output should be observed in tee before cancellation");
-            let error = result
-                .expect("cancelled runner should return promptly")
-                .expect_err("cancelled command should return an error");
+            let error = result.expect_err("cancelled command should return an error");
             join.expect("runner thread should not panic");
 
             assert_eq!(error.kind(), CommandErrorKind::Cancelled);
