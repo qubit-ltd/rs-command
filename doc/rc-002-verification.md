@@ -4,7 +4,19 @@
 
 <a id="current-summary"></a>
 
-## Latest evidence summary / 最新证据摘要 (2026-11-17)
+## Latest evidence summary / 最新证据摘要 (2026-11-18)
+
+### RC-006 bounded follow-up at implementation source SHA `5fa0cae06001e07b5053171216b1b9f7da6acb15` (2026-11-18)
+
+This implementation-stage check ran on Linux x86_64 with Rust `1.94.0`. The source tree includes the retry-timer test changes and stop-diagnostic documentation. `git diff --exit-code fcdccb7 -- src/command_runner/internal/command_io.rs src/command_runner/internal/io_cancellation.rs src/command_runner/internal/io_cancellation_token.rs src/command_runner/internal/cancel.rs src/command_runner/internal/cancellable_reader.rs src/command_runner/internal/output_collector.rs src/command_runner/internal/output_reader.rs src/command_runner/internal/stdin_pipe.rs src/command_runner/internal/stdin_writer.rs src/command_runner/internal/pollable_stdin.rs src/command_runner/internal/windows_cancel_interleaving_tests.rs src/command_runner/internal/output_collector/tests/windows_probe_tests.rs .github/workflows/windows-cancellation-interleaving.yml .github/scripts/assert-windows-probe-results.ps1 .github/scripts/assert-windows-probe-results.tests.ps1` exited 0: none of those paths changed since the latest recorded Windows source audit. `command -v pwsh` and `command -v powershell` were each unavailable (exit 1); no Windows runtime, PowerShell identity-gate, or new Windows trace was run.
+
+The retry-timer change is limited to `src/execution/executor.rs` and does not modify native cancellation, helper I/O, or join paths. The stop-diagnostic change is documentation-only. No new production-reachable cancellation/interleaving assumption was introduced, so the conditional regression and repair were not triggered. RC-006 remains **unresolved**: this bounded source comparison does not confirm or exclude the suspected hang and does not establish Windows safety. Historical Windows evidence remains tied to its recorded source revisions.
+
+### RC-006 实施阶段有界复核（源码 SHA `5fa0cae06001e07b5053171216b1b9f7da6acb15`，2026-11-18）
+
+本次实施阶段检查运行于 Linux x86_64、Rust `1.94.0`。源码树包含 retry timer 测试改动和停止诊断文档。针对 Windows 取消、helper、探针、workflow 及身份门禁路径执行 `git diff --exit-code fcdccb7 -- src/command_runner/internal/command_io.rs src/command_runner/internal/io_cancellation.rs src/command_runner/internal/io_cancellation_token.rs src/command_runner/internal/cancel.rs src/command_runner/internal/cancellable_reader.rs src/command_runner/internal/output_collector.rs src/command_runner/internal/output_reader.rs src/command_runner/internal/stdin_pipe.rs src/command_runner/internal/stdin_writer.rs src/command_runner/internal/pollable_stdin.rs src/command_runner/internal/windows_cancel_interleaving_tests.rs src/command_runner/internal/output_collector/tests/windows_probe_tests.rs .github/workflows/windows-cancellation-interleaving.yml .github/scripts/assert-windows-probe-results.ps1 .github/scripts/assert-windows-probe-results.tests.ps1`，退出码为 0：相对最近一次 Windows 源码核查，这些路径均未变化。`command -v pwsh` 与 `command -v powershell` 均不可用（各退出码 1）；未运行 Windows runtime、PowerShell 身份门禁或新的 Windows trace。
+
+retry timer 改动仅限 `src/execution/executor.rs`，未改动原生取消、helper I/O 或 join 路径；停止诊断改动仅涉及文档。没有引入新的生产可达取消/交错假设，因此未触发条件性回归及修复。RC-006 仍为 **unresolved（未解决）**：本次有界源码比较既未证实也未排除疑似挂起，也不证明 Windows 安全。历史 Windows 证据仍只适用于各自记录的源码版本。
 
 ### Current implementation audit at SHA `fcdccb7` (2026-11-18)
 

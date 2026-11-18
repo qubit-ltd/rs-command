@@ -10,6 +10,12 @@
 
 调用方应保留主错误及其 `cleanup_failures()`，并在把保留输出视为完整内容前检查 `stdout_complete()` 和 `stderr_complete()`。必须保证硬返回期限的应用应通过独立进程边界监督 runner；runner 的 timeout 不提供该保证。
 
+## 实施阶段有界源码复核（源码 SHA `5fa0cae06001e07b5053171216b1b9f7da6acb15`，2026-11-18）
+
+本次实施阶段源码检查运行于 Linux x86_64、Rust `1.94.0`。`src/execution/executor.rs` 中的 retry timer 测试改动未改变 Windows 取消、helper I/O 或 join 路径；停止诊断改动仅涉及文档。针对生产取消/helper、Windows 探针、workflow 和身份门禁路径执行 `git diff --exit-code fcdccb7 --`，退出码为 0。系统未安装 `pwsh` 或 `powershell`，因此未运行 Windows runtime 测试、PowerShell 门禁或新的 Windows trace。
+
+本次没有发现新的生产可达取消/交错假设，也未触发条件性修复。RC-006 仍为 **unresolved（未解决）**：源码比较既未证实也未排除疑似挂起，也不证明 Windows 安全。此前证据及其边界见[核查历史](rc-002-verification.md#current-summary)。
+
 ## 当前实现源码有界核查（源码 SHA `fcdccb7`，2026-11-18）
 
 本次核查在 Linux x86_64、Rust `1.94.0` 环境进行。针对生产取消/收尾、输出、stdin、Windows 探针、workflow 和身份门禁路径执行

@@ -10,6 +10,12 @@ On Windows, successful `CancelSynchronousIo` means that the cancellation request
 
 Callers should preserve the primary error and its `cleanup_failures()`, then check `stdout_complete()` and `stderr_complete()` before treating retained output as complete. Applications that require a hard return deadline should supervise the runner in a separate process boundary; the runner's timeout does not provide that guarantee.
 
+## Bounded source follow-up (source SHA `5fa0cae06001e07b5053171216b1b9f7da6acb15`, 2026-11-18)
+
+The implementation-stage source check ran on Linux x86_64 with Rust `1.94.0`. The retry-timer test change in `src/execution/executor.rs` does not alter Windows cancellation, helper I/O, or join paths; the stop-diagnostic change is documentation-only. A targeted `git diff --exit-code fcdccb7 --` over the production cancellation/helper, Windows probe, workflow, and identity-gate paths exited 0. `pwsh` and `powershell` were unavailable, so no Windows runtime test, PowerShell gate, or new Windows trace was run.
+
+No new production-reachable cancellation/interleaving assumption was found and no conditional repair was triggered. RC-006 remains **unresolved**: this source comparison neither confirms nor excludes the suspected hang and does not establish Windows safety. See the [verification history](rc-002-verification.md#current-summary) for prior evidence and its limits.
+
 ## Current implementation source audit at SHA `fcdccb7` (2026-11-18)
 
 This bounded audit ran on Linux x86_64 with Rust `1.94.0`. A targeted
