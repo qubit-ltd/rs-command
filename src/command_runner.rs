@@ -803,6 +803,25 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn test_empty_success_code_policy_rejects_zero_without_mutating_other_runners() {
+        let original = CommandRunner::without_timeout();
+        let strict = original.clone().success_exit_codes(&[]);
+        assert_eq!(original.configured_success_exit_codes(), &[0]);
+        assert!(strict.configured_success_exit_codes().is_empty());
+
+        let error = strict
+            .run(crate::Command::new("sh").arg("-c").arg("printf retained; exit 0"))
+            .expect_err("an empty success-code set must reject every exit status");
+        assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::UnexpectedExit { exit_code: Some(0), expected } if expected.is_empty()
+        ));
+        assert_eq!(error.output().unwrap().stdout(), b"retained");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_run_with_preserves_captured_output_for_unexpected_exit() {
         let error = CommandRunner::without_timeout()
             .success_exit_codes(&[0, 7])

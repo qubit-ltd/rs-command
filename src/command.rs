@@ -812,7 +812,15 @@ mod data_api_tests {
             .env_remove_os(OsString::from("OLD_KEY"))
             .stdin_file(input_file.path().to_path_buf());
 
-        assert_eq!(command.arguments().count(), 4);
+        assert_eq!(
+            command.arguments().collect::<Vec<_>>(),
+            [
+                OsStr::new("argument"),
+                OsStr::new("secret"),
+                OsStr::new("--flag"),
+                OsStr::new("value"),
+            ]
+        );
         assert_eq!(command.working_directory_override(), Some(root));
         assert_eq!(
             command.environment(),
@@ -835,6 +843,10 @@ mod data_api_tests {
             super::CommandStdin::Inherit
         ));
         assert_eq!(Command::shell("echo safe").arguments().len(), 2);
+        assert_eq!(
+            Command::shell("echo safe").arguments().collect::<Vec<_>>(),
+            [OsStr::new("-c"), OsStr::new("echo safe")]
+        );
     }
 
     #[test]
