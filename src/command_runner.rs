@@ -757,6 +757,71 @@ mod tests {
         assert_eq!(untimed.configured_timeout(), None);
     }
 
+    #[test]
+    fn test_runner_builder_chain_round_trips_configuration_and_resets_limits() {
+        let timeout = Duration::from_millis(37);
+        let timer = Arc::new(ManualMonotonicClock::new_shared().new_timer());
+        let timer_domain = timer.clock().now().domain();
+        let directory = std::env::temp_dir().join("runner-round-trip-directory");
+        let redaction = RedactionPolicy::default()
+            .to_builder()
+            .fields(|fields| {
+                fields.raise("runner_round_trip_secret", Sensitivity::Secret);
+            })
+            .expect("test redaction field should be valid")
+            .build()
+            .expect("test redaction policy should be valid");
+        let configured = CommandRunner::with_optional_timeout(Some(timeout))
+            .working_directory(directory.clone())
+            .success_exit_code(7)
+            .success_exit_codes(&[0, 7])
+            .disable_logging(true)
+            .fail_on_output_truncation(false)
+            .diagnostic_redaction_policy(redaction.clone())
+            .max_stdout_bytes(2)
+            .max_stderr_bytes(3)
+            .max_output_bytes(4)
+            .max_total_output_bytes(9)
+            .timer(timer);
+
+        assert_eq!(configured.configured_timeout(), Some(timeout));
+        assert_eq!(
+            configured.configured_timer().clock().now().domain(),
+            timer_domain
+        );
+        assert_eq!(
+            configured.configured_working_directory(),
+            Some(directory.as_path())
+        );
+        assert_eq!(configured.configured_success_exit_codes(), &[0, 7]);
+        assert!(configured.is_logging_disabled());
+        assert!(!configured.is_output_truncation_failure_enabled());
+        assert_eq!(
+            configured.configured_diagnostic_redaction_policy(),
+            &redaction
+        );
+        assert_eq!(configured.configured_max_stdout_bytes(), Some(4));
+        assert_eq!(configured.configured_max_stderr_bytes(), Some(4));
+        assert_eq!(configured.configured_max_total_output_bytes(), Some(9));
+
+        let bounded = configured.clone().bounded_output(5);
+        assert_eq!(bounded.configured_max_stdout_bytes(), Some(5));
+        assert_eq!(bounded.configured_max_stderr_bytes(), Some(5));
+        assert!(bounded.is_output_truncation_failure_enabled());
+        assert_eq!(bounded.configured_max_total_output_bytes(), Some(9));
+
+        let reset = configured.unbounded_output().without_total_output_limit();
+        assert_eq!(reset.configured_max_stdout_bytes(), None);
+        assert_eq!(reset.configured_max_stderr_bytes(), None);
+        assert_eq!(reset.configured_max_total_output_bytes(), None);
+        assert!(!reset.is_output_truncation_failure_enabled());
+        assert_eq!(
+            CommandRunner::new(timeout).configured_timeout(),
+            Some(timeout)
+        );
+        assert_eq!(CommandRunner::without_timeout().configured_timeout(), None);
+    }
+
     #[cfg(unix)]
     fn successful_test_command() -> crate::Command {
         crate::Command::new("sh").arg("-c").arg("printf unit-runner")
