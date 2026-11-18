@@ -728,6 +728,7 @@ mod activation_failure_tests {
     fn test_stop_requested_before_adapter_binding_is_retained() {
         let scheduler = scheduler();
         let permit = scheduler.try_reserve(0).unwrap();
+        let scheduler_snapshot = Arc::clone(&scheduler);
         let state = make_state(scheduler, permit);
         let state_for_operation = Arc::clone(&state);
         let manager = OperationManager::new(Default::default()).unwrap();
@@ -751,6 +752,17 @@ mod activation_failure_tests {
         assert!(
             state.restore().is_some(),
             "a stop request alone must not consume prepared input"
+        );
+        assert_eq!(
+            scheduler_snapshot.snapshot().active,
+            1,
+            "restoring the prepared request must leave its reservation with the adapter"
+        );
+        drop(state);
+        assert_eq!(
+            scheduler_snapshot.snapshot().active,
+            0,
+            "dropping the adapter releases its still-owned reservation"
         );
     }
 
