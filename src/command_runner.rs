@@ -347,6 +347,7 @@ mod tests {
     use crate::FileSinkPolicy;
     use crate::OutputStream;
     use crate::command_runner::internal::prepared_command::PreparedCommand;
+    use crate::execution::backend::StartGate;
     use crate::execution::contracts::PreparedFiles;
     use crate::execution::contracts::PreparedSink;
 
@@ -869,6 +870,29 @@ mod tests {
             .expect_err("a pre-cancelled command should be rejected before spawn");
 
         assert_eq!(error.kind(), CommandErrorKind::CancelledBeforeStart);
+    }
+
+    #[test]
+    fn test_run_with_tree_policy_rejects_start_gate_stop_before_spawn() {
+        let gate = StartGate::default();
+        assert!(gate.request_stop(qubit_operation::StopReason::UserCancelled));
+
+        let error = CommandRunner::without_timeout()
+            .run_with_tree_policy(
+                crate::Command::new("__qubit_start_gate_must_not_spawn__"),
+                CommandRunOptions::new(),
+                RunTreePolicy {
+                    start_gate: Some(&gate),
+                    ..RunTreePolicy::default()
+                },
+            )
+            .expect_err("a stopped start gate should reject the command before spawn");
+
+        assert_eq!(error.kind(), CommandErrorKind::CancelledBeforeStart);
+        assert_eq!(
+            gate.stop_reason(),
+            Some(qubit_operation::StopReason::UserCancelled)
+        );
     }
 
     #[cfg(unix)]
