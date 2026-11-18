@@ -841,6 +841,11 @@ mod tests {
         let operation_lease_released = Arc::clone(&lease_released);
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("missing-command");
+        let input = tempfile::NamedTempFile::new().expect("managed input should be available before spawn");
+        let input_path = input.path().to_path_buf();
+        let input_file = input.reopen().expect("managed input should reopen before spawn");
+        let input_fd = std::os::fd::AsRawFd::as_raw_fd(&input_file);
+        assert_eq!(unsafe { libc::flock(input_fd, libc::LOCK_EX | libc::LOCK_NB) }, 0);
         assert!(!executable.exists());
 
         let mut operation = manager
@@ -861,7 +866,7 @@ mod tests {
                     operation_id: None,
                     runner: CommandRunner::without_timeout(),
                     command: Command::new(executable.to_str().expect("temporary path should be UTF-8")),
-                    options: RequestOptions::Standard(CommandRunOptions::default()),
+                    options: RequestOptions::Resources(CommandResourceRunOptions::new().stdin_file(input_file)),
                     snapshot: ExecutionSnapshot {
                         working_directory: std::env::current_dir().unwrap(),
                         environment: Vec::new(),
@@ -899,6 +904,17 @@ mod tests {
         assert!(reservation_released.load(Ordering::SeqCst));
         assert!(lease_released.load(Ordering::SeqCst));
         assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
+        let input_probe = std::fs::File::open(input_path).expect("managed input path should remain available");
+        assert_eq!(
+            unsafe {
+                libc::flock(
+                    std::os::fd::AsRawFd::as_raw_fd(&input_probe),
+                    libc::LOCK_EX | libc::LOCK_NB,
+                )
+            },
+            0,
+            "spawn failure should release the request-owned stdin descriptor"
+        );
     }
 
     #[cfg(unix)]
