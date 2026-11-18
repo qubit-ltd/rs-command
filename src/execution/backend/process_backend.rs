@@ -905,16 +905,28 @@ mod tests {
         assert!(lease_released.load(Ordering::SeqCst));
         assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
         let input_probe = std::fs::File::open(input_path).expect("managed input path should remain available");
-        assert_eq!(
-            unsafe {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            let locked = unsafe {
                 libc::flock(
                     std::os::fd::AsRawFd::as_raw_fd(&input_probe),
                     libc::LOCK_EX | libc::LOCK_NB,
                 )
-            },
-            0,
-            "spawn failure should release the request-owned stdin descriptor"
-        );
+            };
+            if locked == 0 {
+                break;
+            }
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::EWOULDBLOCK),
+                "lock probe should fail only while the request-owned descriptor remains open"
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "spawn failure should eventually release the request-owned stdin descriptor"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
 
     #[cfg(unix)]

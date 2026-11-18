@@ -933,8 +933,8 @@ mod tests {
         use std::task::Poll;
         use std::task::Wake;
         use std::task::Waker;
-        use std::time::Instant;
         use std::time::Duration;
+        use std::time::Instant;
 
         use qubit_io::AsyncInput;
         use qubit_operation::ManagerOptions;
@@ -942,8 +942,8 @@ mod tests {
         use qubit_operation::OperationOptions;
         use qubit_operation::OperationOutcome;
 
-        use super::ManagedCommandRunnerApi;
         use super::super::collect_async;
+        use super::ManagedCommandRunnerApi;
         use super::setup;
         use crate::Command;
         use crate::CommandErrorKind;
@@ -1238,9 +1238,15 @@ mod tests {
             assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
             assert!(matches!(
                 error.reason(),
-                CommandErrorReason::UnexpectedExit { exit_code: Some(17), .. }
+                CommandErrorReason::UnexpectedExit {
+                    exit_code: Some(17),
+                    ..
+                }
             ));
-            assert_eq!(error.captured_output().expect("captured output").stdout(), b"async-failure");
+            assert_eq!(
+                error.captured_output().expect("captured output").stdout(),
+                b"async-failure"
+            );
         }
 
         #[test]
@@ -1265,11 +1271,7 @@ mod tests {
             let ready = directory.path().join("child-ready");
             let script = format!("printf partial; touch {}; exec sleep 30", ready.display());
             let operation = executor
-                .submit_async(
-                    runner,
-                    Command::new("sh").arg("-c").arg(&script),
-                    Default::default(),
-                )
+                .submit_async(runner, Command::new("sh").arg("-c").arg(&script), Default::default())
                 .expect("async command should be admitted");
 
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -1286,7 +1288,13 @@ mod tests {
             assert_eq!(error.kind(), CommandErrorKind::Cancelled);
             assert!(matches!(error.reason(), CommandErrorReason::Cancelled));
             assert_eq!(error.stop_reason(), Some(qubit_operation::StopReason::UserCancelled));
-            assert_eq!(error.captured_output().expect("partial output should be retained").stdout(), b"partial");
+            assert_eq!(
+                error
+                    .captured_output()
+                    .expect("partial output should be retained")
+                    .stdout(),
+                b"partial"
+            );
         }
     }
 }

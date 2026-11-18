@@ -933,7 +933,9 @@ mod tests {
         scheduler.enqueue(job, permit).unwrap();
         clock.ticks.store(5, Ordering::SeqCst);
 
-        let (_, permit) = scheduler.try_next().expect("expired work remains dispatchable after stop");
+        let (_, permit) = scheduler
+            .try_next()
+            .expect("expired work remains dispatchable after stop");
 
         assert_eq!(stops.load(Ordering::SeqCst), 1);
         assert_eq!((scheduler.snapshot().active, scheduler.snapshot().queued), (1, 0));
