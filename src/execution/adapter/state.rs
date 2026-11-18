@@ -1015,6 +1015,37 @@ mod activation_failure_tests {
     }
 
     #[test]
+    fn test_unbound_abandon_recovers_poisoned_inputs_and_rejects_later_activation() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let state = make_state(Arc::clone(&scheduler), permit);
+        let poisoned_state = Arc::clone(&state);
+        let poisoner = std::thread::spawn(move || {
+            let _owned = poisoned_state.owned.lock().unwrap();
+            panic!("poison adapter inputs before unbound abandonment");
+        });
+        assert!(poisoner.join().is_err());
+
+        Arc::clone(&state).abandon();
+        assert!(state.restore().is_none(), "abandonment permanently consumes prepared input");
+        assert_eq!(scheduler.snapshot().active, 0, "unbound abandonment releases its reservation");
+
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit_external(OperationOptions::default(), Arc::clone(&state))
+            .unwrap();
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::ExecutionFailed(_)
+        ));
+        let settlement = operation.wait_settlement().unwrap();
+        assert_eq!(settlement.operation_id, operation.id());
+        assert_eq!(settlement.status, qubit_operation::SettlementStatus::Released);
+        assert!(OperationControl::snapshot(&*state).input_released);
+        assert_eq!(scheduler.snapshot().active, 0);
+    }
+
+    #[test]
     fn test_abandon_after_activation_does_not_release_resources_twice() {
         let releases = Arc::new(AtomicUsize::new(0));
         let scheduler = Arc::new(ReleaseTrackingInlineScheduler(Arc::clone(&releases)));

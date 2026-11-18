@@ -1867,6 +1867,72 @@ mod snapshot_failure_tests {
             .expect("returned stdin should retain its bytes");
         assert_eq!(bytes, b"recoverable input bytes");
         assert_eq!(failure.command.program(), std::ffi::OsStr::new("true"));
+
+        let standard_failure = match executor.submit(
+            CommandRunner::without_timeout(),
+            Command::new("must-not-run-after-standard-snapshot-failure"),
+            Default::default(),
+        ) {
+            Ok(_) => panic!("standard submission must reject a missing working-directory snapshot"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            standard_failure.command.program(),
+            "must-not-run-after-standard-snapshot-failure"
+        );
+        assert!(matches!(
+            standard_failure.reason,
+            CommandSubmitFailureReason::Snapshot(ref snapshot)
+                if snapshot.diagnostic.contains("working directory snapshot failed")
+        ));
+
+        #[cfg(feature = "async")]
+        {
+            let async_failure = match executor.submit_async(
+                CommandRunner::without_timeout(),
+                Command::new("must-not-run-after-async-snapshot-failure"),
+                Default::default(),
+            ) {
+                Ok(_) => panic!("async submission must reject a missing working-directory snapshot"),
+                Err(failure) => failure,
+            };
+            assert_eq!(
+                async_failure.command.program(),
+                "must-not-run-after-async-snapshot-failure"
+            );
+            assert!(matches!(
+                async_failure.reason,
+                CommandSubmitFailureReason::Snapshot(ref snapshot)
+                    if snapshot.diagnostic.contains("working directory snapshot failed")
+            ));
+
+            let mut input = tempfile::tempfile().expect("async stdin file should be created");
+            input.write_all(b"async recoverable input").unwrap();
+            input.rewind().unwrap();
+            let async_resource_failure = match executor.submit_async_resources(
+                CommandRunner::without_timeout(),
+                Command::new("must-not-run-after-async-resource-snapshot-failure"),
+                CommandResourceRunOptions::new().stdin_file(input),
+            ) {
+                Ok(_) => panic!("async resource submission must reject a missing working-directory snapshot"),
+                Err(failure) => failure,
+            };
+            assert!(matches!(
+                async_resource_failure.reason,
+                CommandSubmitFailureReason::Snapshot(ref snapshot)
+                    if snapshot.diagnostic.contains("working directory snapshot failed")
+            ));
+            let mut returned_input = async_resource_failure
+                .options
+                .configured_stdin()
+                .expect("async snapshot rejection must return its input owner")
+                .try_clone()
+                .unwrap();
+            returned_input.rewind().unwrap();
+            let mut bytes = Vec::new();
+            returned_input.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, b"async recoverable input");
+        }
     }
 }
 
