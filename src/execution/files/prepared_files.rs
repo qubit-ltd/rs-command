@@ -354,6 +354,60 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_stdout_truncation_failure_preserves_later_stderr_sink() {
+        let directory = tempfile::tempdir().expect("directory sink should be created");
+        let directory_path = directory.path().to_owned();
+        let stderr = tempfile::NamedTempFile::new().expect("stderr sink should be created");
+        let stderr_path = stderr.path().to_owned();
+        std::fs::write(&stderr_path, b"preserve after stdout failure").unwrap();
+        let operation_stderr_path = stderr_path.clone();
+
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let stdout = std::fs::File::open(&directory_path).expect("directory can be opened as a file");
+                let stderr = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&operation_stderr_path)
+                    .unwrap();
+                let mut reservations = vec![scope.reserve_resource().unwrap(), scope.reserve_resource().unwrap()];
+                let prepared = register_files(
+                    &scope,
+                    &mut reservations,
+                    None,
+                    Some((stdout, FileSinkPolicy::Truncate)),
+                    Some((stderr, FileSinkPolicy::Truncate)),
+                )
+                .expect("both sink owners should register");
+
+                let error = truncate_sinks(&prepared, &scope)
+                    .expect_err("stdout directory truncation should stop the sink pass");
+                assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+                assert!(prepared.stdout.is_some());
+                assert!(prepared.stderr.is_some());
+                drop(prepared);
+                Ok::<_, String>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        let settlement = operation.wait_settlement().unwrap();
+        assert!(settlement.all_released());
+        assert_eq!(settlement.effects_total, 1);
+        assert_eq!(settlement.effects[0].fact, qubit_operation::EffectFact::Unknown);
+        assert_eq!(
+            std::fs::read(&stderr_path).unwrap(),
+            b"preserve after stdout failure",
+            "a later sink must remain untouched when stdout truncation fails"
+        );
+    }
+
     #[test]
     fn test_effect_record_overflow_does_not_block_sink_truncation() {
         let file = tempfile::NamedTempFile::new().unwrap();
