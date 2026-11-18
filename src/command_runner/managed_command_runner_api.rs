@@ -1032,6 +1032,84 @@ mod tests {
         }
 
         #[test]
+        fn test_managed_session_methods_report_closed_executor_rejection() {
+            let (_manager, executor, runner) = setup();
+            let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
+
+            let ordinary = block_on(runner.start_session(
+                &executor,
+                Command::new("__must_not_start_after_session_executor_shutdown__"),
+                Default::default(),
+            ))
+            .err()
+            .expect("closed executor should reject a managed session");
+            let resources = block_on(runner.start_session_resources(
+                &executor,
+                Command::new("__must_not_start_after_session_executor_shutdown__"),
+                CommandResourceRunOptions::new(),
+            ))
+            .err()
+            .expect("closed executor should reject a resource-backed managed session");
+
+            for error in [ordinary, resources] {
+                assert_eq!(error.kind(), CommandErrorKind::ManagedOperationFailed);
+                assert!(matches!(
+                    error.reason(),
+                    CommandErrorReason::ManagedOperationFailed { diagnostic }
+                        if diagnostic.starts_with("managed ") && diagnostic.contains("session admission failed:")
+                ));
+                assert!(error.output().is_none());
+            }
+        }
+
+        #[test]
+        fn test_scoped_managed_session_methods_report_wrong_manager_rejection() {
+            let (manager, _executor, runner) = setup();
+            let other_manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+            let wrong_executor =
+                CommandExecutor::new(other_manager, CommandExecutionConfig::default()).expect("executor should start");
+
+            let outcome = block_on(manager.as_async().run(
+                OperationOptions::default(),
+                move |scope| async move {
+                    let ordinary = runner
+                        .start_session_in(
+                            &scope,
+                            &wrong_executor,
+                            Command::new("__must_not_start_for_wrong_session_manager__"),
+                            Default::default(),
+                        )
+                        .await
+                        .err()
+                        .expect("wrong manager should reject a scoped session");
+                    let resources = runner
+                        .start_session_resources_in(
+                            &scope,
+                            &wrong_executor,
+                            Command::new("__must_not_start_for_wrong_session_manager__"),
+                            CommandResourceRunOptions::new(),
+                        )
+                        .await
+                        .err()
+                        .expect("wrong manager should reject a scoped resource session");
+
+                    for error in [ordinary, resources] {
+                        assert_eq!(error.kind(), CommandErrorKind::ManagedOperationFailed);
+                        assert!(matches!(
+                            error.reason(),
+                            CommandErrorReason::ManagedOperationFailed { diagnostic }
+                                if diagnostic.starts_with("group binding failed:")
+                        ));
+                        assert!(error.output().is_none());
+                    }
+                    Ok::<_, std::convert::Infallible>(())
+                },
+            ))
+            .expect("parent operation should complete");
+            assert!(matches!(outcome, OperationOutcome::Succeeded(())));
+        }
+
+        #[test]
         fn test_scoped_async_runner_maps_closed_executor_rejection() {
             let (manager, executor, runner) = setup();
             let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
