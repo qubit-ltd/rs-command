@@ -1027,8 +1027,15 @@ mod activation_failure_tests {
         assert!(poisoner.join().is_err());
 
         Arc::clone(&state).abandon();
-        assert!(state.restore().is_none(), "abandonment permanently consumes prepared input");
-        assert_eq!(scheduler.snapshot().active, 0, "unbound abandonment releases its reservation");
+        assert!(
+            state.restore().is_none(),
+            "abandonment permanently consumes prepared input"
+        );
+        assert_eq!(
+            scheduler.snapshot().active,
+            0,
+            "unbound abandonment releases its reservation"
+        );
 
         let manager = OperationManager::new(Default::default()).unwrap();
         let mut operation = manager
