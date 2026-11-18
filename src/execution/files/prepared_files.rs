@@ -536,6 +536,60 @@ mod tests {
     }
 
     #[test]
+    fn test_register_files_returns_partial_stdin_stdout_and_recovers_stderr_on_missing_slot() {
+        use std::io::Read;
+        use std::io::Seek;
+        use std::io::SeekFrom;
+
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let stdin = tempfile::tempfile().unwrap();
+                let stdout = tempfile::tempfile().unwrap();
+                let stderr = tempfile::tempfile().unwrap();
+                let mut reservations = vec![scope.reserve_resource().unwrap(), scope.reserve_resource().unwrap()];
+
+                let failure = register_files(
+                    &scope,
+                    &mut reservations,
+                    Some(stdin),
+                    Some((stdout, FileSinkPolicy::Truncate)),
+                    Some((stderr, FileSinkPolicy::Preserve)),
+                )
+                .expect_err("stderr registration should fail after stdin and stdout consume both slots");
+                let (error, prepared, mut raw_files) = *failure;
+                let partial = prepared.expect("registered stdin and stdout owners should be returned");
+
+                assert!(error.to_string().contains("missing reserved resource slot"));
+                assert!(reservations.is_empty());
+                assert!(partial.stdin.is_some());
+                let stdout = partial.stdout.as_ref().expect("stdout owner should remain registered");
+                assert_eq!(stdout.policy, FileSinkPolicy::Truncate);
+                assert!(partial.stderr.is_none());
+                assert!(raw_files[0].is_none());
+                assert!(raw_files[1].is_none());
+
+                let mut recovered_stderr = raw_files[2].take().expect("unregistered stderr owner should return");
+                recovered_stderr.write_all(b"recovered stderr").unwrap();
+                recovered_stderr.seek(SeekFrom::Start(0)).unwrap();
+                let mut contents = Vec::new();
+                recovered_stderr.read_to_end(&mut contents).unwrap();
+                assert_eq!(contents, b"recovered stderr");
+
+                drop(partial);
+                drop(recovered_stderr);
+                Ok::<_, String>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        assert!(operation.wait_settlement().unwrap().all_released());
+    }
+
+    #[test]
     fn test_register_files_transfers_all_streams_and_preserves_selected_sink() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let mut operation = manager
