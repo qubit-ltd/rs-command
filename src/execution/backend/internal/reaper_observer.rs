@@ -328,6 +328,31 @@ mod tests {
     }
 
     #[test]
+    fn test_concurrent_completion_signals_waiter_once() {
+        const COMPLETERS: usize = 8;
+        let (observer, completed) = ReaperObserver::pair();
+        let barrier = Arc::new(std::sync::Barrier::new(COMPLETERS + 1));
+
+        std::thread::scope(|scope| {
+            for _ in 0..COMPLETERS {
+                let observer = observer.clone();
+                let barrier = Arc::clone(&barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    observer.complete();
+                });
+            }
+            barrier.wait();
+        });
+
+        assert!(observer.is_complete());
+        completed
+            .recv_timeout(Duration::from_secs(1))
+            .expect("concurrent completion should notify the waiter");
+        assert!(matches!(completed.try_recv(), Err(mpsc::TryRecvError::Disconnected)));
+    }
+
+    #[test]
     fn test_completion_after_receiver_drop_is_recorded_without_panicking() {
         let (observer, completed) = ReaperObserver::pair();
         drop(completed);
