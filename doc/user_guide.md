@@ -41,6 +41,49 @@ Use `CommandExecutor::submit` or `submit_in` when the caller must distinguish th
 
 The synchronous and asynchronous handles share one outcome receiver: convert with `into_async` or `into_sync` before taking the result. For resource-bearing operations, keep the handle or a read-only observer until settlement is known. `SettlementStatus::RecoveryRequired` means the report contains recovery work; retain its recovery handles and apply the application's recovery policy instead of treating the outcome as full cleanup.
 
+When a managed command stops, keep its concrete `CommandOperation` (or `AsyncCommandOperation`) through both observations. A `Stopped` outcome contains a stop report, not `CommandOutput`; do not invent an exit status. Wait for settlement before calling `take_stop_diagnostic`, because backend cleanup publishes the optional diagnostic during settlement. The method takes an `Option<CommandError>` once. `None` does not undo or disprove the observed stop. Read the diagnostic's stop reason, `cleanup_failures()`, and any `captured_output()` metadata. Captured bytes may be partial: check each stream's truncation and EOF completeness flags. EOF only describes collection, not command success. Raw bytes may contain secrets, so retain or disclose them according to application policy instead of logging them by default. A read-only operation observer cannot take this command-specific diagnostic; `into_async` and `into_sync` preserve access, while `into_inner` gives it up. Keep the settlement report and follow the application's recovery process whenever it reports `RecoveryRequired`.
+
+This sync helper shows the observation order and returns the outcome, settlement, and optional diagnostic to its caller. The caller remains responsible for recovery and for choosing how to handle captured bytes:
+
+<!-- doc-example:managed-stop-diagnostic:compile -->
+```rust
+use std::sync::Arc;
+use qubit_command::{CommandError, CommandOperation};
+use qubit_operation::{OperationOutcome, SettlementReport};
+
+fn observe_stopped_command(
+    mut handle: CommandOperation,
+) -> Result<(
+    OperationOutcome<qubit_command::CommandOutput, CommandError>,
+    Arc<SettlementReport>,
+    Option<CommandError>,
+), Box<dyn std::error::Error>> {
+    let outcome = handle.wait_outcome()?;
+    let settlement = handle.wait_settlement()?;
+    let diagnostic = if matches!(&outcome, OperationOutcome::Stopped(_)) {
+        handle.take_stop_diagnostic()
+    } else {
+        None
+    };
+
+    if let Some(error) = diagnostic.as_ref() {
+        if let Some(captured) = error.captured_output() {
+            let _metadata = (
+                captured.stdout().len(),
+                captured.stdout_truncated(),
+                captured.stdout_complete(),
+                captured.stderr().len(),
+                captured.stderr_truncated(),
+                captured.stderr_complete(),
+            );
+        }
+        let _cleanup_failures = error.cleanup_failures();
+    }
+    // Return RecoveryRequired and its recovery handles to the application.
+    Ok((outcome, settlement, diagnostic))
+}
+```
+
 ### Stream a command with a session
 
 Enable the crate's `async` feature to use `start_session`. A session exposes stdin, stdout, and stderr as independent byte endpoints. Read stdout and stderr concurrently so a full pipe cannot block the other stream; close stdin explicitly to send EOF. After collecting the operation outcome, drop the endpoints and then wait for settlement. The [session example](../examples/managed_session.rs) demonstrates this order using the runtime-independent `qubit-io` traits.

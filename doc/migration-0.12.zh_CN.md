@@ -72,6 +72,8 @@ managed operation 有两个需要分别观察的阶段：
 
 直接使用 handle 时，operation outcome 中的 `Failed(CommandError)` 保留领域错误；`Stopped` 不带 `CommandOutput`，不能自行补造退出码。operation observer 错误和 settlement 错误表示观察过程未完成，应作为生命周期问题处理。便捷入口 `run_managed` 将成功 outcome 映射成 `CommandOutput`，命令失败映射为 `CommandError`；提交拒绝或 operation 桥接失败也会被转换为 `ManagedOperationFailed` 诊断。若调用方需要区分“提交被拒绝”和“命令本身失败”，使用 `submit` 并检查 `CommandSubmitFailureReason`，不要使用收集型便捷入口。
 
+要排查停止后的部分输出或清理问题，保留具体 handle，先观察 `Stopped` outcome，再等待 settlement，之后对 handle 调用一次 `take_stop_diagnostic()`。`None` 仍可能出现在已经停止的操作中；诊断若含捕获字节，应检查截断、EOF 完整性和 `cleanup_failures`，并避免默认记录原始敏感内容。`RecoveryRequired` 时保留 recovery handles 并执行应用的恢复流程。完整的双语操作步骤和可编译示例见[英文指南](user_guide.md#observe-outcome-and-settlement-separately)与[中文指南](user_guide.zh_CN.md#分开观察命令结果和资源结算)。
+
 | 旧调用习惯 | 0.12 建议 | 注意事项 |
 | --- | --- | --- |
 | `CommandRunner::run` / `run_with` | 原样保留，或按服务边界迁移到 `run_managed` | 旧同步调用契约不因新增 API 自动改变。 |

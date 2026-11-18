@@ -41,6 +41,49 @@ println!("{}", output.stdout_lossy_text());
 
 同步与异步 handle 共用同一个 outcome 接收端；取结果前可通过 `into_async` 或 `into_sync` 转换。涉及资源的操作应保留 handle 或只读 observer，直到确认 settlement。`SettlementStatus::RecoveryRequired` 表示仍有待恢复资源：保留报告中的 recovery handle，并按应用自身的恢复策略处理，不能把它视为清理完成。
 
+受管命令停止时，应保留具体的 `CommandOperation` 或 `AsyncCommandOperation`，直到完成两阶段观察。`Stopped` outcome 只有停止报告，不含 `CommandOutput`；不要自行补造退出状态。先等待 settlement，再调用 `take_stop_diagnostic`，因为后台清理会在结算过程中发布可选诊断。该方法返回 `Option<CommandError>`，内容只能取出一次；返回 `None` 不会撤销或否定已经观察到的停止。检查诊断中的停止原因、`cleanup_failures()` 和 `captured_output()` 元数据。捕获的字节可能不完整，应分别查看每个流是否截断、是否观察到 EOF；EOF 只说明采集状态，不代表命令成功。原始字节可能含敏感信息，应用应按自身策略保留或披露，不要默认写入日志。只读 operation observer 没有取回此命令诊断的接口；`into_async` 与 `into_sync` 会保留访问能力，`into_inner` 则会放弃它。保留 settlement 报告；若状态为 `RecoveryRequired`，按应用的恢复流程处理。
+
+下面的同步辅助函数展示观察顺序，并把 outcome、settlement 和可选诊断交还调用方。恢复和捕获字节的处理仍由调用方负责：
+
+<!-- doc-example:managed-stop-diagnostic:compile -->
+```rust
+use std::sync::Arc;
+use qubit_command::{CommandError, CommandOperation};
+use qubit_operation::{OperationOutcome, SettlementReport};
+
+fn observe_stopped_command(
+    mut handle: CommandOperation,
+) -> Result<(
+    OperationOutcome<qubit_command::CommandOutput, CommandError>,
+    Arc<SettlementReport>,
+    Option<CommandError>,
+), Box<dyn std::error::Error>> {
+    let outcome = handle.wait_outcome()?;
+    let settlement = handle.wait_settlement()?;
+    let diagnostic = if matches!(&outcome, OperationOutcome::Stopped(_)) {
+        handle.take_stop_diagnostic()
+    } else {
+        None
+    };
+
+    if let Some(error) = diagnostic.as_ref() {
+        if let Some(captured) = error.captured_output() {
+            let _metadata = (
+                captured.stdout().len(),
+                captured.stdout_truncated(),
+                captured.stdout_complete(),
+                captured.stderr().len(),
+                captured.stderr_truncated(),
+                captured.stderr_complete(),
+            );
+        }
+        let _cleanup_failures = error.cleanup_failures();
+    }
+    // 将 RecoveryRequired 及其 recovery handles 交还应用处理。
+    Ok((outcome, settlement, diagnostic))
+}
+```
+
 ### 用 session 流式处理命令
 
 启用 crate 的 `async` feature 后可调用 `start_session`。session 为 stdin、stdout 和 stderr 提供独立字节端点。stdout 与 stderr 应并发读取，避免一个满管道阻塞另一条流；发送完输入后显式关闭 stdin，向子进程传递 EOF。取出 operation outcome 后，释放端点，再等待 settlement。[session 示例](../examples/managed_session.rs)展示了使用不绑定 runtime 的 `qubit-io` trait 完成这套流程。
