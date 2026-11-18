@@ -1497,7 +1497,10 @@ mod tests {
                 std::task::Poll::Ready(Ok(MAX_BLOCK))
             ));
         }
-        assert!(matches!(first.poll_write(&mut writer_context, b"blocked"), std::task::Poll::Pending));
+        assert!(matches!(
+            first.poll_write(&mut writer_context, b"blocked"),
+            std::task::Poll::Pending
+        ));
         assert!(reader_counter.0.load(Ordering::SeqCst) > 0);
 
         let mut drained = vec![0; CHANNEL_CAPACITY];
@@ -1524,7 +1527,10 @@ mod tests {
             std::task::Poll::Ready(Ok(3))
         ));
         assert_eq!(&tail[..3], b"xyz");
-        assert!(matches!(second.poll_read(&mut reader_context, &mut tail), std::task::Poll::Pending));
+        assert!(matches!(
+            second.poll_read(&mut reader_context, &mut tail),
+            std::task::Poll::Pending
+        ));
     }
 
     #[test]

@@ -954,16 +954,9 @@ mod tests {
 
     #[test]
     fn test_finalization_keeps_primary_and_output_while_appending_cleanup_in_order() {
-        let primary_capture = CommandCapturedOutput::new(
-            (b"primary".to_vec(), false, true),
-            (Vec::new(), false, true),
-        );
-        let primary = CommandError::from_reason(
-            "<redacted command>",
-            CommandErrorReason::Cancelled,
-            None,
-        )
-        .with_captured_output(primary_capture);
+        let primary_capture = CommandCapturedOutput::new((b"primary".to_vec(), false, true), (Vec::new(), false, true));
+        let primary = CommandError::from_reason("<redacted command>", CommandErrorReason::Cancelled, None)
+            .with_captured_output(primary_capture);
         let finalization = CommandError::from_reason(
             "<redacted command>",
             CommandErrorReason::ReadOutputFailed {

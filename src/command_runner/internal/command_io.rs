@@ -933,19 +933,23 @@ mod tests {
     #[test]
     fn test_cancel_and_collect_without_stdin_preserves_joined_output_snapshot() {
         let stdout = OutputReader::new(
-            thread::spawn(|| Ok(CapturedOutput {
-                bytes: b"stdout snapshot".to_vec(),
-                truncated: false,
-                complete: true,
-            })),
+            thread::spawn(|| {
+                Ok(CapturedOutput {
+                    bytes: b"stdout snapshot".to_vec(),
+                    truncated: false,
+                    complete: true,
+                })
+            }),
             IoCancellation::pair().expect("stdout cancellation should initialize").0,
         );
         let stderr = OutputReader::new(
-            thread::spawn(|| Ok(CapturedOutput {
-                bytes: b"stderr snapshot".to_vec(),
-                truncated: false,
-                complete: true,
-            })),
+            thread::spawn(|| {
+                Ok(CapturedOutput {
+                    bytes: b"stderr snapshot".to_vec(),
+                    truncated: false,
+                    complete: true,
+                })
+            }),
             IoCancellation::pair().expect("stderr cancellation should initialize").0,
         );
         let status = std::process::Command::new("rustc")
@@ -953,8 +957,8 @@ mod tests {
             .status()
             .expect("rustc should provide an exit status");
 
-        let (result, failures) = CommandIo::new(stdout, stderr, None)
-            .cancel_and_collect("command", status, || Ok(Duration::from_millis(3)));
+        let (result, failures) =
+            CommandIo::new(stdout, stderr, None).cancel_and_collect("command", status, || Ok(Duration::from_millis(3)));
         let output = result.expect("successfully joined readers should produce output");
 
         assert_eq!(output.stdout(), b"stdout snapshot");
