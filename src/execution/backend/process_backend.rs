@@ -607,6 +607,47 @@ mod tests {
     }
 
     #[cfg(unix)]
+    struct RejectOnceRecordingSink {
+        recording: RecordingSink,
+        attempts: AtomicUsize,
+        reject_once: AtomicBool,
+    }
+
+    #[cfg(unix)]
+    impl FactSink for RejectOnceRecordingSink {
+        fn publish_stop_diagnostic(&self, error: CommandError) -> Result<(), CommandError> {
+            self.recording.publish_stop_diagnostic(error)
+        }
+
+        fn publish_outcome(
+            &self,
+            outcome: OperationOutcome<CommandOutput, CommandError>,
+        ) -> Result<(), FactPublishError> {
+            self.recording.publish_outcome(outcome)
+        }
+
+        fn confirm_input_release(&self) -> Result<(), FactPublishError> {
+            self.recording.confirm_input_release()
+        }
+
+        fn publish_settlement(&self, report: Arc<SettlementReport>) -> Result<(), FactPublishError> {
+            self.recording.publish_settlement(report)
+        }
+
+        fn retain_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) -> Result<(), RecoveryPublishFailure> {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            if self.reject_once.swap(false, Ordering::SeqCst) {
+                Err(RecoveryPublishFailure {
+                    reason: RecoveryPublishError::StoreUnavailable,
+                    owner,
+                })
+            } else {
+                self.recording.retain_recovery_owner(owner)
+            }
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn test_stop_before_backend_start_publishes_stopped_release_and_settlement() {
         let manager = OperationManager::new(Default::default()).unwrap();
@@ -1414,6 +1455,96 @@ mod tests {
             owner.retry_cleanup().unwrap_err(),
             RecoveryRetryError::OwnerAlreadyConsumed
         );
+        operation.wait_settlement().unwrap();
+        assert!(!capacity_released.load(Ordering::SeqCst));
+        drop(owner);
+        assert!(capacity_released.load(Ordering::SeqCst));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_preparation_recovery_retries_rejected_owner_before_settlement() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::new());
+        let sink = Arc::new(RejectOnceRecordingSink {
+            recording: RecordingSink::default(),
+            attempts: AtomicUsize::new(0),
+            reject_once: AtomicBool::new(true),
+        });
+        let capacity_released = Arc::new(AtomicBool::new(false));
+        let operation_backend = Arc::clone(&backend);
+        let operation_sink = Arc::clone(&sink);
+        let operation_capacity_released = Arc::clone(&capacity_released);
+        let file = tempfile::tempfile().unwrap();
+        let duplicate = file.try_clone().unwrap();
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    |_| {},
+                    move |_| {
+                        let released = Arc::clone(&operation_capacity_released);
+                        crate::execution::contracts::ReservationLease::new(move || {
+                            released.store(true, Ordering::SeqCst);
+                        })
+                    },
+                );
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout(),
+                    command: Command::new("sh").arg("-c").arg("exit 99"),
+                    options: RequestOptions::Resources(
+                        CommandResourceRunOptions::new()
+                            .stdin_file(duplicate)
+                            .stdout_sink(file, FileSinkPolicy::Truncate),
+                    ),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
+                    },
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: None,
+                };
+                operation_backend.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: operation_sink.clone(),
+                        session_bridge: None,
+                    },
+                    operation_sink,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        assert_eq!(sink.attempts.load(Ordering::SeqCst), 2);
+        assert!(!sink.recording.released.load(Ordering::SeqCst));
+        assert!(sink.recording.settlement.lock().unwrap().is_none());
+        assert!(matches!(
+            sink.recording.outcome.lock().unwrap().take(),
+            Some(OperationOutcome::Failed(error))
+                if matches!(error.reason(), CommandErrorReason::WriteOutputFailed { .. })
+        ));
+
+        let owner = sink
+            .recording
+            .recovery_owner
+            .lock()
+            .unwrap()
+            .take()
+            .expect("retried owner should be retained by the recovery store");
+        assert!(!owner.is_complete());
+        owner.retry_cleanup().unwrap();
         operation.wait_settlement().unwrap();
         assert!(!capacity_released.load(Ordering::SeqCst));
         drop(owner);
