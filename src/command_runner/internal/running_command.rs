@@ -2052,6 +2052,72 @@ mod tests {
         assert_eq!(releases.load(Ordering::SeqCst), 1);
     }
 
+    #[test]
+    fn test_uncertain_termination_keeps_output_limit_primary_and_budget_snapshot() {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+
+        use crate::execution::backend::ReaperObserver;
+        use crate::execution::contracts::ReservationLease;
+
+        let budget = budget_with_stdout(1, Some(1), b"ab");
+        let (stdout, reader_release) = blocked_budget_reader(Arc::clone(&budget));
+        let releases = Arc::new(AtomicUsize::new(0));
+        let released = Arc::clone(&releases);
+        let lease = ReservationLease::new(move || {
+            released.fetch_add(1, Ordering::SeqCst);
+        });
+        let (observer, completed) = ReaperObserver::pair();
+        let started = ManualMonotonicClock::new_shared();
+        let timer = ManualMonotonicClock::new_shared();
+        let command = RunningCommand::new_with_reaper(
+            "output limit reaper test".to_owned(),
+            termination_failure_child(),
+            CommandIo::new(stdout, joined_stderr_reader(), None),
+            started.now(),
+            timer.new_timer(),
+            RunningCommandResources {
+                cancellation_token: None,
+                total_budget: Some(budget),
+                capacity_lease: Some(lease),
+                reaper_observer: Some(observer.clone()),
+                session_bridge: None,
+                operation_context: None,
+            },
+        );
+
+        let error = expect_error(
+            command.resolve_event(
+                RunEvent::OutputLimitExceeded {
+                    limit: 1,
+                    observed: 2,
+                    status: None,
+                },
+                None,
+            ),
+            "uncertain termination must preserve the output limit failure",
+        );
+        assert_eq!(error.kind(), CommandErrorKind::OutputLimitExceeded);
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::OutputLimitExceeded { limit: 1, observed: 2 }
+        ));
+        let captured = error.captured_output().expect("the budget snapshot must survive handoff");
+        assert_eq!(captured.stdout(), b"a");
+        assert!(captured.stdout_truncated());
+        assert!(!captured.stdout_complete());
+        assert!(observer.is_pending());
+        assert_eq!(releases.load(Ordering::SeqCst), 0);
+
+        reader_release.release.store(true, Ordering::Release);
+        completed
+            .recv_timeout(Duration::from_secs(3))
+            .expect("reaper should finish helper cleanup and release the lease");
+        assert!(observer.is_complete());
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
+    }
+
     fn running_with_elapsed_failure(child: ManagedChildProcess, io: CommandIo) -> RunningCommand {
         let started_clock = ManualMonotonicClock::new_shared();
         let timer_clock = ManualMonotonicClock::new_shared();
