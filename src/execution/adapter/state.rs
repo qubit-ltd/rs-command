@@ -1182,6 +1182,43 @@ mod activation_failure_tests {
     }
 
     #[test]
+    fn test_stop_diagnostic_recovers_poisoned_slot_and_retains_error() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let state = make_state(scheduler, permit);
+        let slot = state.stop_diagnostic_slot();
+        let poison_slot = Arc::clone(&slot);
+        let poisoner = std::thread::spawn(move || {
+            let _guard = poison_slot.lock().unwrap();
+            panic!("poison diagnostic slot for recovery test");
+        });
+        assert!(poisoner.join().is_err());
+
+        let first = CommandError::from_reason(
+            "retained after poison",
+            CommandErrorReason::WaitFailed {
+                source: std::io::Error::other("wait failed"),
+            },
+            None,
+        );
+        assert!(crate::execution::contracts::FactSink::publish_stop_diagnostic(&*state, first).is_ok());
+        let duplicate = crate::execution::contracts::FactSink::publish_stop_diagnostic(
+            &*state,
+            CommandError::from_reason("duplicate", CommandErrorReason::Cancelled, None),
+        )
+        .expect_err("poison recovery must preserve the first diagnostic");
+        assert_eq!(duplicate.kind(), CommandErrorKind::Cancelled);
+        assert_eq!(
+            slot.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_ref()
+                .unwrap()
+                .kind(),
+            CommandErrorKind::WaitFailed
+        );
+    }
+
+    #[test]
     fn test_recovery_owner_is_returned_when_adapter_has_no_operation_identity() {
         let scheduler = scheduler();
         let permit = scheduler.try_reserve(0).unwrap();
