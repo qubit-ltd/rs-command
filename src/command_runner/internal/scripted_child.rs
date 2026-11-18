@@ -26,12 +26,12 @@ pub(super) struct ScriptedChild {
     inner: Box<dyn ChildWrapper>,
     /// Shared, ordered log of lifecycle operations observed by the test.
     calls: Arc<Mutex<Vec<String>>>,
-    /// Optional error returned by the next termination request.
-    kill_error: Option<io::Error>,
+    /// Queued errors returned by successive termination requests.
+    kill_errors: VecDeque<io::Error>,
     /// Whether unscripted termination should be delegated to the inner child.
     delegate_kill: bool,
-    /// Optional result returned by the next blocking wait.
-    wait_result: Option<io::Result<ExitStatus>>,
+    /// Queued results returned by successive blocking waits.
+    wait_results: VecDeque<io::Result<ExitStatus>>,
     /// Queued results returned by successive nonblocking waits.
     try_wait_results: VecDeque<io::Result<Option<ExitStatus>>>,
 }
@@ -43,16 +43,16 @@ impl ScriptedChild {
             name,
             inner,
             calls,
-            kill_error: None,
+            kill_errors: VecDeque::new(),
             delegate_kill: false,
-            wait_result: None,
+            wait_results: VecDeque::new(),
             try_wait_results: VecDeque::new(),
         }
     }
 
-    /// Scripts the next termination request to return an error.
+    /// Queues an error for a termination request.
     pub(super) fn kill_error(mut self, source: io::Error) -> Self {
-        self.kill_error = Some(source);
+        self.kill_errors.push_back(source);
         self
     }
 
@@ -61,9 +61,9 @@ impl ScriptedChild {
         self
     }
 
-    /// Scripts the next blocking wait to return the supplied exit status.
+    /// Queues a successful blocking wait with the supplied exit status.
     pub(super) fn wait_status(mut self, exit_status: ExitStatus) -> Self {
-        self.wait_result = Some(Ok(exit_status));
+        self.wait_results.push_back(Ok(exit_status));
         self
     }
 
@@ -76,9 +76,9 @@ impl ScriptedChild {
         self
     }
 
-    /// Injects a failure while confirming an accepted termination request.
+    /// Queues a failure while confirming an accepted termination request.
     pub(super) fn wait_error(mut self, source: io::Error) -> Self {
-        self.wait_result = Some(Err(source));
+        self.wait_results.push_back(Err(source));
         self
     }
 
@@ -106,7 +106,7 @@ impl ChildWrapper for ScriptedChild {
 
     fn start_kill(&mut self) -> io::Result<()> {
         self.record("kill");
-        match self.kill_error.take() {
+        match self.kill_errors.pop_front() {
             Some(source) => Err(source),
             None if self.delegate_kill => self.inner.start_kill(),
             None => Ok(()),
@@ -122,7 +122,7 @@ impl ChildWrapper for ScriptedChild {
 
     fn wait(&mut self) -> io::Result<ExitStatus> {
         self.record("wait");
-        self.wait_result.take().unwrap_or_else(|| self.inner.wait())
+        self.wait_results.pop_front().unwrap_or_else(|| self.inner.wait())
     }
 }
 
