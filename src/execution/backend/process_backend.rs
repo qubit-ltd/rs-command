@@ -278,12 +278,10 @@ impl Backend for ProcessBackend {
             log::error!("failed to publish command outcome: {error:?}");
         }
         finish_backend_tail(
-            operation_id,
             sink,
             reaper_observer,
             reaper_completion,
-            deferred_owner,
-            recovery_transferred,
+            (recovery_transferred, deferred_owner),
             session_bridge,
             scope,
             reservation,
@@ -292,21 +290,31 @@ impl Backend for ProcessBackend {
 }
 
 /// Completes publication and ownership transfer after the runner returns.
-///
 /// Reaper recovery can keep backend ownership after the runner has returned.
 /// Keeping this tail in one helper makes the transfer-before-release rule
 /// explicit for both accepted and deferred reaper owners.
+///
+/// # Parameters
+/// * `sink`: Sink receiving cleanup, settlement, and recovery facts.
+/// * `reaper_observer`: Observer tracking child and helper reaper completion.
+/// * `reaper_completion`: Channel signaling completion of pending reaper work.
+/// * `recovery`: Whether ownership was transferred and any deferred recovery
+///   owner.
+/// * `session_bridge`: Session endpoints retained until runner/reaper handoff
+///   resolves.
+/// * `scope`: Operation scope retaining managed resources.
+/// * `reservation`: Capacity reservation retained until cleanup ownership
+///   resolves.
 fn finish_backend_tail(
-    operation_id: OperationId,
     sink: Arc<dyn FactSink>,
     reaper_observer: ReaperObserver,
     reaper_completion: std::sync::mpsc::Receiver<()>,
-    deferred_owner: Option<Box<dyn RecoveryOwner>>,
-    mut recovery_transferred: bool,
+    (mut recovery_transferred, deferred_owner): (bool, Option<Box<dyn RecoveryOwner>>),
     session_bridge: Option<Arc<dyn crate::session::contracts::SessionBridge>>,
     scope: qubit_operation::OperationScope,
     reservation: crate::execution::contracts::Reservation,
 ) {
+    let operation_id = scope.id();
     if let Some(owner) = deferred_owner {
         schedule_recovery_transfer(Arc::clone(&sink), owner);
         recovery_transferred = true;
@@ -428,9 +436,9 @@ mod tests {
     use qubit_operation::TimerRegistration;
 
     #[cfg(unix)]
-    use super::finish_backend_tail;
-    #[cfg(unix)]
     use super::ProcessBackend;
+    #[cfg(unix)]
+    use super::finish_backend_tail;
     use super::normalize_tee_paths;
     use super::runner_result_outcome;
     use super::schedule_recovery_transfer;
@@ -1848,7 +1856,6 @@ mod tests {
 
         let mut operation = manager
             .try_submit(OperationOptions::default(), move |scope| {
-                let operation_id = scope.id();
                 let reservation = Reservation::new(
                     1,
                     1,
@@ -1887,12 +1894,10 @@ mod tests {
                     .unwrap();
 
                 finish_backend_tail(
-                    operation_id,
                     sink_port,
                     observer,
                     completion,
-                    Some(deferred_owner),
-                    transferred,
+                    (transferred, Some(deferred_owner)),
                     None,
                     scope,
                     reservation,
