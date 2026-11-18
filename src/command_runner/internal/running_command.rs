@@ -677,9 +677,9 @@ mod tests {
     use crate::CommandErrorReason;
     use crate::OutputStream;
     use crate::execution::contracts::ReservationLease;
-    use crate::session::contracts::SessionBridge;
     #[cfg(feature = "async")]
     use crate::session::channel::SessionChannels;
+    use crate::session::contracts::SessionBridge;
     #[cfg(feature = "async")]
     use crate::session::contracts::SessionStreamPolicy;
 
