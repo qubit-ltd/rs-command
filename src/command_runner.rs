@@ -812,7 +812,13 @@ mod tests {
         assert!(bounded.is_output_truncation_failure_enabled());
         assert_eq!(bounded.configured_max_total_output_bytes(), Some(9));
 
-        let reset = configured.unbounded_output().without_total_output_limit();
+        let unbounded = bounded.unbounded_output();
+        assert_eq!(unbounded.configured_max_stdout_bytes(), None);
+        assert_eq!(unbounded.configured_max_stderr_bytes(), None);
+        assert_eq!(unbounded.configured_max_total_output_bytes(), Some(9));
+        assert!(!unbounded.is_output_truncation_failure_enabled());
+
+        let reset = unbounded.without_total_output_limit();
         assert_eq!(reset.configured_max_stdout_bytes(), None);
         assert_eq!(reset.configured_max_stderr_bytes(), None);
         assert_eq!(reset.configured_max_total_output_bytes(), None);
