@@ -1021,6 +1021,53 @@ mod tests {
     }
 
     #[test]
+    fn test_try_next_dispatches_active_reservation_before_earlier_queued_job() {
+        use std::sync::Mutex;
+
+        let scheduler = BoundedScheduler::new(config(1, 0)).unwrap();
+        let active = scheduler.try_reserve(1).unwrap();
+        let queued = scheduler.try_reserve(2).unwrap();
+        let dispatched = Arc::new(Mutex::new(Vec::new()));
+
+        let queued_order = Arc::clone(&dispatched);
+        scheduler
+            .enqueue(
+                ScheduledJob {
+                    run: Box::new(move |permit| {
+                        queued_order.lock().unwrap().push("queued");
+                        drop(permit);
+                    }),
+                    stop: Arc::new(NoopStop),
+                },
+                queued,
+            )
+            .unwrap();
+        let active_order = Arc::clone(&dispatched);
+        scheduler
+            .enqueue(
+                ScheduledJob {
+                    run: Box::new(move |permit| {
+                        active_order.lock().unwrap().push("active");
+                        drop(permit);
+                    }),
+                    stop: Arc::new(NoopStop),
+                },
+                active,
+            )
+            .unwrap();
+
+        let (job, permit) = scheduler.try_next().expect("active reservation should dispatch first");
+        (job.run)(permit);
+        assert_eq!(*dispatched.lock().unwrap(), ["active"]);
+        assert_eq!((scheduler.snapshot().active, scheduler.snapshot().queued), (1, 0));
+
+        let (job, permit) = scheduler.try_next().expect("queued reservation should promote and dispatch");
+        (job.run)(permit);
+        assert_eq!(*dispatched.lock().unwrap(), ["active", "queued"]);
+        assert_eq!((scheduler.snapshot().active, scheduler.snapshot().queued), (0, 0));
+    }
+
+    #[test]
     fn test_scheduler_trait_dispatches_queued_work_and_drains_after_close() {
         let scheduler = BoundedScheduler::new(config(1, 0)).unwrap();
         let executed = Arc::new(AtomicUsize::new(0));
