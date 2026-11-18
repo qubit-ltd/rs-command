@@ -1835,7 +1835,8 @@ mod snapshot_failure_tests {
         input.seek(SeekFrom::Start(0)).expect("stdin cursor should be reset");
 
         let manager = OperationManager::new(Default::default()).expect("manager should start");
-        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).expect("executor should start");
+        let executor =
+            CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).expect("executor should start");
         let removed_directory = tempfile::tempdir().expect("temporary directory should be created");
         std::env::set_current_dir(removed_directory.path()).expect("current directory should change");
         std::fs::remove_dir(removed_directory.path()).expect("current directory should be unlinked");
@@ -1885,6 +1886,102 @@ mod snapshot_failure_tests {
             CommandSubmitFailureReason::Snapshot(ref snapshot)
                 if snapshot.diagnostic.contains("working directory snapshot failed")
         ));
+
+        let scoped_executor = executor.clone();
+        let scoped_result = manager
+            .run(qubit_operation::OperationOptions::default(), move |scope| {
+                let scoped_failure = match scoped_executor.submit_in(
+                    &scope,
+                    CommandRunner::without_timeout(),
+                    Command::new("must-not-run-after-scoped-snapshot-failure"),
+                    Default::default(),
+                ) {
+                    Ok(_) => panic!("scoped submission must reject a missing working-directory snapshot"),
+                    Err(failure) => failure,
+                };
+                assert!(matches!(
+                    scoped_failure.reason,
+                    CommandSubmitFailureReason::Snapshot(ref snapshot)
+                        if snapshot.diagnostic.contains("working directory snapshot failed")
+                ));
+
+                let mut input = tempfile::tempfile().expect("scoped resource input should be created");
+                input.write_all(b"scoped snapshot input").unwrap();
+                input.rewind().unwrap();
+                let scoped_resource_failure = match scoped_executor.submit_resources_in(
+                    &scope,
+                    CommandRunner::without_timeout(),
+                    Command::new("must-not-run-after-scoped-resource-snapshot-failure"),
+                    CommandResourceRunOptions::new().stdin_file(input),
+                ) {
+                    Ok(_) => panic!("scoped resource submission must reject a missing working-directory snapshot"),
+                    Err(failure) => failure,
+                };
+                assert!(matches!(
+                    scoped_resource_failure.reason,
+                    CommandSubmitFailureReason::Snapshot(ref snapshot)
+                        if snapshot.diagnostic.contains("working directory snapshot failed")
+                ));
+                let mut returned_input = scoped_resource_failure
+                    .options
+                    .configured_stdin()
+                    .expect("scoped snapshot rejection must return its input owner")
+                    .try_clone()
+                    .unwrap();
+                returned_input.rewind().unwrap();
+                let mut bytes = Vec::new();
+                returned_input.read_to_end(&mut bytes).unwrap();
+                assert_eq!(bytes, b"scoped snapshot input");
+
+                #[cfg(feature = "async")]
+                {
+                    let async_scoped_failure = match scoped_executor.submit_async_in(
+                        &scope,
+                        CommandRunner::without_timeout(),
+                        Command::new("must-not-run-after-async-scoped-snapshot-failure"),
+                        Default::default(),
+                    ) {
+                        Ok(_) => panic!("async scoped submission must reject a missing snapshot"),
+                        Err(failure) => failure,
+                    };
+                    assert!(matches!(
+                        async_scoped_failure.reason,
+                        CommandSubmitFailureReason::Snapshot(ref snapshot)
+                            if snapshot.diagnostic.contains("working directory snapshot failed")
+                    ));
+
+                    let mut input = tempfile::tempfile().expect("async scoped input should be created");
+                    input.write_all(b"async scoped snapshot input").unwrap();
+                    input.rewind().unwrap();
+                    let async_resource_failure = match scoped_executor.submit_async_resources_in(
+                        &scope,
+                        CommandRunner::without_timeout(),
+                        Command::new("must-not-run-after-async-scoped-resource-snapshot-failure"),
+                        CommandResourceRunOptions::new().stdin_file(input),
+                    ) {
+                        Ok(_) => panic!("async scoped resource submission must reject a missing snapshot"),
+                        Err(failure) => failure,
+                    };
+                    assert!(matches!(
+                        async_resource_failure.reason,
+                        CommandSubmitFailureReason::Snapshot(ref snapshot)
+                            if snapshot.diagnostic.contains("working directory snapshot failed")
+                    ));
+                    let mut returned_input = async_resource_failure
+                        .options
+                        .configured_stdin()
+                        .expect("async scoped snapshot rejection must return its input owner")
+                        .try_clone()
+                        .unwrap();
+                    returned_input.rewind().unwrap();
+                    let mut bytes = Vec::new();
+                    returned_input.read_to_end(&mut bytes).unwrap();
+                    assert_eq!(bytes, b"async scoped snapshot input");
+                }
+                Ok::<_, crate::CommandError>(())
+            })
+            .expect("snapshot rejections should not fail the parent operation");
+        assert!(matches!(scoped_result, qubit_operation::OperationOutcome::Succeeded(())));
 
         #[cfg(feature = "async")]
         {
