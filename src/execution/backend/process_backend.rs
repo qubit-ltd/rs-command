@@ -974,7 +974,9 @@ mod tests {
         let operation_cancellation = cancellation.clone();
         let directory = tempfile::tempdir().unwrap();
         let ready = directory.path().join("external-cancel-ready");
+        let output = directory.path().join("external-cancel-output");
         let operation_ready = ready.clone();
+        let operation_output = output.clone();
 
         let mut operation = manager
             .try_submit(OperationOptions::default(), move |scope| {
@@ -986,7 +988,11 @@ mod tests {
                         "printf partial; touch {}; exec sleep 30",
                         operation_ready.display()
                     )),
-                    options: RequestOptions::Standard(CommandRunOptions::new().cancellation(operation_cancellation)),
+                    options: RequestOptions::Standard(
+                        CommandRunOptions::new()
+                            .cancellation(operation_cancellation)
+                            .tee_stdout_to_file(&operation_output),
+                    ),
                     snapshot: ExecutionSnapshot {
                         working_directory: std::env::current_dir().unwrap(),
                         environment: Vec::new(),
@@ -1016,11 +1022,17 @@ mod tests {
             .unwrap();
 
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        while !ready.exists() && std::time::Instant::now() < deadline {
+        let mut output_reached_reader = false;
+        while std::time::Instant::now() < deadline {
+            if ready.exists() && std::fs::read(&output).is_ok_and(|bytes| bytes == b"partial") {
+                output_reached_reader = true;
+                break;
+            }
             std::thread::sleep(Duration::from_millis(5));
         }
         cancellation.cancel();
         assert!(ready.exists(), "the command must start before external cancellation");
+        assert!(output_reached_reader, "stdout should reach the reader before external cancellation");
 
         assert!(matches!(
             operation.wait_outcome().unwrap(),
