@@ -244,6 +244,55 @@ mod tests {
     }
 
     #[test]
+    fn test_transferred_owner_stays_pending_until_cleanup_is_released() {
+        let sink = sink(false);
+        let (observer, completed) = ReaperObserver::pair_with_recovery_sink(sink.clone());
+        observer.mark_pending();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (cleaned_tx, cleaned_rx) = mpsc::channel();
+        let cleanup_observer = observer.clone();
+
+        observer.retain_or_defer_reaper_owner(ReaperOwner::new(move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            cleaned_tx.send(()).unwrap();
+            cleanup_observer.complete();
+        }));
+
+        assert!(observer.recovery_was_transferred());
+        assert!(observer.is_pending());
+        assert!(!observer.is_complete());
+        assert!(completed.try_recv().is_err());
+        let owner = sink
+            .owners
+            .lock()
+            .unwrap()
+            .pop()
+            .expect("recovery store should retain cleanup ownership");
+        assert!(!owner.is_complete());
+
+        owner.retry_cleanup().expect("owner should transfer to the reaper");
+        started_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("reaper should start the retained cleanup");
+        assert!(observer.is_pending());
+        assert!(!observer.is_complete());
+        assert!(completed.try_recv().is_err(), "cleanup completion must wait for cleanup release");
+        assert!(cleaned_rx.try_recv().is_err(), "the gated cleanup must still be running");
+
+        release_tx.send(()).unwrap();
+        cleaned_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("released cleanup should finish");
+        completed
+            .recv_timeout(Duration::from_secs(3))
+            .expect("cleanup completion should be observable");
+        assert!(observer.is_complete());
+        assert!(observer.is_pending(), "pending records that asynchronous cleanup was handed off");
+    }
+
+    #[test]
     fn test_rejected_recovery_transfer_returns_owner_for_backend_retry() {
         let sink = sink(true);
         let (observer, completed) = ReaperObserver::pair_with_recovery_sink(sink);
