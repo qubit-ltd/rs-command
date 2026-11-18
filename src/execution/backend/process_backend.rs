@@ -1333,6 +1333,93 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn test_second_deadline_check_publication_failures_still_release_reservation() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::new());
+        let sink = Arc::new(RecordingSink::default());
+        sink.reject_outcome_once.store(true, Ordering::SeqCst);
+        sink.reject_release_once.store(true, Ordering::SeqCst);
+        sink.reject_settlement_once.store(true, Ordering::SeqCst);
+        let reservation_released = Arc::new(AtomicBool::new(false));
+        let lease_created = Arc::new(AtomicBool::new(false));
+        let operation_backend = Arc::clone(&backend);
+        let operation_sink = Arc::clone(&sink);
+        let operation_reservation_released = Arc::clone(&reservation_released);
+        let operation_lease_created = Arc::clone(&lease_created);
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("must-not-start-after-deadline-publication-errors");
+        let operation_marker = marker.clone();
+        let domain = ClockDomainId::new_unique();
+        let clock_calls = Arc::new(AtomicUsize::new(0));
+        let clock: Arc<dyn ClockSource> =
+            Arc::new(DeadlineExpiresBeforeAuthorization(domain, Arc::clone(&clock_calls)));
+        let deadline = OperationContext::new(ContextOptions {
+            clock: Some(Arc::clone(&clock)),
+            deadline: Some(Deadline::at(MonotonicTime::new(domain, 1))),
+            budget: None,
+        })
+        .unwrap();
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    move |_| operation_reservation_released.store(true, Ordering::SeqCst),
+                    move |_| {
+                        operation_lease_created.store(true, Ordering::SeqCst);
+                        crate::execution::contracts::ReservationLease::new(|| {})
+                    },
+                );
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout(),
+                    command: Command::new("sh")
+                        .arg("-c")
+                        .arg(&format!("touch {}", operation_marker.display())),
+                    options: RequestOptions::Standard(CommandRunOptions::default()),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
+                    },
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: Some(deadline),
+                };
+                operation_backend.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: operation_sink.clone(),
+                        session_bridge: None,
+                    },
+                    operation_sink,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        operation.wait_settlement().unwrap();
+        assert!(!marker.exists(), "the second deadline check must still prevent spawn");
+        assert_eq!(clock_calls.load(Ordering::SeqCst), 3);
+        assert!(reservation_released.load(Ordering::SeqCst));
+        assert!(!lease_created.load(Ordering::SeqCst));
+        assert!(!sink.reject_outcome_once.load(Ordering::SeqCst));
+        assert!(!sink.reject_release_once.load(Ordering::SeqCst));
+        assert!(!sink.reject_settlement_once.load(Ordering::SeqCst));
+        assert!(sink.outcome.lock().unwrap().is_none());
+        assert!(!sink.released.load(Ordering::SeqCst));
+        assert!(sink.settlement.lock().unwrap().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_nonzero_child_exit_publishes_failure_and_releases_inputs() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let backend = Arc::new(ProcessBackend::new());
