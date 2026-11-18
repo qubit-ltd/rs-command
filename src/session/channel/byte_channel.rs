@@ -1481,7 +1481,7 @@ mod tests {
     fn test_aggregate_budget_backpressures_then_wakes_and_discards_later_bytes() {
         let first = ByteChannel::new();
         let reader_counter = Arc::new(CountWake(AtomicUsize::new(0)));
-        let reader_waker = std::task::Waker::from(reader_counter);
+        let reader_waker = std::task::Waker::from(reader_counter.clone());
         let mut reader_context = std::task::Context::from_waker(&reader_waker);
         assert!(matches!(
             first.poll_read(&mut reader_context, &mut [0; 1]),
@@ -1498,6 +1498,7 @@ mod tests {
             ));
         }
         assert!(matches!(first.poll_write(&mut writer_context, b"blocked"), std::task::Poll::Pending));
+        assert!(reader_counter.0.load(Ordering::SeqCst) > 0);
 
         let mut drained = vec![0; CHANNEL_CAPACITY];
         let mut offset = 0;
