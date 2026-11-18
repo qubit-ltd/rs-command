@@ -2498,8 +2498,8 @@ mod retry_wait_tests {
     use qubit_operation::TimerRegistration;
 
     use super::wait_capacity_async;
-    use super::wait_retry_tick;
     use super::wait_retryable_async;
+    use super::wait_retry_tick;
     use crate::CommandExecutionConfig;
     use crate::execution::contracts::Scheduler;
     use crate::execution::scheduler::BoundedScheduler;
@@ -2572,8 +2572,9 @@ mod retry_wait_tests {
         .unwrap();
         let reservation = scheduler.try_reserve(0).unwrap();
         let context = OperationContext::new(ContextOptions::default()).unwrap();
-        let reason =
-            crate::execution::CommandSubmitFailureReason::Capacity(crate::execution::CapacityFailure::ActiveFull);
+        let reason = crate::execution::CommandSubmitFailureReason::Capacity(
+            crate::execution::CapacityFailure::ActiveFull,
+        );
         let mut wait = Box::pin(wait_retryable_async(
             scheduler.clone(),
             0,
@@ -3124,118 +3125,123 @@ mod command_executor_api_tests {
             assert_eq!(bytes, expected);
         }
 
+        type Submit = fn(
+            &CommandExecutor,
+            crate::CommandRunner,
+            Command,
+            crate::CommandRunOptions,
+        ) -> Result<crate::CommandOperation, crate::CommandSubmitFailure>;
+        type SubmitResources = fn(
+            &CommandExecutor,
+            crate::CommandRunner,
+            Command,
+            CommandResourceRunOptions,
+        ) -> Result<crate::CommandOperation, crate::CommandResourceSubmitFailure>;
+        type SubmitIn = for<'scope> fn(
+            &CommandExecutor,
+            &'scope qubit_operation::OperationScope,
+            crate::CommandRunner,
+            Command,
+            crate::CommandRunOptions,
+        ) -> Result<crate::CommandOperation, crate::CommandSubmitFailure>;
+        type SubmitResourcesIn = for<'scope> fn(
+            &CommandExecutor,
+            &'scope qubit_operation::OperationScope,
+            crate::CommandRunner,
+            Command,
+            CommandResourceRunOptions,
+        ) -> Result<crate::CommandOperation, crate::CommandResourceSubmitFailure>;
+
+        let submit: Submit = <CommandExecutor as CommandExecutorApi>::submit;
+        let submit_resources: SubmitResources = <CommandExecutor as CommandExecutorApi>::submit_resources;
+        let submit_wait: Submit = <CommandExecutor as CommandExecutorApi>::submit_wait_blocking;
+        let submit_wait_resources: SubmitResources =
+            <CommandExecutor as CommandExecutorApi>::submit_wait_resources_blocking;
+        let submit_in: SubmitIn = <CommandExecutor as CommandExecutorApi>::submit_in;
+        let submit_resources_in: SubmitResourcesIn = <CommandExecutor as CommandExecutorApi>::submit_resources_in;
+        let submit_wait_in: SubmitIn = <CommandExecutor as CommandExecutorApi>::submit_wait_blocking_in;
+        let submit_wait_resources_in: SubmitResourcesIn =
+            <CommandExecutor as CommandExecutorApi>::submit_wait_resources_blocking_in;
+
         let (manager, executor, runner) = setup();
         executor.scheduler.close_admission();
 
-        let root = rejected(
-            <CommandExecutor as CommandExecutorApi>::submit(
-                &executor,
-                runner.clone(),
-                Command::new("must-not-run-root-submit"),
-                Default::default(),
-            ),
-            "closed root submit must return its capacity error",
-        );
-        assert_eq!(
-            root.reason,
-            CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
-        );
+        let root = rejected(submit(
+            &executor,
+            runner.clone(),
+            Command::new("must-not-run-root-submit"),
+            Default::default(),
+        ), "closed root submit must return its capacity error");
+        assert_eq!(root.reason, CommandSubmitFailureReason::Capacity(CapacityFailure::Closed));
 
         let mut input = tempfile::tempfile().unwrap();
         input.write_all(b"root resource").unwrap();
         input.rewind().unwrap();
-        let root_resources = rejected(
-            <CommandExecutor as CommandExecutorApi>::submit_resources(
-                &executor,
-                runner.clone(),
-                Command::new("must-not-run-root-resource-submit"),
-                CommandResourceRunOptions::new().stdin_file(input),
-            ),
-            "closed root resource submit must return its capacity error",
-        );
+        let root_resources = rejected(submit_resources(
+            &executor,
+            runner.clone(),
+            Command::new("must-not-run-root-resource-submit"),
+            CommandResourceRunOptions::new().stdin_file(input),
+        ), "closed root resource submit must return its capacity error");
         resource_input(root_resources, b"root resource");
 
-        let root_wait = rejected(
-            <CommandExecutor as CommandExecutorApi>::submit_wait_blocking(
-                &executor,
-                runner.clone(),
-                Command::new("must-not-run-root-wait"),
-                Default::default(),
-            ),
-            "closed root wait must return without waiting",
-        );
-        assert_eq!(
-            root_wait.reason,
-            CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
-        );
+        let root_wait = rejected(submit_wait(
+            &executor,
+            runner.clone(),
+            Command::new("must-not-run-root-wait"),
+            Default::default(),
+        ), "closed root wait must return without waiting");
+        assert_eq!(root_wait.reason, CommandSubmitFailureReason::Capacity(CapacityFailure::Closed));
 
         let mut input = tempfile::tempfile().unwrap();
         input.write_all(b"root wait resource").unwrap();
         input.rewind().unwrap();
-        let root_wait_resources = rejected(
-            <CommandExecutor as CommandExecutorApi>::submit_wait_resources_blocking(
-                &executor,
-                runner.clone(),
-                Command::new("must-not-run-root-resource-wait"),
-                CommandResourceRunOptions::new().stdin_file(input),
-            ),
-            "closed root resource wait must return ownership without waiting",
-        );
+        let root_wait_resources = rejected(submit_wait_resources(
+            &executor,
+            runner.clone(),
+            Command::new("must-not-run-root-resource-wait"),
+            CommandResourceRunOptions::new().stdin_file(input),
+        ), "closed root resource wait must return ownership without waiting");
         resource_input(root_wait_resources, b"root wait resource");
 
         let scoped_executor = executor.clone();
         let scoped_result = manager
             .run(qubit_operation::OperationOptions::default(), move |scope| {
-                let scoped = rejected(
-                    <CommandExecutor as CommandExecutorApi>::submit_in(
-                        &scoped_executor,
-                        &scope,
-                        runner.clone(),
-                        Command::new("must-not-run-scoped-submit"),
-                        Default::default(),
-                    ),
-                    "closed scoped submit must return its capacity error",
-                );
-                assert_eq!(
-                    scoped.reason,
-                    CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
-                );
+                let scoped = rejected(submit_in(
+                    &scoped_executor,
+                    &scope,
+                    runner.clone(),
+                    Command::new("must-not-run-scoped-submit"),
+                    Default::default(),
+                ), "closed scoped submit must return its capacity error");
+                assert_eq!(scoped.reason, CommandSubmitFailureReason::Capacity(CapacityFailure::Closed));
 
                 let mut input = tempfile::tempfile().unwrap();
                 input.write_all(b"scoped resource").unwrap();
                 input.rewind().unwrap();
-                let scoped_resources = rejected(
-                    <CommandExecutor as CommandExecutorApi>::submit_resources_in(
-                        &scoped_executor,
-                        &scope,
-                        runner.clone(),
-                        Command::new("must-not-run-scoped-resource-submit"),
-                        CommandResourceRunOptions::new().stdin_file(input),
-                    ),
-                    "closed scoped resource submit must return its capacity error",
-                );
+                let scoped_resources = rejected(submit_resources_in(
+                    &scoped_executor,
+                    &scope,
+                    runner.clone(),
+                    Command::new("must-not-run-scoped-resource-submit"),
+                    CommandResourceRunOptions::new().stdin_file(input),
+                ), "closed scoped resource submit must return its capacity error");
                 resource_input(scoped_resources, b"scoped resource");
 
-                let scoped_wait = rejected(
-                    <CommandExecutor as CommandExecutorApi>::submit_wait_blocking_in(
-                        &scoped_executor,
-                        &scope,
-                        runner.clone(),
-                        Command::new("must-not-run-scoped-wait"),
-                        Default::default(),
-                    ),
-                    "closed scoped wait must return without waiting",
-                );
-                assert_eq!(
-                    scoped_wait.reason,
-                    CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
-                );
+                let scoped_wait = rejected(submit_wait_in(
+                    &scoped_executor,
+                    &scope,
+                    runner.clone(),
+                    Command::new("must-not-run-scoped-wait"),
+                    Default::default(),
+                ), "closed scoped wait must return without waiting");
+                assert_eq!(scoped_wait.reason, CommandSubmitFailureReason::Capacity(CapacityFailure::Closed));
 
                 let mut input = tempfile::tempfile().unwrap();
                 input.write_all(b"scoped wait resource").unwrap();
                 input.rewind().unwrap();
                 let scoped_wait_resources = rejected(
-                    <CommandExecutor as CommandExecutorApi>::submit_wait_resources_blocking_in(
+                    submit_wait_resources_in(
                         &scoped_executor,
                         &scope,
                         runner,
