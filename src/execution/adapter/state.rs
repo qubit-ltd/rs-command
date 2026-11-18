@@ -1250,6 +1250,33 @@ mod activation_failure_tests {
     }
 
     #[test]
+    fn test_stop_request_recovers_poisoned_stop_port_and_retains_reason() {
+        let scheduler = scheduler();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let state = make_state(scheduler, permit);
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let operation_id = operation.id();
+        let _ = operation.wait_outcome().unwrap();
+        operation.wait_settlement().unwrap();
+        state.bind(operation_id).unwrap();
+        let poisoned_state = Arc::clone(&state);
+        let poisoner = std::thread::spawn(move || {
+            let _stop = poisoned_state.stop.lock().unwrap();
+            panic!("poison adapter stop-port slot for recovery test");
+        });
+        assert!(poisoner.join().is_err());
+
+        OperationControl::request_stop(&*state, qubit_operation::StopReason::ManagerShutdown);
+        assert_eq!(
+            OperationControl::snapshot(&*state).stop.unwrap().reason,
+            qubit_operation::StopReason::ManagerShutdown
+        );
+    }
+
+    #[test]
     fn test_recovery_owner_is_returned_when_adapter_has_no_operation_identity() {
         let scheduler = scheduler();
         let permit = scheduler.try_reserve(0).unwrap();
