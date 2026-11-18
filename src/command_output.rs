@@ -423,10 +423,47 @@ mod tests {
             Duration::ZERO,
         );
 
-        assert!(output.stdout_text().is_err());
-        assert!(output.stderr_text().is_err());
+        assert_eq!(output.stdout_text().unwrap_err().valid_up_to(), 1);
+        assert_eq!(output.stderr_text().unwrap_err().valid_up_to(), 0);
         assert!(matches!(output.stdout_lossy_text(), std::borrow::Cow::Owned(text) if text == "a\u{fffd}"));
         assert!(matches!(output.stderr_lossy_text(), std::borrow::Cow::Owned(text) if text == "\u{fffd}"));
+        let debug = format!("{output:?}");
+        assert!(!debug.contains("a\\xff"));
+        assert!(!debug.contains("\\xfe"));
+        assert!(debug.contains("stdout"));
+        assert!(debug.contains("stderr"));
+    }
+
+    #[test]
+    fn test_consuming_stream_accessors_preserve_empty_and_nonempty_bytes() {
+        let output = CommandOutput::new(
+            test_status(),
+            (Vec::new(), false, true),
+            (b"tail".to_vec(), false, true),
+            Duration::ZERO,
+        );
+        assert_eq!(output.into_stdout(), Vec::<u8>::new());
+        let output = CommandOutput::new(
+            test_status(),
+            (b"head".to_vec(), false, true),
+            (Vec::new(), false, true),
+            Duration::ZERO,
+        );
+        assert_eq!(output.into_stderr(), Vec::<u8>::new());
+        let output = CommandOutput::new(
+            test_status(),
+            (b"head".to_vec(), false, true),
+            (b"tail".to_vec(), false, true),
+            Duration::ZERO,
+        );
+        assert_eq!(output.into_stdout(), b"head");
+        let output = CommandOutput::new(
+            test_status(),
+            (b"head".to_vec(), false, true),
+            (b"tail".to_vec(), false, true),
+            Duration::ZERO,
+        );
+        assert_eq!(output.into_stderr(), b"tail");
     }
 
     #[test]
