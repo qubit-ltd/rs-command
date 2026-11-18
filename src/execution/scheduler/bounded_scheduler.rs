@@ -982,6 +982,39 @@ mod tests {
         assert_eq!(scheduler.snapshot().waiters, 0);
     }
 
+    #[test]
+    fn test_blocking_capacity_wait_expires_with_original_deadline() {
+        let scheduler = BoundedScheduler::new(config(0, 1)).unwrap();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let clock = Arc::new(ManualDeadlineClock {
+            domain: ClockDomainId::new_unique(),
+            ticks: AtomicU64::new(0),
+        });
+        let context = OperationContext::new(ContextOptions {
+            clock: Some(Arc::clone(&clock) as Arc<dyn ClockSource>),
+            deadline: Some(Deadline::at(MonotonicTime::new(clock.domain, 5))),
+            budget: None,
+        })
+        .unwrap();
+        let waiting = scheduler.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            done_tx.send(waiting.wait_for_capacity(0, Some(context))).unwrap();
+        });
+
+        let setup_deadline = Instant::now() + Duration::from_secs(2);
+        while scheduler.snapshot().waiters == 0 && Instant::now() < setup_deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        clock.ticks.store(5, Ordering::SeqCst);
+
+        assert!(!done_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        thread.join().unwrap();
+        assert_eq!(scheduler.snapshot().waiters, 0);
+        drop(permit);
+    }
+
     struct NoopStop;
 
     impl crate::execution::contracts::StopPort for NoopStop {
