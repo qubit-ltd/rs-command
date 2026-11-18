@@ -2498,8 +2498,8 @@ mod retry_wait_tests {
     use qubit_operation::TimerRegistration;
 
     use super::wait_capacity_async;
-    use super::wait_retryable_async;
     use super::wait_retry_tick;
+    use super::wait_retryable_async;
     use crate::CommandExecutionConfig;
     use crate::execution::contracts::Scheduler;
     use crate::execution::scheduler::BoundedScheduler;
@@ -2572,9 +2572,8 @@ mod retry_wait_tests {
         .unwrap();
         let reservation = scheduler.try_reserve(0).unwrap();
         let context = OperationContext::new(ContextOptions::default()).unwrap();
-        let reason = crate::execution::CommandSubmitFailureReason::Capacity(
-            crate::execution::CapacityFailure::ActiveFull,
-        );
+        let reason =
+            crate::execution::CommandSubmitFailureReason::Capacity(crate::execution::CapacityFailure::ActiveFull);
         let mut wait = Box::pin(wait_retryable_async(
             scheduler.clone(),
             0,

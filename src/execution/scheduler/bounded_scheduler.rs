@@ -1061,7 +1061,9 @@ mod tests {
         assert_eq!(*dispatched.lock().unwrap(), ["active"]);
         assert_eq!((scheduler.snapshot().active, scheduler.snapshot().queued), (1, 0));
 
-        let (job, permit) = scheduler.try_next().expect("queued reservation should promote and dispatch");
+        let (job, permit) = scheduler
+            .try_next()
+            .expect("queued reservation should promote and dispatch");
         (job.run)(permit);
         assert_eq!(*dispatched.lock().unwrap(), ["active", "queued"]);
         assert_eq!((scheduler.snapshot().active, scheduler.snapshot().queued), (0, 0));

@@ -827,8 +827,7 @@ mod tests {
     }
 
     fn immediate_successful_reader() -> OutputReader {
-        let (cancellation, _token) =
-            IoCancellation::pair().expect("reader cancellation should create");
+        let (cancellation, _token) = IoCancellation::pair().expect("reader cancellation should create");
         OutputReader::new(thread::spawn(|| Ok(CapturedOutput::default())), cancellation)
     }
 
@@ -1631,11 +1630,7 @@ mod tests {
         );
 
         assert_eq!(error.kind(), CommandErrorKind::ReadOutputFailed);
-        assert!(
-            error
-                .output()
-                .is_some_and(|output| output.exit_status().success())
-        );
+        assert!(error.output().is_some_and(|output| output.exit_status().success()));
         let captured = error
             .captured_output()
             .expect("the failed reader should retain its partial capture");

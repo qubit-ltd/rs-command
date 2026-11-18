@@ -889,10 +889,7 @@ mod tests {
             .expect_err("a stopped start gate should reject the command before spawn");
 
         assert_eq!(error.kind(), CommandErrorKind::CancelledBeforeStart);
-        assert_eq!(
-            gate.stop_reason(),
-            Some(qubit_operation::StopReason::UserCancelled)
-        );
+        assert_eq!(gate.stop_reason(), Some(qubit_operation::StopReason::UserCancelled));
     }
 
     #[cfg(unix)]
