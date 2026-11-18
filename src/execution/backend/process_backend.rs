@@ -575,6 +575,9 @@ mod tests {
         recovery_owner: Mutex<Option<Box<dyn RecoveryOwner>>>,
         reject_recovery_once: AtomicBool,
         recovery_attempts: AtomicUsize,
+        reject_outcome_once: AtomicBool,
+        reject_release_once: AtomicBool,
+        reject_settlement_once: AtomicBool,
     }
 
     #[cfg(unix)]
@@ -588,16 +591,25 @@ mod tests {
             &self,
             outcome: OperationOutcome<CommandOutput, CommandError>,
         ) -> Result<(), FactPublishError> {
+            if self.reject_outcome_once.swap(false, Ordering::SeqCst) {
+                return Err(FactPublishError::DuplicateOutcome);
+            }
             *self.outcome.lock().unwrap() = Some(outcome);
             Ok(())
         }
 
         fn confirm_input_release(&self) -> Result<(), FactPublishError> {
+            if self.reject_release_once.swap(false, Ordering::SeqCst) {
+                return Err(FactPublishError::DuplicateRelease);
+            }
             self.released.store(true, Ordering::SeqCst);
             Ok(())
         }
 
         fn publish_settlement(&self, report: Arc<SettlementReport>) -> Result<(), FactPublishError> {
+            if self.reject_settlement_once.swap(false, Ordering::SeqCst) {
+                return Err(FactPublishError::DuplicateSettlement);
+            }
             *self.settlement.lock().unwrap() = Some(report);
             Ok(())
         }
@@ -686,6 +698,156 @@ mod tests {
         ));
         let report = sink.settlement.lock().unwrap().take().unwrap();
         assert!(report.all_released());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_pre_start_stop_publication_failures_still_release_reservation() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::new());
+        let sink = Arc::new(RecordingSink::default());
+        sink.reject_outcome_once.store(true, Ordering::SeqCst);
+        sink.reject_release_once.store(true, Ordering::SeqCst);
+        sink.reject_settlement_once.store(true, Ordering::SeqCst);
+        let reservation_released = Arc::new(AtomicBool::new(false));
+        let operation_backend = Arc::clone(&backend);
+        let operation_sink = Arc::clone(&sink);
+        let operation_reservation_released = Arc::clone(&reservation_released);
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("must-not-start-after-publication-errors");
+        let operation_marker = marker.clone();
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                let stop = operation_backend.stop_port(operation_id);
+                StopPort::request_stop(&*stop, StopReason::UserCancelled);
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    move |_| operation_reservation_released.store(true, Ordering::SeqCst),
+                    |_| crate::execution::contracts::ReservationLease::new(|| {}),
+                );
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout(),
+                    command: Command::new("sh")
+                        .arg("-c")
+                        .arg(&format!("touch {}", operation_marker.display())),
+                    options: RequestOptions::Standard(CommandRunOptions::default()),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
+                    },
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: None,
+                };
+                operation_backend.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: operation_sink.clone(),
+                        session_bridge: None,
+                    },
+                    operation_sink,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        operation.wait_settlement().unwrap();
+        assert!(!marker.exists(), "a pre-start stop must still prevent process spawn");
+        assert!(reservation_released.load(Ordering::SeqCst));
+        assert!(!sink.reject_outcome_once.load(Ordering::SeqCst));
+        assert!(!sink.reject_release_once.load(Ordering::SeqCst));
+        assert!(!sink.reject_settlement_once.load(Ordering::SeqCst));
+        assert!(sink.outcome.lock().unwrap().is_none());
+        assert!(!sink.released.load(Ordering::SeqCst));
+        assert!(sink.settlement.lock().unwrap().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_terminal_publication_failures_do_not_skip_process_or_reservation_cleanup() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::new());
+        let sink = Arc::new(RecordingSink::default());
+        sink.reject_outcome_once.store(true, Ordering::SeqCst);
+        sink.reject_release_once.store(true, Ordering::SeqCst);
+        sink.reject_settlement_once.store(true, Ordering::SeqCst);
+        let reservation_released = Arc::new(AtomicBool::new(false));
+        let lease_released = Arc::new(AtomicBool::new(false));
+        let operation_backend = Arc::clone(&backend);
+        let operation_sink = Arc::clone(&sink);
+        let operation_reservation_released = Arc::clone(&reservation_released);
+        let operation_lease_released = Arc::clone(&lease_released);
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("process-ran-despite-publication-errors");
+        let operation_marker = marker.clone();
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    move |_| operation_reservation_released.store(true, Ordering::SeqCst),
+                    move |_| {
+                        let released = Arc::clone(&operation_lease_released);
+                        crate::execution::contracts::ReservationLease::new(move || {
+                            released.store(true, Ordering::SeqCst);
+                        })
+                    },
+                );
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout(),
+                    command: Command::new("sh")
+                        .arg("-c")
+                        .arg(&format!("touch {}", operation_marker.display())),
+                    options: RequestOptions::Standard(CommandRunOptions::default()),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
+                    },
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: None,
+                };
+                operation_backend.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: operation_sink.clone(),
+                        session_bridge: None,
+                    },
+                    operation_sink,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        operation.wait_settlement().unwrap();
+        assert!(marker.exists(), "the authorized process should run before publication");
+        assert!(reservation_released.load(Ordering::SeqCst));
+        assert!(lease_released.load(Ordering::SeqCst));
+        assert!(!sink.reject_outcome_once.load(Ordering::SeqCst));
+        assert!(!sink.reject_release_once.load(Ordering::SeqCst));
+        assert!(!sink.reject_settlement_once.load(Ordering::SeqCst));
+        assert!(sink.outcome.lock().unwrap().is_none());
+        assert!(!sink.released.load(Ordering::SeqCst));
+        assert!(sink.settlement.lock().unwrap().is_none());
     }
 
     #[cfg(unix)]
@@ -1168,16 +1330,16 @@ mod tests {
             3,
             "the deadline should expire at the second backend check"
         );
-        assert!(matches!(
-            sink.outcome.lock().unwrap().take(),
-            Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
-        ));
-        assert!(sink.released.load(Ordering::SeqCst));
         assert!(reservation_released.load(Ordering::SeqCst));
         assert!(
             !lease_created.load(Ordering::SeqCst),
             "pre-start stop should not retain process capacity"
         );
+        assert!(matches!(
+            sink.outcome.lock().unwrap().take(),
+            Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
+        ));
+        assert!(sink.released.load(Ordering::SeqCst));
         assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
     }
 
@@ -1463,6 +1625,7 @@ mod tests {
         let manager = OperationManager::new(Default::default()).unwrap();
         let backend = Arc::new(ProcessBackend::new());
         let sink = Arc::new(RecordingSink::default());
+        sink.reject_outcome_once.store(true, Ordering::SeqCst);
         sink.reject_recovery_once.store(true, Ordering::SeqCst);
         let capacity_released = Arc::new(AtomicBool::new(false));
         let operation_backend = Arc::clone(&backend);
@@ -1523,12 +1686,8 @@ mod tests {
         assert_eq!(sink.recovery_attempts.load(Ordering::SeqCst), 2);
         assert!(!sink.released.load(Ordering::SeqCst));
         assert!(sink.settlement.lock().unwrap().is_none());
-        let outcome = sink.outcome.lock().unwrap().take().unwrap();
-        assert!(matches!(
-            outcome,
-            OperationOutcome::Failed(error)
-                if matches!(error.reason(), CommandErrorReason::WriteOutputFailed { .. })
-        ));
+        assert!(!sink.reject_outcome_once.load(Ordering::SeqCst));
+        assert!(sink.outcome.lock().unwrap().is_none());
 
         let owner = sink
             .recovery_owner
