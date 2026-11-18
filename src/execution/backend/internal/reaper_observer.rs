@@ -278,8 +278,14 @@ mod tests {
             .expect("reaper should start the retained cleanup");
         assert!(observer.is_pending());
         assert!(!observer.is_complete());
-        assert!(completed.try_recv().is_err(), "cleanup completion must wait for cleanup release");
-        assert!(cleaned_rx.try_recv().is_err(), "the gated cleanup must still be running");
+        assert!(
+            completed.try_recv().is_err(),
+            "cleanup completion must wait for cleanup release"
+        );
+        assert!(
+            cleaned_rx.try_recv().is_err(),
+            "the gated cleanup must still be running"
+        );
 
         release_tx.send(()).unwrap();
         cleaned_rx
@@ -289,7 +295,10 @@ mod tests {
             .recv_timeout(Duration::from_secs(3))
             .expect("cleanup completion should be observable");
         assert!(observer.is_complete());
-        assert!(observer.is_pending(), "pending records that asynchronous cleanup was handed off");
+        assert!(
+            observer.is_pending(),
+            "pending records that asynchronous cleanup was handed off"
+        );
     }
 
     #[test]

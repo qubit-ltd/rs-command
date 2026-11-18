@@ -35,6 +35,10 @@ impl OperationObserverSlot {
         self.wait_inner(|| {})
     }
 
+    /// Waits for the observer, invoking `before_wait` before each condvar wait.
+    ///
+    /// # Parameters
+    /// * `before_wait`: Callback invoked immediately before waiting.
     fn wait_inner(&self, mut before_wait: impl FnMut()) -> OperationObserver {
         let mut observer = self.observer.lock().unwrap_or_else(|error| error.into_inner());
         while observer.is_none() {
@@ -144,7 +148,9 @@ mod tests {
             result_tx.send(id).unwrap();
             id
         });
-        waiting_rx.recv_timeout(Duration::from_secs(2)).expect("waiter should reach Condvar::wait");
+        waiting_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("waiter should reach Condvar::wait");
 
         let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _observer = slot.observer.lock().expect("observer mutex should not be poisoned yet");
@@ -154,10 +160,7 @@ mod tests {
 
         let (observer, expected_id) = completed_observer();
         slot.set(observer);
-        assert_eq!(
-            result_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-            expected_id
-        );
+        assert_eq!(result_rx.recv_timeout(Duration::from_secs(2)).unwrap(), expected_id);
         assert_eq!(waiter.join().unwrap(), expected_id);
     }
 }

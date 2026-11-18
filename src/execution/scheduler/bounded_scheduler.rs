@@ -789,9 +789,11 @@ mod tests {
 
         scheduler.close_admission();
         for _ in 0..waiter_count {
-            assert!(!done_rx
-                .recv_timeout(Duration::from_secs(2))
-                .expect("closing admission should wake every capacity waiter"));
+            assert!(
+                !done_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("closing admission should wake every capacity waiter")
+            );
         }
         for thread in threads {
             thread.join().expect("capacity waiter should exit after close");

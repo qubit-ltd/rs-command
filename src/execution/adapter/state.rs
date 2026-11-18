@@ -1207,10 +1207,20 @@ mod activation_failure_tests {
         state.clone().abandon();
         state.clone().abandon();
 
-        assert_eq!(releases.load(Ordering::SeqCst), 1, "abandon should release the retained reservation once");
-        assert!(state.restore().is_none(), "restored request must not reappear in adapter state");
+        assert_eq!(
+            releases.load(Ordering::SeqCst),
+            1,
+            "abandon should release the retained reservation once"
+        );
+        assert!(
+            state.restore().is_none(),
+            "restored request must not reappear in adapter state"
+        );
         let output = restored.runner.run(restored.command).unwrap();
-        assert!(output.exit_status().success(), "restored request remains usable after abandon");
+        assert!(
+            output.exit_status().success(),
+            "restored request remains usable after abandon"
+        );
     }
 
     #[test]

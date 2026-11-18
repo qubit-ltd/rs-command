@@ -1032,7 +1032,10 @@ mod tests {
         }
         cancellation.cancel();
         assert!(ready.exists(), "the command must start before external cancellation");
-        assert!(output_reached_reader, "stdout should reach the reader before external cancellation");
+        assert!(
+            output_reached_reader,
+            "stdout should reach the reader before external cancellation"
+        );
 
         assert!(matches!(
             operation.wait_outcome().unwrap(),

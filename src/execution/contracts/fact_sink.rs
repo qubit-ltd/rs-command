@@ -56,3 +56,51 @@ pub trait FactSink: Send + Sync {
     /// * `owner`: Supplies the owner value used by this operation.
     fn retain_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) -> Result<(), RecoveryPublishFailure>;
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use qubit_operation::OperationOutcome;
+    use qubit_operation::SettlementReport;
+
+    use super::FactPublishError;
+    use super::FactSink;
+    use super::RecoveryOwner;
+    use super::RecoveryPublishFailure;
+    use crate::CommandError;
+    use crate::CommandErrorReason;
+    use crate::CommandOutput;
+
+    struct DefaultDiagnosticSink;
+
+    impl FactSink for DefaultDiagnosticSink {
+        fn publish_outcome(&self, _: OperationOutcome<CommandOutput, CommandError>) -> Result<(), FactPublishError> {
+            unreachable!("this test only exercises the optional default hook")
+        }
+
+        fn confirm_input_release(&self) -> Result<(), FactPublishError> {
+            unreachable!("this test only exercises the optional default hook")
+        }
+
+        fn publish_settlement(&self, _: Arc<SettlementReport>) -> Result<(), FactPublishError> {
+            unreachable!("this test only exercises the optional default hook")
+        }
+
+        fn retain_recovery_owner(&self, _: Box<dyn RecoveryOwner>) -> Result<(), RecoveryPublishFailure> {
+            unreachable!("this test only exercises the optional default hook")
+        }
+    }
+
+    #[test]
+    fn test_default_stop_diagnostic_hook_returns_the_original_error() {
+        let error = CommandError::from_reason("test command", CommandErrorReason::Cancelled, None);
+
+        let returned = DefaultDiagnosticSink
+            .publish_stop_diagnostic(error)
+            .expect_err("the default hook must decline to retain the diagnostic");
+
+        assert_eq!(returned.to_string(), "command `test command` was cancelled");
+        assert!(matches!(returned.reason(), CommandErrorReason::Cancelled));
+    }
+}

@@ -2168,7 +2168,9 @@ mod tests {
             error.reason(),
             CommandErrorReason::OutputLimitExceeded { limit: 1, observed: 2 }
         ));
-        let captured = error.captured_output().expect("the budget snapshot must survive handoff");
+        let captured = error
+            .captured_output()
+            .expect("the budget snapshot must survive handoff");
         assert_eq!(captured.stdout(), b"a");
         assert!(captured.stdout_truncated());
         assert!(!captured.stdout_complete());
