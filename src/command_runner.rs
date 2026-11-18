@@ -625,7 +625,10 @@ mod tests {
         let runner = set_total_limit(runner, 10);
 
         assert_eq!(configured_timer(&runner).clock().now().domain(), timer_domain);
-        assert_eq!(runner.configured_working_directory(), Some(directory.as_path()));
+        assert_eq!(
+            runner.configured_working_directory(),
+            Some(directory.as_path())
+        );
         assert_eq!(runner.configured_success_exit_codes(), &[3, 7]);
         assert!(is_logging_disabled(&runner));
         assert!(truncation_fails(&runner));
@@ -820,6 +823,20 @@ mod tests {
             Some(timeout)
         );
         assert_eq!(CommandRunner::without_timeout().configured_timeout(), None);
+    }
+
+    #[test]
+    fn test_inline_runner_builders_via_function_items() {
+        let without_timeout: fn() -> CommandRunner =
+            std::hint::black_box(CommandRunner::without_timeout);
+        let set_working_directory: fn(CommandRunner, PathBuf) -> CommandRunner =
+            std::hint::black_box(CommandRunner::working_directory::<PathBuf>);
+        let directory = std::env::temp_dir().join("runner-function-item-directory");
+
+        let runner = set_working_directory(without_timeout(), directory.clone());
+
+        assert_eq!(runner.configured_timeout(), None);
+        assert_eq!(runner.configured_working_directory(), Some(directory.as_path()));
     }
 
     #[cfg(unix)]
