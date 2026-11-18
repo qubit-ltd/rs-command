@@ -933,6 +933,7 @@ mod tests {
         use std::task::Poll;
         use std::task::Wake;
         use std::task::Waker;
+        use std::time::Instant;
         use std::time::Duration;
 
         use qubit_io::AsyncInput;
@@ -942,6 +943,7 @@ mod tests {
         use qubit_operation::OperationOutcome;
 
         use super::ManagedCommandRunnerApi;
+        use super::super::collect_async;
         use super::setup;
         use crate::Command;
         use crate::CommandErrorKind;
@@ -1221,6 +1223,70 @@ mod tests {
             ))
             .expect_err("async spawn failure should be returned");
             assert!(matches!(error.reason(), crate::CommandErrorReason::SpawnFailed { .. }));
+        }
+
+        #[test]
+        fn test_collect_async_maps_failed_command_and_preserves_output() {
+            let (_manager, executor, runner) = setup();
+            let error = block_on(runner.run_async(
+                &executor,
+                Command::new("sh").arg("-c").arg("printf async-failure; exit 17"),
+                Default::default(),
+            ))
+            .expect_err("a non-success exit status should be returned as a command error");
+
+            assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
+            assert!(matches!(
+                error.reason(),
+                CommandErrorReason::UnexpectedExit { exit_code: Some(17), .. }
+            ));
+            assert_eq!(error.captured_output().expect("captured output").stdout(), b"async-failure");
+        }
+
+        #[test]
+        fn test_collect_async_returns_successful_command_output() {
+            let (_manager, executor, runner) = setup();
+            let output = block_on(runner.run_async(
+                &executor,
+                Command::new("sh").arg("-c").arg("printf async-success"),
+                Default::default(),
+            ))
+            .expect("a successful command should return its output");
+
+            assert_eq!(output.stdout(), b"async-success");
+            assert_eq!(output.stderr(), b"");
+            assert_eq!(output.exit_code(), Some(0));
+        }
+
+        #[test]
+        fn test_collect_async_maps_stopped_operation_and_retains_runner_diagnostic() {
+            let (_manager, executor, runner) = setup();
+            let directory = tempfile::tempdir().expect("readiness directory should be created");
+            let ready = directory.path().join("child-ready");
+            let script = format!("printf partial; touch {}; exec sleep 30", ready.display());
+            let operation = executor
+                .submit_async(
+                    runner,
+                    Command::new("sh").arg("-c").arg(&script),
+                    Default::default(),
+                )
+                .expect("async command should be admitted");
+
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !ready.exists() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(ready.exists(), "child should signal readiness before stop is requested");
+            assert_eq!(
+                operation.request_stop(qubit_operation::StopReason::UserCancelled),
+                qubit_operation::StopRequestStatus::Accepted
+            );
+
+            let error = block_on(collect_async(operation)).expect_err("stopped command should return its diagnostic");
+            assert_eq!(error.kind(), CommandErrorKind::Cancelled);
+            assert!(matches!(error.reason(), CommandErrorReason::Cancelled));
+            assert_eq!(error.stop_reason(), Some(qubit_operation::StopReason::UserCancelled));
+            assert_eq!(error.captured_output().expect("partial output should be retained").stdout(), b"partial");
         }
     }
 }
