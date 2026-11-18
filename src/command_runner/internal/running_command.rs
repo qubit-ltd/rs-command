@@ -677,12 +677,94 @@ mod tests {
     use crate::CommandErrorReason;
     use crate::OutputStream;
     use crate::execution::contracts::ReservationLease;
+    use crate::session::contracts::SessionBridge;
     #[cfg(feature = "async")]
     use crate::session::channel::SessionChannels;
     #[cfg(feature = "async")]
-    use crate::session::contracts::SessionBridge;
-    #[cfg(feature = "async")]
     use crate::session::contracts::SessionStreamPolicy;
+
+    struct ExceededSessionBudgetBridge;
+
+    impl SessionBridge for ExceededSessionBudgetBridge {
+        fn read_stdin(&self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Ok(0)
+        }
+
+        fn write_stdout(&self, _bytes: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn write_stderr(&self, _bytes: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn close_stdin(&self) {}
+
+        fn output_budget_exceeded(&self) -> bool {
+            true
+        }
+
+        fn output_budget_limit(&self) -> Option<u64> {
+            Some(4)
+        }
+
+        fn output_bytes_observed(&self) -> u64 {
+            7
+        }
+    }
+
+    #[derive(Debug)]
+    struct ReaperRetryChild {
+        inner: Box<dyn ChildWrapper>,
+        events: mpsc::Sender<&'static str>,
+        kill_attempts: usize,
+        wait_attempts: usize,
+        exit_status: ExitStatus,
+    }
+
+    impl ChildWrapper for ReaperRetryChild {
+        fn inner(&self) -> &dyn ChildWrapper {
+            self.inner.as_ref()
+        }
+
+        fn inner_mut(&mut self) -> &mut dyn ChildWrapper {
+            self.inner.as_mut()
+        }
+
+        fn into_inner(self: Box<Self>) -> Box<dyn ChildWrapper> {
+            self.inner
+        }
+
+        fn start_kill(&mut self) -> io::Result<()> {
+            self.kill_attempts += 1;
+            let attempt = self.kill_attempts;
+            let _ = self.events.send(match attempt {
+                1 => "initial-tree-kill",
+                2 => "reaper-tree-kill-retry",
+                _ => "reaper-tree-kill-success",
+            });
+            if attempt <= 2 {
+                Err(io::Error::other("injected tree termination retry"))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+            Ok(None)
+        }
+
+        fn wait(&mut self) -> io::Result<ExitStatus> {
+            self.wait_attempts += 1;
+            if self.wait_attempts == 1 {
+                let _ = self.events.send("reaper-wait-failure");
+                Err(io::Error::other("injected reaper wait failure"))
+            } else {
+                let _ = self.events.send("reaper-wait-success");
+                Ok(self.exit_status)
+            }
+        }
+    }
 
     struct FailingTimer {
         clock: CountingClock,
@@ -1439,6 +1521,40 @@ mod tests {
         assert!(captured.stdout_complete());
     }
 
+    #[test]
+    fn test_session_budget_exceeded_stops_default_feature_monitoring() {
+        let bridge: Arc<dyn SessionBridge> = Arc::new(ExceededSessionBudgetBridge);
+        let child = ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new())))
+            .try_wait_results([Ok(Some(status(0)))]);
+        let clock = ManualMonotonicClock::new_shared();
+        let started_at = clock.now();
+        let mut running = RunningCommand::new_with_reaper(
+            "session budget".to_owned(),
+            ManagedChildProcess::new(Box::new(child), false),
+            CommandIo::new(immediate_successful_reader(), immediate_successful_reader(), None),
+            started_at,
+            clock.new_timer(),
+            RunningCommandResources {
+                cancellation_token: None,
+                total_budget: None,
+                capacity_lease: None,
+                reaper_observer: None,
+                session_bridge: Some(bridge),
+                operation_context: None,
+            },
+        );
+
+        assert!(matches!(
+            running.wait_for_event(None),
+            RunEvent::OutputLimitExceeded {
+                limit: 4,
+                observed: 7,
+                status: Some(value),
+            } if value.success()
+        ));
+        assert!(running.io.cancel_and_join(&running.command_text).is_empty());
+    }
+
     #[cfg(feature = "async")]
     #[test]
     fn test_session_output_budget_stops_child_and_post_exit_io_monitoring() {
@@ -2114,6 +2230,83 @@ mod tests {
         completed
             .recv_timeout(Duration::from_secs(3))
             .expect("reaper should finish the transferred owner");
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_reaper_retries_uncertain_tree_termination_before_releasing_lease() {
+        use crate::execution::backend::ReaperObserver;
+
+        let (event_tx, event_rx) = mpsc::channel();
+        let direct = ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new())))
+            .kill_error(io::Error::other("initial direct-child termination denied"))
+            .try_wait_results([Ok(None)]);
+        let child = ReaperRetryChild {
+            inner: Box::new(direct),
+            events: event_tx,
+            kill_attempts: 0,
+            wait_attempts: 0,
+            exit_status: status(0),
+        };
+        let releases = Arc::new(AtomicUsize::new(0));
+        let release_counter = Arc::clone(&releases);
+        let lease = ReservationLease::new(move || {
+            release_counter.fetch_add(1, Ordering::SeqCst);
+        });
+        let (observer, completed) = ReaperObserver::pair();
+        let clock = ManualMonotonicClock::new_shared();
+        let (stdout, reader_release) = blocked_unbudgeted_reader();
+        let command = RunningCommand::new_with_reaper(
+            "reaper retry test".to_owned(),
+            ManagedChildProcess::new(Box::new(child), true),
+            CommandIo::new(stdout, joined_stderr_reader(), None),
+            clock.now(),
+            clock.new_timer(),
+            RunningCommandResources {
+                cancellation_token: None,
+                total_budget: None,
+                capacity_lease: Some(lease),
+                reaper_observer: Some(observer.clone()),
+                session_bridge: None,
+                operation_context: None,
+            },
+        );
+
+        let error = expect_error(
+            command.resolve_event(RunEvent::Cancelled { status: None }, None),
+            "uncertain termination should transfer cleanup to the reaper",
+        );
+        assert_eq!(error.kind(), CommandErrorKind::Cancelled);
+        assert!(observer.is_pending());
+        assert_eq!(releases.load(Ordering::SeqCst), 0);
+
+        let mut observed = Vec::new();
+        while !observed.contains(&"reaper-wait-failure") {
+            observed.push(
+                event_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("reaper should retry cleanup after the injected wait failure"),
+            );
+        }
+        assert_eq!(releases.load(Ordering::SeqCst), 0);
+        reader_release.release.store(true, Ordering::Release);
+        completed
+            .recv_timeout(Duration::from_secs(3))
+            .expect("reaper should finish cleanup after a later successful attempt");
+        while let Ok(event) = event_rx.try_recv() {
+            observed.push(event);
+        }
+
+        assert_eq!(
+            observed,
+            [
+                "initial-tree-kill",
+                "reaper-tree-kill-retry",
+                "reaper-wait-failure",
+                "reaper-tree-kill-success",
+                "reaper-wait-success",
+            ]
+        );
         assert_eq!(releases.load(Ordering::SeqCst), 1);
     }
 
