@@ -374,6 +374,17 @@ settled. `CommandOperation` callers observe settlement separately; a
 | Session endpoints | Submission context keeps endpoints alive while `SessionBridge` connects channels to process workers | Caller closes the stdin writer to signal EOF; stdout/stderr are drained concurrently; endpoints settle when execution and retained owners release the bridge and keepalive |
 | Reaper and recovery handle | Runner transfers uncertain child/helper cleanup to reaper; recovery owner can be retained by the manager | Reaper completion or explicit recovery releases the retained owner; pending work remains observable and is not reported as released early |
 
+Each session stdout/stderr queue remains bounded to 64 KiB. Before the aggregate
+session budget is exceeded, producers wait for queue capacity and advance only
+by bytes actually published. The configured budget is shared by both streams;
+exactly `N` observed bytes are valid, and the first observed `N + 1` byte marks
+the output incomplete and triggers termination. Explicit endpoint discard,
+stop, or reader loss can drain bytes without publication. The final external
+`CommandExecutor` handle owns a private scheduler-lifetime token: dropping it
+closes admission and wakes idle workers, while accepted jobs and leases retain
+their normal settlement path. This asynchronous drain is not proof of cleanup;
+callers that need completion evidence continue using shutdown and settlement.
+
 The legacy `CommandRunner::run` and `run_with` entry points remain synchronous
 and do not provide executor admission, operation settlement, or managed
 recovery observation. Managed execution uses the same runner with a

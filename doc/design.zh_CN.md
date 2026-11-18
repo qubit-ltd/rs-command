@@ -263,6 +263,8 @@ settlement；`RecoveryRequired` settlement 表示仍有待恢复的效果。
 | Session 端点 | 提交上下文保持端点存活，`SessionBridge` 将 channel 接到进程 worker | 调用方关闭 stdin writer 以发送 EOF；stdout/stderr 并发 drain；执行和保留的 owner 释放 bridge 与 keepalive 后端点才结算 |
 | Reaper 与 recovery handle | Runner 将不确定的子进程/helper 清理交给 reaper；manager 可保留 recovery owner | Reaper 完成或显式恢复后释放保留 owner；pending 工作仍可观察，不能提前报告已释放 |
 
+Session stdout/stderr 队列仍各自限制为 64 KiB。aggregate session 预算超限前，生产者等待队列容量，只按实际发布的字节推进。两个流共用一个预算；观察到恰好 `N` 字节仍有效，首次观察到第 `N + 1` 字节才标记输出不完整并触发终止。显式丢弃端点、停止写入或读端消失时，可以排空但不发布后续字节。最后一个外部 `CommandExecutor` handle 持有私有 scheduler 生命周期令牌：释放它会关闭接纳并唤醒空闲 worker，已接纳任务和 lease 仍按原有结算路径完成。后台排空不证明清理完成；需要完成证据时仍应继续观察 shutdown 与 settlement。
+
 旧 `CommandRunner::run` 和 `run_with` 入口仍是同步 API，不提供 executor 接纳、
 operation settlement 或 managed recovery 观察。Managed execution 通过
 `RunTreePolicy` 使用同一个 runner；`CommandRunOptions` 默认选择 managed 进程树策略。

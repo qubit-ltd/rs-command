@@ -11,6 +11,18 @@ use std::sync::Mutex;
 
 use super::output_budget_state::OutputBudgetState;
 
+/// Adds bytes observed by a stream and marks only a strict overage as exceeded.
+///
+/// # Parameters
+/// * `state` - Shared byte count and exceeded flag to update.
+/// * `limit` - Aggregate byte limit for stdout and stderr.
+/// * `bytes` - Number of newly observed bytes.
+pub(super) fn account(state: &mut OutputBudgetState, limit: u64, bytes: usize) {
+    let next = u128::from(state.observed) + bytes as u128;
+    state.exceeded |= next > u128::from(limit);
+    state.observed = u64::try_from(next).unwrap_or(u64::MAX);
+}
+
 /// Tracks aggregate bytes observed across stdout and stderr.
 pub(crate) struct OutputBudget {
     /// Maximum aggregate stdout and stderr bytes accepted.
@@ -30,7 +42,7 @@ impl OutputBudget {
             limit,
             state: Mutex::new(OutputBudgetState {
                 observed: 0,
-                exceeded: limit == 0,
+                exceeded: false,
             }),
         }
     }
@@ -56,6 +68,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::OutputBudget;
+    use super::account;
 
     #[test]
     fn test_budget_accessors_recover_observations_after_state_lock_poisoning() {
@@ -71,5 +84,40 @@ mod tests {
         assert_eq!(budget.limit(), 10);
         assert_eq!(budget.observed(), 4);
         assert!(!budget.exceeded());
+    }
+
+    #[test]
+    fn test_zero_budget_exceeds_only_after_observing_a_byte() {
+        let budget = OutputBudget::new(0);
+        assert!(!budget.exceeded());
+        {
+            let mut state = budget.state.lock().unwrap();
+            account(&mut state, budget.limit(), 0);
+        }
+        assert!(!budget.exceeded());
+        {
+            let mut state = budget.state.lock().unwrap();
+            account(&mut state, budget.limit(), 1);
+        }
+        assert_eq!(budget.observed(), 1);
+        assert!(budget.exceeded());
+    }
+
+    #[test]
+    fn test_budget_accounting_detects_overflow_past_u64_max() {
+        let budget = OutputBudget::new(u64::MAX);
+        {
+            let mut state = budget.state.lock().unwrap();
+            state.observed = u64::MAX - 1;
+            account(&mut state, budget.limit(), 1);
+        }
+        assert_eq!(budget.observed(), u64::MAX);
+        assert!(!budget.exceeded());
+        {
+            let mut state = budget.state.lock().unwrap();
+            account(&mut state, budget.limit(), 1);
+        }
+        assert_eq!(budget.observed(), u64::MAX);
+        assert!(budget.exceeded());
     }
 }

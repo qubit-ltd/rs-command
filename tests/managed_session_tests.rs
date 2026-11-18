@@ -268,6 +268,78 @@ fn test_managed_session_applies_runner_total_output_budget() {
 
 #[cfg(unix)]
 #[test]
+fn test_managed_session_preserves_both_slow_streams_within_budget() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let payload_size = 128 * 1024;
+    let command =
+        format!("head -c {payload_size} /dev/zero | tr '\\000' x; head -c {payload_size} /dev/zero | tr '\\000' y >&2");
+    let runner = CommandRunner::without_timeout().max_total_output_bytes(1024 * 1024);
+    let mut session = block_on(runner.start_session(
+        &executor,
+        Command::new("sh").arg("-c").arg(&command),
+        CommandRunOptions::new(),
+    ))
+    .unwrap();
+    let mut stdin = session.take_stdin().unwrap();
+    let mut stdout = session.take_stdout().unwrap();
+    let mut stderr = session.take_stderr().unwrap();
+    let mut operation = session.take_operation().unwrap();
+
+    thread::sleep(Duration::from_millis(50));
+    let (out, err) = thread::scope(|scope| {
+        let out_reader = scope.spawn(|| block_on(read_all(&mut stdout)));
+        let err_reader = scope.spawn(|| block_on(read_all(&mut stderr)));
+        block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).unwrap();
+        (out_reader.join().unwrap().unwrap(), err_reader.join().unwrap().unwrap())
+    });
+
+    assert_eq!(out, vec![b'x'; payload_size]);
+    assert_eq!(err, vec![b'y'; payload_size]);
+    assert!(matches!(
+        operation.wait_outcome().unwrap(),
+        OperationOutcome::Succeeded(_)
+    ));
+    drop((stdin, stdout, stderr));
+    operation.wait_settlement().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn test_managed_session_zero_budget_accepts_empty_output() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let runner = CommandRunner::without_timeout().max_total_output_bytes(0);
+    let mut session = block_on(runner.start_session(
+        &executor,
+        Command::new("sh").arg("-c").arg(":"),
+        CommandRunOptions::new(),
+    ))
+    .unwrap();
+    let mut stdin = session.take_stdin().unwrap();
+    let mut stdout = session.take_stdout().unwrap();
+    let mut stderr = session.take_stderr().unwrap();
+    let mut operation = session.take_operation().unwrap();
+
+    let (out, err) = thread::scope(|scope| {
+        let out_reader = scope.spawn(|| block_on(read_all(&mut stdout)));
+        let err_reader = scope.spawn(|| block_on(read_all(&mut stderr)));
+        block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).unwrap();
+        (out_reader.join().unwrap().unwrap(), err_reader.join().unwrap().unwrap())
+    });
+
+    assert!(out.is_empty());
+    assert!(err.is_empty());
+    assert!(matches!(
+        operation.wait_outcome().unwrap(),
+        OperationOutcome::Succeeded(_)
+    ));
+    drop((stdin, stdout, stderr));
+    operation.wait_settlement().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn test_dropping_session_requests_stop_and_preserves_observable_settlement() {
     use qubit_operation::SettlementWait;
     use qubit_operation::ShutdownMode;

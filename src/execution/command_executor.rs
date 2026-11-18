@@ -11,6 +11,7 @@ use super::CommandExecutorCreateError;
 use super::adapter;
 use super::backend;
 use super::executor;
+use super::internal::ExecutorLifetime;
 use super::scheduler;
 
 /// Manages local command admission and exposes operation handles tied to an
@@ -27,9 +28,12 @@ use super::scheduler;
 /// capacity.
 ///
 /// A [`crate::CommandOperation`] outcome is one-shot; settlement and any
-/// recovery are separate resource lifecycle observations. See the
-/// [managed execution guide](../../doc/user_guide.md) and the
-/// [Chinese version](../../doc/user_guide.zh_CN.md) for ownership details.
+/// recovery are separate resource lifecycle observations. Dropping the last
+/// executor clone closes admission and lets accepted work drain in the
+/// background; it does not prove that settlement or recovery has completed.
+/// See the [managed execution guide](https://github.com/qubit-ltd/rs-command/blob/main/doc/user_guide.md)
+/// and the [Chinese version](https://github.com/qubit-ltd/rs-command/blob/main/doc/user_guide.zh_CN.md)
+/// for ownership details.
 #[derive(Clone)]
 pub struct CommandExecutor {
     /// Stores the manager value used by this execution component.
@@ -38,6 +42,8 @@ pub struct CommandExecutor {
     pub(super) config: CommandExecutionConfig,
     /// Stores the scheduler value used by this execution component.
     pub(crate) scheduler: std::sync::Arc<scheduler::BoundedScheduler>,
+    /// Keeps scheduler admission open while an external executor clone exists.
+    _lifetime: std::sync::Arc<ExecutorLifetime>,
     /// Stores the backend value used by this execution component.
     pub(crate) backend: std::sync::Arc<backend::ProcessBackend>,
     /// Stores the group value used by this execution component.
@@ -57,10 +63,13 @@ impl CommandExecutor {
     ) -> Result<Self, CommandExecutorCreateError> {
         config.validate()?;
         let (scheduler, backend, group, recovery, manager) = executor::build_executor(manager.clone(), config.clone())?;
+        let scheduler = std::sync::Arc::new(scheduler);
+        let lifetime = std::sync::Arc::new(ExecutorLifetime::new(std::sync::Arc::clone(&scheduler)));
         Ok(Self {
             manager,
             config,
-            scheduler: std::sync::Arc::new(scheduler),
+            scheduler,
+            _lifetime: lifetime,
             backend: std::sync::Arc::new(backend),
             group,
             recovery,

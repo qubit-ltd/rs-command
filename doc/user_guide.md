@@ -47,6 +47,8 @@ Enable the crate's `async` feature to use `start_session`. A session exposes std
 
 If the caller drops one output endpoint early, the session switches that stream to discard-and-drain behavior and the result may be incomplete. `flush` only means bytes were accepted by the endpoint's pipe writer; it does not mean the child consumed them. `BrokenPipe` is an I/O fact to handle independently from the operation's primary outcome.
 
+Each session output queue is bounded to 64 KiB. While the shared stdout/stderr session budget has not been exceeded, a full queue applies backpressure and preserves the bytes; read both streams concurrently so the child cannot block behind an unread pipe. Reaching the configured budget exactly is allowed. The first observed byte beyond it triggers the output-limit failure and later bytes are drained as incomplete output. Dropping an endpoint explicitly switches that stream to discard-and-drain behavior.
+
 ### Pass owned files explicitly
 
 `CommandResourceRunOptions` transfers `File` handles to a managed run. An stdin file starts at its current cursor; the library does not seek it implicitly. Each stdout/stderr sink must choose `FileSinkPolicy::Preserve` or `FileSinkPolicy::Truncate`. Truncation is an observable side effect and occurs only after command and resource capacity have been reserved. Identity conflicts are checked using opened handles, so equal paths are neither a lease nor the authority token. See the [owned-file example](../examples/managed_file.rs).
@@ -56,6 +58,8 @@ Wait for settlement before deleting an external temporary directory that contain
 ### Shut down without guessing
 
 `CommandExecutor::request_shutdown` stops new executor admission and returns a durable shutdown observer. Use `wait_for(Duration::ZERO)` to inspect an immediate snapshot. `ShutdownWait::Pending` is not failure: retain that same handle and continue with `wait` or another bounded `wait_for`. Do not infer release from elapsed time or a fixed sleep. The [shutdown example](../examples/managed_shutdown.rs) keeps an stdin-gated session active, confirms the child has consumed input by reading its response, observes `Pending`, then closes stdin and releases endpoints before continuing to observe shutdown. It also matches `SettlementStatus::RecoveryRequired` and reports retained recovery handles.
+
+Dropping the final `CommandExecutor` clone closes its local scheduler to new submissions and lets already accepted work drain in the background. Drop is non-blocking and does not prove that operations have settled or recovery has finished. Keep an operation handle or observer when settlement matters; use explicit shutdown when the caller needs a completion handle.
 
 On Windows, the existing helper-cancellation limitation still applies: successful cancellation does not prove a helper has stopped, and the runner does not promise a hard wall-clock return deadline. See the [Windows cancellation status](windows-cancellation-status.md).
 

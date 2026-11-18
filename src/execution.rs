@@ -35,6 +35,8 @@ pub mod contracts;
 pub(super) mod executor;
 #[path = "execution/files/mod.rs"]
 pub mod files;
+#[path = "execution/internal/mod.rs"]
+mod internal;
 #[path = "execution/scheduler/mod.rs"]
 pub mod scheduler;
 #[path = "execution/snapshot_failure.rs"]

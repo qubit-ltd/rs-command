@@ -55,6 +55,47 @@ fn test_managed_submit_runs_through_operation_manager() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn test_dropping_executor_keeps_accepted_operation_running_to_completion() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let started = directory.path().join("started");
+    let release = directory.path().join("release");
+    let script = "touch \"$0\"; while [ ! -f \"$1\" ]; do sleep 0.01; done; printf drained";
+    let mut operation = executor
+        .submit(
+            CommandRunner::new(Duration::from_secs(5)),
+            Command::new("sh")
+                .arg("-c")
+                .arg(script)
+                .arg(started.to_str().unwrap())
+                .arg(release.to_str().unwrap()),
+            Default::default(),
+        )
+        .unwrap();
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !started.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if !started.exists() {
+        std::fs::write(&release, b"release").unwrap();
+        let outcome = operation.wait_outcome();
+        panic!("accepted operation should start before dropping the executor: {outcome:?}");
+    }
+
+    drop(executor);
+    std::fs::write(&release, b"release").unwrap();
+
+    match operation.wait_outcome().unwrap() {
+        OperationOutcome::Succeeded(output) => assert_eq!(output.stdout(), b"drained"),
+        other => panic!("accepted work should complete after executor drop: {other:?}"),
+    }
+    assert!(operation.wait_settlement().unwrap().all_released());
+}
+
 #[test]
 fn test_owned_preparation_failure_retains_and_reports_recovery() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
@@ -242,4 +283,113 @@ fn test_async_wait_future_is_lazy_and_cancelled_waiter_is_removed() {
     });
     assert!(matches!(second_outcome.unwrap(), OperationOutcome::Succeeded(_)));
     assert!(second_settlement.all_released());
+}
+
+#[cfg(all(feature = "async", unix))]
+#[test]
+fn test_async_submission_entry_points_complete_and_settle() {
+    struct ThreadWake(thread::Thread);
+    impl Wake for ThreadWake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark()
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark()
+        }
+    }
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let waker = Waker::from(Arc::new(ThreadWake(thread::current())));
+        let mut context = Context::from_waker(&waker);
+        let mut future = Box::pin(future);
+        loop {
+            if let Poll::Ready(output) = future.as_mut().poll(&mut context) {
+                return output;
+            }
+            thread::park_timeout(Duration::from_secs(2));
+        }
+    }
+
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let mut operation = CommandExecutorApi::submit(
+        &executor,
+        CommandRunner::without_timeout(),
+        Command::new("sh").arg("-c").arg("printf trait-submit"),
+        Default::default(),
+    )
+    .unwrap();
+    match operation.wait_outcome().unwrap() {
+        OperationOutcome::Succeeded(output) => assert_eq!(output.stdout(), b"trait-submit"),
+        other => panic!("trait submission failed: {other:?}"),
+    }
+    assert!(operation.wait_settlement().unwrap().all_released());
+
+    let mut operation = CommandExecutorApi::submit_wait_blocking(
+        &executor,
+        CommandRunner::without_timeout(),
+        Command::new("sh").arg("-c").arg("printf trait-wait"),
+        Default::default(),
+    )
+    .unwrap();
+    match operation.wait_outcome().unwrap() {
+        OperationOutcome::Succeeded(output) => assert_eq!(output.stdout(), b"trait-wait"),
+        other => panic!("trait wait submission failed: {other:?}"),
+    }
+    assert!(operation.wait_settlement().unwrap().all_released());
+
+    use std::io::Read;
+    use std::io::Seek;
+    let mut sync_output_file = tempfile::tempfile().unwrap();
+    let mut operation = CommandExecutorApi::submit_resources(
+        &executor,
+        CommandRunner::without_timeout(),
+        Command::new("sh").arg("-c").arg("printf trait-resource"),
+        CommandResourceRunOptions::new().stdout_sink(sync_output_file.try_clone().unwrap(), FileSinkPolicy::Truncate),
+    )
+    .unwrap();
+    assert!(matches!(
+        operation.wait_outcome().unwrap(),
+        OperationOutcome::Succeeded(_)
+    ));
+    assert!(operation.wait_settlement().unwrap().all_released());
+    sync_output_file.rewind().unwrap();
+    let mut written = String::new();
+    sync_output_file.read_to_string(&mut written).unwrap();
+    assert_eq!(written, "trait-resource");
+
+    let mut operation = CommandExecutorApi::submit_async(
+        &executor,
+        CommandRunner::without_timeout(),
+        Command::new("sh").arg("-c").arg("printf async-output"),
+        Default::default(),
+    )
+    .unwrap();
+    let outcome = block_on(operation.wait_outcome()).unwrap();
+    let settlement = block_on(operation.wait_settlement());
+    match outcome {
+        OperationOutcome::Succeeded(output) => assert_eq!(output.stdout(), b"async-output"),
+        other => panic!("async submission failed: {other:?}"),
+    }
+    assert!(settlement.all_released());
+
+    let mut output_file = tempfile::tempfile().unwrap();
+    let operation = CommandExecutorApi::submit_async_resources(
+        &executor,
+        CommandRunner::without_timeout(),
+        Command::new("sh").arg("-c").arg("printf resource-output"),
+        CommandResourceRunOptions::new().stdout_sink(output_file.try_clone().unwrap(), FileSinkPolicy::Truncate),
+    )
+    .unwrap();
+    let outcome = block_on(async move {
+        let mut operation = operation;
+        let outcome = operation.wait_outcome().await;
+        let settlement = operation.wait_settlement().await;
+        (outcome, settlement)
+    });
+    assert!(matches!(outcome.0.unwrap(), OperationOutcome::Succeeded(_)));
+    assert!(outcome.1.all_released());
+    output_file.rewind().unwrap();
+    let mut written = String::new();
+    output_file.read_to_string(&mut written).unwrap();
+    assert_eq!(written, "resource-output");
 }

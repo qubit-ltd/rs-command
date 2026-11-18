@@ -47,6 +47,8 @@ println!("{}", output.stdout_lossy_text());
 
 调用方提前丢弃某个输出端点后，该流会切换为丢弃并继续排空，最终数据可能不完整。`flush` 只表示数据已交给管道写侧，不表示子进程已经读取。`BrokenPipe` 是独立 I/O 事实，应与 operation 的主结果分别处理。
 
+每个 session 输出队列最多缓存 64 KiB。共享 stdout/stderr session 预算尚未超限时，队列满会施加背压并保留字节；应并发读取两个流，避免子进程被未读取的管道阻塞。恰好达到预算仍然允许；首次观察到超出预算的字节后才触发输出限制错误，后续字节会以不完整输出方式排空。主动丢弃端点会明确切换该流为丢弃并排空。
+
 ### 显式移交文件资源
 
 `CommandResourceRunOptions` 将 `File` 句柄移交给受管任务。stdin 文件从当前游标处开始读取，库不会隐式 seek。stdout 和 stderr sink 都必须明确选择 `FileSinkPolicy::Preserve` 或 `FileSinkPolicy::Truncate`。只有命令容量和资源预留成功后才会执行截断；截断属于可观察副作用。文件冲突按已打开句柄身份判断，因此相同路径既不是资源租约，也不是授权凭证。详见[owned 文件示例](../examples/managed_file.rs)。
@@ -56,6 +58,8 @@ println!("{}", output.stdout_lossy_text());
 ### 关闭 executor 时继续观察
 
 `CommandExecutor::request_shutdown` 会停止该 executor 接收新任务，并返回可持续观察的 shutdown handle。使用 `wait_for(Duration::ZERO)` 获取即时快照。若返回 `ShutdownWait::Pending`，这不是失败；保留同一个 handle，继续调用 `wait` 或带期限的 `wait_for`。不要按等待时间或固定 sleep 推断资源已释放。[shutdown 示例](../examples/managed_shutdown.rs)先写入数据并读到子进程回传内容，确认子进程已实际运行；stdin 仍保持开放时观察 `Pending`，接着关闭 stdin、释放端点，再继续观察 shutdown。示例也展示如何处理 `SettlementStatus::RecoveryRequired`。
+
+释放最后一个 `CommandExecutor` clone 会关闭其本地 scheduler 的新任务接纳，并让已接纳工作在后台排空。Drop 不会等待，也不能证明 operation 已结算或恢复工作已完成。需要确认 settlement 时应保留 operation handle 或 observer；需要可观察的关闭完成状态时使用显式 shutdown。
 
 Windows 上的 helper cancellation 限制仍然适用：取消请求成功并不证明 helper 已停止，runner 也不承诺整个调用有硬墙钟返回期限。参阅 [Windows 取消状态](windows-cancellation-status.zh_CN.md)。
 
