@@ -861,7 +861,9 @@ mod tests {
                     operation_id: None,
                     runner: CommandRunner::without_timeout(),
                     command: Command::new(executable.to_str().expect("temporary path should be UTF-8")),
-                    options: RequestOptions::Standard(CommandRunOptions::default()),
+                    options: RequestOptions::Resources(CommandResourceRunOptions::new().stdin_file(
+                        tempfile::tempfile().expect("managed input should be available before spawn"),
+                    )),
                     snapshot: ExecutionSnapshot {
                         working_directory: std::env::current_dir().unwrap(),
                         environment: Vec::new(),
