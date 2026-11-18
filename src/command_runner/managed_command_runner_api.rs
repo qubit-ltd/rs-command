@@ -1222,6 +1222,39 @@ mod tests {
             .expect_err("async spawn failure should be returned");
             assert!(matches!(error.reason(), crate::CommandErrorReason::SpawnFailed { .. }));
         }
+
+        #[test]
+        fn test_collect_async_maps_failed_command_and_preserves_output() {
+            let (_manager, executor, runner) = setup();
+            let error = block_on(runner.run_async(
+                &executor,
+                Command::new("sh").arg("-c").arg("printf async-failure; exit 17"),
+                Default::default(),
+            ))
+            .expect_err("a non-success exit status should be returned as a command error");
+
+            assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
+            assert!(matches!(
+                error.reason(),
+                CommandErrorReason::UnexpectedExit { exit_code: Some(17), .. }
+            ));
+            assert_eq!(error.captured_output().expect("captured output").stdout(), b"async-failure");
+        }
+
+        #[test]
+        fn test_collect_async_returns_successful_command_output() {
+            let (_manager, executor, runner) = setup();
+            let output = block_on(runner.run_async(
+                &executor,
+                Command::new("sh").arg("-c").arg("printf async-success"),
+                Default::default(),
+            ))
+            .expect("a successful command should return its output");
+
+            assert_eq!(output.stdout(), b"async-success");
+            assert_eq!(output.stderr(), b"");
+            assert_eq!(output.exit_code(), Some(0));
+        }
     }
 }
 
