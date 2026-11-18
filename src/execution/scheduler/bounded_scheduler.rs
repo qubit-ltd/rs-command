@@ -900,6 +900,48 @@ mod tests {
     }
 
     #[test]
+    fn test_expired_queued_job_requests_timeout_once_before_dispatch() {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::atomic::Ordering;
+
+        struct RecordingStop(Arc<AtomicUsize>);
+        impl crate::execution::contracts::StopPort for RecordingStop {
+            fn request_stop(&self, reason: qubit_operation::StopReason) {
+                assert_eq!(reason, qubit_operation::StopReason::Timeout);
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let scheduler = BoundedScheduler::new(config(1, 1)).unwrap();
+        let clock = Arc::new(ManualDeadlineClock {
+            domain: ClockDomainId::new_unique(),
+            ticks: AtomicU64::new(0),
+        });
+        let context = OperationContext::new(ContextOptions {
+            clock: Some(Arc::clone(&clock) as Arc<dyn ClockSource>),
+            deadline: Some(Deadline::at(MonotonicTime::new(clock.domain, 5))),
+            budget: None,
+        })
+        .unwrap();
+        let permit = scheduler.try_reserve_until(3, Some(context)).unwrap();
+        let stops = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::clone(&stops);
+        let job = ScheduledJob {
+            run: Box::new(|_| {}),
+            stop: Arc::new(RecordingStop(stop)),
+        };
+        scheduler.enqueue(job, permit).unwrap();
+        clock.ticks.store(5, Ordering::SeqCst);
+
+        let (_, permit) = scheduler.try_next().expect("expired work remains dispatchable after stop");
+
+        assert_eq!(stops.load(Ordering::SeqCst), 1);
+        assert_eq!((scheduler.snapshot().active, scheduler.snapshot().queued), (1, 0));
+        drop(permit);
+        assert_eq!((scheduler.snapshot().active, scheduler.snapshot().input_bytes), (0, 0));
+    }
+
+    #[test]
     fn test_waiter_limit_and_release_notification_preserve_capacity() {
         let scheduler = BoundedScheduler::new(config(0, 1)).unwrap();
         let permit = scheduler.try_reserve(0).unwrap();
