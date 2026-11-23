@@ -43,6 +43,8 @@ fn repository_status() -> Result<String, Box<dyn std::error::Error>> {
 
 服务程序需要把进程树回收和操作结算纳入共享管理时，可以使用受管入口：
 
+需要迁移受管路径、有所有权的文件、session 或提交等待逻辑时，请阅读[0.12 迁移指南](doc/migration-0.12.zh_CN.md)。
+
 <!-- doc-example:managed-service-quick-start:compile -->
 ```rust
 use qubit_command::{Command, CommandExecutionConfig, CommandExecutor, CommandRunOptions, CommandRunner, ManagedCommandRunnerApi};

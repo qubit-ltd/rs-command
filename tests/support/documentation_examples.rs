@@ -167,12 +167,14 @@ pub(crate) fn require_markers(examples: &[Example], expected: &[(&str, &str)], l
 
 pub(crate) fn check_documents(root: &Path) {
     let documents = [
-        ("README.md", &[("quick-start", "compile")][..]),
-        ("README.zh_CN.md", &[("quick-start", "compile")][..]),
+        ("README.md", &[("quick-start", "compile"), ("managed-service-quick-start", "compile")][..]),
+        ("README.zh_CN.md", &[("quick-start", "compile"), ("managed-service-quick-start", "compile")][..]),
         (
             "doc/user_guide.md",
             &[
                 ("basic-run", "compile"),
+                ("managed-service-quick-start", "compile"),
+                ("managed-stop-diagnostic", "compile"),
                 ("unix-output", "unix"),
                 ("windows-output", "windows"),
                 ("unix-shell", "unix"),
@@ -194,6 +196,8 @@ pub(crate) fn check_documents(root: &Path) {
             "doc/user_guide.zh_CN.md",
             &[
                 ("basic-run", "compile"),
+                ("managed-service-quick-start", "compile"),
+                ("managed-stop-diagnostic", "compile"),
                 ("unix-output", "unix"),
                 ("windows-output", "windows"),
                 ("unix-shell", "unix"),
@@ -211,6 +215,8 @@ pub(crate) fn check_documents(root: &Path) {
                 ("total-output-budget", "no_run"),
             ][..],
         ),
+        ("doc/migration-0.12.md", &[("migration-entry-selection", "compile"), ("migration-tree-policy", "compile"), ("migration-owned-file-configuration", "compile")][..]),
+        ("doc/migration-0.12.zh_CN.md", &[("migration-entry-selection", "compile"), ("migration-tree-policy", "compile"), ("migration-owned-file-configuration", "compile")][..]),
     ];
     let mut examples = Vec::new();
     for (relative, expected) in documents {

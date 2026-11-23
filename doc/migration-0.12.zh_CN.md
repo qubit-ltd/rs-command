@@ -1,19 +1,26 @@
 # 迁移到 qubit-command 0.12
 
-[English user guide](user_guide.md) · [中文用户手册](user_guide.zh_CN.md) · [README](../README.zh_CN.md)
+[English user guide](user_guide.md) · [中文用户手册](user_guide.zh_CN.md) · [English migration guide](migration-0.12.md) · [English README](../README.md) · [中文 README](../README.zh_CN.md)
 
-本文说明如何从 0.11 迁移到 0.12 的受管执行入口。原来的 `CommandRunner::run`、`run_with` 和基于路径的 stdin/tee 配置继续保留；只需在应用需要统一并发准入、进程树生命周期或资源结算时，迁移对应调用点。
+本文说明如何从 0.11 迁移到 0.12 的受管执行入口。本文对应 `qubit-command` 0.12 版本；Cargo 依赖约束为 `qubit-command = "0.12"`。原来的 `CommandRunner::run`、`run_with` 和基于路径的 stdin/tee 配置继续保留；只需在应用需要统一并发准入、进程树生命周期或资源结算时，迁移对应调用点。
 
 ## 选择入口
 
 简单的一次性命令可以继续使用旧同步入口：
 
+<!-- doc-example:migration-entry-selection:compile -->
 ```rust
+use std::time::Duration;
+use qubit_command::{Command, CommandRunner};
+
+let timeout = Duration::from_secs(5);
+let command = Command::new("program");
 let output = CommandRunner::new(timeout).run(command)?;
 ```
 
 服务中需要由 `OperationManager` 管理命令时，创建一个共享 executor：
 
+<!-- doc-example:migration-executor-setup:compile -->
 ```rust
 use qubit_command::{CommandExecutionConfig, CommandExecutor};
 use qubit_operation::{ManagerOptions, OperationManager};
@@ -24,10 +31,15 @@ let executor = CommandExecutor::new(manager, CommandExecutionConfig::default())?
 
 简单收集结果使用 `CommandRunner::run_managed` 或 `run_managed_in`。需要在返回后继续追踪操作时，使用 `CommandExecutor::submit`、`submit_in` 或带资源的对应方法，并保留返回的 `CommandOperation`。
 
+## 受管路径与工作目录
+
+managed stdin、stdout tee 和 stderr tee 的相对路径以提交时的父进程目录为基准；child 工作目录仍由 command override 优先于 runner 默认值决定。曾依赖 child cwd 定位 tee 的调用点，应传入显式绝对路径。Windows drive-relative 路径（例如 `C:logs\run.txt`）保留平台语义，不等同于 `C:\logs\run.txt`，也不作为普通相对路径拼到父目录。compatibility snapshot 的 `environment` 字段保留但为空；进程仍按启动时继承环境，并应用显式清空、删除和覆盖。
+
 ## 进程树策略
 
 新的 managed API 中，`CommandRunOptions::default()` 的 `ProcessTreePolicy` 是 `Managed`。它会把后代进程纳入停止和回收边界，不依赖是否配置 timeout 或 cancellation。只有确实只希望负责直接子进程时才显式选择：
 
+<!-- doc-example:migration-tree-policy:compile -->
 ```rust
 use qubit_command::{CommandRunOptions, ProcessTreePolicy};
 
@@ -49,9 +61,13 @@ let options = CommandRunOptions::new()
 
 需要把已经打开的文件交给一次 managed run 时，使用 `CommandResourceRunOptions`：
 
+<!-- doc-example:migration-owned-file-configuration:compile -->
 ```rust
+use std::fs::File;
 use qubit_command::{CommandResourceRunOptions, FileSinkPolicy};
 
+let input_file = File::open("input.txt")?;
+let output_file = File::options().create(true).write(true).open("output.txt")?;
 let resources = CommandResourceRunOptions::new()
     .stdin_file(input_file) // 从当前游标读取，不隐式 seek
     .stdout_sink(output_file, FileSinkPolicy::Truncate);
@@ -60,6 +76,12 @@ let resources = CommandResourceRunOptions::new()
 每个输出 sink 都必须指定 `Preserve` 或 `Truncate`。`Truncate` 会在容量与资源预留成功后产生截断副作用；拒绝发生在预留前时，不应假定文件已被改写。冲突校验按已打开文件句柄的身份执行；路径字符串只是查找/诊断信息，并不代表库持有该路径的独占租约。调用方的其他文件句柄副本也不会因所有权移交而自动关闭。
 
 资源输入/输出选项不可 `Clone`，因为它们按值移交文件句柄。迁移时不要把旧路径型 `stdin_file`、`tee_stdout_to_file` 或 `tee_stderr_to_file` 误当成新的 owned-file 接口；旧入口仍按旧语义工作。
+
+## 准入等待与准备错误
+
+提交前会检查文件输入、owned sinks、session stdin 和路径 tee 的互斥组合。session 应使用管道作为 stdin；需要先提供一段输入时可使用字节前缀。文件准备错误可通过 `CommandErrorKind::FilePreparationFailed` 及 `CommandErrorReason::FilePreparationFailed` 查看阶段、方向和原始 source。部分文件 commit 失败可能已经产生 effect，应根据结算报告判断后续恢复。
+
+容量等待期间的 scope stop 对应 `AdmissionError::Stopped`，deadline 到期对应 `CapacityFailure::DeadlineExpired`。新增的 `CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)` 区分等待者额度耗尽 `WaiterLimit` 与计时器失败 `Timer(RetryTimerFailure)`；timer failure 包括启动失败、队列满和断连。穷举匹配 `CommandSubmitFailureReason` 的调用方需补充 `Wait` 分支。
 
 ## 阶段报告与错误处理
 

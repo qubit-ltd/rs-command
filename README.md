@@ -43,6 +43,8 @@ The structured form passes arguments without shell parsing. For an intentional s
 
 For service code that must keep process-tree cleanup and operation settlement under a shared manager, use the managed entry point:
 
+See the [0.12 migration guide](doc/migration-0.12.md) for managed path, owned-file, session, and submission-wait changes.
+
 <!-- doc-example:managed-service-quick-start:compile -->
 ```rust
 use qubit_command::{Command, CommandExecutionConfig, CommandExecutor, CommandRunOptions, CommandRunner, ManagedCommandRunnerApi};

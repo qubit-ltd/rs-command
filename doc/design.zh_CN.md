@@ -277,3 +277,13 @@ reader 继续 drain。输出限制仍由 runner 的捕获策略决定；managed
 reaper owner 或恢复效果已经完成。Windows 成功取消同步 I/O 后仍会 join，该 join
 不受失败请求确认窗口限制。生产路径是否可达的调查仍未解决，见
 [Windows cancellation status](windows-cancellation-status.md)。
+
+## 受管提交契约
+
+受管资源提交会先校验完整 I/O 配置，再登记资源。stdout/stderr owned sink 只会在准入与启动授权通过后的最后 I/O commit 阶段截断；部分 commit 仍可能让较早处理的 sink 已发生变化。commit 前被拒绝不会截断 sink。session stdin 使用 session 管道，与文件 stdin 互斥；字节前缀 stdin 仍可使用。
+
+受管 stdin 和 tee 的相对路径以提交时捕获的父进程目录为基准。子进程工作目录单独选择，command override 优先于 runner 默认值。Windows drive-relative 路径保留 Windows 自身语义，不会当作以捕获目录为根的普通相对路径。请求快照保留兼容字段 `environment`，但其值为空；子进程仍在启动时继承环境，并按既有规则应用 clear、remove 和 override。
+
+带 scope 的容量等待会持续检查 stop 和 deadline。scope stop 映射为 `AdmissionError::Stopped`，deadline 到期映射为 `CapacityFailure::DeadlineExpired`。等待者额度耗尽和重试计时器失败统一通过 `CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)` 表示；其中 `WaiterLimit` 区分等待额度不足，`Timer(RetryTimerFailure)` 则区分计时器启动、队列满和断连。
+
+收集型 managed 方法会等待结算，但只返回命令结果或停止诊断。需要查看结算副作用、恢复证据或资源释放状态时，必须使用 submit handle。`ProcessTreePolicy::DirectChild` 是 managed API 中显式选择的例外；旧 `run` 与 `run_with` 生命周期保持原契约。
