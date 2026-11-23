@@ -91,6 +91,7 @@ pub use execution::CommandResourceSubmitFailure;
 pub use execution::CommandSubmitFailure;
 pub use execution::CommandSubmitFailureReason;
 pub use execution::CommandSubmitWaitFailure;
+pub use execution::RetryTimerFailure;
 pub use execution::SnapshotFailure;
 pub use file_preparation_direction::FilePreparationDirection;
 pub use file_preparation_stage::FilePreparationStage;

@@ -29,6 +29,10 @@ mod command_resource_submit_failure;
 mod command_submit_failure;
 #[path = "execution/command_submit_failure_reason.rs"]
 mod command_submit_failure_reason;
+#[path = "execution/command_submit_wait_failure.rs"]
+mod command_submit_wait_failure;
+#[path = "execution/retry_timer_failure.rs"]
+mod retry_timer_failure;
 #[path = "execution/contracts/mod.rs"]
 pub mod contracts;
 #[path = "execution/executor.rs"]
@@ -52,7 +56,8 @@ pub use command_operation::CommandOperation;
 pub use command_resource_submit_failure::CommandResourceSubmitFailure;
 pub use command_submit_failure::CommandSubmitFailure;
 pub use command_submit_failure_reason::CommandSubmitFailureReason;
-pub use command_submit_failure_reason::CommandSubmitWaitFailure;
+pub use command_submit_wait_failure::CommandSubmitWaitFailure;
+pub use retry_timer_failure::RetryTimerFailure;
 pub use contracts::ActivatedRequest;
 pub use contracts::Backend;
 pub use contracts::CapacityFailure;

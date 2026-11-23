@@ -7,14 +7,8 @@
 // =============================================================================
 
 use super::CapacityFailure;
+use super::CommandSubmitWaitFailure;
 use super::SnapshotFailure;
-
-/// Failure while waiting to retry a managed command submission.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CommandSubmitWaitFailure {
-    /// The executor has reached its configured limit for concurrent waiters.
-    WaiterLimit,
-}
 
 /// Input rejection reason.
 #[derive(Clone, Debug, Eq, PartialEq)]

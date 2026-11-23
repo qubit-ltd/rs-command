@@ -9,4 +9,3 @@
 mod internal;
 
 pub use internal::retry_delay::RetryDelay;
-pub use internal::retry_timer_failure::RetryTimerFailure;

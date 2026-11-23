@@ -27,7 +27,7 @@ use super::CommandSubmitFailureReason;
 #[cfg(feature = "async")]
 use super::command_executor::RetryDelay;
 #[cfg(feature = "async")]
-use super::command_executor::RetryTimerFailure;
+use super::RetryTimerFailure;
 use super::SnapshotFailure;
 use super::adapter::AdapterState;
 use super::backend::ProcessBackend;
@@ -153,7 +153,8 @@ impl CommandExecutor {
         command: Command,
         options: CommandResourceRunOptions,
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
-        self.submit_resources_manager(&self.manager, runner, command, options, None)
+        let bytes = resource_bytes(&options);
+        self.submit_resources_manager(&self.manager, runner, command, options, bytes, None)
     }
     /// Attempts local admission and returns an asynchronous view of the
     /// submitted operation without waiting for executor capacity. Use the
@@ -218,11 +219,13 @@ impl CommandExecutor {
         command: Command,
         options: CommandResourceRunOptions,
     ) -> Result<super::AsyncCommandOperation, CommandResourceSubmitFailure> {
+        let bytes = resource_bytes(&options);
         self.submit_async_resources_manager(
             &self.manager,
             runner,
             command,
             options,
+            bytes,
             AsyncSubmissionContext::plain(None),
         )
     }
@@ -312,6 +315,18 @@ impl CommandExecutor {
         command: Command,
         options: CommandResourceRunOptions,
     ) -> Result<super::AsyncCommandOperation, CommandResourceSubmitFailure> {
+        let bytes = resource_bytes(&options);
+        self.submit_async_resources_in_with_bytes(scope, runner, command, options, bytes)
+    }
+    #[cfg(feature = "async")]
+    fn submit_async_resources_in_with_bytes(
+        &self,
+        scope: &OperationScope,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandResourceRunOptions,
+        bytes: usize,
+    ) -> Result<super::AsyncCommandOperation, CommandResourceSubmitFailure> {
         let manager = match scope.manager().with_group(&self.group) {
             Ok(m) => m,
             Err(e) => {
@@ -328,6 +343,7 @@ impl CommandExecutor {
             runner,
             command,
             options,
+            bytes,
             AsyncSubmissionContext::plain(Some(scope.context())),
         )
     }
@@ -409,6 +425,17 @@ impl CommandExecutor {
         command: Command,
         options: CommandResourceRunOptions,
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
+        let bytes = resource_bytes(&options);
+        self.submit_resources_in_with_bytes(scope, runner, command, options, bytes)
+    }
+    fn submit_resources_in_with_bytes(
+        &self,
+        scope: &OperationScope,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandResourceRunOptions,
+        bytes: usize,
+    ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
         let manager = match scope.manager().with_group(&self.group) {
             Ok(m) => m,
             Err(e) => {
@@ -420,7 +447,7 @@ impl CommandExecutor {
                 });
             }
         };
-        self.submit_resources_manager(&manager, runner, command, options, Some(scope.context()))
+        self.submit_resources_manager(&manager, runner, command, options, bytes, Some(scope.context()))
     }
     /// Performs the submit in manager step in the managed command execution
     /// lifecycle.
@@ -518,6 +545,7 @@ impl CommandExecutor {
         runner: CommandRunner,
         command: Command,
         options: CommandResourceRunOptions,
+        bytes: usize,
         deadline: Option<OperationContext>,
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
         let request = make_request(runner, command, RequestOptions::Resources(options)).map_err(|error| {
@@ -532,7 +560,6 @@ impl CommandExecutor {
                 reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure { diagnostic: message }),
             }
         })?;
-        let bytes = resource_bytes(&request.options);
         let permit = match self.scheduler.try_reserve_until(bytes, deadline.clone()) {
             Ok(p) => p,
             Err(reason) => {
@@ -892,12 +919,14 @@ impl CommandExecutor {
             stdout_writer,
             stderr_writer,
         } = channels;
+        let bytes = resource_bytes(&options);
         let operation = self
             .submit_async_resources_manager(
                 manager,
                 runner,
                 command,
                 options,
+                bytes,
                 AsyncSubmissionContext {
                     bridge: Some(bridge),
                     keepalive: Some(super::adapter::SessionOwners {
@@ -932,6 +961,7 @@ impl CommandExecutor {
         runner: CommandRunner,
         command: Command,
         options: CommandResourceRunOptions,
+        bytes: usize,
         context: AsyncSubmissionContext,
     ) -> Result<super::AsyncCommandOperation, CommandResourceSubmitFailure> {
         let AsyncSubmissionContext {
@@ -951,7 +981,6 @@ impl CommandExecutor {
                 reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure { diagnostic: message }),
             }
         })?;
-        let bytes = resource_bytes(&request.options);
         let permit = match self.scheduler.try_reserve_until(bytes, deadline.clone()) {
             Ok(p) => p,
             Err(reason) => {
@@ -1020,30 +1049,7 @@ impl CommandExecutor {
 ///
 /// # Parameters
 /// * `options`: Supplies the options value used by this operation.
-fn resource_bytes(options: &RequestOptions) -> usize {
-    match options {
-        RequestOptions::Standard(_) => 0,
-        RequestOptions::Resources(o) => [
-            o.configured_stdin().and_then(|f| f.metadata().ok()).map(|m| m.len()),
-            o.configured_stdout()
-                .and_then(|(f, _)| f.metadata().ok())
-                .map(|m| m.len()),
-            o.configured_stderr()
-                .and_then(|(f, _)| f.metadata().ok())
-                .map(|m| m.len()),
-        ]
-        .into_iter()
-        .flatten()
-        .fold(0usize, |sum, n| {
-            sum.saturating_add(usize::try_from(n).unwrap_or(usize::MAX))
-        }),
-    }
-}
-/// Stores the resource option bytes value used by this execution component.
-///
-/// # Parameters
-/// * `options`: Supplies the options value used by this operation.
-fn resource_option_bytes(options: &CommandResourceRunOptions) -> usize {
+fn resource_bytes(options: &CommandResourceRunOptions) -> usize {
     [
         options
             .configured_stdin()
@@ -1075,9 +1081,7 @@ mod resource_byte_tests {
     use qubit_operation::ManagerOptions;
     use qubit_operation::OperationManager;
 
-    use super::RequestOptions;
     use super::resource_bytes;
-    use super::resource_option_bytes;
     use crate::Command;
     use crate::CommandExecutionConfig;
     use crate::CommandExecutor;
@@ -1100,9 +1104,7 @@ mod resource_byte_tests {
             .stdout_sink(stdout, FileSinkPolicy::Preserve)
             .stderr_sink(stderr, FileSinkPolicy::Truncate);
 
-        assert_eq!(resource_option_bytes(&options), 14);
-        assert_eq!(resource_bytes(&RequestOptions::Resources(options)), 14);
-        assert_eq!(resource_bytes(&RequestOptions::Standard(Default::default())), 0);
+        assert_eq!(resource_bytes(&options), 14);
     }
 
     #[test]
@@ -1502,7 +1504,10 @@ async fn wait_busy_async(
                 Err(_) => return std::task::Poll::Ready(Ok(false)),
             }
         }
-        timer.as_mut().poll(cx).map(Ok)
+        timer
+            .as_mut()
+            .poll(cx)
+            .map(|result| result.map_err(super::CommandSubmitWaitFailure::from))
     })
     .await
 }
@@ -1539,32 +1544,32 @@ async fn wait_retryable_async(
 /// # Parameters
 /// * `context`: Supplies the context value used by this operation.
 #[cfg(feature = "async")]
-async fn wait_retry_tick(context: Option<OperationContext>) -> bool {
+async fn wait_retry_tick(context: Option<OperationContext>) -> Result<bool, RetryTimerFailure> {
     let mut delay = Box::pin(RetryDelay::new());
     if let Some(context) = context {
         let mut stop = Box::pin(context.stop_requested());
         let mut deadline = context.deadline_signal().map(Box::pin);
         std::future::poll_fn(|cx| {
             if stop.as_mut().poll(cx).is_ready() {
-                return std::task::Poll::Ready(false);
+                return std::task::Poll::Ready(Ok(false));
             }
             if deadline
                 .as_mut()
                 .is_some_and(|signal| signal.as_mut().poll(cx).is_ready())
             {
-                return std::task::Poll::Ready(false);
+                return std::task::Poll::Ready(Ok(false));
             }
             let delay_result: std::task::Poll<Result<(), RetryTimerFailure>> =
                 delay.as_mut().poll(cx);
             if let std::task::Poll::Ready(value) = delay_result {
-                return std::task::Poll::Ready(value.is_ok());
+                return std::task::Poll::Ready(value.map(|()| true));
             }
             std::task::Poll::Pending
         })
         .await
     } else {
         let result: Result<(), RetryTimerFailure> = delay.await;
-        result.is_ok()
+        result.map(|()| true)
     }
 }
 /// Stores the managed failure value used by this execution component.
@@ -2071,6 +2076,22 @@ mod executor_decision_tests {
         );
     }
 
+    #[test]
+    fn test_wait_failure_preserves_each_retry_timer_failure() {
+        use crate::execution::CommandSubmitWaitFailure;
+
+        for timer_failure in [
+            super::RetryTimerFailure::Startup,
+            super::RetryTimerFailure::Full,
+            super::RetryTimerFailure::Disconnected,
+        ] {
+            assert_eq!(
+                CommandSubmitWaitFailure::from(timer_failure),
+                CommandSubmitWaitFailure::Timer(timer_failure)
+            );
+        }
+    }
+
     #[cfg(feature = "async")]
     #[test]
     fn test_async_retry_classification_accepts_only_capacity_and_busy() {
@@ -2569,8 +2590,8 @@ impl CommandExecutorApi for CommandExecutor {
         mut o: CommandResourceRunOptions,
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
         loop {
-            let bytes = resource_option_bytes(&o);
-            match self.submit_resources(r, c, o) {
+            let bytes = resource_bytes(&o);
+            match self.submit_resources_manager(&self.manager, r, c, o, bytes, None) {
                 Ok(h) => return Ok(h),
                 Err(failure) => {
                     let CommandResourceSubmitFailure {
@@ -2612,8 +2633,8 @@ impl CommandExecutorApi for CommandExecutor {
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
         let deadline = s.context();
         loop {
-            let bytes = resource_option_bytes(&o);
-            match self.submit_resources_in(s, r, c, o) {
+            let bytes = resource_bytes(&o);
+            match self.submit_resources_in_with_bytes(s, r, c, o, bytes) {
                 Ok(h) => return Ok(h),
                 Err(failure) => {
                     let CommandResourceSubmitFailure {
@@ -2709,8 +2730,15 @@ impl CommandExecutorApi for CommandExecutor {
         mut o: CommandResourceRunOptions,
     ) -> Result<super::AsyncCommandOperation, CommandResourceSubmitFailure> {
         loop {
-            let bytes = resource_option_bytes(&o);
-            match self.submit_async_resources(r, c, o) {
+            let bytes = resource_bytes(&o);
+            match self.submit_async_resources_manager(
+                &self.manager,
+                r,
+                c,
+                o,
+                bytes,
+                AsyncSubmissionContext::plain(None),
+            ) {
                 Ok(h) => return Ok(h),
                 Err(f) => {
                     let CommandResourceSubmitFailure {
@@ -2761,8 +2789,8 @@ impl CommandExecutorApi for CommandExecutor {
     ) -> Result<super::AsyncCommandOperation, CommandResourceSubmitFailure> {
         let context = s.context();
         loop {
-            let bytes = resource_option_bytes(&o);
-            match self.submit_async_resources_in(s, r, c, o) {
+            let bytes = resource_bytes(&o);
+            match self.submit_async_resources_in_with_bytes(s, r, c, o, bytes) {
                 Ok(h) => return Ok(h),
                 Err(f) => {
                     let CommandResourceSubmitFailure {
@@ -3007,10 +3035,23 @@ mod retry_wait_tests {
     use std::future::Future;
     use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::task::Context;
     use std::task::Poll;
     use std::task::Waker;
+
+    struct CountWake(AtomicUsize);
+
+    impl std::task::Wake for CountWake {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
 
     use qubit_operation::ClockDomainId;
     use qubit_operation::ClockSource;
@@ -3060,7 +3101,7 @@ mod retry_wait_tests {
         let mut cx = Context::from_waker(&waker);
         assert!(retry.as_mut().poll(&mut cx).is_pending());
         assert!(context.request_stop(StopReason::UserCancelled));
-        assert!(matches!(retry.as_mut().poll(&mut cx), Poll::Ready(false)));
+        assert!(matches!(retry.as_mut().poll(&mut cx), Poll::Ready(Ok(false))));
     }
 
     #[test]
@@ -3081,7 +3122,7 @@ mod retry_wait_tests {
         let mut cx = Context::from_waker(&waker);
         assert!(retry.as_mut().poll(&mut cx).is_pending());
         clock.ticks.store(5, Ordering::SeqCst);
-        assert!(matches!(retry.as_mut().poll(&mut cx), Poll::Ready(false)));
+        assert!(matches!(retry.as_mut().poll(&mut cx), Poll::Ready(Ok(false))));
         assert_eq!(context.stop_reason(), Some(StopReason::Timeout));
     }
 

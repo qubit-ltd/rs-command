@@ -20,8 +20,6 @@ use super::scheduler;
 mod retry_timer;
 #[cfg(feature = "async")]
 pub(super) use retry_timer::RetryDelay;
-#[cfg(feature = "async")]
-pub(super) use retry_timer::RetryTimerFailure;
 
 /// Manages local command admission and exposes operation handles tied to an
 /// operation manager.
