@@ -1493,6 +1493,7 @@ impl RetryTimer {
         Self { tx, in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)), capacity }
     }
 
+    #[cfg(test)]
     fn in_flight(&self) -> usize {
         self.in_flight.load(std::sync::atomic::Ordering::Acquire)
     }
@@ -1529,6 +1530,7 @@ fn complete_retry_timer(item: RetryTimerMessage) {
     if item.cancelled.load(std::sync::atomic::Ordering::Acquire) {
         return;
     }
+    drop(item.permit);
     item.ready.store(true, std::sync::atomic::Ordering::Release);
     let waker = item.waker.lock().unwrap_or_else(|e| e.into_inner()).take();
     if let Some(waker) = waker {
@@ -2901,6 +2903,20 @@ mod retry_wait_tests {
         }
     }
 
+    struct RescheduleOnWake {
+        timer: RetryTimer,
+        result: std::sync::Mutex<Option<Result<(), RetryTimerFailure>>>,
+    }
+
+    impl Wake for RescheduleOnWake {
+        fn wake(self: Arc<Self>) {
+            let result = self.timer.schedule(retry_timer_message(
+                std::time::Instant::now() + std::time::Duration::from_secs(30),
+            ));
+            *self.result.lock().unwrap() = Some(result);
+        }
+    }
+
     struct NoopRegistration;
     impl TimerRegistration for NoopRegistration {
         ///
@@ -3016,6 +3032,28 @@ mod retry_wait_tests {
             .schedule(retry_timer_message(std::time::Instant::now() + std::time::Duration::from_secs(30)))
             .unwrap();
         assert_eq!(timer.in_flight(), 2);
+    }
+
+    #[test]
+    fn test_retry_timer_releases_quota_before_waking_registered_task() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let timer = RetryTimer::new(tx, 1);
+        timer
+            .schedule(retry_timer_message(
+                std::time::Instant::now() + std::time::Duration::from_secs(30),
+            ))
+            .unwrap();
+        let mut completed = rx.try_recv().unwrap();
+        let callback = Arc::new(RescheduleOnWake {
+            timer,
+            result: std::sync::Mutex::new(None),
+        });
+        completed.waker = Arc::new(std::sync::Mutex::new(Some(Waker::from(callback.clone()))));
+
+        super::complete_retry_timer(completed);
+
+        assert_eq!(*callback.result.lock().unwrap(), Some(Ok(())));
+        assert_eq!(callback.timer.in_flight(), 1);
     }
 
     #[test]
