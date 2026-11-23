@@ -1833,7 +1833,14 @@ mod tests {
         assert!(matches!(
             outcome,
             OperationOutcome::Failed(error)
-                if matches!(error.reason(), CommandErrorReason::WriteOutputFailed { .. })
+                if matches!(
+                    error.reason(),
+                    CommandErrorReason::FilePreparationFailed {
+                        stage: crate::FilePreparationStage::Validation,
+                        direction: Some(crate::FilePreparationDirection::Stdout),
+                        ..
+                    }
+                )
         ));
 
         let owner = sink
@@ -1925,7 +1932,14 @@ mod tests {
         assert!(matches!(
             sink.outcome.lock().unwrap().take(),
             Some(OperationOutcome::Failed(error))
-                if matches!(error.reason(), CommandErrorReason::WriteOutputFailed { .. })
+                if matches!(
+                    error.reason(),
+                    CommandErrorReason::FilePreparationFailed {
+                        stage: crate::FilePreparationStage::Validation,
+                        direction: Some(crate::FilePreparationDirection::Stdout),
+                        ..
+                    }
+                )
         ));
 
         let owner = sink
