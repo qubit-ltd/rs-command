@@ -34,9 +34,15 @@ impl Waiters {
     /// # Parameters
     /// * `id`: Supplies the id value used by this operation.
     /// * `waker`: Supplies the waker value used by this operation.
-    pub fn update(&mut self, id: u64, waker: &Waker) {
+    ///
+    /// # Returns
+    /// `true` when the waiter ID exists and was updated.
+    pub fn update(&mut self, id: u64, waker: &Waker) -> bool {
         if let Some((_, slot)) = self.entries.iter_mut().find(|(key, _)| *key == id) {
             *slot = Some(waker.clone());
+            true
+        } else {
+            false
         }
     }
     /// Stores the remove value used by this execution component.

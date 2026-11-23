@@ -52,6 +52,7 @@ pub use command_operation::CommandOperation;
 pub use command_resource_submit_failure::CommandResourceSubmitFailure;
 pub use command_submit_failure::CommandSubmitFailure;
 pub use command_submit_failure_reason::CommandSubmitFailureReason;
+pub use command_submit_failure_reason::CommandSubmitWaitFailure;
 pub use contracts::ActivatedRequest;
 pub use contracts::Backend;
 pub use contracts::CapacityFailure;

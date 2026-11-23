@@ -7,6 +7,8 @@
 // =============================================================================
 
 use std::sync::Arc;
+#[cfg(feature = "async")]
+use std::future::Future;
 
 use qubit_operation::GroupOptions;
 use qubit_operation::OperationContext;
@@ -1284,36 +1286,36 @@ mod resource_byte_tests {
 /// * `reason`: Supplies the reason value used by this operation.
 /// * `scheduler`: Supplies the scheduler value used by this operation.
 /// * `bytes`: Supplies the bytes value used by this operation.
-/// * `deadline`: Supplies the deadline value used by this operation.
+/// * `context`: Supplies the scope context used by this operation.
+///
+/// # Errors
+/// Returns a waiter quota failure when no scheduler waiter slot is available.
 fn retry_wait(
     reason: &CommandSubmitFailureReason,
     scheduler: &BoundedScheduler,
     bytes: usize,
-    deadline: Option<OperationContext>,
-) -> bool {
+    context: Option<OperationContext>,
+) -> Result<bool, super::CommandSubmitWaitFailure> {
     match reason {
         CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull | CapacityFailure::QueueFull) => {
-            scheduler.wait_for_capacity(bytes, deadline)
+            scheduler.wait_for_capacity_registered(bytes, context)
         }
-        CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy) => {
-            if deadline.as_ref().is_some_and(OperationContext::is_expired) {
-                return false;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            !deadline.as_ref().is_some_and(OperationContext::is_expired)
-        }
-        _ => false,
+        CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy) => scheduler
+            .wait_for_retry_tick_blocking(context, std::time::Duration::from_millis(10)),
+        _ => Ok(false),
     }
 }
-/// Performs the deadline failure step in the managed command execution
+/// Performs the deadline and stop failure step in the managed command execution
 /// lifecycle.
 ///
 /// # Parameters
-/// * `reason`: Supplies the reason value used by this operation.
-/// * `deadline`: Supplies the deadline value used by this operation.
-fn deadline_failure(reason: CommandSubmitFailureReason, deadline: &OperationContext) -> CommandSubmitFailureReason {
-    if deadline.is_expired() {
+/// * `reason`: Supplies the original submission failure.
+/// * `context`: Supplies the scope context whose stop and deadline are checked.
+fn deadline_failure(reason: CommandSubmitFailureReason, context: &OperationContext) -> CommandSubmitFailureReason {
+    if context.is_expired() {
         CommandSubmitFailureReason::Capacity(CapacityFailure::DeadlineExpired)
+    } else if context.stop_reason().is_some() {
+        CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Stopped)
     } else {
         reason
     }
@@ -1345,56 +1347,78 @@ fn retryable_async(reason: &CommandSubmitFailureReason) -> bool {
 /// execution.
 #[cfg(feature = "async")]
 struct CapacityWait {
-    /// Stores the scheduler value used by this execution component.
+    /// Scheduler whose waiter registry bounds this wait.
     scheduler: BoundedScheduler,
-    /// Stores the bytes value used by this execution component.
+    /// Estimated input size used by the capacity predicate.
     bytes: usize,
-    /// Stores the waiter value used by this execution component.
+    /// Existing waiter registration retained across polls.
     waiter: Option<u64>,
 }
 #[cfg(feature = "async")]
 impl std::future::Future for CapacityWait {
-    /// Represents the output state or contract used by managed command
-    /// execution.
-    type Output = bool;
-    /// Performs the poll step in the managed command execution lifecycle.
+    /// Whether capacity became available, or why this wait was rejected.
+    type Output = Result<bool, super::CommandSubmitWaitFailure>;
+
+    /// Polls the capacity predicate and refreshes the registered waker.
     ///
     /// # Parameters
-    /// * `self`: Supplies the self value used by this operation.
-    /// * `cx`: Supplies the cx value used by this operation.
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<bool> {
-        if let Some(id) = self.waiter.take() {
-            self.scheduler.cancel_waiter(id);
-            return std::task::Poll::Ready(true);
-        }
-        match self.scheduler.register_waiter_if_full(self.bytes, cx.waker()) {
-            Ok(None) => std::task::Poll::Ready(true),
+    /// * `self`: Supplies the wait state.
+    /// * `cx`: Supplies the current task waker.
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        match self
+            .scheduler
+            .refresh_capacity_waiter(self.bytes, self.waiter, cx.waker())
+        {
+            Ok(None) => {
+                self.waiter = None;
+                std::task::Poll::Ready(Ok(true))
+            }
             Ok(Some(id)) => {
                 self.waiter = Some(id);
                 std::task::Poll::Pending
             }
-            Err(_) => std::task::Poll::Ready(false),
+            Err(CapacityFailure::QueueFull) => {
+                self.waiter = None;
+                std::task::Poll::Ready(Err(super::CommandSubmitWaitFailure::WaiterLimit))
+            }
+            Err(CapacityFailure::Closed) => {
+                self.waiter = None;
+                std::task::Poll::Ready(Ok(false))
+            }
+            Err(_) => {
+                self.waiter = None;
+                std::task::Poll::Ready(Ok(false))
+            }
         }
     }
 }
 #[cfg(feature = "async")]
 impl Drop for CapacityWait {
-    /// Performs the drop step in the managed command execution lifecycle.
+    /// Removes the waiter registration when the future is dropped.
     fn drop(&mut self) {
         if let Some(id) = self.waiter.take() {
             self.scheduler.cancel_waiter(id)
         }
     }
 }
-/// Performs the wait capacity async step in the managed command execution
-/// lifecycle.
+/// Waits asynchronously until capacity changes, scope stop, or deadline.
 ///
 /// # Parameters
-/// * `scheduler`: Supplies the scheduler value used by this operation.
-/// * `bytes`: Supplies the bytes value used by this operation.
-/// * `context`: Supplies the context value used by this operation.
+/// * `scheduler`: Supplies the scheduler being observed.
+/// * `bytes`: Supplies the request's estimated input size.
+/// * `context`: Supplies an optional scope context.
+///
+/// # Errors
+/// Returns a waiter quota failure when no scheduler waiter slot is available.
 #[cfg(feature = "async")]
-async fn wait_capacity_async(scheduler: BoundedScheduler, bytes: usize, context: Option<OperationContext>) -> bool {
+async fn wait_capacity_async(
+    scheduler: BoundedScheduler,
+    bytes: usize,
+    context: Option<OperationContext>,
+) -> Result<bool, super::CommandSubmitWaitFailure> {
     let mut capacity = Box::pin(CapacityWait {
         scheduler,
         bytes,
@@ -1405,18 +1429,15 @@ async fn wait_capacity_async(scheduler: BoundedScheduler, bytes: usize, context:
         let mut deadline = context.deadline_signal().map(Box::pin);
         std::future::poll_fn(|cx| {
             if stop.as_mut().poll(cx).is_ready() {
-                return std::task::Poll::Ready(false);
+                return std::task::Poll::Ready(Ok(false));
             }
             if deadline
                 .as_mut()
                 .is_some_and(|signal| signal.as_mut().poll(cx).is_ready())
             {
-                return std::task::Poll::Ready(false);
+                return std::task::Poll::Ready(Ok(false));
             }
-            if let std::task::Poll::Ready(value) = capacity.as_mut().poll(cx) {
-                return std::task::Poll::Ready(value);
-            }
-            std::task::Poll::Pending
+            capacity.as_mut().poll(cx)
         })
         .await
     } else {
@@ -1424,30 +1445,88 @@ async fn wait_capacity_async(scheduler: BoundedScheduler, bytes: usize, context:
     }
 }
 
+/// Owns one scheduler waiter registration for an async retry phase.
+#[cfg(feature = "async")]
+struct SchedulerWaiterGuard {
+    /// Scheduler that owns the registration.
+    scheduler: BoundedScheduler,
+    /// Identifier released when this guard is dropped.
+    id: u64,
+}
+#[cfg(feature = "async")]
+impl Drop for SchedulerWaiterGuard {
+    /// Releases the waiter registration.
+    fn drop(&mut self) {
+        self.scheduler.cancel_waiter(self.id);
+    }
+}
+
+/// Waits for a manager Busy retry tick while holding a waiter registration.
+///
+/// # Parameters
+/// * `scheduler`: Supplies the scheduler whose quota and close state are observed.
+/// * `context`: Supplies an optional scope context.
+///
+/// # Errors
+/// Returns a waiter quota failure when no scheduler waiter slot is available.
+#[cfg(feature = "async")]
+async fn wait_busy_async(
+    scheduler: BoundedScheduler,
+    context: Option<OperationContext>,
+) -> Result<bool, super::CommandSubmitWaitFailure> {
+    let mut waiter: Option<SchedulerWaiterGuard> = None;
+    let mut timer = Box::pin(wait_retry_tick(context.clone()));
+    std::future::poll_fn(|cx| {
+        if context.as_ref().is_some_and(|context| context.is_expired() || context.stop_reason().is_some()) {
+            return std::task::Poll::Ready(Ok(false));
+        }
+        if scheduler.is_closed() {
+            return std::task::Poll::Ready(Ok(false));
+        }
+        if let Some(waiter) = &waiter {
+            scheduler.update_waiter(waiter.id, cx.waker());
+        } else {
+            match scheduler.register_waiter(Some(cx.waker())) {
+                Ok(id) => waiter = Some(SchedulerWaiterGuard {
+                    scheduler: scheduler.clone(),
+                    id,
+                }),
+                Err(CapacityFailure::QueueFull) => {
+                    return std::task::Poll::Ready(Err(super::CommandSubmitWaitFailure::WaiterLimit));
+                }
+                Err(CapacityFailure::Closed) => return std::task::Poll::Ready(Ok(false)),
+                Err(_) => return std::task::Poll::Ready(Ok(false)),
+            }
+        }
+        timer.as_mut().poll(cx).map(Ok)
+    })
+    .await
+}
+
 /// Performs the wait retryable async step in the managed command execution
 /// lifecycle.
 ///
 /// # Parameters
-/// * `scheduler`: Supplies the scheduler value used by this operation.
-/// * `bytes`: Supplies the bytes value used by this operation.
-/// * `reason`: Supplies the reason value used by this operation.
-/// * `context`: Supplies the context value used by this operation.
+/// * `scheduler`: Supplies the scheduler whose waiter quota is used.
+/// * `bytes`: Supplies the request's estimated input size.
+/// * `reason`: Supplies the rejection reason that selects the wait policy.
+/// * `context`: Supplies an optional scope context.
+///
+/// # Errors
+/// Returns a waiter quota failure when no scheduler waiter slot is available.
 #[cfg(feature = "async")]
 async fn wait_retryable_async(
     scheduler: BoundedScheduler,
     bytes: usize,
     reason: &CommandSubmitFailureReason,
     context: Option<OperationContext>,
-) -> bool {
+) -> Result<bool, super::CommandSubmitWaitFailure> {
     if async_capacity_retry(reason) {
         wait_capacity_async(scheduler, bytes, context).await
-    } else if matches!(
-        reason,
-        CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy)
-    ) {
-        wait_retry_tick(context).await
+    } else if matches!(reason, CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy)) {
+        wait_busy_async(scheduler, context).await
     } else {
-        false
+        Ok(false)
     }
 }
 
@@ -1758,11 +1837,205 @@ mod executor_decision_tests {
     use super::retry_wait;
     use crate::execution::CommandExecutionConfig;
     use crate::execution::CommandSubmitFailureReason;
+    use crate::execution::contracts::CapacityFailure;
     use crate::execution::SnapshotFailure;
     use crate::execution::scheduler::BoundedScheduler;
     use crate::Command;
     use crate::CommandRunOptions;
     use crate::CommandRunner;
+
+    #[test]
+    fn test_two_executors_keep_waiter_quotas_local_during_concurrent_submissions() {
+        use std::time::Instant;
+
+        use qubit_operation::OperationManager;
+
+        use crate::execution::CommandExecutorApi;
+        use crate::execution::contracts::Scheduler;
+        use crate::CommandExecutor;
+
+        let config = CommandExecutionConfig {
+            max_active: 1,
+            max_queued: 0,
+            max_waiters: 1,
+            ..Default::default()
+        };
+        let first = CommandExecutor::new(OperationManager::new(Default::default()).unwrap(), config.clone()).unwrap();
+        let second = CommandExecutor::new(OperationManager::new(Default::default()).unwrap(), config).unwrap();
+        let first_reservation = first.scheduler.try_reserve(0).unwrap();
+        let second_reservation = second.scheduler.try_reserve(0).unwrap();
+        let first_executor = first.clone();
+        let second_executor = second.clone();
+        let (first_tx, first_rx) = std::sync::mpsc::channel();
+        let (second_tx, second_rx) = std::sync::mpsc::channel();
+        let first_waiter = std::thread::spawn(move || {
+            let failure = match first_executor.submit_wait_blocking(
+                CommandRunner::without_timeout(),
+                Command::new("first-executor-request"),
+                CommandRunOptions::new(),
+            ) {
+                Err(failure) => failure,
+                Ok(_) => panic!("full scheduler should keep the first request waiting"),
+            };
+            first_tx.send(failure).unwrap();
+        });
+        let second_waiter = std::thread::spawn(move || {
+            let failure = match second_executor.submit_wait_blocking(
+                CommandRunner::without_timeout(),
+                Command::new("second-executor-request"),
+                CommandRunOptions::new(),
+            ) {
+                Err(failure) => failure,
+                Ok(_) => panic!("full scheduler should keep the second request waiting"),
+            };
+            second_tx.send(failure).unwrap();
+        });
+        let setup_deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while (first.scheduler.snapshot().waiters == 0 || second.scheduler.snapshot().waiters == 0)
+            && Instant::now() < setup_deadline
+        {
+            std::thread::yield_now();
+        }
+        assert_eq!(first.scheduler.snapshot().waiters, 1);
+        assert_eq!(second.scheduler.snapshot().waiters, 1);
+        first.scheduler.close_admission();
+        second.scheduler.close_admission();
+
+        let first_failure = first_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        let second_failure = second_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        first_waiter.join().unwrap();
+        second_waiter.join().unwrap();
+        assert_eq!(first_failure.command.program(), std::ffi::OsStr::new("first-executor-request"));
+        assert_eq!(second_failure.command.program(), std::ffi::OsStr::new("second-executor-request"));
+        assert_eq!(first.scheduler.snapshot().waiters, 0);
+        assert_eq!(second.scheduler.snapshot().waiters, 0);
+        drop(first_reservation);
+        drop(second_reservation);
+    }
+
+    #[test]
+    fn test_waiter_limit_is_returned_by_public_blocking_wait_entry() {
+        use qubit_operation::OperationManager;
+
+        use crate::execution::CommandExecutorApi;
+        use crate::execution::contracts::Scheduler;
+        use crate::CommandExecutor;
+
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let executor = CommandExecutor::new(
+            manager,
+            CommandExecutionConfig {
+                max_active: 1,
+                max_queued: 0,
+                max_waiters: 0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let reservation = executor.scheduler.try_reserve(0).unwrap();
+        let failure = match executor.submit_wait_blocking(
+            CommandRunner::without_timeout(),
+            Command::new("preserved-command").arg("preserved-arg"),
+            CommandRunOptions::new().tee_stdout_to_file("preserved-output.log"),
+        ) {
+            Err(failure) => failure,
+            Ok(_) => panic!("zero waiter capacity should reject a retry wait"),
+        };
+        assert_eq!(
+            failure.reason,
+            CommandSubmitFailureReason::Wait(crate::execution::CommandSubmitWaitFailure::WaiterLimit)
+        );
+        assert_eq!(failure.command.program(), std::ffi::OsStr::new("preserved-command"));
+        assert_eq!(
+            failure.command.arguments().collect::<Vec<_>>(),
+            vec![std::ffi::OsStr::new("preserved-arg")]
+        );
+        assert_eq!(
+            failure.options.configured_stdout_file(),
+            Some(Path::new("preserved-output.log"))
+        );
+        drop(reservation);
+    }
+
+    #[test]
+    fn test_scoped_blocking_wait_returns_stopped_with_original_request_while_full() {
+        use std::time::Duration;
+        use std::time::Instant;
+
+        use qubit_operation::OperationManager;
+        use qubit_operation::StopReason;
+
+        use crate::execution::CommandExecutorApi;
+        use crate::execution::contracts::Scheduler;
+        use crate::CommandExecutor;
+
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let executor = CommandExecutor::new(
+            manager.clone(),
+            CommandExecutionConfig {
+                max_active: 1,
+                max_queued: 0,
+                max_waiters: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let reservation = executor.scheduler.try_reserve(0).unwrap();
+        let (context_tx, context_rx) = std::sync::mpsc::channel();
+        let (failure_tx, failure_rx) = std::sync::mpsc::channel();
+        let waiting_executor = executor.clone();
+        let submitter = std::thread::spawn(move || {
+            let outcome = manager
+                .run(Default::default(), move |scope| {
+                    context_tx.send(scope.context()).unwrap();
+                    let failure = match waiting_executor.submit_wait_blocking_in(
+                        &scope,
+                        CommandRunner::without_timeout().working_directory("retained-directory"),
+                        Command::new("must-not-start").arg("original-arg"),
+                        CommandRunOptions::new().tee_stdout_to_file("original-output.log"),
+                    ) {
+                        Err(failure) => failure,
+                        Ok(_) => panic!("scope stop should reject the waiting submission"),
+                    };
+                    failure_tx.send(failure).unwrap();
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
+            drop(outcome);
+        });
+        let context = context_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let setup_deadline = Instant::now() + Duration::from_secs(2);
+        while executor.scheduler.snapshot().waiters == 0 && Instant::now() < setup_deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(executor.scheduler.snapshot().waiters, 1);
+        assert!(context.request_stop(StopReason::UserCancelled));
+
+        let failure = failure_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("scoped stop should return the original waiting request promptly");
+        assert_eq!(
+            failure.reason,
+            CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Stopped)
+        );
+        assert_eq!(failure.command.program(), std::ffi::OsStr::new("must-not-start"));
+        assert_eq!(
+            failure.command.arguments().collect::<Vec<_>>(),
+            vec![std::ffi::OsStr::new("original-arg")]
+        );
+        assert_eq!(
+            failure.runner.configured_working_directory(),
+            Some(Path::new("retained-directory"))
+        );
+        assert_eq!(
+            failure.options.configured_stdout_file(),
+            Some(Path::new("original-output.log"))
+        );
+        assert_eq!(executor.scheduler.snapshot().waiters, 0);
+        assert_eq!(executor.scheduler.snapshot().active, 1);
+        drop(reservation);
+        submitter.join().unwrap();
+    }
 
     #[test]
     fn test_make_request_captures_parent_io_base_without_copying_environment() {
@@ -1814,14 +2087,129 @@ mod executor_decision_tests {
             diagnostic: "invalid snapshot".to_owned(),
         });
 
-        assert!(!retry_wait(&snapshot, &scheduler, 0, None));
+        assert!(!retry_wait(&snapshot, &scheduler, 0, None).unwrap());
         assert_eq!(deadline_failure(snapshot.clone(), &context), snapshot);
         assert!(retry_wait(
             &CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy),
             &scheduler,
             0,
             None,
-        ));
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn test_busy_wait_shares_waiter_quota_with_capacity_wait() {
+        use std::time::Instant;
+
+        use crate::execution::contracts::Scheduler;
+
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig {
+            max_active: 1,
+            max_queued: 0,
+            max_waiters: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let reservation = scheduler.try_reserve(0).unwrap();
+        let waiting_scheduler = scheduler.clone();
+        let capacity_waiter = std::thread::spawn(move || {
+            retry_wait(
+                &CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull),
+                &waiting_scheduler,
+                0,
+                None,
+            )
+        });
+        let setup_deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while scheduler.snapshot().waiters == 0 && Instant::now() < setup_deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(scheduler.snapshot().waiters, 1);
+
+        let busy = CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy);
+        assert_eq!(
+            retry_wait(&busy, &scheduler, 0, None),
+            Err(crate::execution::CommandSubmitWaitFailure::WaiterLimit)
+        );
+        drop(reservation);
+        assert!(capacity_waiter.join().unwrap().unwrap());
+        assert_eq!(scheduler.snapshot().waiters, 0);
+    }
+
+    #[test]
+    fn test_busy_wait_observes_scope_stop() {
+        use std::time::Instant;
+
+        use qubit_operation::StopReason;
+
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig {
+            max_waiters: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let context = OperationContext::new(ContextOptions::default()).unwrap();
+        let waiting_scheduler = scheduler.clone();
+        let waiting_context = context.clone();
+        let waiter = std::thread::spawn(move || {
+            retry_wait(
+                &CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy),
+                &waiting_scheduler,
+                0,
+                Some(waiting_context),
+            )
+        });
+        let setup_deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while scheduler.snapshot().waiters == 0 && Instant::now() < setup_deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        assert!(context.request_stop(StopReason::UserCancelled));
+
+        assert!(!waiter.join().unwrap().unwrap());
+        assert_eq!(scheduler.snapshot().waiters, 0);
+    }
+
+    #[test]
+    fn test_busy_wait_returns_when_scheduler_closes() {
+        use std::time::Instant;
+
+        use crate::execution::contracts::Scheduler;
+
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig {
+            max_waiters: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let busy = CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy);
+        let waiting_scheduler = scheduler.clone();
+        let waiter = std::thread::spawn(move || retry_wait(&busy, &waiting_scheduler, 0, None));
+        let setup_deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while scheduler.snapshot().waiters == 0 && Instant::now() < setup_deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        scheduler.close_admission();
+
+        assert!(!waiter.join().unwrap().unwrap());
+        assert_eq!(scheduler.snapshot().waiters, 0);
+    }
+
+    #[test]
+    fn test_manager_busy_wait_respects_scheduler_waiter_limit() {
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig {
+            max_waiters: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let busy = CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy);
+
+        assert_eq!(
+            retry_wait(&busy, &scheduler, 0, None),
+            Err(crate::execution::CommandSubmitWaitFailure::WaiterLimit),
+            "a Busy retry must not proceed without a scheduler waiter slot"
+        );
+        assert_eq!(scheduler.snapshot().waiters, 0);
     }
 
     #[test]
@@ -1836,7 +2224,7 @@ mod executor_decision_tests {
         .unwrap();
         let busy = CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy);
 
-        assert!(!retry_wait(&busy, &scheduler, 0, Some(context.clone())));
+        assert!(!retry_wait(&busy, &scheduler, 0, Some(context.clone())).unwrap());
         assert_eq!(
             deadline_failure(busy, &context),
             CommandSubmitFailureReason::Capacity(crate::execution::CapacityFailure::DeadlineExpired)
@@ -1882,7 +2270,7 @@ mod executor_decision_tests {
     #[test]
     fn test_async_capacity_wait_returns_when_scheduler_has_room() {
         let scheduler = BoundedScheduler::new(CommandExecutionConfig::default()).unwrap();
-        assert!(futures_lite_block_on(super::wait_capacity_async(scheduler, 0, None)));
+        assert!(futures_lite_block_on(super::wait_capacity_async(scheduler, 0, None)).unwrap());
     }
 }
 
@@ -2264,18 +2652,26 @@ impl CommandExecutorApi for CommandExecutor {
                         options,
                         reason,
                     } = failure;
-                    if retry_wait(&reason, &self.scheduler, 0, Some(deadline.clone())) {
-                        r = *runner;
-                        c = *command;
-                        o = options;
-                        continue;
+                    match retry_wait(&reason, &self.scheduler, 0, Some(deadline.clone())) {
+                        Ok(true) => {
+                            r = *runner;
+                            c = *command;
+                            o = options;
+                            continue;
+                        }
+                        Ok(false) => {
+                            return Err(CommandSubmitFailure {
+                                runner, command, options,
+                                reason: deadline_failure(reason, &deadline),
+                            });
+                        }
+                        Err(wait) => {
+                            return Err(CommandSubmitFailure {
+                                runner, command, options,
+                                reason: CommandSubmitFailureReason::Wait(wait),
+                            });
+                        }
                     }
-                    return Err(CommandSubmitFailure {
-                        runner,
-                        command,
-                        options,
-                        reason: deadline_failure(reason, &deadline),
-                    });
                 }
             }
         }
@@ -2303,18 +2699,18 @@ impl CommandExecutorApi for CommandExecutor {
                         options,
                         reason,
                     } = failure;
-                    if retry_wait(&reason, &self.scheduler, 0, None) {
-                        r = *runner;
-                        c = *command;
-                        o = options;
-                        continue;
+                    match retry_wait(&reason, &self.scheduler, 0, None) {
+                        Ok(true) => {
+                            r = *runner;
+                            c = *command;
+                            o = options;
+                            continue;
+                        }
+                        Ok(false) => return Err(CommandSubmitFailure { runner, command, options, reason }),
+                        Err(wait) => return Err(CommandSubmitFailure {
+                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
+                        }),
                     }
-                    return Err(CommandSubmitFailure {
-                        runner,
-                        command,
-                        options,
-                        reason,
-                    });
                 }
             }
         }
@@ -2343,18 +2739,18 @@ impl CommandExecutorApi for CommandExecutor {
                         options,
                         reason,
                     } = failure;
-                    if retry_wait(&reason, &self.scheduler, bytes, None) {
-                        r = *runner;
-                        c = *command;
-                        o = *options;
-                        continue;
+                    match retry_wait(&reason, &self.scheduler, bytes, None) {
+                        Ok(true) => {
+                            r = *runner;
+                            c = *command;
+                            o = *options;
+                            continue;
+                        }
+                        Ok(false) => return Err(CommandResourceSubmitFailure { runner, command, options, reason }),
+                        Err(wait) => return Err(CommandResourceSubmitFailure {
+                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
+                        }),
                     }
-                    return Err(CommandResourceSubmitFailure {
-                        runner,
-                        command,
-                        options,
-                        reason,
-                    });
                 }
             }
         }
@@ -2386,18 +2782,26 @@ impl CommandExecutorApi for CommandExecutor {
                         options,
                         reason,
                     } = failure;
-                    if retry_wait(&reason, &self.scheduler, bytes, Some(deadline.clone())) {
-                        r = *runner;
-                        c = *command;
-                        o = *options;
-                        continue;
+                    match retry_wait(&reason, &self.scheduler, bytes, Some(deadline.clone())) {
+                        Ok(true) => {
+                            r = *runner;
+                            c = *command;
+                            o = *options;
+                            continue;
+                        }
+                        Ok(false) => {
+                            return Err(CommandResourceSubmitFailure {
+                                runner, command, options,
+                                reason: deadline_failure(reason, &deadline),
+                            });
+                        }
+                        Err(wait) => {
+                            return Err(CommandResourceSubmitFailure {
+                                runner, command, options,
+                                reason: CommandSubmitFailureReason::Wait(wait),
+                            });
+                        }
                     }
-                    return Err(CommandResourceSubmitFailure {
-                        runner,
-                        command,
-                        options,
-                        reason: deadline_failure(reason, &deadline),
-                    });
                 }
             }
         }
@@ -2434,18 +2838,18 @@ impl CommandExecutorApi for CommandExecutor {
                             reason,
                         });
                     }
-                    if wait_retryable_async(self.scheduler.as_ref().clone(), 0, &reason, None).await {
-                        r = *runner;
-                        c = *command;
-                        o = options;
-                        continue;
+                    match wait_retryable_async(self.scheduler.as_ref().clone(), 0, &reason, None).await {
+                        Ok(true) => {
+                            r = *runner;
+                            c = *command;
+                            o = options;
+                            continue;
+                        }
+                        Ok(false) => return Err(CommandSubmitFailure { runner, command, options, reason }),
+                        Err(wait) => return Err(CommandSubmitFailure {
+                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
+                        }),
                     }
-                    return Err(CommandSubmitFailure {
-                        runner,
-                        command,
-                        options,
-                        reason,
-                    });
                 }
             }
         }
@@ -2483,18 +2887,18 @@ impl CommandExecutorApi for CommandExecutor {
                             reason,
                         });
                     }
-                    if wait_retryable_async(self.scheduler.as_ref().clone(), bytes, &reason, None).await {
-                        r = *runner;
-                        c = *command;
-                        o = *options;
-                        continue;
+                    match wait_retryable_async(self.scheduler.as_ref().clone(), bytes, &reason, None).await {
+                        Ok(true) => {
+                            r = *runner;
+                            c = *command;
+                            o = *options;
+                            continue;
+                        }
+                        Ok(false) => return Err(CommandResourceSubmitFailure { runner, command, options, reason }),
+                        Err(wait) => return Err(CommandResourceSubmitFailure {
+                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
+                        }),
                     }
-                    return Err(CommandResourceSubmitFailure {
-                        runner,
-                        command,
-                        options,
-                        reason,
-                    });
                 }
             }
         }
@@ -2535,20 +2939,20 @@ impl CommandExecutorApi for CommandExecutor {
                             reason,
                         });
                     }
-                    if wait_retryable_async(self.scheduler.as_ref().clone(), bytes, &reason, Some(context.clone()))
-                        .await
-                    {
-                        r = *runner;
-                        c = *command;
-                        o = *options;
-                        continue;
+                    match wait_retryable_async(self.scheduler.as_ref().clone(), bytes, &reason, Some(context.clone())).await {
+                        Ok(true) => {
+                            r = *runner;
+                            c = *command;
+                            o = *options;
+                            continue;
+                        }
+                        Ok(false) => return Err(CommandResourceSubmitFailure {
+                            runner, command, options, reason: deadline_failure(reason, &context),
+                        }),
+                        Err(wait) => return Err(CommandResourceSubmitFailure {
+                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
+                        }),
                     }
-                    return Err(CommandResourceSubmitFailure {
-                        runner,
-                        command,
-                        options,
-                        reason: deadline_failure(reason, &context),
-                    });
                 }
             }
         }
@@ -2656,18 +3060,20 @@ impl CommandExecutorApi for CommandExecutor {
                             reason,
                         });
                     }
-                    if wait_retryable_async(self.scheduler.as_ref().clone(), 0, &reason, Some(context.clone())).await {
-                        r = *runner;
-                        c = *command;
-                        o = options;
-                        continue;
+                    match wait_retryable_async(self.scheduler.as_ref().clone(), 0, &reason, Some(context.clone())).await {
+                        Ok(true) => {
+                            r = *runner;
+                            c = *command;
+                            o = options;
+                            continue;
+                        }
+                        Ok(false) => return Err(CommandSubmitFailure {
+                            runner, command, options, reason: deadline_failure(reason, &context),
+                        }),
+                        Err(wait) => return Err(CommandSubmitFailure {
+                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
+                        }),
                     }
-                    return Err(CommandSubmitFailure {
-                        runner,
-                        command,
-                        options,
-                        reason: deadline_failure(reason, &context),
-                    });
                 }
             }
         }
@@ -3009,13 +3415,73 @@ mod retry_wait_tests {
         assert!(wait.as_mut().poll(&mut cx).is_pending());
         assert_eq!(scheduler.snapshot().waiters, 1);
         assert!(context.request_stop(StopReason::UserCancelled));
-        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(false)));
+        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(Ok(false))));
         assert_eq!(
             scheduler.snapshot().waiters,
             0,
             "cancellation must unregister capacity waiter"
         );
         drop(reservation);
+    }
+
+    #[test]
+    fn test_async_busy_wait_observes_waiter_limit_and_scheduler_close() {
+        let busy = crate::execution::CommandSubmitFailureReason::Admission(
+            qubit_operation::AdmissionError::Busy,
+        );
+        let full = BoundedScheduler::new(CommandExecutionConfig {
+            max_waiters: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut rejected = Box::pin(wait_retryable_async(full.clone(), 0, &busy, None));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(matches!(
+            rejected.as_mut().poll(&mut cx),
+            Poll::Ready(Err(crate::execution::CommandSubmitWaitFailure::WaiterLimit))
+        ));
+        assert_eq!(full.snapshot().waiters, 0);
+
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig {
+            max_waiters: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut waiting = Box::pin(wait_retryable_async(scheduler.clone(), 0, &busy, None));
+        assert!(waiting.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        scheduler.close_admission();
+        assert!(matches!(waiting.as_mut().poll(&mut cx), Poll::Ready(Ok(false))));
+        assert_eq!(scheduler.snapshot().waiters, 0);
+    }
+
+    #[test]
+    fn test_capacity_wait_refreshes_latest_waker_while_capacity_stays_full() {
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig {
+            max_active: 1,
+            max_queued: 0,
+            max_waiters: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let reservation = scheduler.try_reserve(0).unwrap();
+        let first = Arc::new(CountWake(AtomicUsize::new(0)));
+        let second = Arc::new(CountWake(AtomicUsize::new(0)));
+        let first_waker = Waker::from(first.clone());
+        let second_waker = Waker::from(second.clone());
+        let mut first_cx = Context::from_waker(&first_waker);
+        let mut second_cx = Context::from_waker(&second_waker);
+        let mut wait = Box::pin(wait_capacity_async(scheduler.clone(), 0, None));
+
+        assert!(wait.as_mut().poll(&mut first_cx).is_pending());
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        assert!(wait.as_mut().poll(&mut second_cx).is_pending());
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        drop(reservation);
+        assert_eq!(first.0.load(Ordering::SeqCst), 0);
+        assert_eq!(second.0.load(Ordering::SeqCst), 1);
+        assert!(matches!(wait.as_mut().poll(&mut second_cx), Poll::Ready(Ok(true))));
+        assert_eq!(scheduler.snapshot().waiters, 0);
     }
 
     #[test]
@@ -3035,7 +3501,7 @@ mod retry_wait_tests {
         assert_eq!(scheduler.snapshot().waiters, 1);
         drop(reservation);
 
-        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(true)));
+        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(Ok(true))));
         assert_eq!(scheduler.snapshot().waiters, 0);
         let retried = scheduler
             .try_reserve(0)
@@ -3073,7 +3539,7 @@ mod retry_wait_tests {
         assert_eq!(scheduler.snapshot().waiters, 1);
         drop(reservation);
 
-        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(true)));
+        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(Ok(true))));
         assert_eq!(scheduler.snapshot().waiters, 0);
         assert_eq!(context.stop_reason(), None);
         let retried = scheduler
@@ -3102,7 +3568,7 @@ mod retry_wait_tests {
         assert!(context.request_stop(StopReason::UserCancelled));
         drop(reservation);
 
-        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(false)));
+        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(Ok(false))));
         assert_eq!(scheduler.snapshot().waiters, 0);
         assert_eq!(scheduler.snapshot().active, 0);
 
@@ -3132,7 +3598,7 @@ mod retry_wait_tests {
         clock.ticks.store(5, Ordering::SeqCst);
         drop(reservation);
 
-        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(false)));
+        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(Ok(false))));
         assert_eq!(scheduler.snapshot().waiters, 0);
         assert_eq!(scheduler.snapshot().active, 0);
         assert_eq!(context.stop_reason(), Some(StopReason::Timeout));
@@ -3151,7 +3617,7 @@ mod retry_wait_tests {
         let mut wait = Box::pin(wait_capacity_async(scheduler.clone(), 0, None));
         let mut cx = Context::from_waker(Waker::noop());
 
-        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(false)));
+        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(Ok(false))));
         assert_eq!(scheduler.snapshot().waiters, 0);
         drop(reservation);
 
@@ -3177,7 +3643,7 @@ mod retry_wait_tests {
         assert!(wait.as_mut().poll(&mut cx).is_pending());
         assert_eq!(scheduler.snapshot().waiters, 1);
         clock.ticks.store(5, Ordering::SeqCst);
-        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(false)));
+        assert!(matches!(wait.as_mut().poll(&mut cx), Poll::Ready(Ok(false))));
         assert_eq!(
             scheduler.snapshot().waiters,
             0,

@@ -36,6 +36,14 @@ const CLOCK_RECHECK_INTERVAL: std::time::Duration = std::time::Duration::from_mi
 use super::SchedulerSnapshot;
 use super::internal::State;
 
+/// Reports whether a scope's deadline or stop request has terminated a wait.
+///
+/// # Parameters
+/// * `context`: Supplies the optional scope context to check.
+fn context_terminated(context: Option<&OperationContext>) -> bool {
+    context.is_some_and(|context| context.is_expired() || context.stop_reason().is_some())
+}
+
 /// Thread-safe bounded scheduler. Its internal queue and dispatch threads are
 /// bounded by the configured active and queued permits; worker threads are
 /// owned and started by the executor.
@@ -112,6 +120,49 @@ impl BoundedScheduler {
                 .ok_or(CapacityFailure::QueueFull)?,
         ))
     }
+    /// Rechecks capacity and refreshes a registered waiter's waker under one lock.
+    ///
+    /// # Parameters
+    /// * `input_bytes`: Supplies the estimated input size.
+    /// * `waiter`: Supplies the existing registration, if any.
+    /// * `waker`: Supplies the current task waker.
+    ///
+    /// # Returns
+    /// The retained or newly allocated waiter ID, or `None` when capacity is available.
+    ///
+    /// # Errors
+    /// Returns `Closed` after scheduler closure or `QueueFull` when no waiter slot remains.
+    #[cfg(feature = "async")]
+    pub(in crate::execution) fn refresh_capacity_waiter(
+        &self,
+        input_bytes: usize,
+        waiter: Option<u64>,
+        waker: &Waker,
+    ) -> Result<Option<u64>, CapacityFailure> {
+        let mut s = self.0.state.lock().unwrap();
+        if s.closed {
+            if let Some(id) = waiter {
+                s.waiters.remove(id);
+            }
+            return Err(CapacityFailure::Closed);
+        }
+        if available(&s, &self.0.config, input_bytes) {
+            if let Some(id) = waiter {
+                s.waiters.remove(id);
+            }
+            return Ok(None);
+        }
+        if let Some(id) = waiter
+            && s.waiters.update(id, waker)
+        {
+            return Ok(Some(id));
+        }
+        s.waiters
+            .insert(Some(waker), self.0.config.max_waiters)
+            .map(Some)
+            .ok_or(CapacityFailure::QueueFull)
+    }
+
     /// Stores the update waiter value used by this execution component.
     ///
     /// # Parameters
@@ -119,7 +170,7 @@ impl BoundedScheduler {
     /// * `w`: Supplies the w value used by this operation.
     pub fn update_waiter(&self, id: u64, w: &Waker) {
         let mut s = self.0.state.lock().unwrap();
-        s.waiters.update(id, w)
+        s.waiters.update(id, w);
     }
     /// Stores the cancel waiter value used by this execution component.
     ///
@@ -138,29 +189,44 @@ impl BoundedScheduler {
     /// * `input_bytes`: Supplies the input bytes value used by this operation.
     /// * `deadline`: Supplies the deadline value used by this operation.
     pub fn wait_for_capacity(&self, input_bytes: usize, deadline: Option<OperationContext>) -> bool {
+        self.wait_for_capacity_registered(input_bytes, deadline).unwrap_or(false)
+    }
+
+    /// Waits for capacity with a result that distinguishes waiter quota exhaustion.
+    ///
+    /// # Parameters
+    /// * `input_bytes`: Supplies the estimated input size.
+    /// * `context`: Supplies the optional scope context.
+    ///
+    /// # Errors
+    /// Returns [`CommandSubmitWaitFailure::WaiterLimit`](crate::execution::CommandSubmitWaitFailure::WaiterLimit)
+    /// when the waiter quota is exhausted.
+    pub(in crate::execution) fn wait_for_capacity_registered(
+        &self,
+        input_bytes: usize,
+        context: Option<OperationContext>,
+    ) -> Result<bool, crate::execution::CommandSubmitWaitFailure> {
         let mut s = self.0.state.lock().unwrap();
-        if deadline.as_ref().is_some_and(OperationContext::is_expired) {
-            return false;
+        if s.closed || context_terminated(context.as_ref()) {
+            return Ok(false);
         }
         let waiter_id = if available(&s, &self.0.config, input_bytes) {
             None
         } else {
-            match s.waiters.insert(None, self.0.config.max_waiters) {
-                Some(id) => Some(id),
-                None => return false,
-            }
+            Some(
+                s.waiters
+                    .insert(None, self.0.config.max_waiters)
+                    .ok_or(crate::execution::CommandSubmitWaitFailure::WaiterLimit)?,
+            )
         };
         let result = loop {
-            if s.closed {
-                break false;
-            }
-            if deadline.as_ref().is_some_and(OperationContext::is_expired) {
+            if s.closed || context_terminated(context.as_ref()) {
                 break false;
             }
             if available(&s, &self.0.config, input_bytes) {
                 break true;
             }
-            if deadline.as_ref().is_some_and(|context| context.deadline().is_some()) {
+            if context.is_some() {
                 let (next, _) = self.0.changed.wait_timeout(s, CLOCK_RECHECK_INTERVAL).unwrap();
                 s = next;
             } else {
@@ -170,7 +236,52 @@ impl BoundedScheduler {
         if let Some(id) = waiter_id {
             s.waiters.remove(id);
         }
-        result
+        Ok(result)
+    }
+
+    /// Waits for a manager Busy retry interval while holding a scheduler waiter slot.
+    ///
+    /// # Parameters
+    /// * `context`: Supplies the optional scope context.
+    /// * `interval`: Supplies the retry interval.
+    ///
+    /// # Errors
+    /// Returns [`CommandSubmitWaitFailure::WaiterLimit`](crate::execution::CommandSubmitWaitFailure::WaiterLimit)
+    /// when the waiter quota is exhausted.
+    pub(in crate::execution) fn wait_for_retry_tick_blocking(
+        &self,
+        context: Option<OperationContext>,
+        interval: std::time::Duration,
+    ) -> Result<bool, crate::execution::CommandSubmitWaitFailure> {
+        let mut s = self.0.state.lock().unwrap();
+        if s.closed || context_terminated(context.as_ref()) {
+            return Ok(false);
+        }
+        let id = s
+            .waiters
+            .insert(None, self.0.config.max_waiters)
+            .ok_or(crate::execution::CommandSubmitWaitFailure::WaiterLimit)?;
+        let retry_at = std::time::Instant::now() + interval;
+        let result = loop {
+            if s.closed || context_terminated(context.as_ref()) {
+                break false;
+            }
+            let remaining = retry_at.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break true;
+            }
+            let timeout = remaining.min(CLOCK_RECHECK_INTERVAL);
+            let (next, _) = self.0.changed.wait_timeout(s, timeout).unwrap();
+            s = next;
+        };
+        s.waiters.remove(id);
+        Ok(result)
+    }
+
+    /// Returns whether this scheduler has stopped accepting work.
+    #[cfg(feature = "async")]
+    pub(in crate::execution) fn is_closed(&self) -> bool {
+        self.0.state.lock().unwrap().closed
     }
     /// Concrete entry point for submissions carrying their original, inherited
     /// deadline.
@@ -1020,6 +1131,38 @@ mod tests {
         assert!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap());
         thread.join().unwrap();
         assert_eq!(scheduler.snapshot().waiters, 0);
+    }
+
+    #[test]
+    fn test_blocking_capacity_wait_stops_without_deadline_while_capacity_stays_held() {
+        let scheduler = BoundedScheduler::new(config(0, 1)).unwrap();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let context = OperationContext::new(ContextOptions::default()).unwrap();
+        let waiting = scheduler.clone();
+        let waiting_context = context.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            done_tx
+                .send(waiting.wait_for_capacity(0, Some(waiting_context)))
+                .unwrap();
+        });
+
+        let setup_deadline = Instant::now() + Duration::from_secs(2);
+        while scheduler.snapshot().waiters == 0 && Instant::now() < setup_deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        assert!(context.request_stop(qubit_operation::StopReason::UserCancelled));
+
+        assert!(
+            !done_rx
+                .recv_timeout(Duration::from_millis(200))
+                .expect("scope stop should release a blocking capacity waiter")
+        );
+        thread.join().unwrap();
+        assert_eq!(scheduler.snapshot().waiters, 0);
+        assert_eq!(scheduler.snapshot().active, 1);
+        drop(permit);
     }
 
     #[test]

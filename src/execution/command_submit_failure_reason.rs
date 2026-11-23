@@ -9,6 +9,13 @@
 use super::CapacityFailure;
 use super::SnapshotFailure;
 
+/// Failure while waiting to retry a managed command submission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandSubmitWaitFailure {
+    /// The executor has reached its configured limit for concurrent waiters.
+    WaiterLimit,
+}
+
 /// Input rejection reason.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CommandSubmitFailureReason {
@@ -20,4 +27,6 @@ pub enum CommandSubmitFailureReason {
     GroupBinding(#[doc = "The operation group binding failure."] qubit_operation::GroupBindingError),
     /// Describes the snapshot case handled by managed command execution.
     Snapshot(#[doc = "The failure to capture a stable submission snapshot."] SnapshotFailure),
+    /// Describes a failure while waiting to retry this submission.
+    Wait(#[doc = "The reason waiting could not continue."] CommandSubmitWaitFailure),
 }
