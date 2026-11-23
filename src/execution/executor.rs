@@ -24,6 +24,10 @@ use super::CommandOperation;
 use super::CommandResourceSubmitFailure;
 use super::CommandSubmitFailure;
 use super::CommandSubmitFailureReason;
+#[cfg(feature = "async")]
+use super::command_executor::RetryDelay;
+#[cfg(feature = "async")]
+use super::command_executor::RetryTimerFailure;
 use super::SnapshotFailure;
 use super::adapter::AdapterState;
 use super::backend::ProcessBackend;
@@ -1530,173 +1534,6 @@ async fn wait_retryable_async(
     }
 }
 
-/// Represents the retry timer message state or contract used by managed command
-/// execution.
-#[cfg(feature = "async")]
-struct RetryTimerMessage {
-    /// Stores the due value used by this execution component.
-    due: std::time::Instant,
-    /// Stores the waker value used by this execution component.
-    waker: Arc<std::sync::Mutex<Option<std::task::Waker>>>,
-    /// Stores the ready value used by this execution component.
-    ready: Arc<std::sync::atomic::AtomicBool>,
-    /// Stores the cancelled value used by this execution component.
-    cancelled: Arc<std::sync::atomic::AtomicBool>,
-}
-/// Publishes a timer completion and wakes the latest registered retry task.
-///
-/// # Parameters
-/// * `item` - Timer state whose delay has elapsed.
-#[cfg(feature = "async")]
-fn complete_retry_timer(item: RetryTimerMessage) {
-    if item.cancelled.load(std::sync::atomic::Ordering::Acquire) {
-        return;
-    }
-    item.ready.store(true, std::sync::atomic::Ordering::Release);
-    let waker = item.waker.lock().unwrap_or_else(|e| e.into_inner()).take();
-    if let Some(waker) = waker {
-        waker.wake();
-    }
-}
-#[cfg(feature = "async")]
-static RETRY_TIMER: std::sync::OnceLock<Option<std::sync::mpsc::SyncSender<RetryTimerMessage>>> =
-    std::sync::OnceLock::new();
-/// Stores the retry timer value used by this execution component.
-#[cfg(feature = "async")]
-fn retry_timer() -> Option<&'static std::sync::mpsc::SyncSender<RetryTimerMessage>> {
-    RETRY_TIMER
-        .get_or_init(|| {
-            let (tx, rx) = std::sync::mpsc::sync_channel::<RetryTimerMessage>(1024);
-            std::thread::Builder::new()
-                .name("qubit-command-admission-timer".to_owned())
-                .spawn(move || {
-                    let mut pending = Vec::<RetryTimerMessage>::new();
-                    loop {
-                        while let Ok(item) = rx.try_recv() {
-                            pending.push(item)
-                        }
-                        let now = std::time::Instant::now();
-                        let mut index = 0;
-                        while index < pending.len() {
-                            if pending[index].cancelled.load(std::sync::atomic::Ordering::Acquire) {
-                                pending.swap_remove(index);
-                            } else if pending[index].due <= now {
-                                let item = pending.swap_remove(index);
-                                complete_retry_timer(item)
-                            } else {
-                                index += 1
-                            }
-                        }
-                        let wait = pending
-                            .iter()
-                            .map(|x| x.due.saturating_duration_since(std::time::Instant::now()))
-                            .min()
-                            .unwrap_or(std::time::Duration::from_secs(30));
-                        if let Ok(item) = rx.recv_timeout(wait) {
-                            pending.push(item)
-                        }
-                    }
-                })
-                .ok()?;
-            Some(tx)
-        })
-        .as_ref()
-}
-/// Represents the retry delay state or contract used by managed command
-/// execution.
-#[cfg(feature = "async")]
-struct RetryDelay {
-    /// Stores the ready value used by this execution component.
-    ready: Arc<std::sync::atomic::AtomicBool>,
-    /// Stores the cancelled value used by this execution component.
-    cancelled: Arc<std::sync::atomic::AtomicBool>,
-    /// Stores the waker registered by the most recent poll.
-    waker: Arc<std::sync::Mutex<Option<std::task::Waker>>>,
-    /// Stores the scheduled value used by this execution component.
-    scheduled: bool,
-}
-#[cfg(feature = "async")]
-impl RetryDelay {
-    /// Performs the new step in the managed command execution lifecycle.
-    fn new() -> Self {
-        Self {
-            ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            waker: Arc::new(std::sync::Mutex::new(None)),
-            scheduled: false,
-        }
-    }
-}
-#[cfg(feature = "async")]
-impl std::future::Future for RetryDelay {
-    /// Represents the output state or contract used by managed command
-    /// execution.
-    type Output = bool;
-    /// Performs the poll step in the managed command execution lifecycle.
-    ///
-    /// # Parameters
-    /// * `self`: Supplies the self value used by this operation.
-    /// * `cx`: Supplies the cx value used by this operation.
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<bool> {
-        self.as_mut()
-            .get_mut()
-            .poll_with_schedule(cx, |item| retry_timer().is_some_and(|tx| tx.try_send(item).is_ok()))
-    }
-}
-#[cfg(feature = "async")]
-impl RetryDelay {
-    /// Polls the retry delay while delegating timer message scheduling.
-    ///
-    /// # Parameters
-    /// * `self`: Supplies the retry delay state used by this operation.
-    /// * `cx`: Supplies the task context and current waker.
-    /// * `schedule`: Schedules the constructed timer message and reports
-    ///   success.
-    fn poll_with_schedule(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-        schedule: impl FnOnce(RetryTimerMessage) -> bool,
-    ) -> std::task::Poll<bool> {
-        if self.ready.load(std::sync::atomic::Ordering::Acquire) {
-            return std::task::Poll::Ready(true);
-        }
-        {
-            let mut waker = self.waker.lock().unwrap_or_else(|e| e.into_inner());
-            if !waker
-                .as_ref()
-                .is_some_and(|registered| registered.will_wake(cx.waker()))
-            {
-                *waker = Some(cx.waker().clone());
-            }
-        }
-        if self.ready.load(std::sync::atomic::Ordering::Acquire) {
-            return std::task::Poll::Ready(true);
-        }
-        if self.scheduled {
-            return std::task::Poll::Pending;
-        }
-        let item = RetryTimerMessage {
-            due: std::time::Instant::now() + std::time::Duration::from_millis(10),
-            waker: Arc::clone(&self.waker),
-            ready: Arc::clone(&self.ready),
-            cancelled: Arc::clone(&self.cancelled),
-        };
-        if schedule(item) {
-            self.scheduled = true;
-            std::task::Poll::Pending
-        } else {
-            std::task::Poll::Ready(false)
-        }
-    }
-}
-#[cfg(feature = "async")]
-impl Drop for RetryDelay {
-    /// Performs the drop step in the managed command execution lifecycle.
-    fn drop(&mut self) {
-        self.cancelled.store(true, std::sync::atomic::Ordering::Release);
-        self.waker.lock().unwrap_or_else(|e| e.into_inner()).take();
-    }
-}
 /// Stores the wait retry tick value used by this execution component.
 ///
 /// # Parameters
@@ -1717,14 +1554,17 @@ async fn wait_retry_tick(context: Option<OperationContext>) -> bool {
             {
                 return std::task::Poll::Ready(false);
             }
-            if let std::task::Poll::Ready(value) = delay.as_mut().poll(cx) {
-                return std::task::Poll::Ready(value);
+            let delay_result: std::task::Poll<Result<(), RetryTimerFailure>> =
+                delay.as_mut().poll(cx);
+            if let std::task::Poll::Ready(value) = delay_result {
+                return std::task::Poll::Ready(value.is_ok());
             }
             std::task::Poll::Pending
         })
         .await
     } else {
-        delay.await
+        let result: Result<(), RetryTimerFailure> = delay.await;
+        result.is_ok()
     }
 }
 /// Stores the managed failure value used by this execution component.
@@ -3167,11 +3007,9 @@ mod retry_wait_tests {
     use std::future::Future;
     use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
-    use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::task::Context;
     use std::task::Poll;
-    use std::task::Wake;
     use std::task::Waker;
 
     use qubit_operation::ClockDomainId;
@@ -3183,27 +3021,12 @@ mod retry_wait_tests {
     use qubit_operation::StopReason;
     use qubit_operation::TimerRegistration;
 
-    use super::RetryDelay;
-    use super::RetryTimerMessage;
-    use super::complete_retry_timer;
     use super::wait_capacity_async;
     use super::wait_retry_tick;
     use super::wait_retryable_async;
     use crate::CommandExecutionConfig;
     use crate::execution::contracts::Scheduler;
     use crate::execution::scheduler::BoundedScheduler;
-
-    fn reject_retry_schedule(_: RetryTimerMessage) -> bool {
-        false
-    }
-
-    struct CountWake(AtomicUsize);
-
-    impl Wake for CountWake {
-        fn wake(self: Arc<Self>) {
-            self.0.fetch_add(1, Ordering::SeqCst);
-        }
-    }
 
     struct NoopRegistration;
     impl TimerRegistration for NoopRegistration {
@@ -3227,135 +3050,6 @@ mod retry_wait_tests {
         fn register_deadline(&self, _: MonotonicTime, _: Waker) -> Box<dyn TimerRegistration> {
             Box::new(NoopRegistration)
         }
-    }
-
-    #[test]
-    fn test_retry_timer_wakes_the_most_recently_registered_waker() {
-        let mut delay = Box::pin(RetryDelay::new());
-        let first = Arc::new(CountWake(AtomicUsize::new(0)));
-        let second = Arc::new(CountWake(AtomicUsize::new(0)));
-        let first_waker = Waker::from(first.clone());
-        let second_waker = Waker::from(second.clone());
-        let mut first_context = Context::from_waker(&first_waker);
-        let mut second_context = Context::from_waker(&second_waker);
-        let mut scheduled = None;
-
-        assert!(
-            delay
-                .poll_with_schedule(&mut first_context, |item| {
-                    scheduled = Some(item);
-                    true
-                })
-                .is_pending()
-        );
-        assert!(
-            delay
-                .poll_with_schedule(&mut second_context, reject_retry_schedule)
-                .is_pending()
-        );
-        complete_retry_timer(scheduled.take().expect("first poll must schedule a message"));
-
-        assert_eq!(first.0.load(Ordering::SeqCst), 0);
-        assert_eq!(second.0.load(Ordering::SeqCst), 1);
-        assert!(matches!(
-            delay.poll_with_schedule(&mut second_context, reject_retry_schedule),
-            Poll::Ready(true)
-        ));
-    }
-
-    #[test]
-    fn test_retry_delay_schedule_and_completion_boundaries() {
-        let mut delay = Box::pin(RetryDelay::new());
-        let wake_count = Arc::new(CountWake(AtomicUsize::new(0)));
-        let waker = Waker::from(wake_count.clone());
-        let mut cx = Context::from_waker(&waker);
-
-        assert!(matches!(
-            delay.poll_with_schedule(&mut cx, reject_retry_schedule),
-            Poll::Ready(false)
-        ));
-        assert!(!delay.scheduled);
-
-        let mut scheduled = None;
-        assert!(
-            delay
-                .poll_with_schedule(&mut cx, |item| {
-                    scheduled = Some(item);
-                    true
-                })
-                .is_pending()
-        );
-        let item = scheduled.take().expect("retry poll must construct timer message");
-        let cancelled = Arc::clone(&item.cancelled);
-        let waker_slot = Arc::clone(&item.waker);
-        drop(delay);
-        assert!(cancelled.load(Ordering::Acquire));
-        assert!(waker_slot.lock().unwrap().is_none());
-        complete_retry_timer(item);
-        assert_eq!(wake_count.0.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn test_retry_delay_production_timer_wakes_and_completes() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let completed = super::futures_lite_block_on(super::wait_retry_tick(None));
-            let _ = tx.send(completed);
-        });
-
-        assert!(
-            rx.recv_timeout(std::time::Duration::from_secs(2))
-                .expect("production retry timer must complete")
-        );
-    }
-
-    #[test]
-    fn test_retry_timer_recovers_poisoned_waker_slots() {
-        let mut delay = Box::pin(RetryDelay::new());
-        let waker = Waker::noop().clone();
-        let mut context = Context::from_waker(&waker);
-        let mut scheduled = None;
-        assert!(
-            delay
-                .poll_with_schedule(&mut context, |item| {
-                    scheduled = Some(item);
-                    true
-                })
-                .is_pending()
-        );
-
-        let slot = Arc::clone(&delay.waker);
-        let poison = std::thread::spawn(move || {
-            let _guard = slot.lock().unwrap();
-            panic!("simulate a timer worker panic while holding its waker slot");
-        })
-        .join();
-        assert!(poison.is_err());
-        assert!(
-            delay
-                .poll_with_schedule(&mut context, reject_retry_schedule)
-                .is_pending()
-        );
-        drop(delay);
-        complete_retry_timer(scheduled.take().expect("first poll must schedule a message"));
-
-        let waker_slot = Arc::new(std::sync::Mutex::new(None));
-        let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let poison = Arc::clone(&waker_slot);
-        let join = std::thread::spawn(move || {
-            let _guard = poison.lock().unwrap();
-            panic!("simulate a timer worker panic while publishing completion");
-        })
-        .join();
-        assert!(join.is_err());
-        complete_retry_timer(RetryTimerMessage {
-            due: std::time::Instant::now(),
-            waker: waker_slot,
-            ready: Arc::clone(&ready),
-            cancelled,
-        });
-        assert!(ready.load(std::sync::atomic::Ordering::Acquire));
     }
 
     #[test]
