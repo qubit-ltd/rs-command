@@ -230,13 +230,13 @@ fn test_snapshot_directory_resolves_relative_tee_identity() {
     });
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn test_managed_relative_paths_use_parent_directory_and_child_cwd_priority() {
     const WORKER_ENV: &str = "QUBIT_MANAGED_PATH_BASE_WORKER";
     if let Some(root) = std::env::var_os(WORKER_ENV) {
         let root = std::path::PathBuf::from(root);
-        std::env::set_current_dir(&root).expect("worker parent directory should be set");
+        assert_eq!(std::env::current_dir().expect("worker directory should resolve"), root);
         let runner_dir = root.join("runner-default");
         let command_dir = root.join("command-override");
         std::fs::create_dir_all(&runner_dir).expect("runner directory should be created");
@@ -251,9 +251,7 @@ fn test_managed_relative_paths_use_parent_directory_and_child_cwd_priority() {
         let mut command_override = executor
             .submit(
                 CommandRunner::without_timeout().working_directory(&runner_dir),
-                Command::new("sh")
-                    .arg("-c")
-                    .arg("pwd; cat")
+                path_probe_command()
                     .stdin_file("input.txt")
                     .working_directory(&command_dir),
                 CommandRunOptions::new()
@@ -266,7 +264,7 @@ fn test_managed_relative_paths_use_parent_directory_and_child_cwd_priority() {
             other => panic!("command override request failed: {other:?}"),
         };
         assert!(String::from_utf8_lossy(output.stdout()).starts_with(command_dir.to_str().unwrap()));
-        assert!(String::from_utf8_lossy(output.stdout()).ends_with("parent-input"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("parent-input"));
         assert_eq!(std::fs::read(root.join("command-stdout.log")).unwrap(), output.stdout());
         assert!(std::fs::read(root.join("command-stderr.log")).unwrap().is_empty());
         assert!(!runner_dir.join("command-stdout.log").exists());
@@ -276,7 +274,7 @@ fn test_managed_relative_paths_use_parent_directory_and_child_cwd_priority() {
         let mut runner_default = executor
             .submit(
                 CommandRunner::without_timeout().working_directory(&runner_dir),
-                Command::new("sh").arg("-c").arg("pwd; cat").stdin_file("input.txt"),
+                path_probe_command().stdin_file("input.txt"),
                 CommandRunOptions::new().tee_stdout_to_file("runner-stdout.log"),
             )
             .expect("runner default request should be admitted");
@@ -285,17 +283,25 @@ fn test_managed_relative_paths_use_parent_directory_and_child_cwd_priority() {
             other => panic!("runner default request failed: {other:?}"),
         };
         assert!(String::from_utf8_lossy(output.stdout()).starts_with(runner_dir.to_str().unwrap()));
-        assert!(String::from_utf8_lossy(output.stdout()).ends_with("parent-input"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("parent-input"));
         assert_eq!(std::fs::read(root.join("runner-stdout.log")).unwrap(), output.stdout());
         assert!(!runner_dir.join("runner-stdout.log").exists());
         assert!(runner_default.wait_settlement().unwrap().all_released());
 
+        for directory in [&runner_dir, &command_dir] {
+            std::fs::write(directory.join("resource-stdout.log"), b"child sentinel")
+                .expect("child stdout sentinel should be written");
+            std::fs::write(directory.join("resource-stderr.log"), b"child sentinel")
+                .expect("child stderr sentinel should be written");
+        }
+        std::fs::write(root.join("resource-stdout.log"), b"parent seed")
+            .expect("parent stdout tee should exist before resource preflight");
+        std::fs::write(root.join("resource-stderr.log"), b"parent seed")
+            .expect("parent stderr tee should exist before resource preflight");
         let mut resources = executor
             .submit_resources(
                 CommandRunner::without_timeout().working_directory(&runner_dir),
-                Command::new("sh")
-                    .arg("-c")
-                    .arg("pwd; cat")
+                path_probe_command()
                     .stdin_file("input.txt")
                     .working_directory(&command_dir),
                 CommandResourceRunOptions::new().options(
@@ -310,11 +316,13 @@ fn test_managed_relative_paths_use_parent_directory_and_child_cwd_priority() {
             other => panic!("resource request failed: {other:?}"),
         };
         assert!(String::from_utf8_lossy(output.stdout()).starts_with(command_dir.to_str().unwrap()));
-        assert!(String::from_utf8_lossy(output.stdout()).ends_with("parent-input"));
+        assert!(String::from_utf8_lossy(output.stdout()).contains("parent-input"));
         assert_eq!(std::fs::read(root.join("resource-stdout.log")).unwrap(), output.stdout());
         assert!(std::fs::read(root.join("resource-stderr.log")).unwrap().is_empty());
-        assert!(!runner_dir.join("resource-stdout.log").exists());
-        assert!(!command_dir.join("resource-stdout.log").exists());
+        for directory in [&runner_dir, &command_dir] {
+            assert_eq!(std::fs::read(directory.join("resource-stdout.log")).unwrap(), b"child sentinel");
+            assert_eq!(std::fs::read(directory.join("resource-stderr.log")).unwrap(), b"child sentinel");
+        }
         assert!(resources.wait_settlement().unwrap().all_released());
         return;
     }
@@ -325,11 +333,106 @@ fn test_managed_relative_paths_use_parent_directory_and_child_cwd_priority() {
         .arg("test_managed_relative_paths_use_parent_directory_and_child_cwd_priority")
         .arg("--nocapture")
         .env(WORKER_ENV, directory.path())
+        .current_dir(directory.path())
         .output()
         .expect("isolated path worker should start");
     assert!(
         output.status.success(),
         "isolated path worker failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+fn path_probe_command() -> Command {
+    Command::new("sh").arg("-c").arg("pwd; cat")
+}
+
+#[cfg(windows)]
+fn path_probe_command() -> Command {
+    Command::new("cmd.exe").args(&["/C", "cd & findstr /R ."])
+}
+
+#[cfg(windows)]
+#[test]
+fn test_windows_drive_relative_resource_paths_keep_parent_drive_cwd() {
+    use std::path::Component;
+
+    const WORKER_ENV: &str = "QUBIT_WINDOWS_DRIVE_RELATIVE_WORKER";
+    if let Some(root) = std::env::var_os(WORKER_ENV) {
+        let root = std::path::PathBuf::from(root);
+        assert_eq!(std::env::current_dir().expect("worker directory should resolve"), root);
+        let drive_prefix = root
+            .components()
+            .find_map(|component| match component {
+                Component::Prefix(prefix) => Some(prefix.as_os_str().to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .expect("temporary directory should have a drive prefix");
+        let drive_relative = |name: &str| std::path::PathBuf::from(format!("{drive_prefix}{name}"));
+        let input = drive_relative("input.txt");
+        let stdout_tee = drive_relative("drive-relative-stdout.log");
+        let stderr_tee = drive_relative("drive-relative-stderr.log");
+        std::fs::write(root.join("input.txt"), b"parent-drive-input")
+            .expect("parent drive input should be written");
+        std::fs::write(&stdout_tee, b"parent seed").expect("stdout tee should exist for preflight");
+        std::fs::write(&stderr_tee, b"parent seed").expect("stderr tee should exist for preflight");
+
+        let child_dir = root.join("drive-relative-child");
+        std::fs::create_dir_all(&child_dir).expect("child directory should be created");
+        std::fs::write(child_dir.join("drive-relative-stdout.log"), b"child sentinel")
+            .expect("child stdout sentinel should be written");
+        std::fs::write(child_dir.join("drive-relative-stderr.log"), b"child sentinel")
+            .expect("child stderr sentinel should be written");
+
+        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default())
+            .expect("executor should start");
+        let mut operation = executor
+            .submit_resources(
+                CommandRunner::without_timeout(),
+                path_probe_command().stdin_file(input).working_directory(&child_dir),
+                CommandResourceRunOptions::new().options(
+                    CommandRunOptions::new()
+                        .tee_stdout_to_file(stdout_tee)
+                        .tee_stderr_to_file(stderr_tee),
+                ),
+            )
+            .expect("drive-relative resource request should be admitted");
+        let output = match operation.wait_outcome().expect("outcome should arrive") {
+            OperationOutcome::Succeeded(output) => output,
+            other => panic!("drive-relative request failed: {other:?}"),
+        };
+        let stdout = String::from_utf8_lossy(output.stdout());
+        assert!(stdout.starts_with(child_dir.to_str().unwrap()));
+        assert!(stdout.contains("parent-drive-input"));
+        assert_eq!(std::fs::read(&root.join("drive-relative-stdout.log")).unwrap(), output.stdout());
+        assert!(std::fs::read(root.join("drive-relative-stderr.log")).unwrap().is_empty());
+        assert_eq!(
+            std::fs::read(child_dir.join("drive-relative-stdout.log")).unwrap(),
+            b"child sentinel"
+        );
+        assert_eq!(
+            std::fs::read(child_dir.join("drive-relative-stderr.log")).unwrap(),
+            b"child sentinel"
+        );
+        assert!(operation.wait_settlement().unwrap().all_released());
+        return;
+    }
+
+    let directory = tempfile::tempdir().expect("drive-relative fixture should be created");
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable should resolve"))
+        .arg("--exact")
+        .arg("test_windows_drive_relative_resource_paths_keep_parent_drive_cwd")
+        .arg("--nocapture")
+        .env(WORKER_ENV, directory.path())
+        .current_dir(directory.path())
+        .output()
+        .expect("isolated Windows path worker should start");
+    assert!(
+        output.status.success(),
+        "isolated Windows path worker failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
