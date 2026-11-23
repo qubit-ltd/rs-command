@@ -10,6 +10,14 @@ On Windows, successful `CancelSynchronousIo` means that the cancellation request
 
 Callers should preserve the primary error and its `cleanup_failures()`, then check `stdout_complete()` and `stderr_complete()` before treating retained output as complete. Applications that require a hard return deadline should supervise the runner in a separate process boundary; the runner's timeout does not provide that guarantee.
 
+## Current bounded source audit at SHA `36579c289a9cd6e9fb981854e87a7e3137cb6512` (2026-11-23)
+
+This audit ran on Linux x86_64 with Rust `1.94.0`. A targeted `git diff --exit-code fcdccb7 --` over the production cancellation/helper, Windows probe, workflow, and identity-gate paths exited 0: those paths are unchanged from the latest recorded source audit. `command -v pwsh` and `command -v powershell` each exited 1. No Windows runtime test, PowerShell identity gate, or new Windows trace was run for this SHA.
+
+The existing production-path probe still does not witness a subsequent blocked production I/O or a production cleanup join waiting on it: its recorded fields include `original_io_return_is_subsequent_io=false`, `production_join_pending_witness=false`, `source_writer_manually_released=true`, and `watchdog_released=false`. The pipe-based interleaving probes and separate watchdog self-test cannot establish the ordinary-file tee or production-stdin causal chain. The existing `windows-2022` workflow and PowerShell identity gate remain the runtime and result-interpretation entry points, but neither was available in this environment.
+
+**Decision:** RC-006 remains **unresolved**. This source comparison confirms only that the inspected paths did not change since `fcdccb7`; it neither confirms nor excludes the suspected production hang and does not establish Windows safety. No production code or probe was changed.
+
 ## Bounded source follow-up (source SHA `5fa0cae06001e07b5053171216b1b9f7da6acb15`, 2026-11-18)
 
 The implementation-stage source check ran on Linux x86_64 with Rust `1.94.0`. The retry-timer test change in `src/execution/executor.rs` does not alter Windows cancellation, helper I/O, or join paths; the stop-diagnostic change is documentation-only. A targeted `git diff --exit-code fcdccb7 --` over the production cancellation/helper, Windows probe, workflow, and identity-gate paths exited 0. `pwsh` and `powershell` were unavailable, so no Windows runtime test, PowerShell gate, or new Windows trace was run.

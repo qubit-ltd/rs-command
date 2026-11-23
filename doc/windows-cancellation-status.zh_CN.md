@@ -10,6 +10,14 @@
 
 调用方应保留主错误及其 `cleanup_failures()`，并在把保留输出视为完整内容前检查 `stdout_complete()` 和 `stderr_complete()`。必须保证硬返回期限的应用应通过独立进程边界监督 runner；runner 的 timeout 不提供该保证。
 
+## 当前源码有界核查（源码 SHA `36579c289a9cd6e9fb981854e87a7e3137cb6512`，2026-11-23）
+
+本次核查运行于 Linux x86_64、Rust `1.94.0`。针对生产取消/helper、Windows 探针、workflow 和身份门禁路径执行 `git diff --exit-code fcdccb7 --`，退出码为 0：这些路径相对最近一次记录的源码核查未变化。`command -v pwsh` 与 `command -v powershell` 均退出码为 1。本 SHA 未运行 Windows runtime 测试、PowerShell 身份门禁，也未生成新的 Windows trace。
+
+现有生产路径探针仍未见证后续阻塞的生产 I/O，也未见证因此等待的生产 cleanup join；记录字段仍包括 `original_io_return_is_subsequent_io=false`、`production_join_pending_witness=false`、`source_writer_manually_released=true` 和 `watchdog_released=false`。基于管道的交错探针及独立 watchdog 自测不能证明普通文件 tee 或生产 stdin 的因果链。现有 `windows-2022` workflow 和 PowerShell 身份门禁仍是 runtime 运行及判读入口，但本环境无法运行它们。
+
+**结论：** RC-006 仍为 **unresolved（未解决）**。本次源码比较只确认受检路径自 `fcdccb7` 起没有变化；既未证实也未排除疑似生产挂起，也不证明 Windows 安全。未修改生产代码或探针。
+
 ## 实施阶段有界源码复核（源码 SHA `5fa0cae06001e07b5053171216b1b9f7da6acb15`，2026-11-18）
 
 本次实施阶段源码检查运行于 Linux x86_64、Rust `1.94.0`。`src/execution/executor.rs` 中的 retry timer 测试改动未改变 Windows 取消、helper I/O 或 join 路径；停止诊断改动仅涉及文档。针对生产取消/helper、Windows 探针、workflow 和身份门禁路径执行 `git diff --exit-code fcdccb7 --`，退出码为 0。系统未安装 `pwsh` 或 `powershell`，因此未运行 Windows runtime 测试、PowerShell 门禁或新的 Windows trace。
