@@ -31,8 +31,6 @@ mod command_submit_failure;
 mod command_submit_failure_reason;
 #[path = "execution/command_submit_wait_failure.rs"]
 mod command_submit_wait_failure;
-#[path = "execution/retry_timer_failure.rs"]
-mod retry_timer_failure;
 #[path = "execution/contracts/mod.rs"]
 pub mod contracts;
 #[path = "execution/executor.rs"]
@@ -41,6 +39,8 @@ pub(super) mod executor;
 pub mod files;
 #[path = "execution/internal/mod.rs"]
 mod internal;
+#[path = "execution/retry_timer_failure.rs"]
+mod retry_timer_failure;
 #[path = "execution/scheduler/mod.rs"]
 pub mod scheduler;
 #[path = "execution/snapshot_failure.rs"]
@@ -57,7 +57,6 @@ pub use command_resource_submit_failure::CommandResourceSubmitFailure;
 pub use command_submit_failure::CommandSubmitFailure;
 pub use command_submit_failure_reason::CommandSubmitFailureReason;
 pub use command_submit_wait_failure::CommandSubmitWaitFailure;
-pub use retry_timer_failure::RetryTimerFailure;
 pub use contracts::ActivatedRequest;
 pub use contracts::Backend;
 pub use contracts::CapacityFailure;
@@ -75,4 +74,5 @@ pub use contracts::ResourceInput;
 pub use contracts::ScheduledJob;
 pub use contracts::Scheduler;
 pub use contracts::StopPort;
+pub use retry_timer_failure::RetryTimerFailure;
 pub use snapshot_failure::SnapshotFailure;

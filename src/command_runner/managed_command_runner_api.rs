@@ -31,9 +31,10 @@ use crate::CommandStdout;
 pub trait ManagedCommandRunnerApi {
     /// Runs a command through the managed executor and waits for settlement.
     ///
-    /// This convenience method waits for settlement, but returns only the command result or diagnostic.
-    /// Use the corresponding submit handle when you need settlement reports, recovery evidence, or
-    /// to confirm that files were released or rejected owned inputs were returned.
+    /// This convenience method waits for settlement, but returns only the
+    /// command result or diagnostic. Use the corresponding submit handle
+    /// when you need settlement reports, recovery evidence, or to confirm
+    /// that files were released or rejected owned inputs were returned.
     ///
     /// # Parameters
     ///
@@ -57,9 +58,10 @@ pub trait ManagedCommandRunnerApi {
 
     /// Runs a command with executor-prepared file resources.
     ///
-    /// This convenience method waits for settlement, but returns only the command result or diagnostic.
-    /// Use the corresponding submit handle when you need settlement reports, recovery evidence, or
-    /// to confirm that files were released or rejected owned inputs were returned.
+    /// This convenience method waits for settlement, but returns only the
+    /// command result or diagnostic. Use the corresponding submit handle
+    /// when you need settlement reports, recovery evidence, or to confirm
+    /// that files were released or rejected owned inputs were returned.
     ///
     /// # Parameters
     ///
@@ -83,9 +85,10 @@ pub trait ManagedCommandRunnerApi {
 
     /// Runs a command within an existing operation scope.
     ///
-    /// This convenience method waits for settlement, but returns only the command result or diagnostic.
-    /// Use the corresponding submit handle when you need settlement reports, recovery evidence, or
-    /// to confirm that files were released or rejected owned inputs were returned.
+    /// This convenience method waits for settlement, but returns only the
+    /// command result or diagnostic. Use the corresponding submit handle
+    /// when you need settlement reports, recovery evidence, or to confirm
+    /// that files were released or rejected owned inputs were returned.
     ///
     /// # Parameters
     ///
@@ -111,9 +114,10 @@ pub trait ManagedCommandRunnerApi {
 
     /// Runs a resource-backed command within an operation scope.
     ///
-    /// This convenience method waits for settlement, but returns only the command result or diagnostic.
-    /// Use the corresponding submit handle when you need settlement reports, recovery evidence, or
-    /// to confirm that files were released or rejected owned inputs were returned.
+    /// This convenience method waits for settlement, but returns only the
+    /// command result or diagnostic. Use the corresponding submit handle
+    /// when you need settlement reports, recovery evidence, or to confirm
+    /// that files were released or rejected owned inputs were returned.
     ///
     /// # Parameters
     ///
@@ -139,9 +143,10 @@ pub trait ManagedCommandRunnerApi {
 
     /// Submits a command asynchronously and waits for settlement.
     ///
-    /// This convenience method waits for settlement, but returns only the command result or diagnostic.
-    /// Use the corresponding submit handle when you need settlement reports, recovery evidence, or
-    /// to confirm that files were released or rejected owned inputs were returned.
+    /// This convenience method waits for settlement, but returns only the
+    /// command result or diagnostic. Use the corresponding submit handle
+    /// when you need settlement reports, recovery evidence, or to confirm
+    /// that files were released or rejected owned inputs were returned.
     ///
     /// # Parameters
     ///
@@ -166,9 +171,10 @@ pub trait ManagedCommandRunnerApi {
 
     /// Submits a resource-backed command asynchronously.
     ///
-    /// This convenience method waits for settlement, but returns only the command result or diagnostic.
-    /// Use the corresponding submit handle when you need settlement reports, recovery evidence, or
-    /// to confirm that files were released or rejected owned inputs were returned.
+    /// This convenience method waits for settlement, but returns only the
+    /// command result or diagnostic. Use the corresponding submit handle
+    /// when you need settlement reports, recovery evidence, or to confirm
+    /// that files were released or rejected owned inputs were returned.
     ///
     /// # Parameters
     ///
@@ -239,9 +245,10 @@ pub trait ManagedCommandRunnerApi {
 
     /// Submits a command asynchronously within an operation scope.
     ///
-    /// This convenience method waits for settlement, but returns only the command result or diagnostic.
-    /// Use the corresponding submit handle when you need settlement reports, recovery evidence, or
-    /// to confirm that files were released or rejected owned inputs were returned.
+    /// This convenience method waits for settlement, but returns only the
+    /// command result or diagnostic. Use the corresponding submit handle
+    /// when you need settlement reports, recovery evidence, or to confirm
+    /// that files were released or rejected owned inputs were returned.
     ///
     /// # Parameters
     ///
@@ -268,9 +275,10 @@ pub trait ManagedCommandRunnerApi {
 
     /// Submits a resource-backed command within an operation scope.
     ///
-    /// This convenience method waits for settlement, but returns only the command result or diagnostic.
-    /// Use the corresponding submit handle when you need settlement reports, recovery evidence, or
-    /// to confirm that files were released or rejected owned inputs were returned.
+    /// This convenience method waits for settlement, but returns only the
+    /// command result or diagnostic. Use the corresponding submit handle
+    /// when you need settlement reports, recovery evidence, or to confirm
+    /// that files were released or rejected owned inputs were returned.
     ///
     /// # Parameters
     ///
@@ -349,9 +357,10 @@ pub trait ManagedCommandRunnerApi {
 impl ManagedCommandRunnerApi for crate::CommandRunner {
     /// Runs a command through the managed executor and waits for settlement.
     ///
-    /// This convenience method waits for settlement, but returns only the command result or diagnostic.
-    /// Use the corresponding submit handle when you need settlement reports, recovery evidence, or
-    /// to confirm that files were released or rejected owned inputs were returned.
+    /// This convenience method waits for settlement, but returns only the
+    /// command result or diagnostic. Use the corresponding submit handle
+    /// when you need settlement reports, recovery evidence, or to confirm
+    /// that files were released or rejected owned inputs were returned.
     ///
     /// # Parameters
     ///
@@ -379,9 +388,10 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     }
     /// Runs a command using executor-prepared file resources.
     ///
-    /// This convenience method waits for settlement, but returns only the command result or diagnostic.
-    /// Use the corresponding submit handle when you need settlement reports, recovery evidence, or
-    /// to confirm that files were released or rejected owned inputs were returned.
+    /// This convenience method waits for settlement, but returns only the
+    /// command result or diagnostic. Use the corresponding submit handle
+    /// when you need settlement reports, recovery evidence, or to confirm
+    /// that files were released or rejected owned inputs were returned.
     ///
     /// # Parameters
     ///
@@ -409,9 +419,10 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     }
     /// Runs a command within the supplied operation scope.
     ///
-    /// This convenience method waits for settlement, but returns only the command result or diagnostic.
-    /// Use the corresponding submit handle when you need settlement reports, recovery evidence, or
-    /// to confirm that files were released or rejected owned inputs were returned.
+    /// This convenience method waits for settlement, but returns only the
+    /// command result or diagnostic. Use the corresponding submit handle
+    /// when you need settlement reports, recovery evidence, or to confirm
+    /// that files were released or rejected owned inputs were returned.
     ///
     /// # Parameters
     ///
@@ -441,9 +452,10 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     }
     /// Runs a resource-backed command within the supplied scope.
     ///
-    /// This convenience method waits for settlement, but returns only the command result or diagnostic.
-    /// Use the corresponding submit handle when you need settlement reports, recovery evidence, or
-    /// to confirm that files were released or rejected owned inputs were returned.
+    /// This convenience method waits for settlement, but returns only the
+    /// command result or diagnostic. Use the corresponding submit handle
+    /// when you need settlement reports, recovery evidence, or to confirm
+    /// that files were released or rejected owned inputs were returned.
     ///
     /// # Parameters
     ///
@@ -473,9 +485,10 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     }
     /// Submits a command asynchronously and waits for settlement.
     ///
-    /// This convenience method waits for settlement, but returns only the command result or diagnostic.
-    /// Use the corresponding submit handle when you need settlement reports, recovery evidence, or
-    /// to confirm that files were released or rejected owned inputs were returned.
+    /// This convenience method waits for settlement, but returns only the
+    /// command result or diagnostic. Use the corresponding submit handle
+    /// when you need settlement reports, recovery evidence, or to confirm
+    /// that files were released or rejected owned inputs were returned.
     ///
     /// # Parameters
     ///
@@ -505,9 +518,10 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     }
     /// Submits a resource-backed command asynchronously.
     ///
-    /// This convenience method waits for settlement, but returns only the command result or diagnostic.
-    /// Use the corresponding submit handle when you need settlement reports, recovery evidence, or
-    /// to confirm that files were released or rejected owned inputs were returned.
+    /// This convenience method waits for settlement, but returns only the
+    /// command result or diagnostic. Use the corresponding submit handle
+    /// when you need settlement reports, recovery evidence, or to confirm
+    /// that files were released or rejected owned inputs were returned.
     ///
     /// # Parameters
     ///
@@ -585,9 +599,10 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     }
     /// Submits a command asynchronously within the supplied scope.
     ///
-    /// This convenience method waits for settlement, but returns only the command result or diagnostic.
-    /// Use the corresponding submit handle when you need settlement reports, recovery evidence, or
-    /// to confirm that files were released or rejected owned inputs were returned.
+    /// This convenience method waits for settlement, but returns only the
+    /// command result or diagnostic. Use the corresponding submit handle
+    /// when you need settlement reports, recovery evidence, or to confirm
+    /// that files were released or rejected owned inputs were returned.
     ///
     /// # Parameters
     ///
@@ -619,9 +634,10 @@ impl ManagedCommandRunnerApi for crate::CommandRunner {
     }
     /// Submits a resource-backed command within the supplied scope.
     ///
-    /// This convenience method waits for settlement, but returns only the command result or diagnostic.
-    /// Use the corresponding submit handle when you need settlement reports, recovery evidence, or
-    /// to confirm that files were released or rejected owned inputs were returned.
+    /// This convenience method waits for settlement, but returns only the
+    /// command result or diagnostic. Use the corresponding submit handle
+    /// when you need settlement reports, recovery evidence, or to confirm
+    /// that files were released or rejected owned inputs were returned.
     ///
     /// # Parameters
     ///

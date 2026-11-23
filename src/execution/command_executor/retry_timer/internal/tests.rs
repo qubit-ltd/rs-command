@@ -76,15 +76,19 @@ fn test_retry_timer_wakes_the_most_recently_registered_waker() {
     let mut second_context = Context::from_waker(&second_waker);
     let mut scheduled = None;
 
-    assert!(delay
-        .poll_with_schedule(&mut first_context, |item| {
-            scheduled = Some(item);
-            Ok(())
-        })
-        .is_pending());
-    assert!(delay
-        .poll_with_schedule(&mut second_context, reject_retry_schedule)
-        .is_pending());
+    assert!(
+        delay
+            .poll_with_schedule(&mut first_context, |item| {
+                scheduled = Some(item);
+                Ok(())
+            })
+            .is_pending()
+    );
+    assert!(
+        delay
+            .poll_with_schedule(&mut second_context, reject_retry_schedule)
+            .is_pending()
+    );
     complete_retry_timer(scheduled.take().expect("first poll must schedule a message"));
 
     assert_eq!(first.0.load(Ordering::SeqCst), 0);
@@ -109,12 +113,14 @@ fn test_retry_delay_schedule_and_completion_boundaries() {
     assert!(!delay.scheduled);
 
     let mut scheduled = None;
-    assert!(delay
-        .poll_with_schedule(&mut cx, |item| {
-            scheduled = Some(item);
-            Ok(())
-        })
-        .is_pending());
+    assert!(
+        delay
+            .poll_with_schedule(&mut cx, |item| {
+                scheduled = Some(item);
+                Ok(())
+            })
+            .is_pending()
+    );
     let item = scheduled.take().expect("retry poll must construct timer message");
     let cancelled = Arc::clone(&item.cancelled);
     let waker_slot = Arc::clone(&item.waker);
@@ -209,8 +215,7 @@ fn test_retry_timer_processes_expired_pending_while_queue_has_messages() {
     let (tx, rx) = std::sync::mpsc::sync_channel(64);
     let timer = RetryTimer::new(tx, 64);
     let wakes = Arc::new(CountWake(AtomicUsize::new(0)));
-    let mut expired =
-        retry_timer_message(std::time::Instant::now() - std::time::Duration::from_millis(1));
+    let mut expired = retry_timer_message(std::time::Instant::now() - std::time::Duration::from_millis(1));
     expired.waker = Arc::new(std::sync::Mutex::new(Some(Waker::from(wakes.clone()))));
     let mut pending = vec![expired];
     for _ in 0..64 {
@@ -248,12 +253,14 @@ fn test_retry_timer_recovers_poisoned_waker_slots() {
     let waker = Waker::noop().clone();
     let mut context = Context::from_waker(&waker);
     let mut scheduled = None;
-    assert!(delay
-        .poll_with_schedule(&mut context, |item| {
-            scheduled = Some(item);
-            Ok(())
-        })
-        .is_pending());
+    assert!(
+        delay
+            .poll_with_schedule(&mut context, |item| {
+                scheduled = Some(item);
+                Ok(())
+            })
+            .is_pending()
+    );
 
     let slot = Arc::clone(&delay.waker);
     let poison = std::thread::spawn(move || {
@@ -262,9 +269,11 @@ fn test_retry_timer_recovers_poisoned_waker_slots() {
     })
     .join();
     assert!(poison.is_err());
-    assert!(delay
-        .poll_with_schedule(&mut context, reject_retry_schedule)
-        .is_pending());
+    assert!(
+        delay
+            .poll_with_schedule(&mut context, reject_retry_schedule)
+            .is_pending()
+    );
     drop(delay);
     complete_retry_timer(scheduled.take().expect("first poll must schedule a message"));
 

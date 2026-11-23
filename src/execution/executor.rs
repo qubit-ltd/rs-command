@@ -6,9 +6,9 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 
-use std::sync::Arc;
 #[cfg(feature = "async")]
 use std::future::Future;
+use std::sync::Arc;
 
 use qubit_operation::GroupOptions;
 use qubit_operation::OperationContext;
@@ -25,23 +25,23 @@ use super::CommandResourceSubmitFailure;
 use super::CommandSubmitFailure;
 use super::CommandSubmitFailureReason;
 #[cfg(feature = "async")]
+use super::RetryTimerFailure;
+use super::SnapshotFailure;
+use super::adapter::AdapterState;
+use super::backend::ProcessBackend;
+#[cfg(feature = "async")]
 use super::command_executor::RetryDelay;
 #[cfg(feature = "async")]
 use super::command_executor::internal::capacity_wait::CapacityWait;
 #[cfg(feature = "async")]
 use super::command_executor::internal::scheduler_waiter_guard::SchedulerWaiterGuard;
-#[cfg(feature = "async")]
-use super::command_executor::wait::retryable_async;
 use super::command_executor::wait::deadline_failure;
 use super::command_executor::wait::retry_wait;
 #[cfg(feature = "async")]
-use super::RetryTimerFailure;
-use super::SnapshotFailure;
-use super::adapter::AdapterState;
-use super::backend::ProcessBackend;
-use super::contracts::ExecutionSnapshot;
+use super::command_executor::wait::retryable_async;
 #[cfg(any(feature = "async", test))]
 use super::contracts::CapacityFailure;
+use super::contracts::ExecutionSnapshot;
 use super::contracts::IoPathSnapshot;
 use super::contracts::Request;
 use super::contracts::RequestOptions;
@@ -1329,7 +1329,8 @@ async fn wait_capacity_async(
 /// Waits for a manager Busy retry tick while holding a waiter registration.
 ///
 /// # Parameters
-/// * `scheduler`: Supplies the scheduler whose quota and close state are observed.
+/// * `scheduler`: Supplies the scheduler whose quota and close state are
+///   observed.
 /// * `context`: Supplies an optional scope context.
 ///
 /// # Errors
@@ -1342,7 +1343,10 @@ async fn wait_busy_async(
     let mut waiter: Option<SchedulerWaiterGuard> = None;
     let mut timer = Box::pin(wait_retry_tick(context.clone()));
     std::future::poll_fn(|cx| {
-        if context.as_ref().is_some_and(|context| context.is_expired() || context.stop_reason().is_some()) {
+        if context
+            .as_ref()
+            .is_some_and(|context| context.is_expired() || context.stop_reason().is_some())
+        {
             return std::task::Poll::Ready(Ok(false));
         }
         if scheduler.is_closed() {
@@ -1352,10 +1356,12 @@ async fn wait_busy_async(
             scheduler.update_waiter(waiter.id, cx.waker());
         } else {
             match scheduler.register_waiter(Some(cx.waker())) {
-                Ok(id) => waiter = Some(SchedulerWaiterGuard {
-                    scheduler: scheduler.clone(),
-                    id,
-                }),
+                Ok(id) => {
+                    waiter = Some(SchedulerWaiterGuard {
+                        scheduler: scheduler.clone(),
+                        id,
+                    })
+                }
                 Err(CapacityFailure::QueueFull) => {
                     return std::task::Poll::Ready(Err(super::CommandSubmitWaitFailure::WaiterLimit));
                 }
@@ -1394,7 +1400,10 @@ async fn wait_retryable_async(
         CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull | CapacityFailure::QueueFull)
     ) {
         wait_capacity_async(scheduler, bytes, context).await
-    } else if matches!(reason, CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy)) {
+    } else if matches!(
+        reason,
+        CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy)
+    ) {
         wait_busy_async(scheduler, context).await
     } else {
         Ok(false)
@@ -1421,8 +1430,7 @@ async fn wait_retry_tick(context: Option<OperationContext>) -> Result<bool, Retr
             {
                 return std::task::Poll::Ready(Ok(false));
             }
-            let delay_result: std::task::Poll<Result<(), RetryTimerFailure>> =
-                delay.as_mut().poll(cx);
+            let delay_result: std::task::Poll<Result<(), RetryTimerFailure>> = delay.as_mut().poll(cx);
             if let std::task::Poll::Ready(value) = delay_result {
                 return std::task::Poll::Ready(value.map(|()| true));
             }
@@ -1457,9 +1465,7 @@ fn make_request(
     command: Command,
     options: RequestOptions,
 ) -> Result<Request, Box<(CommandRunner, Command, RequestOptions, String)>> {
-    let stdin = command
-        .stdin_file_path()
-        .map(ToOwned::to_owned);
+    let stdin = command.stdin_file_path().map(ToOwned::to_owned);
     let (stdout, stderr) = match &options {
         RequestOptions::Standard(o) => (
             o.configured_stdout_file().map(ToOwned::to_owned),
@@ -1486,9 +1492,8 @@ fn make_request(
         }
         Err(_) => std::path::PathBuf::new(),
     };
-    let resolve = |path: Option<std::path::PathBuf>| {
-        path.map(|path| crate::execution::files::resolve_io_path(&wd, &path))
-    };
+    let resolve =
+        |path: Option<std::path::PathBuf>| path.map(|path| crate::execution::files::resolve_io_path(&wd, &path));
     let paths = IoPathSnapshot {
         stdin: resolve(stdin),
         stdout: resolve(stdout),
@@ -1538,18 +1543,18 @@ mod executor_decision_tests {
     use qubit_operation::TimerRegistration;
 
     use super::deadline_failure;
-    use super::make_request;
     #[cfg(feature = "async")]
     use super::futures_lite_block_on;
+    use super::make_request;
     use super::retry_wait;
-    use crate::execution::CommandExecutionConfig;
-    use crate::execution::CommandSubmitFailureReason;
-    use crate::execution::contracts::CapacityFailure;
-    use crate::execution::SnapshotFailure;
-    use crate::execution::scheduler::BoundedScheduler;
     use crate::Command;
     use crate::CommandRunOptions;
     use crate::CommandRunner;
+    use crate::execution::CommandExecutionConfig;
+    use crate::execution::CommandSubmitFailureReason;
+    use crate::execution::SnapshotFailure;
+    use crate::execution::contracts::CapacityFailure;
+    use crate::execution::scheduler::BoundedScheduler;
 
     #[test]
     fn test_two_executors_keep_waiter_quotas_local_during_concurrent_submissions() {
@@ -1557,9 +1562,9 @@ mod executor_decision_tests {
 
         use qubit_operation::OperationManager;
 
+        use crate::CommandExecutor;
         use crate::execution::CommandExecutorApi;
         use crate::execution::contracts::Scheduler;
-        use crate::CommandExecutor;
 
         let config = CommandExecutionConfig {
             max_active: 1,
@@ -1612,8 +1617,14 @@ mod executor_decision_tests {
         let second_failure = second_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
         first_waiter.join().unwrap();
         second_waiter.join().unwrap();
-        assert_eq!(first_failure.command.program(), std::ffi::OsStr::new("first-executor-request"));
-        assert_eq!(second_failure.command.program(), std::ffi::OsStr::new("second-executor-request"));
+        assert_eq!(
+            first_failure.command.program(),
+            std::ffi::OsStr::new("first-executor-request")
+        );
+        assert_eq!(
+            second_failure.command.program(),
+            std::ffi::OsStr::new("second-executor-request")
+        );
         assert_eq!(first.scheduler.snapshot().waiters, 0);
         assert_eq!(second.scheduler.snapshot().waiters, 0);
         drop(first_reservation);
@@ -1624,9 +1635,9 @@ mod executor_decision_tests {
     fn test_waiter_limit_is_returned_by_public_blocking_wait_entry() {
         use qubit_operation::OperationManager;
 
+        use crate::CommandExecutor;
         use crate::execution::CommandExecutorApi;
         use crate::execution::contracts::Scheduler;
-        use crate::CommandExecutor;
 
         let manager = OperationManager::new(Default::default()).unwrap();
         let executor = CommandExecutor::new(
@@ -1672,9 +1683,9 @@ mod executor_decision_tests {
         use qubit_operation::OperationManager;
         use qubit_operation::StopReason;
 
+        use crate::CommandExecutor;
         use crate::execution::CommandExecutorApi;
         use crate::execution::contracts::Scheduler;
-        use crate::CommandExecutor;
 
         let manager = OperationManager::new(Default::default()).unwrap();
         let executor = CommandExecutor::new(
@@ -1761,8 +1772,14 @@ mod executor_decision_tests {
 
         assert_eq!(request.snapshot.working_directory, parent);
         assert!(request.snapshot.environment.is_empty());
-        assert_eq!(request.io_paths.stdin.as_deref(), Some(parent.join("input.txt").as_path()));
-        assert_eq!(request.io_paths.stdout.as_deref(), Some(parent.join("output.log").as_path()));
+        assert_eq!(
+            request.io_paths.stdin.as_deref(),
+            Some(parent.join("input.txt").as_path())
+        );
+        assert_eq!(
+            request.io_paths.stdout.as_deref(),
+            Some(parent.join("output.log").as_path())
+        );
         assert_eq!(request.command.stdin_file_path(), Some(Path::new("input.txt")));
         assert_eq!(request.command.working_directory_override(), Some(command_directory));
         assert_eq!(request.runner.configured_working_directory(), Some(runner_directory));
@@ -1796,13 +1813,15 @@ mod executor_decision_tests {
 
         assert!(!retry_wait(&snapshot, &scheduler, 0, None).unwrap());
         assert_eq!(deadline_failure(snapshot.clone(), &context), snapshot);
-        assert!(retry_wait(
-            &CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy),
-            &scheduler,
-            0,
-            None,
-        )
-        .unwrap());
+        assert!(
+            retry_wait(
+                &CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy),
+                &scheduler,
+                0,
+                None,
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -1992,13 +2011,12 @@ mod executor_decision_tests {
             let _outcome = manager
                 .run(Default::default(), move |scope| {
                     context_tx.send(scope.context()).unwrap();
-                    let failure = match waiting_executor
-                        .submit_wait_resources_blocking_in(
-                            &scope,
-                            CommandRunner::without_timeout(),
-                            Command::new("must-not-start"),
-                            CommandResourceRunOptions::new().stdin_file(input),
-                        ) {
+                    let failure = match waiting_executor.submit_wait_resources_blocking_in(
+                        &scope,
+                        CommandRunner::without_timeout(),
+                        Command::new("must-not-start"),
+                        CommandResourceRunOptions::new().stdin_file(input),
+                    ) {
                         Err(failure) => failure,
                         Ok(_) => panic!("stopped scope must return the original request"),
                     };
@@ -2033,9 +2051,9 @@ mod executor_decision_tests {
     #[cfg(feature = "async")]
     #[test]
     fn test_async_retry_classification_accepts_only_capacity_and_busy() {
-        use crate::execution::command_executor::wait::async_capacity_retry;
         use super::retryable_async;
         use crate::execution::CapacityFailure;
+        use crate::execution::command_executor::wait::async_capacity_retry;
 
         let active_full = CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull);
         let queue_full = CommandSubmitFailureReason::Capacity(CapacityFailure::QueueFull);
@@ -2158,7 +2176,10 @@ mod snapshot_failure_tests {
             .expect("returned stdin should retain its bytes");
         assert_eq!(bytes, b"recoverable input bytes");
         assert_eq!(failure.command.program(), std::ffi::OsStr::new("true"));
-        assert_eq!(failure.command.stdin_file_path(), Some(std::path::Path::new("raw-command-input.txt")));
+        assert_eq!(
+            failure.command.stdin_file_path(),
+            Some(std::path::Path::new("raw-command-input.txt"))
+        );
         assert_eq!(
             failure.options.ordinary_options().configured_stdout_file(),
             Some(std::path::Path::new("relative-output.log"))
@@ -2255,7 +2276,10 @@ mod snapshot_failure_tests {
                         CommandRunner::without_timeout(),
                         Command::new("must-not-run-after-async-scoped-resource-snapshot-failure"),
                         CommandResourceRunOptions::new()
-                            .options(CommandRunOptions::new().tee_stdout_to_file("relative-async-scoped-resource-output.log"))
+                            .options(
+                                CommandRunOptions::new()
+                                    .tee_stdout_to_file("relative-async-scoped-resource-output.log"),
+                            )
                             .stdin_file(input),
                     ) {
                         Ok(_) => panic!("async scoped resource submission must reject a missing snapshot"),
@@ -2460,13 +2484,17 @@ impl CommandExecutorApi for CommandExecutor {
                         }
                         Ok(false) => {
                             return Err(CommandSubmitFailure {
-                                runner, command, options,
+                                runner,
+                                command,
+                                options,
                                 reason: deadline_failure(reason, &deadline),
                             });
                         }
                         Err(wait) => {
                             return Err(CommandSubmitFailure {
-                                runner, command, options,
+                                runner,
+                                command,
+                                options,
                                 reason: CommandSubmitFailureReason::Wait(wait),
                             });
                         }
@@ -2505,10 +2533,22 @@ impl CommandExecutorApi for CommandExecutor {
                             o = options;
                             continue;
                         }
-                        Ok(false) => return Err(CommandSubmitFailure { runner, command, options, reason }),
-                        Err(wait) => return Err(CommandSubmitFailure {
-                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
-                        }),
+                        Ok(false) => {
+                            return Err(CommandSubmitFailure {
+                                runner,
+                                command,
+                                options,
+                                reason,
+                            });
+                        }
+                        Err(wait) => {
+                            return Err(CommandSubmitFailure {
+                                runner,
+                                command,
+                                options,
+                                reason: CommandSubmitFailureReason::Wait(wait),
+                            });
+                        }
                     }
                 }
             }
@@ -2545,10 +2585,22 @@ impl CommandExecutorApi for CommandExecutor {
                             o = *options;
                             continue;
                         }
-                        Ok(false) => return Err(CommandResourceSubmitFailure { runner, command, options, reason }),
-                        Err(wait) => return Err(CommandResourceSubmitFailure {
-                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
-                        }),
+                        Ok(false) => {
+                            return Err(CommandResourceSubmitFailure {
+                                runner,
+                                command,
+                                options,
+                                reason,
+                            });
+                        }
+                        Err(wait) => {
+                            return Err(CommandResourceSubmitFailure {
+                                runner,
+                                command,
+                                options,
+                                reason: CommandSubmitFailureReason::Wait(wait),
+                            });
+                        }
                     }
                 }
             }
@@ -2590,13 +2642,17 @@ impl CommandExecutorApi for CommandExecutor {
                         }
                         Ok(false) => {
                             return Err(CommandResourceSubmitFailure {
-                                runner, command, options,
+                                runner,
+                                command,
+                                options,
                                 reason: deadline_failure(reason, &deadline),
                             });
                         }
                         Err(wait) => {
                             return Err(CommandResourceSubmitFailure {
-                                runner, command, options,
+                                runner,
+                                command,
+                                options,
                                 reason: CommandSubmitFailureReason::Wait(wait),
                             });
                         }
@@ -2644,10 +2700,22 @@ impl CommandExecutorApi for CommandExecutor {
                             o = options;
                             continue;
                         }
-                        Ok(false) => return Err(CommandSubmitFailure { runner, command, options, reason }),
-                        Err(wait) => return Err(CommandSubmitFailure {
-                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
-                        }),
+                        Ok(false) => {
+                            return Err(CommandSubmitFailure {
+                                runner,
+                                command,
+                                options,
+                                reason,
+                            });
+                        }
+                        Err(wait) => {
+                            return Err(CommandSubmitFailure {
+                                runner,
+                                command,
+                                options,
+                                reason: CommandSubmitFailureReason::Wait(wait),
+                            });
+                        }
                     }
                 }
             }
@@ -2700,10 +2768,22 @@ impl CommandExecutorApi for CommandExecutor {
                             o = *options;
                             continue;
                         }
-                        Ok(false) => return Err(CommandResourceSubmitFailure { runner, command, options, reason }),
-                        Err(wait) => return Err(CommandResourceSubmitFailure {
-                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
-                        }),
+                        Ok(false) => {
+                            return Err(CommandResourceSubmitFailure {
+                                runner,
+                                command,
+                                options,
+                                reason,
+                            });
+                        }
+                        Err(wait) => {
+                            return Err(CommandResourceSubmitFailure {
+                                runner,
+                                command,
+                                options,
+                                reason: CommandSubmitFailureReason::Wait(wait),
+                            });
+                        }
                     }
                 }
             }
@@ -2745,19 +2825,31 @@ impl CommandExecutorApi for CommandExecutor {
                             reason,
                         });
                     }
-                    match wait_retryable_async(self.scheduler.as_ref().clone(), bytes, &reason, Some(context.clone())).await {
+                    match wait_retryable_async(self.scheduler.as_ref().clone(), bytes, &reason, Some(context.clone()))
+                        .await
+                    {
                         Ok(true) => {
                             r = *runner;
                             c = *command;
                             o = *options;
                             continue;
                         }
-                        Ok(false) => return Err(CommandResourceSubmitFailure {
-                            runner, command, options, reason: deadline_failure(reason, &context),
-                        }),
-                        Err(wait) => return Err(CommandResourceSubmitFailure {
-                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
-                        }),
+                        Ok(false) => {
+                            return Err(CommandResourceSubmitFailure {
+                                runner,
+                                command,
+                                options,
+                                reason: deadline_failure(reason, &context),
+                            });
+                        }
+                        Err(wait) => {
+                            return Err(CommandResourceSubmitFailure {
+                                runner,
+                                command,
+                                options,
+                                reason: CommandSubmitFailureReason::Wait(wait),
+                            });
+                        }
                     }
                 }
             }
@@ -2866,19 +2958,30 @@ impl CommandExecutorApi for CommandExecutor {
                             reason,
                         });
                     }
-                    match wait_retryable_async(self.scheduler.as_ref().clone(), 0, &reason, Some(context.clone())).await {
+                    match wait_retryable_async(self.scheduler.as_ref().clone(), 0, &reason, Some(context.clone())).await
+                    {
                         Ok(true) => {
                             r = *runner;
                             c = *command;
                             o = options;
                             continue;
                         }
-                        Ok(false) => return Err(CommandSubmitFailure {
-                            runner, command, options, reason: deadline_failure(reason, &context),
-                        }),
-                        Err(wait) => return Err(CommandSubmitFailure {
-                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
-                        }),
+                        Ok(false) => {
+                            return Err(CommandSubmitFailure {
+                                runner,
+                                command,
+                                options,
+                                reason: deadline_failure(reason, &context),
+                            });
+                        }
+                        Err(wait) => {
+                            return Err(CommandSubmitFailure {
+                                runner,
+                                command,
+                                options,
+                                reason: CommandSubmitFailureReason::Wait(wait),
+                            });
+                        }
                     }
                 }
             }
@@ -3109,13 +3212,13 @@ mod retry_wait_tests {
         use qubit_operation::OperationManager;
         use qubit_operation::StopReason;
 
-        use crate::execution::CommandExecutorApi;
-        use crate::execution::contracts::Scheduler;
-        use crate::CommandExecutor;
         use crate::Command;
+        use crate::CommandExecutor;
         use crate::CommandResourceRunOptions;
         use crate::CommandRunner;
         use crate::CommandSubmitFailureReason;
+        use crate::execution::CommandExecutorApi;
+        use crate::execution::contracts::Scheduler;
 
         let manager = OperationManager::new(Default::default()).unwrap();
         let executor = CommandExecutor::new(
@@ -3169,7 +3272,10 @@ mod retry_wait_tests {
             failure.reason,
             CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Stopped)
         );
-        assert_eq!(failure.command.program(), std::ffi::OsStr::new("must-not-start-resource"));
+        assert_eq!(
+            failure.command.program(),
+            std::ffi::OsStr::new("must-not-start-resource")
+        );
         assert_eq!(
             failure.command.arguments().collect::<Vec<_>>(),
             vec![std::ffi::OsStr::new("resource-original-arg")]
@@ -3191,9 +3297,7 @@ mod retry_wait_tests {
 
     #[test]
     fn test_async_busy_wait_observes_waiter_limit_and_scheduler_close() {
-        let busy = crate::execution::CommandSubmitFailureReason::Admission(
-            qubit_operation::AdmissionError::Busy,
-        );
+        let busy = crate::execution::CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy);
         let full = BoundedScheduler::new(CommandExecutionConfig {
             max_waiters: 0,
             ..Default::default()

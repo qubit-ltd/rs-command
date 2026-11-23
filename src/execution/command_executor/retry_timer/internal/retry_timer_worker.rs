@@ -11,6 +11,9 @@ use super::retry_timer_message::RetryTimerMessage;
 const RETRY_TIMER_DRAIN_BATCH: usize = 64;
 
 /// Publishes a timer completion and wakes the latest registered retry task.
+///
+/// # Parameters
+/// * `item`: Completed or cancelled timer message.
 pub(super) fn complete_retry_timer(item: RetryTimerMessage) {
     if item.cancelled.load(std::sync::atomic::Ordering::Acquire) {
         return;
@@ -24,6 +27,10 @@ pub(super) fn complete_retry_timer(item: RetryTimerMessage) {
 }
 
 /// Removes cancelled messages and completes messages whose deadlines elapsed.
+///
+/// # Parameters
+/// * `pending`: Worker-owned messages waiting for completion.
+/// * `now`: Current instant used to identify elapsed deadlines.
 pub(super) fn process_retry_timers(pending: &mut Vec<RetryTimerMessage>, now: std::time::Instant) {
     let mut index = 0;
     while index < pending.len() {
@@ -37,7 +44,11 @@ pub(super) fn process_retry_timers(pending: &mut Vec<RetryTimerMessage>, now: st
     }
 }
 
-/// Receives timer requests in bounded batches and processes due work between them.
+/// Receives timer requests in bounded batches and processes due work between
+/// them.
+///
+/// # Parameters
+/// * `rx`: Receiver supplying scheduled timer messages.
 pub(super) fn run_retry_timer(rx: std::sync::mpsc::Receiver<RetryTimerMessage>) {
     let mut pending = Vec::<RetryTimerMessage>::new();
     loop {

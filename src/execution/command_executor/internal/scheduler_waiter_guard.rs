@@ -2,6 +2,8 @@
 //    Copyright (c) 2025 - 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 
 #[cfg(feature = "async")]
@@ -18,6 +20,7 @@ pub(in crate::execution) struct SchedulerWaiterGuard {
 
 #[cfg(feature = "async")]
 impl Drop for SchedulerWaiterGuard {
+    /// Cancels the scheduler registration when the async wait ends.
     fn drop(&mut self) {
         self.scheduler.cancel_waiter(self.id);
     }

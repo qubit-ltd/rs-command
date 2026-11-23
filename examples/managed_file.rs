@@ -54,7 +54,10 @@ pub fn run() {
     };
     assert_eq!(output.exit_code(), Some(0));
     let settlement = operation.wait_settlement().expect("command settlement");
-    assert!(settlement.all_released(), "owned files must be released before cleanup: {settlement:?}");
+    assert!(
+        settlement.all_released(),
+        "owned files must be released before cleanup: {settlement:?}"
+    );
 
     // The settlement report confirms that the owned file input is no longer in
     // use. The caller still owns ordinary external cleanup of its directory;

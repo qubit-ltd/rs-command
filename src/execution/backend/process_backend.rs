@@ -386,6 +386,10 @@ fn normalize_tee_paths(mut options: crate::CommandRunOptions, paths: &IoPathSnap
 }
 
 /// Rewrites path-based stdin to the request's captured I/O target.
+///
+/// # Parameters
+/// * `command`: Command whose stdin path may be replaced.
+/// * `paths`: Resolved I/O targets captured for this request.
 fn normalize_stdin_path(mut command: crate::Command, paths: &IoPathSnapshot) -> crate::Command {
     if let Some(path) = paths.stdin.as_ref() {
         command = command.stdin_file(path.clone());
@@ -490,7 +494,6 @@ mod tests {
     use crate::execution::contracts::ExecutionSnapshot;
     use crate::execution::contracts::FactPublishError;
     use crate::execution::contracts::FactSink;
-    #[cfg(unix)]
     use crate::execution::contracts::IoPathSnapshot;
     use crate::execution::contracts::RecoveryEffectEvidence;
     use crate::execution::contracts::RecoveryOwner;

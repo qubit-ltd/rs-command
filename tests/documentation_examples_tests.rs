@@ -363,9 +363,21 @@ fn test_bilingual_guide_examples_have_matching_ids_and_modes() {
 fn test_required_production_markers_fail_when_removed() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     for (relative, marker, expected) in [
-        ("README.md", "managed-service-quick-start", &[ ("managed-service-quick-start", "compile") ][..]),
-        ("doc/user_guide.md", "managed-stop-diagnostic", &[ ("managed-stop-diagnostic", "compile") ][..]),
-        ("doc/migration-0.12.md", "migration-tree-policy", &[ ("migration-tree-policy", "compile") ][..]),
+        (
+            "README.md",
+            "managed-service-quick-start",
+            &[("managed-service-quick-start", "compile")][..],
+        ),
+        (
+            "doc/user_guide.md",
+            "managed-stop-diagnostic",
+            &[("managed-stop-diagnostic", "compile")][..],
+        ),
+        (
+            "doc/migration-0.12.md",
+            "migration-tree-policy",
+            &[("migration-tree-policy", "compile")][..],
+        ),
     ] {
         let source = std::fs::read_to_string(root.join(relative)).unwrap();
         let parsed = extract_examples(&source, relative).unwrap();

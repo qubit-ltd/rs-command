@@ -22,6 +22,11 @@ pub struct IoPathSnapshot {
 }
 
 impl std::fmt::Debug for IoPathSnapshot {
+    /// Formats only whether each I/O path is present.
+    ///
+    /// # Parameters
+    /// * `self`: Snapshot whose path-presence metadata is formatted.
+    /// * `formatter`: Destination for the debug representation.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("IoPathSnapshot")

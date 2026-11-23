@@ -187,7 +187,10 @@ fn test_owned_file_preparation_failure_retains_recovery_settlement() {
         .expect("adapter recovery evidence is retained by manager");
     assert_eq!(external.status, SettlementStatus::RecoveryRequired);
     assert_eq!(external.recovery_count, 1);
-    assert!(external.recoveries.is_empty(), "adapter recovery is not a manager RecoveryHandle");
+    assert!(
+        external.recoveries.is_empty(),
+        "adapter recovery is not a manager RecoveryHandle"
+    );
 }
 
 #[cfg(unix)]

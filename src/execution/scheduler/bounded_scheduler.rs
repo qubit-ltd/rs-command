@@ -120,7 +120,8 @@ impl BoundedScheduler {
                 .ok_or(CapacityFailure::QueueFull)?,
         ))
     }
-    /// Rechecks capacity and refreshes a registered waiter's waker under one lock.
+    /// Rechecks capacity and refreshes a registered waiter's waker under one
+    /// lock.
     ///
     /// # Parameters
     /// * `input_bytes`: Supplies the estimated input size.
@@ -128,10 +129,12 @@ impl BoundedScheduler {
     /// * `waker`: Supplies the current task waker.
     ///
     /// # Returns
-    /// The retained or newly allocated waiter ID, or `None` when capacity is available.
+    /// The retained or newly allocated waiter ID, or `None` when capacity is
+    /// available.
     ///
     /// # Errors
-    /// Returns `Closed` after scheduler closure or `QueueFull` when no waiter slot remains.
+    /// Returns `Closed` after scheduler closure or `QueueFull` when no waiter
+    /// slot remains.
     #[cfg(feature = "async")]
     pub(in crate::execution) fn refresh_capacity_waiter(
         &self,
@@ -189,10 +192,12 @@ impl BoundedScheduler {
     /// * `input_bytes`: Supplies the input bytes value used by this operation.
     /// * `deadline`: Supplies the deadline value used by this operation.
     pub fn wait_for_capacity(&self, input_bytes: usize, deadline: Option<OperationContext>) -> bool {
-        self.wait_for_capacity_registered(input_bytes, deadline).unwrap_or(false)
+        self.wait_for_capacity_registered(input_bytes, deadline)
+            .unwrap_or(false)
     }
 
-    /// Waits for capacity with a result that distinguishes waiter quota exhaustion.
+    /// Waits for capacity with a result that distinguishes waiter quota
+    /// exhaustion.
     ///
     /// # Parameters
     /// * `input_bytes`: Supplies the estimated input size.
@@ -239,7 +244,8 @@ impl BoundedScheduler {
         Ok(result)
     }
 
-    /// Waits for a manager Busy retry interval while holding a scheduler waiter slot.
+    /// Waits for a manager Busy retry interval while holding a scheduler waiter
+    /// slot.
     ///
     /// # Parameters
     /// * `context`: Supplies the optional scope context.

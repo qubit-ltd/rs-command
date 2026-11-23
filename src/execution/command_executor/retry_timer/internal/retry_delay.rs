@@ -34,6 +34,10 @@ impl RetryDelay {
     }
 
     /// Polls the delay while delegating message scheduling.
+    ///
+    /// # Parameters
+    /// * `cx`: Task context used to register the latest waker.
+    /// * `schedule`: Callback that queues the retry timer message.
     pub(super) fn poll_with_schedule(
         &mut self,
         cx: &mut std::task::Context<'_>,
@@ -75,12 +79,16 @@ impl RetryDelay {
 }
 
 impl std::future::Future for RetryDelay {
+    /// Result returned when the retry delay elapses or scheduling fails.
     type Output = Result<(), RetryTimerFailure>;
 
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
+    /// Polls the delay and schedules its timer message on the first pending
+    /// poll.
+    ///
+    /// # Parameters
+    /// * `self`: Future state retaining the latest waker and timer status.
+    /// * `cx`: Task context used to register the latest waker.
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         self.as_mut()
             .get_mut()
             .poll_with_schedule(cx, |item| retry_timer()?.schedule(item))
@@ -88,12 +96,9 @@ impl std::future::Future for RetryDelay {
 }
 
 impl Drop for RetryDelay {
+    /// Marks the timer message cancelled and removes the retained waker.
     fn drop(&mut self) {
-        self.cancelled
-            .store(true, std::sync::atomic::Ordering::Release);
-        self.waker
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take();
+        self.cancelled.store(true, std::sync::atomic::Ordering::Release);
+        self.waker.lock().unwrap_or_else(|error| error.into_inner()).take();
     }
 }

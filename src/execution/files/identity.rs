@@ -103,12 +103,20 @@ pub(crate) fn resolve_io_path(base: &Path, path: &Path) -> std::path::PathBuf {
     }
 }
 
+/// Returns whether a path begins with a Windows drive or namespace prefix.
+///
+/// # Parameters
+/// * `path`: Path whose first component is inspected.
 #[cfg(windows)]
 fn has_windows_drive_prefix(path: &Path) -> bool {
     use std::path::Component;
     matches!(path.components().next(), Some(Component::Prefix(_)))
 }
 
+/// Returns false because non-Windows paths have no Windows drive prefix.
+///
+/// # Parameters
+/// * `_`: Unused path on platforms without Windows drive prefixes.
 #[cfg(not(windows))]
 fn has_windows_drive_prefix(_: &Path) -> bool {
     false
@@ -116,10 +124,10 @@ fn has_windows_drive_prefix(_: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(windows)]
-    use std::path::Path;
     #[cfg(unix)]
     use std::fs::File;
+    #[cfg(windows)]
+    use std::path::Path;
 
     #[cfg(windows)]
     use super::resolve_io_path;

@@ -2,6 +2,8 @@
 //    Copyright (c) 2025 - 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 
 #[cfg(feature = "async")]
@@ -24,13 +26,20 @@ pub(in crate::execution) struct CapacityWait {
 
 #[cfg(feature = "async")]
 impl std::future::Future for CapacityWait {
+    /// Result returned when capacity changes or a waiter limit is reached.
     type Output = Result<bool, CommandSubmitWaitFailure>;
 
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        match self.scheduler.refresh_capacity_waiter(self.bytes, self.waiter, cx.waker()) {
+    /// Refreshes the waiter registration and reports the current capacity
+    /// state.
+    ///
+    /// # Parameters
+    /// * `self`: Future state retaining the scheduler registration.
+    /// * `cx`: Task context used to register the latest waker.
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        match self
+            .scheduler
+            .refresh_capacity_waiter(self.bytes, self.waiter, cx.waker())
+        {
             Ok(None) => {
                 self.waiter = None;
                 std::task::Poll::Ready(Ok(true))
@@ -53,6 +62,7 @@ impl std::future::Future for CapacityWait {
 
 #[cfg(feature = "async")]
 impl Drop for CapacityWait {
+    /// Releases any waiter registration retained by this future.
     fn drop(&mut self) {
         if let Some(id) = self.waiter.take() {
             self.scheduler.cancel_waiter(id);

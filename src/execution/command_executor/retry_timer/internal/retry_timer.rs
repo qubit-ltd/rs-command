@@ -12,17 +12,21 @@ use super::retry_timer_permit::RetryTimerPermit;
 
 /// Schedules retry messages under one quota shared by the channel and worker.
 pub(super) struct RetryTimer {
+    /// Sender for retry messages queued to the worker.
     tx: std::sync::mpsc::SyncSender<RetryTimerMessage>,
+    /// Shared count of queued and worker-pending messages.
     in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Maximum number of messages allowed in flight.
     capacity: usize,
 }
 
 impl RetryTimer {
     /// Creates a timer sender with the supplied total in-flight capacity.
-    pub(super) fn new(
-        tx: std::sync::mpsc::SyncSender<RetryTimerMessage>,
-        capacity: usize,
-    ) -> Self {
+    ///
+    /// # Parameters
+    /// * `tx`: Bounded channel used to send timer messages to the worker.
+    /// * `capacity`: Maximum number of queued and pending messages.
+    pub(super) fn new(tx: std::sync::mpsc::SyncSender<RetryTimerMessage>, capacity: usize) -> Self {
         Self {
             tx,
             in_flight: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -37,10 +41,10 @@ impl RetryTimer {
     }
 
     /// Reserves a timer slot and queues the supplied message.
-    pub(super) fn schedule(
-        &self,
-        mut item: RetryTimerMessage,
-    ) -> Result<(), RetryTimerFailure> {
+    ///
+    /// # Parameters
+    /// * `item`: Timer message to schedule.
+    pub(super) fn schedule(&self, mut item: RetryTimerMessage) -> Result<(), RetryTimerFailure> {
         let mut current = self.in_flight.load(std::sync::atomic::Ordering::Acquire);
         loop {
             if current >= self.capacity {
@@ -64,8 +68,7 @@ impl RetryTimer {
     }
 }
 
-static RETRY_TIMER: std::sync::OnceLock<Result<RetryTimer, RetryTimerFailure>> =
-    std::sync::OnceLock::new();
+static RETRY_TIMER: std::sync::OnceLock<Result<RetryTimer, RetryTimerFailure>> = std::sync::OnceLock::new();
 
 /// Returns the process-wide retry timer, starting its worker on first use.
 pub(super) fn retry_timer() -> Result<&'static RetryTimer, RetryTimerFailure> {

@@ -13,11 +13,11 @@ use std::io::SeekFrom;
 use std::io::Write;
 use std::path::Path;
 
-use qubit_command::CommandResourceRunOptions;
-use qubit_command::CommandRunOptions;
 use qubit_command::Command;
 use qubit_command::CommandExecutionConfig;
 use qubit_command::CommandExecutor;
+use qubit_command::CommandResourceRunOptions;
+use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
 use qubit_command::FileSinkPolicy;
 use qubit_command::execution::ResourceInput;
@@ -243,8 +243,7 @@ fn test_managed_relative_paths_use_parent_directory_and_child_cwd_priority() {
         std::fs::create_dir_all(&command_dir).expect("command directory should be created");
 
         let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
-        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default())
-            .expect("executor should start");
+        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).expect("executor should start");
         let input = root.join("input.txt");
         std::fs::write(&input, b"parent-input").expect("parent input should be populated");
 
@@ -317,11 +316,20 @@ fn test_managed_relative_paths_use_parent_directory_and_child_cwd_priority() {
         };
         assert!(String::from_utf8_lossy(output.stdout()).starts_with(command_dir.to_str().unwrap()));
         assert!(String::from_utf8_lossy(output.stdout()).contains("parent-input"));
-        assert_eq!(std::fs::read(root.join("resource-stdout.log")).unwrap(), output.stdout());
+        assert_eq!(
+            std::fs::read(root.join("resource-stdout.log")).unwrap(),
+            output.stdout()
+        );
         assert!(std::fs::read(root.join("resource-stderr.log")).unwrap().is_empty());
         for directory in [&runner_dir, &command_dir] {
-            assert_eq!(std::fs::read(directory.join("resource-stdout.log")).unwrap(), b"child sentinel");
-            assert_eq!(std::fs::read(directory.join("resource-stderr.log")).unwrap(), b"child sentinel");
+            assert_eq!(
+                std::fs::read(directory.join("resource-stdout.log")).unwrap(),
+                b"child sentinel"
+            );
+            assert_eq!(
+                std::fs::read(directory.join("resource-stderr.log")).unwrap(),
+                b"child sentinel"
+            );
         }
         assert!(resources.wait_settlement().unwrap().all_released());
         return;
@@ -374,8 +382,7 @@ fn test_windows_drive_relative_resource_paths_keep_parent_drive_cwd() {
         let input = drive_relative("input.txt");
         let stdout_tee = drive_relative("drive-relative-stdout.log");
         let stderr_tee = drive_relative("drive-relative-stderr.log");
-        std::fs::write(root.join("input.txt"), b"parent-drive-input")
-            .expect("parent drive input should be written");
+        std::fs::write(root.join("input.txt"), b"parent-drive-input").expect("parent drive input should be written");
         std::fs::write(&stdout_tee, b"parent seed").expect("stdout tee should exist for preflight");
         std::fs::write(&stderr_tee, b"parent seed").expect("stderr tee should exist for preflight");
 
@@ -387,8 +394,7 @@ fn test_windows_drive_relative_resource_paths_keep_parent_drive_cwd() {
             .expect("child stderr sentinel should be written");
 
         let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
-        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default())
-            .expect("executor should start");
+        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).expect("executor should start");
         let mut operation = executor
             .submit_resources(
                 CommandRunner::without_timeout(),
@@ -407,8 +413,15 @@ fn test_windows_drive_relative_resource_paths_keep_parent_drive_cwd() {
         let stdout = String::from_utf8_lossy(output.stdout());
         assert!(stdout.starts_with(child_dir.to_str().unwrap()));
         assert!(stdout.contains("parent-drive-input"));
-        assert_eq!(std::fs::read(&root.join("drive-relative-stdout.log")).unwrap(), output.stdout());
-        assert!(std::fs::read(root.join("drive-relative-stderr.log")).unwrap().is_empty());
+        assert_eq!(
+            std::fs::read(&root.join("drive-relative-stdout.log")).unwrap(),
+            output.stdout()
+        );
+        assert!(
+            std::fs::read(root.join("drive-relative-stderr.log"))
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             std::fs::read(child_dir.join("drive-relative-stdout.log")).unwrap(),
             b"child sentinel"
