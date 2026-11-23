@@ -348,7 +348,6 @@ mod tests {
     use qubit_operation::ManagerOptions;
     use qubit_operation::OperationManager;
     use qubit_operation::OperationOptions;
-    use qubit_operation::ScopeLimits;
 
     use super::ResourceInput;
     use crate::CommandRunOptions;
@@ -370,36 +369,32 @@ mod tests {
         std::fs::write(output.path(), b"must survive").expect("sink should be populated");
         let sink_path = output.path().to_path_buf();
         let outcome = manager
-            .run(
-                OperationOptions {
-                    limits: ScopeLimits {
-                        resources: 0,
-                        ..ScopeLimits::default()
-                    },
-                    ..OperationOptions::default()
-                },
-                move |scope| {
-                    let file = OpenOptions::new()
-                        .read(true)
-                        .write(true)
-                        .open(&sink_path)
-                        .expect("sink should open");
-                    let error = match CommandResourceRunOptions::new()
-                        .stdout_sink(file, FileSinkPolicy::Truncate)
-                        .prepare_for_managed(&scope, &ExecutionSnapshot::default(), false)
-                    {
-                        Ok(_) => panic!("zero resource capacity must reject preparation"),
-                        Err(error) => error,
-                    };
-                    assert_eq!(error.phase, crate::FilePreparationStage::ResourceReservation);
-                    assert_eq!(error.direction, None);
-                    assert!(error.failure.input.is_some());
-                    assert!(error.failure.prepared.is_none());
-                    assert_eq!(error.source.kind(), std::io::ErrorKind::Other);
-                    assert_eq!(std::fs::read(&sink_path).unwrap(), b"must survive");
-                    Ok::<_, std::convert::Infallible>(())
-                },
-            )
+            .run(OperationOptions::default(), move |scope| {
+                let mut reservations = Vec::new();
+                while let Ok(reservation) = scope.reserve_resource() {
+                    reservations.push(reservation);
+                }
+                let file = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&sink_path)
+                    .expect("sink should open");
+                let error = match CommandResourceRunOptions::new()
+                    .stdout_sink(file, FileSinkPolicy::Truncate)
+                    .prepare_for_managed(&scope, &ExecutionSnapshot::default(), false)
+                {
+                    Ok(_) => panic!("zero resource capacity must reject preparation"),
+                    Err(error) => error,
+                };
+                assert_eq!(error.phase, crate::FilePreparationStage::ResourceReservation);
+                assert_eq!(error.direction, None);
+                assert!(error.failure.input.is_some());
+                assert!(error.failure.prepared.is_none());
+                assert_eq!(error.source.kind(), std::io::ErrorKind::Other);
+                assert_eq!(std::fs::read(&sink_path).unwrap(), b"must survive");
+                drop(reservations);
+                Ok::<_, std::convert::Infallible>(())
+            })
             .expect("preparation operation should finish");
         assert!(matches!(outcome, qubit_operation::OperationOutcome::Succeeded(())));
     }

@@ -98,7 +98,7 @@ fn test_dropping_executor_keeps_accepted_operation_running_to_completion() {
 }
 
 #[test]
-fn test_owned_preparation_failure_retains_and_reports_recovery() {
+fn test_managed_truncation_failure_is_typed_and_releases_registered_sink() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
     use std::io::Write;
@@ -113,19 +113,25 @@ fn test_owned_preparation_failure_retains_and_reports_recovery() {
             options,
         )
         .unwrap();
-    assert!(matches!(operation.wait_outcome().unwrap(), OperationOutcome::Failed(_)));
+    let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
+        panic!("read-only managed sink truncation must fail");
+    };
+    assert_eq!(error.kind(), qubit_command::CommandErrorKind::FilePreparationFailed);
+    assert!(matches!(
+        error.reason(),
+        qubit_command::CommandErrorReason::FilePreparationFailed {
+            stage: qubit_command::FilePreparationStage::Truncation,
+            direction: Some(qubit_command::FilePreparationDirection::Stdout),
+            ..
+        }
+    ));
     let settlement = operation.wait_settlement().unwrap();
     let external = settlement
         .external_settlement
         .as_ref()
         .expect("adapter settlement is retained by manager");
-    assert_eq!(external.status, SettlementStatus::RecoveryRequired);
-    assert_eq!(external.recovery_count, 1);
-    assert_eq!(
-        external.effects_total, 0,
-        "scope effects are not copied into the domain report"
-    );
-    assert_eq!(external.effects.len(), 0);
+    assert_eq!(external.status, SettlementStatus::Released);
+    assert_eq!(external.recovery_count, 0);
     assert_eq!(
         external.recoveries_total, 0,
         "adapter owners are not manager RecoveryHandles"
@@ -240,6 +246,61 @@ fn test_managed_stderr_truncation_failure_is_typed_and_stream_specific() {
         }
     ));
     assert_eq!(std::fs::read(output_path).unwrap(), b"keep stderr");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_managed_commit_truncates_each_sink_once_and_keeps_stdin_cursor() {
+    use std::io::Seek;
+    use std::io::SeekFrom;
+    use std::io::Write;
+
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let mut input = tempfile::tempfile().unwrap();
+    input.write_all(b"prefix-payload").unwrap();
+    input.seek(SeekFrom::Start(7)).unwrap();
+    let stdout = tempfile::NamedTempFile::new().unwrap();
+    let stderr = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(stdout.path(), b"old stdout").unwrap();
+    std::fs::write(stderr.path(), b"old stderr").unwrap();
+    let stdout_path = stdout.path().to_path_buf();
+    let stderr_path = stderr.path().to_path_buf();
+    let stdout = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&stdout_path)
+        .unwrap();
+    let stderr = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&stderr_path)
+        .unwrap();
+    let mut operation = executor
+        .submit_resources(
+            CommandRunner::without_timeout(),
+            Command::new("sh").arg("-c").arg("cat; printf error >&2"),
+            CommandResourceRunOptions::new()
+                .stdin_file(input)
+                .stdout_sink(stdout, FileSinkPolicy::Truncate)
+                .stderr_sink(stderr, FileSinkPolicy::Truncate),
+        )
+        .unwrap();
+    let OperationOutcome::Succeeded(output) = operation.wait_outcome().unwrap() else {
+        panic!("managed owned file commit should run");
+    };
+    assert_eq!(output.stdout(), b"payload");
+    assert_eq!(std::fs::read(stdout_path).unwrap(), b"payload");
+    assert_eq!(std::fs::read(stderr_path).unwrap(), b"error");
+    let settlement = operation.wait_settlement().unwrap();
+    assert!(settlement.all_released());
+    assert_eq!(settlement.effects_total, 2, "each output sink should truncate once");
+    assert!(
+        settlement
+            .effects
+            .iter()
+            .all(|effect| effect.fact == qubit_operation::EffectFact::Known)
+    );
 }
 
 #[test]
