@@ -7,6 +7,9 @@
 // =============================================================================
 //! Private types that own executor wait registrations.
 
+// Carries optional session and scope resources during async admission.
+#[path = "async_submission_context.rs"]
+pub(in crate::execution) mod async_submission_context;
 // Owns one async capacity registration across repeated polls.
 #[path = "capacity_wait.rs"]
 pub(in crate::execution) mod capacity_wait;
