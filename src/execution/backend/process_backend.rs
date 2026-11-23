@@ -26,6 +26,7 @@ use crate::execution::backend::StartGate;
 use crate::execution::contracts::ActivatedRequest;
 use crate::execution::contracts::Backend;
 use crate::execution::contracts::FactSink;
+use crate::execution::contracts::IoPathSnapshot;
 use crate::execution::contracts::RecoveryOwner;
 use crate::execution::contracts::RequestOptions;
 
@@ -230,12 +231,12 @@ impl Backend for ProcessBackend {
                 }
             },
         };
-        let options = normalize_tee_paths(options, &request.snapshot.working_directory);
+        let options = normalize_tee_paths(options, &request.io_paths);
         let capacity_lease = reservation.retain();
         let (reaper_observer, reaper_completion) = ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink));
         let output = match prepared_files {
             Ok(files) => request.runner.run_with_tree_policy(
-                request.command,
+                normalize_stdin_path(request.command, &request.io_paths),
                 options,
                 crate::command_runner::RunTreePolicy {
                     managed_policy: Some(tree_policy),
@@ -374,24 +375,22 @@ fn finish_pre_start_stop(
 /// # Parameters
 /// * `options`: Supplies the options value used by this operation.
 /// * `base`: Supplies the base value used by this operation.
-fn normalize_tee_paths(mut options: crate::CommandRunOptions, base: &std::path::Path) -> crate::CommandRunOptions {
-    if let Some(path) = options.configured_stdout_file() {
-        let absolute = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            base.join(path)
-        };
-        options = options.tee_stdout_to_file(absolute);
+fn normalize_tee_paths(mut options: crate::CommandRunOptions, paths: &IoPathSnapshot) -> crate::CommandRunOptions {
+    if let Some(path) = paths.stdout.as_ref() {
+        options = options.tee_stdout_to_file(path.clone());
     }
-    if let Some(path) = options.configured_stderr_file() {
-        let absolute = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            base.join(path)
-        };
-        options = options.tee_stderr_to_file(absolute);
+    if let Some(path) = paths.stderr.as_ref() {
+        options = options.tee_stderr_to_file(path.clone());
     }
     options
+}
+
+/// Rewrites path-based stdin to the request's captured I/O target.
+fn normalize_stdin_path(mut command: crate::Command, paths: &IoPathSnapshot) -> crate::Command {
+    if let Some(path) = paths.stdin.as_ref() {
+        command = command.stdin_file(path.clone());
+    }
+    command
 }
 
 /// Stores the released report value used by this execution component.
@@ -2196,13 +2195,17 @@ mod tests {
 
     #[test]
     fn test_normalize_tee_paths_resolves_relative_paths_and_keeps_absolute_paths() {
-        let base = std::path::Path::new("/work/dir");
         let absolute_stderr = std::path::PathBuf::from("/logs/stderr.log");
         let options = CommandRunOptions::new()
             .tee_stdout_to_file("stdout.log")
             .tee_stderr_to_file(absolute_stderr.clone());
+        let paths = IoPathSnapshot {
+            stdin: None,
+            stdout: Some(std::path::PathBuf::from("/work/dir/stdout.log")),
+            stderr: Some(absolute_stderr.clone()),
+        };
 
-        let normalized = normalize_tee_paths(options, base);
+        let normalized = normalize_tee_paths(options, &paths);
 
         assert_eq!(
             normalized.configured_stdout_file(),
@@ -2213,7 +2216,7 @@ mod tests {
 
     #[test]
     fn test_normalize_tee_paths_preserves_options_without_tee_files() {
-        let normalized = normalize_tee_paths(CommandRunOptions::new(), std::path::Path::new("/work/dir"));
+        let normalized = normalize_tee_paths(CommandRunOptions::new(), &IoPathSnapshot::default());
 
         assert_eq!(normalized.configured_stdout_file(), None);
         assert_eq!(normalized.configured_stderr_file(), None);

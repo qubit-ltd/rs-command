@@ -95,21 +95,42 @@ fn open_tee_identity(path: &Path) -> io::Result<File> {
 /// # Parameters
 /// * `base`: Captured working directory used as the resolution root.
 /// * `path`: Path to resolve without consulting the filesystem.
-#[allow(dead_code)]
-pub(super) fn absolute_lexical_path(base: &Path, path: &Path) -> std::path::PathBuf {
-    if path.is_absolute() {
+pub(crate) fn resolve_io_path(base: &Path, path: &Path) -> std::path::PathBuf {
+    if path.is_absolute() || has_windows_drive_prefix(path) {
         path.to_path_buf()
     } else {
         base.join(path)
     }
 }
 
+#[cfg(windows)]
+fn has_windows_drive_prefix(path: &Path) -> bool {
+    use std::path::Component;
+    matches!(path.components().next(), Some(Component::Prefix(_)))
+}
+
+#[cfg(not(windows))]
+fn has_windows_drive_prefix(_: &Path) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use std::path::Path;
     #[cfg(unix)]
     use std::fs::File;
 
+    #[cfg(windows)]
+    use super::resolve_io_path;
     use super::validate_files;
+
+    #[cfg(windows)]
+    #[test]
+    fn test_drive_relative_path_keeps_windows_drive_semantics() {
+        let path = Path::new(r"C:folder\input.txt");
+        assert_eq!(resolve_io_path(Path::new(r"D:\parent"), path).as_path(), path);
+    }
 
     #[test]
     fn test_identity_uses_open_handles_and_detects_cloned_file_aliases() {

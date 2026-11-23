@@ -15,6 +15,10 @@ use std::path::Path;
 
 use qubit_command::CommandResourceRunOptions;
 use qubit_command::CommandRunOptions;
+use qubit_command::Command;
+use qubit_command::CommandExecutionConfig;
+use qubit_command::CommandExecutor;
+use qubit_command::CommandRunner;
 use qubit_command::FileSinkPolicy;
 use qubit_command::execution::ResourceInput;
 use qubit_command::execution::contracts::ExecutionSnapshot;
@@ -224,6 +228,111 @@ fn test_snapshot_directory_resolves_relative_tee_identity() {
         assert!(failure.input.is_some());
         assert_eq!(std::fs::read(output_path).unwrap(), b"must survive");
     });
+}
+
+#[cfg(unix)]
+#[test]
+fn test_managed_relative_paths_use_parent_directory_and_child_cwd_priority() {
+    const WORKER_ENV: &str = "QUBIT_MANAGED_PATH_BASE_WORKER";
+    if let Some(root) = std::env::var_os(WORKER_ENV) {
+        let root = std::path::PathBuf::from(root);
+        std::env::set_current_dir(&root).expect("worker parent directory should be set");
+        let runner_dir = root.join("runner-default");
+        let command_dir = root.join("command-override");
+        std::fs::create_dir_all(&runner_dir).expect("runner directory should be created");
+        std::fs::create_dir_all(&command_dir).expect("command directory should be created");
+
+        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default())
+            .expect("executor should start");
+        let input = root.join("input.txt");
+        std::fs::write(&input, b"parent-input").expect("parent input should be populated");
+
+        let mut command_override = executor
+            .submit(
+                CommandRunner::without_timeout().working_directory(&runner_dir),
+                Command::new("sh")
+                    .arg("-c")
+                    .arg("pwd; cat")
+                    .stdin_file("input.txt")
+                    .working_directory(&command_dir),
+                CommandRunOptions::new()
+                    .tee_stdout_to_file("command-stdout.log")
+                    .tee_stderr_to_file("command-stderr.log"),
+            )
+            .expect("standard request should be admitted");
+        let output = match command_override.wait_outcome().expect("outcome should arrive") {
+            OperationOutcome::Succeeded(output) => output,
+            other => panic!("command override request failed: {other:?}"),
+        };
+        assert!(String::from_utf8_lossy(output.stdout()).starts_with(command_dir.to_str().unwrap()));
+        assert!(String::from_utf8_lossy(output.stdout()).ends_with("parent-input"));
+        assert_eq!(std::fs::read(root.join("command-stdout.log")).unwrap(), output.stdout());
+        assert!(std::fs::read(root.join("command-stderr.log")).unwrap().is_empty());
+        assert!(!runner_dir.join("command-stdout.log").exists());
+        assert!(!command_dir.join("command-stdout.log").exists());
+        assert!(command_override.wait_settlement().unwrap().all_released());
+
+        let mut runner_default = executor
+            .submit(
+                CommandRunner::without_timeout().working_directory(&runner_dir),
+                Command::new("sh").arg("-c").arg("pwd; cat").stdin_file("input.txt"),
+                CommandRunOptions::new().tee_stdout_to_file("runner-stdout.log"),
+            )
+            .expect("runner default request should be admitted");
+        let output = match runner_default.wait_outcome().expect("outcome should arrive") {
+            OperationOutcome::Succeeded(output) => output,
+            other => panic!("runner default request failed: {other:?}"),
+        };
+        assert!(String::from_utf8_lossy(output.stdout()).starts_with(runner_dir.to_str().unwrap()));
+        assert!(String::from_utf8_lossy(output.stdout()).ends_with("parent-input"));
+        assert_eq!(std::fs::read(root.join("runner-stdout.log")).unwrap(), output.stdout());
+        assert!(!runner_dir.join("runner-stdout.log").exists());
+        assert!(runner_default.wait_settlement().unwrap().all_released());
+
+        let mut resources = executor
+            .submit_resources(
+                CommandRunner::without_timeout().working_directory(&runner_dir),
+                Command::new("sh")
+                    .arg("-c")
+                    .arg("pwd; cat")
+                    .stdin_file("input.txt")
+                    .working_directory(&command_dir),
+                CommandResourceRunOptions::new().options(
+                    CommandRunOptions::new()
+                        .tee_stdout_to_file("resource-stdout.log")
+                        .tee_stderr_to_file("resource-stderr.log"),
+                ),
+            )
+            .expect("resource request should be admitted");
+        let output = match resources.wait_outcome().expect("outcome should arrive") {
+            OperationOutcome::Succeeded(output) => output,
+            other => panic!("resource request failed: {other:?}"),
+        };
+        assert!(String::from_utf8_lossy(output.stdout()).starts_with(command_dir.to_str().unwrap()));
+        assert!(String::from_utf8_lossy(output.stdout()).ends_with("parent-input"));
+        assert_eq!(std::fs::read(root.join("resource-stdout.log")).unwrap(), output.stdout());
+        assert!(std::fs::read(root.join("resource-stderr.log")).unwrap().is_empty());
+        assert!(!runner_dir.join("resource-stdout.log").exists());
+        assert!(!command_dir.join("resource-stdout.log").exists());
+        assert!(resources.wait_settlement().unwrap().all_released());
+        return;
+    }
+
+    let directory = tempfile::tempdir().expect("path fixture should be created");
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable should resolve"))
+        .arg("--exact")
+        .arg("test_managed_relative_paths_use_parent_directory_and_child_cwd_priority")
+        .arg("--nocapture")
+        .env(WORKER_ENV, directory.path())
+        .output()
+        .expect("isolated path worker should start");
+    assert!(
+        output.status.success(),
+        "isolated path worker failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

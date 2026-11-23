@@ -20,8 +20,11 @@ use crate::CommandRunner;
 ///
 /// `operation_id` is absent before upstream binding and set exactly once before
 /// activation; `snapshot` and `io_paths` are captured before admission side
-/// effects, while actual file identity checks and file access remain worker
-/// responsibilities.
+/// effects. The snapshot directory is the parent-directory base for managed
+/// path I/O, not the child working directory. Actual file identity checks and
+/// file access remain worker responsibilities. The environment compatibility
+/// field in the snapshot is empty in production requests; process environment
+/// inheritance and command overrides are applied by the child process setup.
 pub struct Request {
     /// Stores the operation id value used by this execution component.
     pub operation_id: Option<OperationId>,
@@ -79,16 +82,19 @@ mod tests {
             runner: CommandRunner::without_timeout(),
             command: Command::new("worker").sensitive_arg("request-command-secret"),
             options: RequestOptions::Standard(
-                CommandRunOptions::new().tee_stdout_to_file("private/request-output.log"),
+                CommandRunOptions::new().tee_stdout_to_file("private/request-output-secret.log"),
             ),
             snapshot: ExecutionSnapshot {
-                working_directory: PathBuf::from("working-directory"),
-                environment: vec![(OsString::from("MODE"), Some(OsString::from("safe")))],
+                working_directory: PathBuf::from("private/request-working-directory-secret"),
+                environment: vec![(
+                    OsString::from("PRIVATE_ENVIRONMENT_KEY_SECRET"),
+                    Some(OsString::from("private-environment-value-secret")),
+                )],
             },
             io_paths: IoPathSnapshot {
-                stdin: None,
-                stdout: Some(PathBuf::from("request-output.log")),
-                stderr: None,
+                stdin: Some(PathBuf::from("private/request-input-secret")),
+                stdout: Some(PathBuf::from("private/request-output-secret.log")),
+                stderr: Some(PathBuf::from("private/request-error-secret.log")),
             },
             deadline: None,
         };
@@ -96,9 +102,15 @@ mod tests {
         let debug = format!("{request:?}");
 
         assert!(debug.contains("deadline_configured: false"));
-        assert!(debug.contains("working-directory"));
-        assert!(debug.contains("request-output.log"));
+        assert!(debug.contains("environment_entries: 1"));
+        assert!(debug.contains("stdin: true"));
+        assert!(debug.contains("stdout: true"));
         assert!(!debug.contains("request-command-secret"));
-        assert!(!debug.contains("private/request-output.log"));
+        assert!(!debug.contains("PRIVATE_ENVIRONMENT_KEY_SECRET"));
+        assert!(!debug.contains("private-environment-value-secret"));
+        assert!(!debug.contains("private/request-working-directory-secret"));
+        assert!(!debug.contains("private/request-input-secret"));
+        assert!(!debug.contains("private/request-output-secret.log"));
+        assert!(!debug.contains("private/request-error-secret.log"));
     }
 }

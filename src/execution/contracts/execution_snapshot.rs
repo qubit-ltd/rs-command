@@ -6,14 +6,27 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 
-use std::ffi::OsString;
 use std::path::PathBuf;
 
-/// Immutable working-directory and environment view captured at submission.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+/// Immutable parent-directory base captured at submission for relative path I/O.
+#[derive(Clone, Default, Eq, PartialEq)]
 pub struct ExecutionSnapshot {
-    /// Stores the working directory value used by this execution component.
+    /// Parent process directory used to resolve managed stdin and tee paths.
     pub working_directory: PathBuf,
-    /// Stores the environment value used by this execution component.
-    pub environment: Vec<(OsString, Option<OsString>)>,
+    /// Compatibility field retained for callers. Production requests leave it empty;
+    /// child environment inheritance is resolved by the process at spawn time.
+    pub environment: Vec<(std::ffi::OsString, Option<std::ffi::OsString>)>,
+}
+
+impl std::fmt::Debug for ExecutionSnapshot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExecutionSnapshot")
+            .field(
+                "working_directory",
+                &(!self.working_directory.as_os_str().is_empty()).then_some("<redacted path>"),
+            )
+            .field("environment_entries", &self.environment.len())
+            .finish()
+    }
 }

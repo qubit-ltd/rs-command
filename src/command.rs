@@ -605,6 +605,14 @@ impl Command {
         self.stdin
     }
 
+    /// Returns the configured stdin file path without consuming the command.
+    pub(crate) fn stdin_file_path(&self) -> Option<&Path> {
+        match &self.stdin {
+            CommandStdin::File(path) => Some(path),
+            CommandStdin::Null | CommandStdin::Inherit | CommandStdin::Bytes(_) => None,
+        }
+    }
+
     /// Formats this command for diagnostics.
     ///
     /// # Parameters

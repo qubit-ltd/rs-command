@@ -8,9 +8,10 @@
 
 use std::path::PathBuf;
 
-/// Lexical I/O paths captured with the request; file identity is checked later
-/// by preparation.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+/// Resolved I/O targets captured with the request; file identity is checked
+/// later by preparation. Relative paths use the parent directory captured in
+/// [`super::ExecutionSnapshot`], independently of the child working directory.
+#[derive(Clone, Default, Eq, PartialEq)]
 pub struct IoPathSnapshot {
     /// Stores the stdin value used by this execution component.
     pub stdin: Option<PathBuf>,
@@ -18,4 +19,15 @@ pub struct IoPathSnapshot {
     pub stdout: Option<PathBuf>,
     /// Stores the stderr value used by this execution component.
     pub stderr: Option<PathBuf>,
+}
+
+impl std::fmt::Debug for IoPathSnapshot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("IoPathSnapshot")
+            .field("stdin", &self.stdin.is_some())
+            .field("stdout", &self.stdout.is_some())
+            .field("stderr", &self.stderr.is_some())
+            .finish()
+    }
 }

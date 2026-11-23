@@ -1671,32 +1671,42 @@ fn make_request(
     command: Command,
     options: RequestOptions,
 ) -> Result<Request, Box<(CommandRunner, Command, RequestOptions, String)>> {
-    let wd = if let Some(path) = runner
-        .configured_working_directory()
-        .or_else(|| command.working_directory_override())
-    {
-        path.to_path_buf()
-    } else {
-        match std::env::current_dir() {
-            Ok(path) => path,
-            Err(e) => {
-                return Err(Box::new((
-                    runner,
-                    command,
-                    options,
-                    format!("working directory snapshot failed: {e}"),
-                )));
-            }
-        }
+    let stdin = command
+        .stdin_file_path()
+        .map(ToOwned::to_owned);
+    let (stdout, stderr) = match &options {
+        RequestOptions::Standard(o) => (
+            o.configured_stdout_file().map(ToOwned::to_owned),
+            o.configured_stderr_file().map(ToOwned::to_owned),
+        ),
+        RequestOptions::Resources(o) => (
+            o.ordinary_options().configured_stdout_file().map(ToOwned::to_owned),
+            o.ordinary_options().configured_stderr_file().map(ToOwned::to_owned),
+        ),
     };
-    let env = std::env::vars_os().map(|(k, v)| (k, Some(v))).collect();
-    let paths = match &options {
-        RequestOptions::Standard(o) => IoPathSnapshot {
-            stdin: None,
-            stdout: o.configured_stdout_file().map(ToOwned::to_owned),
-            stderr: o.configured_stderr_file().map(ToOwned::to_owned),
-        },
-        RequestOptions::Resources(_) => IoPathSnapshot::default(),
+    let needs_base = [stdin.as_deref(), stdout.as_deref(), stderr.as_deref()]
+        .into_iter()
+        .flatten()
+        .any(needs_parent_directory);
+    let wd = match std::env::current_dir() {
+        Ok(path) => path,
+        Err(error) if needs_base => {
+            return Err(Box::new((
+                runner,
+                command,
+                options,
+                format!("parent directory snapshot failed: {error}"),
+            )));
+        }
+        Err(_) => std::path::PathBuf::new(),
+    };
+    let resolve = |path: Option<std::path::PathBuf>| {
+        path.map(|path| crate::execution::files::resolve_io_path(&wd, &path))
+    };
+    let paths = IoPathSnapshot {
+        stdin: resolve(stdin),
+        stdout: resolve(stdout),
+        stderr: resolve(stderr),
     };
     Ok(Request {
         operation_id: None,
@@ -1705,15 +1715,32 @@ fn make_request(
         options,
         snapshot: ExecutionSnapshot {
             working_directory: wd,
-            environment: env,
+            environment: Vec::new(),
         },
         io_paths: paths,
         deadline: None,
     })
 }
 
+/// Reports whether a path needs the captured parent directory as its base.
+fn needs_parent_directory(path: &std::path::Path) -> bool {
+    !path.is_absolute() && !has_platform_prefix(path)
+}
+
+#[cfg(windows)]
+fn has_platform_prefix(path: &std::path::Path) -> bool {
+    use std::path::Component;
+    matches!(path.components().next(), Some(Component::Prefix(_)))
+}
+
+#[cfg(not(windows))]
+fn has_platform_prefix(_: &std::path::Path) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod executor_decision_tests {
+    use std::path::Path;
     use std::task::Waker;
 
     use qubit_operation::ClockDomainId;
@@ -1725,6 +1752,7 @@ mod executor_decision_tests {
     use qubit_operation::TimerRegistration;
 
     use super::deadline_failure;
+    use super::make_request;
     #[cfg(feature = "async")]
     use super::futures_lite_block_on;
     use super::retry_wait;
@@ -1732,6 +1760,33 @@ mod executor_decision_tests {
     use crate::execution::CommandSubmitFailureReason;
     use crate::execution::SnapshotFailure;
     use crate::execution::scheduler::BoundedScheduler;
+    use crate::Command;
+    use crate::CommandRunOptions;
+    use crate::CommandRunner;
+
+    #[test]
+    fn test_make_request_captures_parent_io_base_without_copying_environment() {
+        let parent = std::env::current_dir().expect("parent directory should be available");
+        let runner_directory = Path::new("runner-default");
+        let command_directory = Path::new("command-override");
+        let command = Command::new("worker")
+            .stdin_file("input.txt")
+            .working_directory(command_directory);
+        let request = make_request(
+            CommandRunner::without_timeout().working_directory(runner_directory),
+            command,
+            super::RequestOptions::Standard(CommandRunOptions::new().tee_stdout_to_file("output.log")),
+        )
+        .expect("request snapshot should succeed");
+
+        assert_eq!(request.snapshot.working_directory, parent);
+        assert!(request.snapshot.environment.is_empty());
+        assert_eq!(request.io_paths.stdin.as_deref(), Some(parent.join("input.txt").as_path()));
+        assert_eq!(request.io_paths.stdout.as_deref(), Some(parent.join("output.log").as_path()));
+        assert_eq!(request.command.stdin_file_path(), Some(Path::new("input.txt")));
+        assert_eq!(request.command.working_directory_override(), Some(command_directory));
+        assert_eq!(request.runner.configured_working_directory(), Some(runner_directory));
+    }
 
     struct FixedClock(ClockDomainId);
 
@@ -1845,6 +1900,7 @@ mod snapshot_failure_tests {
     use crate::CommandExecutionConfig;
     use crate::CommandExecutor;
     use crate::CommandResourceRunOptions;
+    use crate::CommandRunOptions;
     use crate::CommandRunner;
     use crate::execution::CommandSubmitFailureReason;
 
@@ -1888,15 +1944,17 @@ mod snapshot_failure_tests {
 
         let failure = match executor.submit_resources(
             CommandRunner::without_timeout(),
-            Command::new("true"),
-            CommandResourceRunOptions::new().stdin_file(input),
+            Command::new("true").stdin_file("raw-command-input.txt"),
+            CommandResourceRunOptions::new()
+                .options(CommandRunOptions::new().tee_stdout_to_file("relative-output.log"))
+                .stdin_file(input),
         ) {
             Ok(_) => panic!("submission must reject a missing working-directory snapshot"),
             Err(failure) => failure,
         };
         match &failure.reason {
             CommandSubmitFailureReason::Snapshot(snapshot) => {
-                assert!(snapshot.diagnostic.contains("working directory snapshot failed"));
+                assert!(snapshot.diagnostic.contains("parent directory snapshot failed"));
             }
             other => panic!("expected snapshot failure, got {other:?}"),
         }
@@ -1913,11 +1971,16 @@ mod snapshot_failure_tests {
             .expect("returned stdin should retain its bytes");
         assert_eq!(bytes, b"recoverable input bytes");
         assert_eq!(failure.command.program(), std::ffi::OsStr::new("true"));
+        assert_eq!(failure.command.stdin_file_path(), Some(std::path::Path::new("raw-command-input.txt")));
+        assert_eq!(
+            failure.options.ordinary_options().configured_stdout_file(),
+            Some(std::path::Path::new("relative-output.log"))
+        );
 
         let standard_failure = match executor.submit(
             CommandRunner::without_timeout(),
             Command::new("must-not-run-after-standard-snapshot-failure"),
-            Default::default(),
+            CommandRunOptions::new().tee_stdout_to_file("relative-standard-output.log"),
         ) {
             Ok(_) => panic!("standard submission must reject a missing working-directory snapshot"),
             Err(failure) => failure,
@@ -1929,7 +1992,7 @@ mod snapshot_failure_tests {
         assert!(matches!(
             standard_failure.reason,
             CommandSubmitFailureReason::Snapshot(ref snapshot)
-                if snapshot.diagnostic.contains("working directory snapshot failed")
+                if snapshot.diagnostic.contains("parent directory snapshot failed")
         ));
 
         let scoped_executor = executor.clone();
@@ -1939,7 +2002,7 @@ mod snapshot_failure_tests {
                     &scope,
                     CommandRunner::without_timeout(),
                     Command::new("must-not-run-after-scoped-snapshot-failure"),
-                    Default::default(),
+                    CommandRunOptions::new().tee_stdout_to_file("relative-scoped-output.log"),
                 ) {
                     Ok(_) => panic!("scoped submission must reject a missing working-directory snapshot"),
                     Err(failure) => failure,
@@ -1947,7 +2010,7 @@ mod snapshot_failure_tests {
                 assert!(matches!(
                     scoped_failure.reason,
                     CommandSubmitFailureReason::Snapshot(ref snapshot)
-                        if snapshot.diagnostic.contains("working directory snapshot failed")
+                        if snapshot.diagnostic.contains("parent directory snapshot failed")
                 ));
 
                 let mut input = tempfile::tempfile().expect("scoped resource input should be created");
@@ -1957,7 +2020,9 @@ mod snapshot_failure_tests {
                     &scope,
                     CommandRunner::without_timeout(),
                     Command::new("must-not-run-after-scoped-resource-snapshot-failure"),
-                    CommandResourceRunOptions::new().stdin_file(input),
+                    CommandResourceRunOptions::new()
+                        .options(CommandRunOptions::new().tee_stdout_to_file("relative-scoped-resource-output.log"))
+                        .stdin_file(input),
                 ) {
                     Ok(_) => panic!("scoped resource submission must reject a missing working-directory snapshot"),
                     Err(failure) => failure,
@@ -1965,7 +2030,7 @@ mod snapshot_failure_tests {
                 assert!(matches!(
                     scoped_resource_failure.reason,
                     CommandSubmitFailureReason::Snapshot(ref snapshot)
-                        if snapshot.diagnostic.contains("working directory snapshot failed")
+                        if snapshot.diagnostic.contains("parent directory snapshot failed")
                 ));
                 let mut returned_input = scoped_resource_failure
                     .options
@@ -1984,7 +2049,7 @@ mod snapshot_failure_tests {
                         &scope,
                         CommandRunner::without_timeout(),
                         Command::new("must-not-run-after-async-scoped-snapshot-failure"),
-                        Default::default(),
+                        CommandRunOptions::new().tee_stdout_to_file("relative-async-scoped-output.log"),
                     ) {
                         Ok(_) => panic!("async scoped submission must reject a missing snapshot"),
                         Err(failure) => failure,
@@ -1992,7 +2057,7 @@ mod snapshot_failure_tests {
                     assert!(matches!(
                         async_scoped_failure.reason,
                         CommandSubmitFailureReason::Snapshot(ref snapshot)
-                            if snapshot.diagnostic.contains("working directory snapshot failed")
+                            if snapshot.diagnostic.contains("parent directory snapshot failed")
                     ));
 
                     let mut input = tempfile::tempfile().expect("async scoped input should be created");
@@ -2002,7 +2067,9 @@ mod snapshot_failure_tests {
                         &scope,
                         CommandRunner::without_timeout(),
                         Command::new("must-not-run-after-async-scoped-resource-snapshot-failure"),
-                        CommandResourceRunOptions::new().stdin_file(input),
+                        CommandResourceRunOptions::new()
+                            .options(CommandRunOptions::new().tee_stdout_to_file("relative-async-scoped-resource-output.log"))
+                            .stdin_file(input),
                     ) {
                         Ok(_) => panic!("async scoped resource submission must reject a missing snapshot"),
                         Err(failure) => failure,
@@ -2010,7 +2077,7 @@ mod snapshot_failure_tests {
                     assert!(matches!(
                         async_resource_failure.reason,
                         CommandSubmitFailureReason::Snapshot(ref snapshot)
-                            if snapshot.diagnostic.contains("working directory snapshot failed")
+                            if snapshot.diagnostic.contains("parent directory snapshot failed")
                     ));
                     let mut returned_input = async_resource_failure
                         .options

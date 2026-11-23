@@ -125,10 +125,10 @@ impl CommandResourceRunOptions {
         let tee_paths: Vec<(&'static str, PathBuf)> = [
             options
                 .configured_stdout_file()
-                .map(|path| ("stdout", super::identity::absolute_lexical_path(&base, path))),
+                .map(|path| ("stdout", super::identity::resolve_io_path(&base, path))),
             options
                 .configured_stderr_file()
-                .map(|path| ("stderr", super::identity::absolute_lexical_path(&base, path))),
+                .map(|path| ("stderr", super::identity::resolve_io_path(&base, path))),
         ]
         .into_iter()
         .flatten()
