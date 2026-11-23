@@ -10,6 +10,8 @@ const README_EN: &str = include_str!("../README.md");
 const README_ZH: &str = include_str!("../README.zh_CN.md");
 const GUIDE_EN: &str = include_str!("../doc/user_guide.md");
 const GUIDE_ZH: &str = include_str!("../doc/user_guide.zh_CN.md");
+const MIGRATION_EN: &str = include_str!("../doc/migration-0.12.md");
+const MIGRATION_ZH: &str = include_str!("../doc/migration-0.12.zh_CN.md");
 
 fn compatibility_line(version: &str) -> String {
     let mut components = version.split('.');
@@ -73,6 +75,8 @@ fn test_documentation_install_constraints_match_the_crate_compatibility_line() {
         ("README.zh_CN.md", README_ZH),
         ("doc/user_guide.md", GUIDE_EN),
         ("doc/user_guide.zh_CN.md", GUIDE_ZH),
+        ("doc/migration-0.12.md", MIGRATION_EN),
+        ("doc/migration-0.12.zh_CN.md", MIGRATION_ZH),
     ] {
         assert!(contents.contains(&dependency), "{name} should use {dependency}");
         assert!(

@@ -98,6 +98,14 @@ Each session output queue is bounded to 64 KiB. While the shared stdout/stderr s
 
 Wait for settlement before deleting an external temporary directory that contains a file still used by the operation. Once settlement confirms release, the application remains responsible for its own directory cleanup.
 
+### Submission paths and typed wait failures
+
+Managed stdin and tee relative paths use the parent process directory captured at submission; child working directory selection is separate, and a command override takes precedence over the runner default. On Windows, drive-relative paths keep platform semantics. The request snapshot compatibility `environment` field is empty; the child still inherits its environment at process start and applies explicit clear, remove, and override settings.
+
+Resource submission validates conflicting file and session I/O before registration. Session stdin cannot be combined with file stdin; use the session pipe or a supported byte prefix. A file preparation error is classified as `CommandErrorKind::FilePreparationFailed` and carries stage, direction, and source in `CommandErrorReason::FilePreparationFailed`. Partial commit may already have changed an earlier sink.
+
+A scoped capacity wait returns `AdmissionError::Stopped` after observing scope stop and `CapacityFailure::DeadlineExpired` after deadline expiry. `CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)` distinguishes `WaiterLimit` from `Timer(RetryTimerFailure)`; timer failures report startup, full, or disconnected scheduling states. Exhaustive matches on the submit failure reason must handle this new variant.
+
 ### Shut down without guessing
 
 `CommandExecutor::request_shutdown` stops new executor admission and returns a durable shutdown observer. Use `wait_for(Duration::ZERO)` to inspect an immediate snapshot. `ShutdownWait::Pending` is not failure: retain that same handle and continue with `wait` or another bounded `wait_for`. Do not infer release from elapsed time or a fixed sleep. The [shutdown example](../examples/managed_shutdown.rs) keeps an stdin-gated session active, confirms the child has consumed input by reading its response, observes `Pending`, then closes stdin and releases endpoints before continuing to observe shutdown. It also matches `SettlementStatus::RecoveryRequired` and reports retained recovery handles.
@@ -108,7 +116,7 @@ On Windows, the existing helper-cancellation limitation still applies: successfu
 
 ### Executable examples
 
-Run the examples from the repository with `cargo run --features async --example managed_collect` (replace the example name with `managed_session`, `managed_shutdown`, or `managed_file`). They use only the public API; the session endpoint example requires the `async` feature. See the [0.12 migration guide](migration-0.12.zh_CN.md) before moving existing call sites.
+Run the examples from the repository with `cargo run --features async --example managed_collect` (replace the example name with `managed_session`, `managed_shutdown`, or `managed_file`). They use only the public API; the session endpoint example requires the `async` feature. See the [0.12 migration guide](migration-0.12.md) before moving existing call sites.
 
 ## What This Crate Solves
 

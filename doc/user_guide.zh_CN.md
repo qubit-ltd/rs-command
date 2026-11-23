@@ -98,6 +98,14 @@ fn observe_stopped_command(
 
 如果 operation 使用的文件位于应用临时目录中，应先等 settlement 确认文件已释放，再删除目录。资源释放后，目录清理仍由应用负责。
 
+### 提交路径与类型化等待失败
+
+managed stdin 和 tee 的相对路径以提交时捕获的父进程目录为基准；子进程工作目录单独选择，command override 优先于 runner 默认值。Windows drive-relative 路径保留平台语义。请求快照中的兼容字段 `environment` 为空；子进程仍在启动时继承环境，并应用显式清空、删除和覆盖设置。
+
+资源提交会在登记前检查文件与 session I/O 冲突。session stdin 不能与文件 stdin 同时使用；请选择 session 管道，或使用受支持的字节前缀。文件准备错误归类为 `CommandErrorKind::FilePreparationFailed`，并在 `CommandErrorReason::FilePreparationFailed` 中携带阶段、方向和 source。部分 commit 可能已经改动较早处理的 sink。
+
+带 scope 的容量等待观察到 scope stop 时返回 `AdmissionError::Stopped`，deadline 到期时返回 `CapacityFailure::DeadlineExpired`。`CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)` 区分 `WaiterLimit` 与 `Timer(RetryTimerFailure)`；timer failure 会指出计时器启动失败、队列已满或连接断开。穷举匹配提交失败原因时，需处理新增分支。
+
 ### 关闭 executor 时继续观察
 
 `CommandExecutor::request_shutdown` 会停止该 executor 接收新任务，并返回可持续观察的 shutdown handle。使用 `wait_for(Duration::ZERO)` 获取即时快照。若返回 `ShutdownWait::Pending`，这不是失败；保留同一个 handle，继续调用 `wait` 或带期限的 `wait_for`。不要按等待时间或固定 sleep 推断资源已释放。[shutdown 示例](../examples/managed_shutdown.rs)先写入数据并读到子进程回传内容，确认子进程已实际运行；stdin 仍保持开放时观察 `Pending`，接着关闭 stdin、释放端点，再继续观察 shutdown。示例也展示如何处理 `SettlementStatus::RecoveryRequired`。

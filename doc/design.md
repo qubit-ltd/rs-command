@@ -402,3 +402,13 @@ owners, or recovery effects have finished. On Windows, successful synchronous
 I/O cancellation is followed by a join that is not bounded by the failed-call
 confirmation window. The production reachability investigation remains
 unresolved; see [Windows cancellation status](windows-cancellation-status.md).
+
+## Managed submission contract
+
+Managed resource submission validates the complete I/O configuration before it registers resources. Owned stdout/stderr sinks are truncated only at the final I/O commit after admission and startup authorization; a partial commit can still leave an earlier sink changed. A rejected submission before commit does not truncate sinks. Session stdin uses the session pipe; file stdin and session stdin are mutually exclusive, while byte-prefix stdin remains supported.
+
+Relative managed stdin and tee paths resolve from the parent process directory captured at submission. The child's working directory is selected separately, with the command override taking precedence over the runner default. Windows drive-relative paths retain Windows path semantics and are not treated as ordinary paths rooted at the captured directory. Request snapshots retain the compatibility `environment` field as empty; child environment behavior remains inherited at process start with explicit clear/remove/override operations applied.
+
+Scoped capacity waits recheck stop and deadline while waiting. A scope stop maps to `AdmissionError::Stopped`; an expired deadline maps to `CapacityFailure::DeadlineExpired`. Waiter quota exhaustion and retry timer failures are represented by `CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)`: the latter distinguishes `WaiterLimit` from `Timer(RetryTimerFailure)`, whose kinds include startup, full, and disconnected failures.
+
+Collect-style managed methods wait for settlement but expose only the command result or stop diagnostic. Submit handles are required to inspect settlement effects, recovery evidence, and resource release. `ProcessTreePolicy::DirectChild` is an explicit managed-only exception; legacy `run` and `run_with` keep their prior lifecycle.

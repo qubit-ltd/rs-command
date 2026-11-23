@@ -360,6 +360,41 @@ fn test_bilingual_guide_examples_have_matching_ids_and_modes() {
 }
 
 #[test]
+fn test_required_production_markers_fail_when_removed() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for (relative, marker, expected) in [
+        ("README.md", "managed-service-quick-start", &[ ("managed-service-quick-start", "compile") ][..]),
+        ("doc/user_guide.md", "managed-stop-diagnostic", &[ ("managed-stop-diagnostic", "compile") ][..]),
+        ("doc/migration-0.12.md", "migration-tree-policy", &[ ("migration-tree-policy", "compile") ][..]),
+    ] {
+        let source = std::fs::read_to_string(root.join(relative)).unwrap();
+        let parsed = extract_examples(&source, relative).unwrap();
+        assert!(require_markers(&parsed, expected, relative).is_ok());
+        let removed = source.replace(&format!("<!-- doc-example:{marker}:compile -->\n"), "");
+        match extract_examples(&removed, relative) {
+            Ok(parsed_without_marker) => {
+                assert!(require_markers(&parsed_without_marker, expected, relative).is_err());
+            }
+            Err(_) => {} // An unclassified Rust fence also fails the document gate.
+        }
+    }
+}
+
+#[test]
+fn test_bilingual_migration_examples_have_matching_ids_and_modes() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let english = std::fs::read_to_string(root.join("doc/migration-0.12.md")).unwrap();
+    let chinese = std::fs::read_to_string(root.join("doc/migration-0.12.zh_CN.md")).unwrap();
+    let en = extract_examples(&english, "doc/migration-0.12.md").unwrap();
+    let zh = extract_examples(&chinese, "doc/migration-0.12.zh_CN.md").unwrap();
+    let mut en_pairs: Vec<_> = en.iter().map(|e| (&e.id, &e.mode)).collect();
+    let mut zh_pairs: Vec<_> = zh.iter().map(|e| (&e.id, &e.mode)).collect();
+    en_pairs.sort();
+    zh_pairs.sort();
+    assert_eq!(en_pairs, zh_pairs, "bilingual migration example IDs/modes differ");
+}
+
+#[test]
 fn test_actual_markdown_examples_compile_and_run_for_this_platform() {
     let root = std::env::var_os("DOCUMENTATION_EXAMPLES_ROOT")
         .map(std::path::PathBuf::from)
