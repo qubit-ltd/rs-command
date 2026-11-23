@@ -27,12 +27,21 @@ use super::CommandSubmitFailureReason;
 #[cfg(feature = "async")]
 use super::command_executor::RetryDelay;
 #[cfg(feature = "async")]
+use super::command_executor::internal::capacity_wait::CapacityWait;
+#[cfg(feature = "async")]
+use super::command_executor::internal::scheduler_waiter_guard::SchedulerWaiterGuard;
+#[cfg(feature = "async")]
+use super::command_executor::wait::retryable_async;
+use super::command_executor::wait::deadline_failure;
+use super::command_executor::wait::retry_wait;
+#[cfg(feature = "async")]
 use super::RetryTimerFailure;
 use super::SnapshotFailure;
 use super::adapter::AdapterState;
 use super::backend::ProcessBackend;
-use super::contracts::CapacityFailure;
 use super::contracts::ExecutionSnapshot;
+#[cfg(any(feature = "async", test))]
+use super::contracts::CapacityFailure;
 use super::contracts::IoPathSnapshot;
 use super::contracts::Request;
 use super::contracts::RequestOptions;
@@ -87,19 +96,6 @@ impl AsyncSubmissionContext {
 }
 
 impl CommandExecutor {
-    /// Stores the scheduler snapshot value used by this execution component.
-    pub fn scheduler_snapshot(&self) -> super::scheduler::SchedulerSnapshot {
-        self.scheduler.snapshot()
-    }
-    /// Stops new local reservations and returns a manager handle for observing
-    /// group shutdown.
-    ///
-    /// # Parameters
-    /// * `mode`: Supplies the mode value used by this operation.
-    pub fn request_shutdown(&self, mode: qubit_operation::ShutdownMode) -> qubit_operation::ShutdownHandle {
-        self.scheduler.close_admission();
-        self.group.request_shutdown(mode)
-    }
     /// Attempts to submit a command without waiting for executor capacity. Use
     /// the waiting submission methods when the caller intends to wait for
     /// local admission capacity. The returned operation has a one-shot
@@ -1045,10 +1041,13 @@ impl CommandExecutor {
         }
     }
 }
-/// Stores the resource bytes value used by this execution component.
+/// Estimates existing input and output file lengths for resource admission.
 ///
 /// # Parameters
-/// * `options`: Supplies the options value used by this operation.
+/// * `options`: Supplies resource file handles whose current metadata is read.
+///
+/// Metadata lookup failures contribute zero bytes. Summation saturates at
+/// `usize::MAX` so a large combined estimate cannot wrap below the limit.
 fn resource_bytes(options: &CommandResourceRunOptions) -> usize {
     [
         options
@@ -1286,130 +1285,6 @@ mod resource_byte_tests {
     }
 }
 
-/// Performs the retry wait step in the managed command execution lifecycle.
-///
-/// # Parameters
-/// * `reason`: Supplies the reason value used by this operation.
-/// * `scheduler`: Supplies the scheduler value used by this operation.
-/// * `bytes`: Supplies the bytes value used by this operation.
-/// * `context`: Supplies the scope context used by this operation.
-///
-/// # Errors
-/// Returns a waiter quota failure when no scheduler waiter slot is available.
-fn retry_wait(
-    reason: &CommandSubmitFailureReason,
-    scheduler: &BoundedScheduler,
-    bytes: usize,
-    context: Option<OperationContext>,
-) -> Result<bool, super::CommandSubmitWaitFailure> {
-    match reason {
-        CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull | CapacityFailure::QueueFull) => {
-            scheduler.wait_for_capacity_registered(bytes, context)
-        }
-        CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy) => scheduler
-            .wait_for_retry_tick_blocking(context, std::time::Duration::from_millis(10)),
-        _ => Ok(false),
-    }
-}
-/// Performs the deadline and stop failure step in the managed command execution
-/// lifecycle.
-///
-/// # Parameters
-/// * `reason`: Supplies the original submission failure.
-/// * `context`: Supplies the scope context whose stop and deadline are checked.
-fn deadline_failure(reason: CommandSubmitFailureReason, context: &OperationContext) -> CommandSubmitFailureReason {
-    if context.is_expired() {
-        CommandSubmitFailureReason::Capacity(CapacityFailure::DeadlineExpired)
-    } else if context.stop_reason().is_some() {
-        CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Stopped)
-    } else {
-        reason
-    }
-}
-/// Stores the async capacity retry value used by this execution component.
-///
-/// # Parameters
-/// * `reason`: Supplies the reason value used by this operation.
-#[cfg(feature = "async")]
-fn async_capacity_retry(reason: &CommandSubmitFailureReason) -> bool {
-    matches!(
-        reason,
-        CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull | CapacityFailure::QueueFull)
-    )
-}
-/// Stores the retryable async value used by this execution component.
-///
-/// # Parameters
-/// * `reason`: Supplies the reason value used by this operation.
-#[cfg(feature = "async")]
-fn retryable_async(reason: &CommandSubmitFailureReason) -> bool {
-    async_capacity_retry(reason)
-        || matches!(
-            reason,
-            CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy)
-        )
-}
-/// Represents the capacity wait state or contract used by managed command
-/// execution.
-#[cfg(feature = "async")]
-struct CapacityWait {
-    /// Scheduler whose waiter registry bounds this wait.
-    scheduler: BoundedScheduler,
-    /// Estimated input size used by the capacity predicate.
-    bytes: usize,
-    /// Existing waiter registration retained across polls.
-    waiter: Option<u64>,
-}
-#[cfg(feature = "async")]
-impl std::future::Future for CapacityWait {
-    /// Whether capacity became available, or why this wait was rejected.
-    type Output = Result<bool, super::CommandSubmitWaitFailure>;
-
-    /// Polls the capacity predicate and refreshes the registered waker.
-    ///
-    /// # Parameters
-    /// * `self`: Supplies the wait state.
-    /// * `cx`: Supplies the current task waker.
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        match self
-            .scheduler
-            .refresh_capacity_waiter(self.bytes, self.waiter, cx.waker())
-        {
-            Ok(None) => {
-                self.waiter = None;
-                std::task::Poll::Ready(Ok(true))
-            }
-            Ok(Some(id)) => {
-                self.waiter = Some(id);
-                std::task::Poll::Pending
-            }
-            Err(CapacityFailure::QueueFull) => {
-                self.waiter = None;
-                std::task::Poll::Ready(Err(super::CommandSubmitWaitFailure::WaiterLimit))
-            }
-            Err(CapacityFailure::Closed) => {
-                self.waiter = None;
-                std::task::Poll::Ready(Ok(false))
-            }
-            Err(_) => {
-                self.waiter = None;
-                std::task::Poll::Ready(Ok(false))
-            }
-        }
-    }
-}
-#[cfg(feature = "async")]
-impl Drop for CapacityWait {
-    /// Removes the waiter registration when the future is dropped.
-    fn drop(&mut self) {
-        if let Some(id) = self.waiter.take() {
-            self.scheduler.cancel_waiter(id)
-        }
-    }
-}
 /// Waits asynchronously until capacity changes, scope stop, or deadline.
 ///
 /// # Parameters
@@ -1448,22 +1323,6 @@ async fn wait_capacity_async(
         .await
     } else {
         capacity.await
-    }
-}
-
-/// Owns one scheduler waiter registration for an async retry phase.
-#[cfg(feature = "async")]
-struct SchedulerWaiterGuard {
-    /// Scheduler that owns the registration.
-    scheduler: BoundedScheduler,
-    /// Identifier released when this guard is dropped.
-    id: u64,
-}
-#[cfg(feature = "async")]
-impl Drop for SchedulerWaiterGuard {
-    /// Releases the waiter registration.
-    fn drop(&mut self) {
-        self.scheduler.cancel_waiter(self.id);
     }
 }
 
@@ -1530,7 +1389,10 @@ async fn wait_retryable_async(
     reason: &CommandSubmitFailureReason,
     context: Option<OperationContext>,
 ) -> Result<bool, super::CommandSubmitWaitFailure> {
-    if async_capacity_retry(reason) {
+    if matches!(
+        reason,
+        CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull | CapacityFailure::QueueFull)
+    ) {
         wait_capacity_async(scheduler, bytes, context).await
     } else if matches!(reason, CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy)) {
         wait_busy_async(scheduler, context).await
@@ -2081,9 +1943,9 @@ mod executor_decision_tests {
         use crate::execution::CommandSubmitWaitFailure;
 
         for timer_failure in [
-            super::RetryTimerFailure::Startup,
-            super::RetryTimerFailure::Full,
-            super::RetryTimerFailure::Disconnected,
+            crate::execution::RetryTimerFailure::Startup,
+            crate::execution::RetryTimerFailure::Full,
+            crate::execution::RetryTimerFailure::Disconnected,
         ] {
             assert_eq!(
                 CommandSubmitWaitFailure::from(timer_failure),
@@ -2092,10 +1954,86 @@ mod executor_decision_tests {
         }
     }
 
+    #[test]
+    fn test_scoped_resource_wait_stop_preserves_request_while_capacity_is_full() {
+        use std::io::Read;
+        use std::io::Seek;
+        use std::io::Write;
+        use std::time::Duration;
+        use std::time::Instant;
+
+        use qubit_operation::OperationManager;
+        use qubit_operation::StopReason;
+
+        use crate::CommandExecutor;
+        use crate::CommandExecutorApi;
+        use crate::CommandResourceRunOptions;
+        use crate::execution::contracts::Scheduler;
+
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let executor = CommandExecutor::new(
+            manager.clone(),
+            CommandExecutionConfig {
+                max_active: 1,
+                max_queued: 0,
+                max_waiters: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let reservation = executor.scheduler.try_reserve(0).unwrap();
+        let mut input = tempfile::tempfile().unwrap();
+        input.write_all(b"retained resource").unwrap();
+        input.rewind().unwrap();
+        let (context_tx, context_rx) = std::sync::mpsc::channel();
+        let (failure_tx, failure_rx) = std::sync::mpsc::channel();
+        let waiting_executor = executor.clone();
+        let submitter = std::thread::spawn(move || {
+            let _outcome = manager
+                .run(Default::default(), move |scope| {
+                    context_tx.send(scope.context()).unwrap();
+                    let failure = match waiting_executor
+                        .submit_wait_resources_blocking_in(
+                            &scope,
+                            CommandRunner::without_timeout(),
+                            Command::new("must-not-start"),
+                            CommandResourceRunOptions::new().stdin_file(input),
+                        ) {
+                        Err(failure) => failure,
+                        Ok(_) => panic!("stopped scope must return the original request"),
+                    };
+                    failure_tx.send(failure).unwrap();
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
+        });
+        let context = context_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let timeout = Instant::now() + Duration::from_secs(2);
+        while executor.scheduler.snapshot().waiters == 0 && Instant::now() < timeout {
+            std::thread::yield_now();
+        }
+        assert_eq!(executor.scheduler.snapshot().waiters, 1);
+        assert!(context.request_stop(StopReason::UserCancelled));
+        let failure = failure_rx.recv_timeout(Duration::from_millis(200)).unwrap();
+        assert_eq!(
+            failure.reason,
+            CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Stopped)
+        );
+        let mut returned = failure.options.configured_stdin().unwrap().try_clone().unwrap();
+        returned.rewind().unwrap();
+        let mut contents = Vec::new();
+        returned.read_to_end(&mut contents).unwrap();
+        assert_eq!(contents, b"retained resource");
+        assert_eq!(executor.scheduler.snapshot().waiters, 0);
+        assert_eq!(executor.scheduler.snapshot().active, 1);
+        drop(reservation);
+        submitter.join().unwrap();
+    }
+
     #[cfg(feature = "async")]
     #[test]
     fn test_async_retry_classification_accepts_only_capacity_and_busy() {
-        use super::async_capacity_retry;
+        use crate::execution::command_executor::wait::async_capacity_retry;
         use super::retryable_async;
         use crate::execution::CapacityFailure;
 
@@ -3157,6 +3095,98 @@ mod retry_wait_tests {
             "cancellation must unregister capacity waiter"
         );
         drop(reservation);
+    }
+
+    #[test]
+    fn test_scoped_resource_blocking_wait_returns_stopped_with_original_request_while_full() {
+        use std::io::Read;
+        use std::io::Seek;
+        use std::io::Write;
+        use std::path::Path;
+        use std::time::Duration;
+        use std::time::Instant;
+
+        use qubit_operation::OperationManager;
+        use qubit_operation::StopReason;
+
+        use crate::execution::CommandExecutorApi;
+        use crate::execution::contracts::Scheduler;
+        use crate::CommandExecutor;
+        use crate::Command;
+        use crate::CommandResourceRunOptions;
+        use crate::CommandRunner;
+        use crate::CommandSubmitFailureReason;
+
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let executor = CommandExecutor::new(
+            manager.clone(),
+            CommandExecutionConfig {
+                max_active: 1,
+                max_queued: 0,
+                max_waiters: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let reservation = executor.scheduler.try_reserve(0).unwrap();
+        let mut input = tempfile::tempfile().unwrap();
+        input.write_all(b"original scoped resource input").unwrap();
+        input.rewind().unwrap();
+        let (context_tx, context_rx) = std::sync::mpsc::channel();
+        let (failure_tx, failure_rx) = std::sync::mpsc::channel();
+        let waiting_executor = executor.clone();
+        let submitter = std::thread::spawn(move || {
+            let outcome = manager
+                .run(Default::default(), move |scope| {
+                    context_tx.send(scope.context()).unwrap();
+                    let failure = match waiting_executor.submit_wait_resources_blocking_in(
+                        &scope,
+                        CommandRunner::without_timeout().working_directory("resource-retained-directory"),
+                        Command::new("must-not-start-resource").arg("resource-original-arg"),
+                        CommandResourceRunOptions::new().stdin_file(input),
+                    ) {
+                        Err(failure) => failure,
+                        Ok(_) => panic!("scope stop should reject the waiting resource submission"),
+                    };
+                    failure_tx.send(failure).unwrap();
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
+            drop(outcome);
+        });
+        let context = context_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let setup_deadline = Instant::now() + Duration::from_secs(2);
+        while executor.scheduler.snapshot().waiters == 0 && Instant::now() < setup_deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(executor.scheduler.snapshot().waiters, 1);
+        assert!(context.request_stop(StopReason::UserCancelled));
+
+        let failure = failure_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("scoped stop should return the original resource request promptly");
+        assert_eq!(
+            failure.reason,
+            CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Stopped)
+        );
+        assert_eq!(failure.command.program(), std::ffi::OsStr::new("must-not-start-resource"));
+        assert_eq!(
+            failure.command.arguments().collect::<Vec<_>>(),
+            vec![std::ffi::OsStr::new("resource-original-arg")]
+        );
+        assert_eq!(
+            failure.runner.configured_working_directory(),
+            Some(Path::new("resource-retained-directory"))
+        );
+        let mut returned = failure.options.configured_stdin().unwrap().try_clone().unwrap();
+        returned.rewind().unwrap();
+        let mut contents = Vec::new();
+        returned.read_to_end(&mut contents).unwrap();
+        assert_eq!(contents, b"original scoped resource input");
+        assert_eq!(executor.scheduler.snapshot().waiters, 0);
+        assert_eq!(executor.scheduler.snapshot().active, 1);
+        drop(reservation);
+        submitter.join().unwrap();
     }
 
     #[test]

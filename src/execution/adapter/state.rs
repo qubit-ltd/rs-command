@@ -31,9 +31,13 @@ use crate::execution::contracts::Reservation;
 use crate::execution::contracts::ScheduledJob;
 use crate::execution::contracts::StopPort;
 
-/// One-shot external operation adapter. Request and reservation remain
-/// explicitly recoverable until activation transfers them to the domain
-/// scheduler.
+/// Owns the request and reservation while an external operation is prepared.
+///
+/// Until activation succeeds, dropping or rejecting this adapter can restore
+/// the original request and release the reservation. Successful activation
+/// transfers execution ownership to the operation manager; outcome delivery
+/// remains one-shot, while settlement and resource recovery continue as
+/// separate lifecycle observations.
 pub(crate) struct AdapterState {
     /// Stores the owned value used by this execution component.
     owned: Mutex<OwnedInputs>,

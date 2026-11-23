@@ -14,6 +14,16 @@ use super::executor;
 use super::internal::ExecutorLifetime;
 use super::scheduler;
 
+// Owns private state types used by executor admission and waiting.
+#[path = "command_executor/internal/mod.rs"]
+pub(super) mod internal;
+// Owns the public executor snapshot and shutdown operations.
+#[path = "command_executor/lifecycle.rs"]
+mod lifecycle;
+// Owns the executor's retry-wait implementation and waiter lifecycle.
+#[path = "command_executor/wait.rs"]
+pub(super) mod wait;
+
 #[cfg(feature = "async")]
 // Owns the asynchronous retry timer used by executor admission.
 #[path = "command_executor/retry_timer/mod.rs"]
@@ -41,6 +51,22 @@ pub(super) use retry_timer::RetryDelay;
 /// See the [managed execution guide](https://github.com/qubit-ltd/rs-command/blob/main/doc/user_guide.md)
 /// and the [Chinese version](https://github.com/qubit-ltd/rs-command/blob/main/doc/user_guide.zh_CN.md)
 /// for ownership details.
+///
+/// # Example
+///
+/// Construct an executor through the public API:
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let manager = qubit_operation::OperationManager::new(Default::default())?;
+/// let executor = qubit_command::CommandExecutor::new(
+///     manager,
+///     qubit_command::CommandExecutionConfig::default(),
+/// )?;
+/// assert_eq!(executor.config().max_active, 4);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct CommandExecutor {
     /// Stores the manager value used by this execution component.
@@ -59,11 +85,17 @@ pub struct CommandExecutor {
     pub(crate) recovery: adapter::RecoverySender,
 }
 impl CommandExecutor {
-    /// Performs the new step in the managed command execution lifecycle.
+    /// Creates an executor with validated local capacity limits.
     ///
     /// # Parameters
-    /// * `manager`: Supplies the manager value used by this operation.
-    /// * `config`: Supplies the config value used by this operation.
+    /// `manager` owns the operation group used for submissions. `config`
+    /// sets local active, queued, waiter, input-byte, and diagnostic limits.
+    /// Accepted operations retain their reservations until settlement and
+    /// resource recovery release them.
+    ///
+    /// # Errors
+    /// Returns [`CommandExecutorCreateError`] if the configuration is invalid
+    /// or the executor's managed workers cannot be started.
     pub fn new(
         manager: qubit_operation::OperationManager,
         config: CommandExecutionConfig,
