@@ -21,7 +21,6 @@ use super::internal::OperationStopPort;
 use super::internal::PreparationRecoveryOwner;
 use crate::CommandError;
 use crate::CommandErrorReason;
-use crate::OutputStream;
 use crate::execution::backend::ReaperObserver;
 use crate::execution::backend::StartGate;
 use crate::execution::contracts::ActivatedRequest;
@@ -29,7 +28,6 @@ use crate::execution::contracts::Backend;
 use crate::execution::contracts::FactSink;
 use crate::execution::contracts::RecoveryOwner;
 use crate::execution::contracts::RequestOptions;
-use crate::execution::contracts::ResourceInput;
 
 /// Stores the schedule recovery transfer value used by this execution
 /// component.
@@ -149,7 +147,7 @@ impl Backend for ProcessBackend {
             RequestOptions::Standard(options) => (options, None),
             RequestOptions::Resources(resources) => {
                 let options = resources.ordinary_options().clone();
-                (options, Some(Box::new(resources) as Box<dyn ResourceInput>))
+                (options, Some(resources))
             }
         };
         let tree_policy = options.process_tree_policy();
@@ -168,20 +166,15 @@ impl Backend for ProcessBackend {
             stop.request_stop(StopReason::Timeout);
         }
         if stop.authorize().is_none() {
-            if let Err(error) = sink.publish_outcome(OperationOutcome::Stopped(qubit_operation::StopReport {
-                reason: stop.stop_reason().unwrap_or(StopReason::UserCancelled),
-                accepted_at: None,
-            })) {
-                log::error!("failed to publish pre-start stop outcome: {error:?}");
-            }
-            drop(session_bridge);
-            drop(scope);
-            if let Err(error) = sink.confirm_input_release() {
-                log::error!("failed to publish pre-start input release: {error:?}");
-            }
-            if let Err(error) = sink.publish_settlement(Arc::new(released_report(operation_id))) {
-                log::error!("failed to publish pre-start settlement: {error:?}");
-            }
+            finish_pre_start_stop(
+                sink,
+                operation_id,
+                stop.stop_reason().unwrap_or(StopReason::UserCancelled),
+                resource_input,
+                session_bridge,
+                scope,
+                reservation,
+            );
             return;
         }
         if request
@@ -190,39 +183,35 @@ impl Backend for ProcessBackend {
             .is_some_and(qubit_operation::OperationContext::is_expired)
         {
             stop.request_stop(StopReason::Timeout);
-            if let Err(error) = sink.publish_outcome(OperationOutcome::Stopped(qubit_operation::StopReport {
-                reason: StopReason::Timeout,
-                accepted_at: None,
-            })) {
-                log::error!("failed to publish expired-deadline outcome: {error:?}");
-            }
-            drop(session_bridge);
-            drop(scope);
-            if let Err(error) = sink.confirm_input_release() {
-                log::error!("failed to publish expired-deadline input release: {error:?}");
-            }
-            if let Err(error) = sink.publish_settlement(Arc::new(released_report(operation_id))) {
-                log::error!("failed to publish expired-deadline settlement: {error:?}");
-            }
+            finish_pre_start_stop(
+                sink,
+                operation_id,
+                StopReason::Timeout,
+                resource_input,
+                session_bridge,
+                scope,
+                reservation,
+            );
             return;
         }
         let prepared_files = match resource_input {
             None => Ok(None),
-            Some(resources) => match resources.prepare_files_with_snapshot(&scope, &request.snapshot) {
+            Some(resources) => match resources.prepare_for_managed(&scope, &request.snapshot, session_bridge.is_some())
+            {
                 Ok(files) => Ok(Some(files)),
-                Err(failure) => {
+                Err(managed_failure) => {
                     let error = CommandError::from_reason(
                         "<managed command>",
-                        CommandErrorReason::WriteOutputFailed {
-                            stream: OutputStream::Stdout,
-                            path: std::path::PathBuf::from("<owned resource>"),
-                            source: std::io::Error::other(failure.message.clone()),
+                        CommandErrorReason::FilePreparationFailed {
+                            stage: managed_failure.phase,
+                            direction: managed_failure.direction,
+                            source: managed_failure.source,
                         },
                         None,
                     );
                     let capacity_lease = reservation.retain();
                     let owner: Box<dyn RecoveryOwner> = Box::new(PreparationRecoveryOwner {
-                        retained: Mutex::new(Some((failure, scope))),
+                        retained: Mutex::new(Some((managed_failure.failure, scope))),
                         _capacity_lease: Mutex::new(Some(capacity_lease)),
                     });
                     if let Err(error) = sink.publish_outcome(OperationOutcome::Failed(error)) {
@@ -252,6 +241,7 @@ impl Backend for ProcessBackend {
                     managed_policy: Some(tree_policy),
                     start_gate: Some(&stop),
                     prepared_files: files,
+                    file_scope: Some(&scope),
                     capacity_lease: Some(capacity_lease),
                     reaper_observer: Some(reaper_observer.clone()),
                     session_bridge: session_bridge.clone(),
@@ -341,6 +331,43 @@ fn finish_backend_tail(
     drop(reservation);
 }
 
+/// Publishes a pre-start stop after dropping all request-owned inputs.
+///
+/// # Parameters
+/// * `sink`: Receives the terminal outcome, release, and settlement facts.
+/// * `operation_id`: Operation whose stop is being published.
+/// * `reason`: Stop cause selected before process startup.
+/// * `resource_input`: Raw owned options retained by the request.
+/// * `session_bridge`: Session endpoints retained by the request.
+/// * `scope`: Scope retaining prepared operation resources.
+/// * `reservation`: Executor reservation held for the request.
+fn finish_pre_start_stop(
+    sink: Arc<dyn FactSink>,
+    operation_id: OperationId,
+    reason: StopReason,
+    resource_input: Option<crate::CommandResourceRunOptions>,
+    session_bridge: Option<Arc<dyn crate::session::contracts::SessionBridge>>,
+    scope: qubit_operation::OperationScope,
+    reservation: crate::execution::contracts::Reservation,
+) {
+    if let Err(error) = sink.publish_outcome(OperationOutcome::Stopped(qubit_operation::StopReport {
+        reason,
+        accepted_at: None,
+    })) {
+        log::error!("failed to publish pre-start stop outcome: {error:?}");
+    }
+    drop(resource_input);
+    drop(session_bridge);
+    drop(scope);
+    if let Err(error) = sink.confirm_input_release() {
+        log::error!("failed to publish pre-start input release: {error:?}");
+    }
+    if let Err(error) = sink.publish_settlement(Arc::new(released_report(operation_id))) {
+        log::error!("failed to publish pre-start settlement: {error:?}");
+    }
+    drop(reservation);
+}
+
 /// Performs the normalize tee paths step in the managed command execution
 /// lifecycle.
 ///
@@ -402,6 +429,8 @@ fn released_report(operation_id: OperationId) -> SettlementReport {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex;
     #[cfg(unix)]
@@ -616,6 +645,8 @@ mod tests {
         outcome: Mutex<Option<OperationOutcome<CommandOutput, CommandError>>>,
         stop_diagnostic: Mutex<Option<CommandError>>,
         released: AtomicBool,
+        release_probe_path: Mutex<Option<PathBuf>>,
+        release_observed_unlocked: AtomicBool,
         settlement: Mutex<Option<Arc<SettlementReport>>>,
         recovery_owner: Mutex<Option<Box<dyn RecoveryOwner>>>,
         reject_recovery_once: AtomicBool,
@@ -646,6 +677,12 @@ mod tests {
         fn confirm_input_release(&self) -> Result<(), FactPublishError> {
             if self.reject_release_once.swap(false, Ordering::SeqCst) {
                 return Err(FactPublishError::DuplicateRelease);
+            }
+            if let Some(path) = self.release_probe_path.lock().unwrap().as_ref() {
+                let file = std::fs::File::open(path).expect("release probe file should open");
+                let unlocked =
+                    unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX | libc::LOCK_NB) == 0 };
+                self.release_observed_unlocked.store(unlocked, Ordering::SeqCst);
             }
             self.released.store(true, Ordering::SeqCst);
             Ok(())
@@ -685,6 +722,19 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("must-not-start");
         let operation_path = path.clone();
+        let input = tempfile::NamedTempFile::new().unwrap();
+        let input_path = input.path().to_path_buf();
+        let input_file = input.reopen().unwrap();
+        assert_eq!(
+            unsafe {
+                libc::flock(
+                    std::os::fd::AsRawFd::as_raw_fd(&input_file),
+                    libc::LOCK_EX | libc::LOCK_NB,
+                )
+            },
+            0
+        );
+        *sink.release_probe_path.lock().unwrap() = Some(input_path);
 
         let mut operation = manager
             .try_submit(OperationOptions::default(), move |scope| {
@@ -703,7 +753,7 @@ mod tests {
                     command: Command::new("sh")
                         .arg("-c")
                         .arg(&format!("touch {}", operation_path.display())),
-                    options: RequestOptions::Standard(CommandRunOptions::default()),
+                    options: RequestOptions::Resources(CommandResourceRunOptions::new().stdin_file(input_file)),
                     snapshot: ExecutionSnapshot {
                         working_directory: std::env::current_dir().unwrap(),
                         environment: Vec::new(),
@@ -737,6 +787,7 @@ mod tests {
         );
         assert!(reservation_released.load(Ordering::SeqCst));
         assert!(sink.released.load(Ordering::SeqCst));
+        assert!(sink.release_observed_unlocked.load(Ordering::SeqCst));
         assert!(matches!(
             sink.outcome.lock().unwrap().take(),
             Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
@@ -1248,6 +1299,19 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("must-not-start-after-deadline");
         let operation_path = path.clone();
+        let input = tempfile::NamedTempFile::new().unwrap();
+        let input_path = input.path().to_path_buf();
+        let input_file = input.reopen().unwrap();
+        assert_eq!(
+            unsafe {
+                libc::flock(
+                    std::os::fd::AsRawFd::as_raw_fd(&input_file),
+                    libc::LOCK_EX | libc::LOCK_NB,
+                )
+            },
+            0
+        );
+        *sink.release_probe_path.lock().unwrap() = Some(input_path);
         let domain = ClockDomainId::new_unique();
         let deadline = OperationContext::new(ContextOptions {
             clock: Some(Arc::new(ExpiredClock(domain))),
@@ -1271,7 +1335,7 @@ mod tests {
                     command: Command::new("sh")
                         .arg("-c")
                         .arg(&format!("touch {}", operation_path.display())),
-                    options: RequestOptions::Standard(CommandRunOptions::default()),
+                    options: RequestOptions::Resources(CommandResourceRunOptions::new().stdin_file(input_file)),
                     snapshot: ExecutionSnapshot {
                         working_directory: std::env::current_dir().unwrap(),
                         environment: Vec::new(),
@@ -1305,6 +1369,7 @@ mod tests {
             Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
         ));
         assert!(sink.released.load(Ordering::SeqCst));
+        assert!(sink.release_observed_unlocked.load(Ordering::SeqCst));
         assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
     }
 
@@ -1323,6 +1388,19 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let marker = directory.path().join("must-not-start-after-second-deadline-check");
         let operation_marker = marker.clone();
+        let input = tempfile::NamedTempFile::new().unwrap();
+        let input_path = input.path().to_path_buf();
+        let input_file = input.reopen().unwrap();
+        assert_eq!(
+            unsafe {
+                libc::flock(
+                    std::os::fd::AsRawFd::as_raw_fd(&input_file),
+                    libc::LOCK_EX | libc::LOCK_NB,
+                )
+            },
+            0
+        );
+        *sink.release_probe_path.lock().unwrap() = Some(input_path);
         let domain = ClockDomainId::new_unique();
         let clock_calls = Arc::new(AtomicUsize::new(0));
         let clock: Arc<dyn ClockSource> =
@@ -1352,7 +1430,7 @@ mod tests {
                     command: Command::new("sh")
                         .arg("-c")
                         .arg(&format!("touch {}", operation_marker.display())),
-                    options: RequestOptions::Standard(CommandRunOptions::default()),
+                    options: RequestOptions::Resources(CommandResourceRunOptions::new().stdin_file(input_file)),
                     snapshot: ExecutionSnapshot {
                         working_directory: std::env::current_dir().unwrap(),
                         environment: Vec::new(),
@@ -1400,6 +1478,7 @@ mod tests {
             Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
         ));
         assert!(sink.released.load(Ordering::SeqCst));
+        assert!(sink.release_observed_unlocked.load(Ordering::SeqCst));
         assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
     }
 

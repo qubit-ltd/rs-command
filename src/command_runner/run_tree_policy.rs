@@ -29,6 +29,8 @@ pub(crate) struct RunTreePolicy<'a> {
     pub(crate) start_gate: Option<&'a StartGate>,
     /// Open file resources prepared for this command.
     pub(crate) prepared_files: Option<PreparedFiles>,
+    /// Scope used to record side effects from the owned-file commit.
+    pub(crate) file_scope: Option<&'a qubit_operation::OperationScope>,
     /// Managed capacity reservation retained through process cleanup.
     pub(crate) capacity_lease: Option<ReservationLease>,
     /// Observer notified when child ownership is handed to a reaper.

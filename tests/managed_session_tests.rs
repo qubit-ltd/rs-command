@@ -155,6 +155,130 @@ fn test_managed_resource_session_returns_streams_and_operation() {
 
 #[cfg(unix)]
 #[test]
+fn test_resource_session_owned_stdin_conflict_preserves_sink_before_start() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let input_path = directory.path().join("input");
+    let output_path = directory.path().join("output");
+    let started_path = directory.path().join("started");
+    std::fs::write(&input_path, b"owned input").unwrap();
+    std::fs::write(&output_path, b"preserve sink").unwrap();
+    let input = std::fs::File::open(&input_path).unwrap();
+    let output = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&output_path)
+        .unwrap();
+
+    let mut ordinary = block_on(
+        CommandRunner::without_timeout().start_session(
+            &executor,
+            Command::new("sh")
+                .arg("-c")
+                .arg("exit 0")
+                .stdin_file(input_path.clone()),
+            CommandRunOptions::new(),
+        ),
+    )
+    .expect("ordinary session submission should be accepted");
+    let mut ordinary_operation = ordinary.take_operation().unwrap();
+    let OperationOutcome::Failed(ordinary_error) = ordinary_operation.wait_outcome().unwrap() else {
+        panic!("ordinary session stdin files must be rejected before startup");
+    };
+    assert_eq!(ordinary_error.kind(), qubit_command::CommandErrorKind::WriteInputFailed);
+
+    let mut session = block_on(
+        CommandRunner::without_timeout().start_session_resources(
+            &executor,
+            Command::new("sh")
+                .arg("-c")
+                .arg("touch \"$1\"")
+                .arg("resource-session-conflict")
+                .arg(started_path.to_str().unwrap()),
+            CommandResourceRunOptions::new()
+                .stdin_file(input)
+                .stdout_sink(output, qubit_command::FileSinkPolicy::Truncate),
+        ),
+    )
+    .expect("resource session submission should be accepted");
+    let mut operation = session.take_operation().unwrap();
+    let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
+        panic!("resource session stdin files must be rejected before startup");
+    };
+    assert!(matches!(
+        error.reason(),
+        qubit_command::CommandErrorReason::FilePreparationFailed {
+            stage: qubit_command::FilePreparationStage::Validation,
+            direction: Some(qubit_command::FilePreparationDirection::Stdin),
+            ..
+        }
+    ));
+    assert_eq!(std::fs::read(&output_path).unwrap(), b"preserve sink");
+    assert!(
+        !started_path.exists(),
+        "the resource session must be rejected before spawn"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_scoped_resource_session_owned_stdin_conflict_preserves_sink_before_start() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let child_manager = manager.clone();
+    let directory = tempfile::tempdir().unwrap();
+    let input_path = directory.path().join("input");
+    let output_path = directory.path().join("output");
+    let started_path = directory.path().join("started");
+    std::fs::write(&input_path, b"owned input").unwrap();
+    std::fs::write(&output_path, b"preserve scoped sink").unwrap();
+    let output_path_for_scope = output_path.clone();
+    let started_path_for_scope = started_path.clone();
+    let _ = manager
+        .run(OperationOptions::default(), move |scope| {
+            let executor = CommandExecutor::new(child_manager, CommandExecutionConfig::default()).unwrap();
+            let input = std::fs::File::open(&input_path).unwrap();
+            let output = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&output_path_for_scope)
+                .unwrap();
+            let mut session = block_on(
+                CommandRunner::without_timeout().start_session_resources_in(
+                    &scope,
+                    &executor,
+                    Command::new("sh")
+                        .arg("-c")
+                        .arg("touch \"$1\"")
+                        .arg("scoped-resource-session-conflict")
+                        .arg(started_path_for_scope.to_str().unwrap()),
+                    CommandResourceRunOptions::new()
+                        .stdin_file(input)
+                        .stdout_sink(output, qubit_command::FileSinkPolicy::Truncate),
+                ),
+            )
+            .expect("scoped resource session should be accepted");
+            let mut operation = session.take_operation().unwrap();
+            let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
+                panic!("scoped resource session stdin files must be rejected");
+            };
+            assert!(matches!(
+                error.reason(),
+                qubit_command::CommandErrorReason::FilePreparationFailed {
+                    stage: qubit_command::FilePreparationStage::Validation,
+                    direction: Some(qubit_command::FilePreparationDirection::Stdin),
+                    ..
+                }
+            ));
+            assert_eq!(std::fs::read(&output_path_for_scope).unwrap(), b"preserve scoped sink");
+            assert!(!started_path_for_scope.exists());
+            Ok::<_, std::convert::Infallible>(())
+        })
+        .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn test_scoped_managed_resource_session_finishes_with_parent_scope() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let child_manager = manager.clone();

@@ -9,8 +9,6 @@ use std::fmt;
 
 mod managed_command_runner_api;
 use std::io;
-use std::io::Seek;
-use std::io::SeekFrom;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -47,11 +45,11 @@ use crate::CommandError;
 use crate::CommandErrorReason;
 use crate::CommandOutput;
 use crate::CommandRunOptions;
-use crate::FileSinkPolicy;
 use crate::OutputStream;
 use crate::ProcessTreePolicy;
 use crate::command_run_options_parts::CommandRunOptionsParts;
 use crate::execution::contracts::PreparedFiles;
+use crate::execution::files::prepared_files::truncate_sink;
 
 /// Marker used when a configured working directory is redacted from
 /// diagnostics.
@@ -222,19 +220,37 @@ fn apply_prepared_files(
     command: &str,
     files: &PreparedFiles,
     committed: &mut CommittedCommand,
+    scope: Option<&qubit_operation::OperationScope>,
 ) -> Result<(), CommandError> {
     if let Some(stdin) = files.stdin.as_ref() {
         let file = stdin
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .try_clone()
-            .map_err(|source| owned_file_error(command, OutputStream::Stdout, "<owned stdin>", source))?;
+            .map_err(|source| {
+                file_preparation_error(
+                    command,
+                    crate::FilePreparationStage::Validation,
+                    Some(crate::FilePreparationDirection::Stdin),
+                    source,
+                )
+            })?;
         committed.process_command.stdin(std::process::Stdio::from(file));
     }
     if let Some(sink) = files.stdout.as_ref() {
+        if let Some(scope) = scope {
+            truncate_sink(sink, OutputStream::Stdout, scope).map_err(|(phase, source)| {
+                file_preparation_error(command, phase, Some(crate::FilePreparationDirection::Stdout), source)
+            })?;
+        }
         committed.stdout_tee = Some(owned_sink(command, OutputStream::Stdout, sink)?);
     }
     if let Some(sink) = files.stderr.as_ref() {
+        if let Some(scope) = scope {
+            truncate_sink(sink, OutputStream::Stderr, scope).map_err(|(phase, source)| {
+                file_preparation_error(command, phase, Some(crate::FilePreparationDirection::Stderr), source)
+            })?;
+        }
         committed.stderr_tee = Some(owned_sink(command, OutputStream::Stderr, sink)?);
     }
     Ok(())
@@ -260,19 +276,22 @@ fn owned_sink(
     stream: OutputStream,
     sink: &crate::execution::contracts::PreparedSink,
 ) -> Result<FileTee, CommandError> {
-    use std::io::Write;
-    let mut file = sink
+    let file = sink
         .file
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .try_clone()
-        .map_err(|source| owned_file_error(command, stream, "<owned sink>", source))?;
-    if sink.policy == FileSinkPolicy::Truncate {
-        file.set_len(0)
-            .and_then(|()| file.seek(SeekFrom::Start(0)))
-            .map_err(|source| owned_file_error(command, stream, "<owned sink>", source))?;
-    }
-    let _ = file.flush();
+        .map_err(|source| {
+            file_preparation_error(
+                command,
+                crate::FilePreparationStage::Validation,
+                Some(match stream {
+                    OutputStream::Stdout => crate::FilePreparationDirection::Stdout,
+                    OutputStream::Stderr => crate::FilePreparationDirection::Stderr,
+                }),
+                source,
+            )
+        })?;
     Ok(FileTee::new(file, std::path::PathBuf::from("<owned sink>")))
 }
 
@@ -294,6 +313,30 @@ fn owned_file_error(command: &str, stream: OutputStream, path: &str, source: io:
         CommandErrorReason::WriteOutputFailed {
             stream,
             path: std::path::PathBuf::from(path),
+            source,
+        },
+        None,
+    )
+}
+
+/// Creates a controlled managed file preparation error.
+///
+/// # Parameters
+/// * `command`: Redacted command description.
+/// * `stage`: Preparation phase that failed.
+/// * `direction`: Affected stream, when known.
+/// * `source`: Original operating-system error.
+fn file_preparation_error(
+    command: &str,
+    stage: crate::FilePreparationStage,
+    direction: Option<crate::FilePreparationDirection>,
+    source: io::Error,
+) -> CommandError {
+    CommandError::from_reason(
+        command,
+        CommandErrorReason::FilePreparationFailed {
+            stage,
+            direction,
             source,
         },
         None,
@@ -1164,16 +1207,15 @@ mod tests {
                     .commit()
                     .expect("prepared command should commit");
 
-                let error = apply_prepared_files("read-only-sink-test", &files, &mut committed)
+                let error = apply_prepared_files("read-only-sink-test", &files, &mut committed, Some(&scope))
                     .expect_err("a read-only output sink cannot be truncated");
                 assert!(matches!(
                     error.reason(),
-                    CommandErrorReason::WriteOutputFailed {
-                        stream: OutputStream::Stdout,
-                        path,
+                    CommandErrorReason::FilePreparationFailed {
+                        stage: crate::FilePreparationStage::Truncation,
+                        direction: Some(crate::FilePreparationDirection::Stdout),
                         source,
-                    } if path == std::path::Path::new("<owned sink>")
-                        && source.raw_os_error().is_some()
+                    } if source.raw_os_error().is_some()
                 ));
                 assert_eq!(
                     std::fs::read(fixture.path()).expect("failed preparation must preserve file bytes"),
@@ -1218,7 +1260,8 @@ mod tests {
                 let mut committed = prepared_command("cat", None, None)
                     .commit()
                     .expect("prepared command should commit");
-                apply_prepared_files("cat", &files, &mut committed).expect("owned resources should be installed");
+                apply_prepared_files("cat", &files, &mut committed, Some(&scope))
+                    .expect("owned resources should be installed");
 
                 let output = committed
                     .process_command
@@ -1490,6 +1533,7 @@ impl CommandRunner {
             managed_policy,
             start_gate,
             prepared_files,
+            file_scope,
             capacity_lease,
             reaper_observer,
             session_bridge,
@@ -1529,7 +1573,8 @@ impl CommandRunner {
             ));
         }
         if let Some(files) = prepared_files.as_ref() {
-            validate_prepared_files(&prepared.command_text, files, &prepared)?;
+            validate_prepared_files(&prepared.command_text, files, &prepared)
+                .map_err(|error| error.into_file_preparation_failure(crate::FilePreparationStage::Validation))?;
         }
         let _start_permit = match start_gate {
             Some(gate) => match gate.authorize() {
@@ -1557,7 +1602,7 @@ impl CommandRunner {
         let command_diagnostic = prepared.command_text.clone();
         let mut committed = prepared.commit()?;
         if let Some(files) = prepared_files.as_ref() {
-            apply_prepared_files(&command_diagnostic, files, &mut committed)?;
+            apply_prepared_files(&command_diagnostic, files, &mut committed, file_scope)?;
         }
         let CommittedCommand {
             command_text,

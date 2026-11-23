@@ -16,6 +16,8 @@ use qubit_clock::TimeError;
 use qubit_operation::StopReason;
 use qubit_redact::Redactor;
 
+use crate::FilePreparationDirection;
+use crate::FilePreparationStage;
 use crate::OutputStream;
 use crate::internal::diagnostic_source::TIME_SOURCE_SUMMARY;
 use crate::internal::diagnostic_source::io_source_summary;
@@ -182,6 +184,15 @@ pub enum CommandErrorReason {
         /// Redacted summary of the managed-operation failure.
         diagnostic: String,
     },
+    /// Managed file preparation failed before command execution.
+    FilePreparationFailed {
+        /// Preparation phase that failed.
+        stage: FilePreparationStage,
+        /// Affected stream, when the failure is stream-specific.
+        direction: Option<FilePreparationDirection>,
+        /// Underlying preparation failure.
+        source: io::Error,
+    },
 }
 
 impl fmt::Debug for CommandErrorReason {
@@ -279,6 +290,16 @@ impl fmt::Debug for CommandErrorReason {
             Self::ManagedOperationFailed { .. } => {
                 formatter.write_str("ManagedOperationFailed { diagnostic: <redacted> }")
             }
+            Self::FilePreparationFailed {
+                stage,
+                direction,
+                source,
+            } => formatter
+                .debug_struct("FilePreparationFailed")
+                .field("stage", stage)
+                .field("direction", direction)
+                .field("source", &io_source_summary(source))
+                .finish(),
             Self::OutputTruncated => formatter.write_str("OutputTruncated"),
             Self::OutputLimitExceeded { limit, observed } => formatter
                 .debug_struct("OutputLimitExceeded")

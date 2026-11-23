@@ -69,4 +69,6 @@ pub enum CommandErrorKind {
     UnexpectedExit,
     /// The operation manager rejected or failed a managed command operation.
     ManagedOperationFailed,
+    /// Managed file preparation failed before command execution.
+    FilePreparationFailed,
 }

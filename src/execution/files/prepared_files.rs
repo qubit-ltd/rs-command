@@ -145,34 +145,63 @@ fn build(mut refs: [Option<ResourceRef<Mutex<File>>>; 3], policies: [Option<File
 /// # Parameters
 /// * `prepared`: Registered files whose truncate policies should be applied.
 /// * `scope`: Scope used to record confirmed or uncertain side effects.
-pub(super) fn truncate_sinks(prepared: &PreparedFiles, scope: &OperationScope) -> io::Result<()> {
-    for (name, sink) in [
-        ("stdout", prepared.stdout.as_ref()),
-        ("stderr", prepared.stderr.as_ref()),
+pub(crate) fn truncate_sinks(prepared: &PreparedFiles, scope: &OperationScope) -> io::Result<()> {
+    for (stream, sink) in [
+        (crate::OutputStream::Stdout, prepared.stdout.as_ref()),
+        (crate::OutputStream::Stderr, prepared.stderr.as_ref()),
     ] {
         let Some(sink) = sink else { continue };
-        if sink.policy == FileSinkPolicy::Truncate {
-            let mut file = sink.file.lock().map_err(|error| io::Error::other(error.to_string()))?;
-            if let Err(error) = file.set_len(0) {
-                record_effect(
-                    scope,
-                    sink.file.id(),
-                    qubit_operation::EffectFact::Unknown,
-                    format!("{name} sink truncation could not be confirmed"),
-                );
-                return Err(error);
-            }
-            record_effect(
-                scope,
-                sink.file.id(),
-                qubit_operation::EffectFact::Known,
-                format!("{name} sink truncated"),
-            );
-            use std::io::Seek;
-            file.rewind()?;
-        }
+        truncate_sink(sink, stream, scope).map_err(|(_, error)| error)?;
     }
     Ok(())
+}
+
+/// Truncates one managed sink and retains evidence if the operation partially
+/// succeeds.
+///
+/// # Parameters
+/// * `sink`: Registered output sink to truncate.
+/// * `stream`: Output stream associated with this sink.
+/// * `scope`: Operation scope recording the resulting side effect.
+///
+/// # Returns
+/// Success, or the failed preparation phase and original I/O error.
+pub(crate) fn truncate_sink(
+    sink: &PreparedSink,
+    stream: crate::OutputStream,
+    scope: &OperationScope,
+) -> Result<(), (crate::FilePreparationStage, io::Error)> {
+    if sink.policy != FileSinkPolicy::Truncate {
+        return Ok(());
+    }
+    let name = match stream {
+        crate::OutputStream::Stdout => "stdout",
+        crate::OutputStream::Stderr => "stderr",
+    };
+    let mut file = sink.file.lock().map_err(|error| {
+        (
+            crate::FilePreparationStage::Truncation,
+            io::Error::other(error.to_string()),
+        )
+    })?;
+    if let Err(error) = file.set_len(0) {
+        record_effect(
+            scope,
+            sink.file.id(),
+            qubit_operation::EffectFact::Unknown,
+            format!("{name} sink truncation could not be confirmed"),
+        );
+        return Err((crate::FilePreparationStage::Truncation, error));
+    }
+    record_effect(
+        scope,
+        sink.file.id(),
+        qubit_operation::EffectFact::Known,
+        format!("{name} sink truncated"),
+    );
+    use std::io::Seek;
+    file.rewind()
+        .map_err(|error| (crate::FilePreparationStage::Rewind, error))
 }
 
 /// Performs the record effect step in the managed command execution lifecycle.

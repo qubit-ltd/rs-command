@@ -89,6 +89,43 @@ impl CommandError {
         }
     }
 
+    /// Reclassifies an owned-file validation error as managed preparation.
+    ///
+    /// # Parameters
+    /// * `stage`: Preparation phase assigned to the validation error.
+    pub(crate) fn into_file_preparation_failure(self, stage: crate::FilePreparationStage) -> Self {
+        let Self {
+            command,
+            reason,
+            output,
+            captured_output,
+            stop_reason,
+            cleanup_failures,
+        } = self;
+        let reason = match *reason {
+            CommandErrorReason::WriteOutputFailed { stream, source, .. } => {
+                let direction = Some(match stream {
+                    OutputStream::Stdout => crate::FilePreparationDirection::Stdout,
+                    OutputStream::Stderr => crate::FilePreparationDirection::Stderr,
+                });
+                CommandErrorReason::FilePreparationFailed {
+                    stage,
+                    direction,
+                    source,
+                }
+            }
+            other => other,
+        };
+        Self {
+            command,
+            reason: Box::new(reason),
+            output,
+            captured_output,
+            stop_reason,
+            cleanup_failures,
+        }
+    }
+
     /// Adds cleanup failures and restores canonical resource order.
     ///
     /// Failures are ordered by process tree, direct child, wait, time, stdout,
@@ -565,6 +602,11 @@ impl fmt::Display for CommandError {
             (CommandErrorReason::ManagedOperationFailed { diagnostic }, _) => {
                 write!(formatter, "managed command operation failed: {diagnostic}")
             }
+            (CommandErrorReason::FilePreparationFailed { stage, direction, .. }, _) => write!(
+                formatter,
+                "managed file preparation failed during {stage:?}{} for command `{command}`",
+                direction.map(|value| format!(" ({value:?})")).unwrap_or_default()
+            ),
             (CommandErrorReason::OutputTruncated, _) => write!(
                 formatter,
                 "command `{command}` completed successfully, but captured output was truncated"
@@ -603,7 +645,8 @@ impl Error for CommandError {
             | CommandErrorReason::StartInputThreadFailed { source }
             | CommandErrorReason::StartOutputThreadFailed { source, .. }
             | CommandErrorReason::WriteInputFailed { source }
-            | CommandErrorReason::WriteOutputFailed { source, .. } => Some(source),
+            | CommandErrorReason::WriteOutputFailed { source, .. }
+            | CommandErrorReason::FilePreparationFailed { source, .. } => Some(source),
             CommandErrorReason::TimeFailed { source } => Some(source),
             _ => None,
         }
@@ -641,6 +684,7 @@ impl From<&CommandErrorReason> for CommandErrorKind {
             CommandErrorReason::OutputLimitExceeded { .. } => Self::OutputLimitExceeded,
             CommandErrorReason::UnexpectedExit { .. } => Self::UnexpectedExit,
             CommandErrorReason::ManagedOperationFailed { .. } => Self::ManagedOperationFailed,
+            CommandErrorReason::FilePreparationFailed { .. } => Self::FilePreparationFailed,
         }
     }
 }
@@ -974,7 +1018,9 @@ mod tests {
         assert_eq!(error.captured_output().unwrap().stdout(), b"primary");
         assert_eq!(cleanup_labels(error.cleanup_failures()), ["stdout-read", "stdin"]);
         match &error.cleanup_failures()[0] {
-            CommandCleanupFailure::StdoutRead { source } => assert_eq!(source.to_string(), "final read"),
+            CommandCleanupFailure::StdoutRead { source } => {
+                assert_eq!(source.to_string(), "final read")
+            }
             _ => panic!("finalization read error should remain available as cleanup evidence"),
         }
         let moved = error.take_captured_output().unwrap();

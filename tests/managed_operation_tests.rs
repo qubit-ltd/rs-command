@@ -29,6 +29,7 @@ use qubit_command::CommandExecutor;
 #[cfg(all(feature = "async", unix))]
 use qubit_command::CommandExecutorApi;
 use qubit_command::CommandResourceRunOptions;
+use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
 use qubit_command::FileSinkPolicy;
 use qubit_operation::ManagerOptions;
@@ -134,6 +135,111 @@ fn test_owned_preparation_failure_retains_and_reports_recovery() {
     assert_eq!(settlement.effects_total, 1);
     assert_eq!(settlement.effects[0].fact, qubit_operation::EffectFact::Unknown);
     assert!(settlement.effects[0].resource_id.is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_conflicting_owned_sink_and_path_tee_do_not_truncate_before_rejection() {
+    for (owned_stream, tee_stream) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let owned = directory.path().join("owned");
+        let tee = directory.path().join("tee");
+        let started = directory.path().join("started");
+        std::fs::write(&owned, b"preserve me").unwrap();
+        let file = std::fs::OpenOptions::new().read(true).write(true).open(&owned).unwrap();
+        let options = CommandRunOptions::new();
+        let options = if tee_stream == 0 {
+            options.tee_stdout_to_file(&tee)
+        } else {
+            options.tee_stderr_to_file(&tee)
+        };
+        let resources = if owned_stream == 0 {
+            CommandResourceRunOptions::new()
+                .options(options)
+                .stdout_sink(file, FileSinkPolicy::Truncate)
+        } else {
+            CommandResourceRunOptions::new()
+                .options(options)
+                .stderr_sink(file, FileSinkPolicy::Truncate)
+        };
+        let mut operation = executor
+            .submit_resources(
+                CommandRunner::new(Duration::from_secs(5)),
+                Command::new("sh")
+                    .arg("-c")
+                    .arg("touch \"$1\"")
+                    .arg("managed-conflict-test")
+                    .arg(started.to_str().unwrap()),
+                resources,
+            )
+            .unwrap();
+
+        assert!(matches!(operation.wait_outcome().unwrap(), OperationOutcome::Failed(_)));
+        assert_eq!(std::fs::read(&owned).unwrap(), b"preserve me");
+        assert!(!started.exists(), "the rejected command must not start");
+        assert!(!tee.exists(), "the path tee must not be opened");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_managed_file_preparation_errors_report_stage_and_stream() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let mut operation = executor
+        .submit_resources(
+            CommandRunner::without_timeout(),
+            Command::new("sh").arg("-c").arg("exit 0"),
+            CommandResourceRunOptions::new().stdin_file(std::fs::File::open(directory.path()).unwrap()),
+        )
+        .unwrap();
+    let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
+        panic!("a directory cannot be used as managed stdin");
+    };
+    assert_eq!(error.kind(), qubit_command::CommandErrorKind::FilePreparationFailed);
+    assert!(matches!(
+        error.reason(),
+        qubit_command::CommandErrorReason::FilePreparationFailed {
+            stage: qubit_command::FilePreparationStage::Validation,
+            direction: Some(qubit_command::FilePreparationDirection::Stdin),
+            source,
+        } if source.kind() == std::io::ErrorKind::InvalidInput
+    ));
+    assert!(!format!("{error:?}").contains("must refer to a regular file"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_managed_stderr_truncation_failure_is_typed_and_stream_specific() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let output = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(output.path(), b"keep stderr").unwrap();
+    let output_path = output.path().to_path_buf();
+    let stderr = std::fs::File::open(output.path()).unwrap();
+    let mut operation = executor
+        .submit_resources(
+            CommandRunner::without_timeout(),
+            Command::new("sh").arg("-c").arg("exit 0"),
+            CommandResourceRunOptions::new().stderr_sink(stderr, FileSinkPolicy::Truncate),
+        )
+        .unwrap();
+    let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
+        panic!("a read-only stderr sink cannot be truncated");
+    };
+    assert_eq!(error.kind(), qubit_command::CommandErrorKind::FilePreparationFailed);
+    assert!(matches!(
+        error.reason(),
+        qubit_command::CommandErrorReason::FilePreparationFailed {
+            stage: qubit_command::FilePreparationStage::Truncation,
+            direction: Some(qubit_command::FilePreparationDirection::Stderr),
+            ..
+        }
+    ));
+    assert_eq!(std::fs::read(output_path).unwrap(), b"keep stderr");
 }
 
 #[test]

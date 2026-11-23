@@ -8,5 +8,6 @@
 //! Preparation and ownership for files transferred to managed commands.
 mod cleanup;
 mod identity;
-mod input;
-mod prepared_files;
+pub(crate) mod input;
+mod managed_preparation_failure;
+pub(crate) mod prepared_files;

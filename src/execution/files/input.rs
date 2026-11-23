@@ -14,6 +14,7 @@ use qubit_operation::OperationScope;
 
 use super::identity::validate_files;
 use super::identity::validate_tee_paths;
+use super::managed_preparation_failure::ManagedPreparationFailure;
 use super::prepared_files::register_files;
 use super::prepared_files::truncate_sinks;
 use crate::execution::contracts::ExecutionSnapshot;
@@ -31,7 +32,7 @@ impl ResourceInput for CommandResourceRunOptions {
     /// * `self`: Supplies the self value used by this operation.
     /// * `scope`: Supplies the scope value used by this operation.
     fn prepare_files(self: Box<Self>, scope: &OperationScope) -> Result<PreparedFiles, FilePreparationFailure> {
-        (*self).prepare_with_directory(scope, None)
+        (*self).prepare_with_directory(scope, None, true)
     }
 
     /// Performs the prepare files with snapshot step in the managed command
@@ -46,7 +47,7 @@ impl ResourceInput for CommandResourceRunOptions {
         scope: &OperationScope,
         snapshot: &ExecutionSnapshot,
     ) -> Result<PreparedFiles, FilePreparationFailure> {
-        (*self).prepare_with_directory(scope, Some(&snapshot.working_directory))
+        (*self).prepare_with_directory(scope, Some(&snapshot.working_directory), true)
     }
 }
 
@@ -58,11 +59,37 @@ impl CommandResourceRunOptions {
     /// * `scope`: Supplies the scope value used by this operation.
     /// * `working_directory`: Supplies the working directory value used by this
     ///   operation.
+    /// * `truncate`: Whether to truncate sinks for the standalone preparation
+    ///   API.
+    ///
+    /// # Returns
+    /// Prepared files or the public error retaining recoverable owners.
     fn prepare_with_directory(
         self,
         scope: &OperationScope,
         working_directory: Option<&Path>,
+        truncate: bool,
     ) -> Result<PreparedFiles, FilePreparationFailure> {
+        self.prepare_internal(scope, working_directory, truncate)
+            .map_err(|failure| failure.failure)
+    }
+
+    /// Registers the configured files and optionally applies standalone
+    /// truncation.
+    ///
+    /// # Parameters
+    /// * `scope`: Operation scope receiving file reservations.
+    /// * `working_directory`: Snapshot root for configured tee paths.
+    /// * `truncate`: Whether to apply standalone output truncation.
+    ///
+    /// # Returns
+    /// Prepared file owners, or a typed error retaining all recoverable owners.
+    fn prepare_internal(
+        self,
+        scope: &OperationScope,
+        working_directory: Option<&Path>,
+        truncate: bool,
+    ) -> Result<PreparedFiles, ManagedPreparationFailure> {
         let parts = self.into_parts();
         let options = parts.options;
         let mut input = parts.stdin;
@@ -85,8 +112,10 @@ impl CommandResourceRunOptions {
             None => match std::env::current_dir() {
                 Ok(directory) => directory,
                 Err(error) => {
-                    return Err(failure(
+                    return Err(managed_failure(
                         error,
+                        crate::FilePreparationStage::Validation,
+                        None,
                         None,
                         Some(restore_input(options, input, stdout, stderr)),
                     ));
@@ -108,8 +137,11 @@ impl CommandResourceRunOptions {
             let paths: Vec<_> = tee_paths.iter().map(|(name, path)| (*name, path.as_path())).collect();
             validate_tee_paths(&files, &paths)
         }) {
-            return Err(failure(
+            let direction = preparation_direction(&error);
+            return Err(managed_failure(
                 error,
+                crate::FilePreparationStage::Validation,
+                direction,
                 None,
                 Some(restore_input(options, input, stdout, stderr)),
             ));
@@ -122,8 +154,10 @@ impl CommandResourceRunOptions {
                 Ok(reservation) => reservations.push(reservation),
                 Err(error) => {
                     let kind = format!("resource capacity reservation failed: {error:?}");
-                    return Err(failure(
+                    return Err(managed_failure(
                         io::Error::other(kind),
+                        crate::FilePreparationStage::ResourceReservation,
+                        None,
                         None,
                         Some(restore_input(options, input, stdout, stderr)),
                     ));
@@ -144,31 +178,125 @@ impl CommandResourceRunOptions {
                     raw[1].take().zip(stdout_policy),
                     raw[2].take().zip(stderr_policy),
                 );
-                return Err(failure(error, recovered, Some(raw_input)));
+                return Err(managed_failure(
+                    error,
+                    crate::FilePreparationStage::Registration,
+                    None,
+                    recovered,
+                    Some(raw_input),
+                ));
             }
         };
-        if let Err(error) = truncate_sinks(&prepared, scope) {
-            return Err(failure(error, Some(prepared), None));
+        if truncate && let Err(error) = truncate_sinks(&prepared, scope) {
+            return Err(managed_failure(
+                error,
+                crate::FilePreparationStage::Truncation,
+                None,
+                Some(prepared),
+                None,
+            ));
         }
         Ok(prepared)
     }
+
+    /// Prepares managed files without applying output side effects. The runner
+    /// commits truncation after its final start authorization.
+    ///
+    /// # Parameters
+    /// * `scope`: Operation scope that owns prepared file resources.
+    /// * `snapshot`: Submission-time path snapshot used for tee identity
+    ///   checks.
+    /// * `session_stdin`: Whether the command uses a session stdin pipe.
+    ///
+    /// # Returns
+    /// Registered files or a typed failure retaining all recoverable owners.
+    pub(crate) fn prepare_for_managed(
+        self,
+        scope: &OperationScope,
+        snapshot: &ExecutionSnapshot,
+        session_stdin: bool,
+    ) -> Result<PreparedFiles, ManagedPreparationFailure> {
+        if session_stdin && self.configured_stdin().is_some() {
+            let source = io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "session stdin cannot be combined with an owned stdin file",
+            );
+            return Err(managed_failure(
+                source,
+                crate::FilePreparationStage::Validation,
+                Some(crate::FilePreparationDirection::Stdin),
+                None,
+                Some(Box::new(self) as Box<dyn ResourceInput>),
+            ));
+        }
+        let value = self;
+        let has_owned_output = value.configured_stdout().is_some() || value.configured_stderr().is_some();
+        let has_path_output = value.ordinary_options().configured_stdout_file().is_some()
+            || value.ordinary_options().configured_stderr_file().is_some();
+        if has_owned_output && has_path_output {
+            return Err(managed_failure(
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "owned sinks cannot be combined with path tees",
+                ),
+                crate::FilePreparationStage::Validation,
+                None,
+                None,
+                Some(Box::new(value) as Box<dyn ResourceInput>),
+            ));
+        }
+        value.prepare_internal(scope, Some(&snapshot.working_directory), false)
+    }
 }
 
-/// Performs the failure step in the managed command execution lifecycle.
+/// Builds a typed preparation failure and its public recovery carrier.
 ///
 /// # Parameters
 /// * `error`: Supplies the error value used by this operation.
 /// * `prepared`: Supplies the prepared value used by this operation.
 /// * `input`: Supplies the input value used by this operation.
-fn failure(
+/// * `phase`: Preparation phase that failed.
+/// * `direction`: Affected stream, when known.
+///
+/// # Returns
+/// A failure containing the original source and retained recovery owners.
+fn managed_failure(
     error: io::Error,
+    phase: crate::FilePreparationStage,
+    direction: Option<crate::FilePreparationDirection>,
     prepared: Option<PreparedFiles>,
     input: Option<Box<dyn ResourceInput>>,
-) -> FilePreparationFailure {
-    FilePreparationFailure {
-        message: error.to_string(),
-        input,
-        prepared: prepared.map(Box::new),
+) -> ManagedPreparationFailure {
+    let message = error.to_string();
+    ManagedPreparationFailure {
+        phase,
+        direction,
+        source: error,
+        failure: FilePreparationFailure {
+            message,
+            input,
+            prepared: prepared.map(Box::new),
+        },
+    }
+}
+
+/// Infers a stream from a validation error's stable safe prefix.
+///
+/// # Parameters
+/// * `error`: Validation error returned by the file identity checks.
+///
+/// # Returns
+/// The direction named by the validation message, when available.
+fn preparation_direction(error: &io::Error) -> Option<crate::FilePreparationDirection> {
+    let message = error.to_string();
+    if message.starts_with("stdin") {
+        Some(crate::FilePreparationDirection::Stdin)
+    } else if message.starts_with("stdout") {
+        Some(crate::FilePreparationDirection::Stdout)
+    } else if message.starts_with("stderr") {
+        Some(crate::FilePreparationDirection::Stderr)
+    } else {
+        None
     }
 }
 
@@ -220,6 +348,7 @@ mod tests {
     use qubit_operation::ManagerOptions;
     use qubit_operation::OperationManager;
     use qubit_operation::OperationOptions;
+    use qubit_operation::ScopeLimits;
 
     use super::ResourceInput;
     use crate::CommandRunOptions;
@@ -232,6 +361,47 @@ mod tests {
     fn test_file_sink_policy_exhaustiveness_covers_every_supported_policy() {
         super::_policy_is_exhaustive(FileSinkPolicy::Preserve);
         super::_policy_is_exhaustive(FileSinkPolicy::Truncate);
+    }
+
+    #[test]
+    fn test_managed_reservation_failure_keeps_typed_stage_and_owner() {
+        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let output = tempfile::NamedTempFile::new().expect("sink should be created");
+        std::fs::write(output.path(), b"must survive").expect("sink should be populated");
+        let sink_path = output.path().to_path_buf();
+        let outcome = manager
+            .run(
+                OperationOptions {
+                    limits: ScopeLimits {
+                        resources: 0,
+                        ..ScopeLimits::default()
+                    },
+                    ..OperationOptions::default()
+                },
+                move |scope| {
+                    let file = OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(&sink_path)
+                        .expect("sink should open");
+                    let error = match CommandResourceRunOptions::new()
+                        .stdout_sink(file, FileSinkPolicy::Truncate)
+                        .prepare_for_managed(&scope, &ExecutionSnapshot::default(), false)
+                    {
+                        Ok(_) => panic!("zero resource capacity must reject preparation"),
+                        Err(error) => error,
+                    };
+                    assert_eq!(error.phase, crate::FilePreparationStage::ResourceReservation);
+                    assert_eq!(error.direction, None);
+                    assert!(error.failure.input.is_some());
+                    assert!(error.failure.prepared.is_none());
+                    assert_eq!(error.source.kind(), std::io::ErrorKind::Other);
+                    assert_eq!(std::fs::read(&sink_path).unwrap(), b"must survive");
+                    Ok::<_, std::convert::Infallible>(())
+                },
+            )
+            .expect("preparation operation should finish");
+        assert!(matches!(outcome, qubit_operation::OperationOutcome::Succeeded(())));
     }
 
     #[test]
