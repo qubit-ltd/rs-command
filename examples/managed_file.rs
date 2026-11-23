@@ -15,9 +15,9 @@ use qubit_command::CommandExecutor;
 use qubit_command::CommandResourceRunOptions;
 use qubit_command::CommandRunner;
 use qubit_command::FileSinkPolicy;
-use qubit_command::ManagedCommandRunnerApi;
 use qubit_operation::ManagerOptions;
 use qubit_operation::OperationManager;
+use qubit_operation::OperationOutcome;
 
 pub fn run() {
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -46,14 +46,19 @@ pub fn run() {
     };
     let manager = OperationManager::new(ManagerOptions::default()).expect("manager");
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).expect("executor");
-    let output = CommandRunner::without_timeout()
-        .run_managed_resources(&executor, command, resources)
-        .expect("managed file command");
+    let mut operation = executor
+        .submit_resources(CommandRunner::without_timeout(), command, resources)
+        .expect("submit managed file command");
+    let OperationOutcome::Succeeded(output) = operation.wait_outcome().expect("command outcome") else {
+        panic!("managed file command should succeed");
+    };
     assert_eq!(output.exit_code(), Some(0));
+    let settlement = operation.wait_settlement().expect("command settlement");
+    assert!(settlement.all_released(), "owned files must be released before cleanup: {settlement:?}");
 
-    // The run has returned after observing settlement, so the owned file input
-    // is no longer in use. The caller still owns ordinary external cleanup of
-    // its directory; the path string itself did not act as a lease.
+    // The settlement report confirms that the owned file input is no longer in
+    // use. The caller still owns ordinary external cleanup of its directory;
+    // the path string itself did not act as a lease.
     let written = std::fs::read(&output_path).expect("read sink");
     assert!(written.starts_with(b"data"), "unexpected command output: {written:?}");
     println!("input started at byte {position}; sink now contains {:?}", written);

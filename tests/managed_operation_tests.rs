@@ -145,6 +145,53 @@ fn test_managed_truncation_failure_is_typed_and_releases_registered_sink() {
 
 #[cfg(unix)]
 #[test]
+fn test_owned_file_preparation_failure_retains_recovery_settlement() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let input = std::fs::File::open(directory.path()).unwrap();
+    let output = tempfile::NamedTempFile::new().unwrap();
+    let sink = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(output.path())
+        .unwrap();
+    let mut operation = executor
+        .submit_resources(
+            CommandRunner::without_timeout(),
+            Command::new("sh").arg("-c").arg("exit 0"),
+            CommandResourceRunOptions::new()
+                .stdin_file(input)
+                .stdout_sink(sink, FileSinkPolicy::Preserve),
+        )
+        .unwrap();
+
+    let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
+        panic!("a directory cannot be prepared as owned stdin");
+    };
+    assert_eq!(error.kind(), qubit_command::CommandErrorKind::FilePreparationFailed);
+    assert!(matches!(
+        error.reason(),
+        qubit_command::CommandErrorReason::FilePreparationFailed {
+            stage: qubit_command::FilePreparationStage::Validation,
+            direction: Some(qubit_command::FilePreparationDirection::Stdin),
+            ..
+        }
+    ));
+
+    let settlement = operation.wait_settlement().unwrap();
+    assert_eq!(settlement.status, SettlementStatus::RecoveryRequired);
+    let external = settlement
+        .external_settlement
+        .as_ref()
+        .expect("adapter recovery evidence is retained by manager");
+    assert_eq!(external.status, SettlementStatus::RecoveryRequired);
+    assert_eq!(external.recovery_count, 1);
+    assert!(external.recoveries.is_empty(), "adapter recovery is not a manager RecoveryHandle");
+}
+
+#[cfg(unix)]
+#[test]
 fn test_conflicting_owned_sink_and_path_tee_do_not_truncate_before_rejection() {
     for (owned_stream, tee_stream) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
         let manager = OperationManager::new(ManagerOptions::default()).unwrap();

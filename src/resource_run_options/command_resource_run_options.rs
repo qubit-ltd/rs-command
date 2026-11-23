@@ -108,12 +108,12 @@ impl CommandResourceRunOptions {
         self.stdin.as_ref()
     }
 
-    /// Returns the configured stdout path and explicit sink policy.
+    /// Borrows the configured stdout file and returns its explicit sink policy.
     pub fn configured_stdout(&self) -> Option<(&File, FileSinkPolicy)> {
         self.stdout.as_ref().map(|sink| (&sink.file, sink.policy))
     }
 
-    /// Returns the configured stderr path and explicit sink policy.
+    /// Borrows the configured stderr file and returns its explicit sink policy.
     pub fn configured_stderr(&self) -> Option<(&File, FileSinkPolicy)> {
         self.stderr.as_ref().map(|sink| (&sink.file, sink.policy))
     }
