@@ -29,11 +29,15 @@ use super::command_executor::RetryDelay;
 #[cfg(feature = "async")]
 use super::command_executor::internal::capacity_wait::CapacityWait;
 #[cfg(feature = "async")]
-use super::command_executor::internal::scheduler_waiter_guard::SchedulerWaiterGuard;
+use super::command_executor::internal::async_submission_context::AsyncSubmissionContext;
 #[cfg(feature = "async")]
-use super::command_executor::wait::retryable_async;
+use super::command_executor::internal::scheduler_waiter_guard::SchedulerWaiterGuard;
+#[cfg(test)]
 use super::command_executor::wait::deadline_failure;
+#[cfg(test)]
 use super::command_executor::wait::retry_wait;
+#[cfg(all(test, feature = "async"))]
+use super::command_executor::wait::retryable_async;
 #[cfg(feature = "async")]
 use super::RetryTimerFailure;
 use super::SnapshotFailure;
@@ -65,33 +69,6 @@ fn session_channels(runner: &CommandRunner) -> crate::session::channel::SessionC
             crate::session::contracts::SessionStreamPolicy::TerminateAfterBytes(limit),
         ),
         None => crate::session::channel::SessionChannels::new(),
-    }
-}
-
-/// Represents the async submission context state or contract used by managed
-/// command execution.
-#[cfg(feature = "async")]
-struct AsyncSubmissionContext {
-    /// Stores the bridge value used by this execution component.
-    bridge: Option<Arc<dyn crate::session::contracts::SessionBridge>>,
-    /// Stores the keepalive value used by this execution component.
-    keepalive: Option<super::adapter::SessionOwners>,
-    /// Stores the deadline value used by this execution component.
-    deadline: Option<OperationContext>,
-}
-
-#[cfg(feature = "async")]
-impl AsyncSubmissionContext {
-    /// Stores the plain value used by this execution component.
-    ///
-    /// # Parameters
-    /// * `deadline`: Supplies the deadline value used by this operation.
-    fn plain(deadline: Option<OperationContext>) -> Self {
-        Self {
-            bridge: None,
-            keepalive: None,
-            deadline,
-        }
     }
 }
 
@@ -315,7 +292,7 @@ impl CommandExecutor {
         self.submit_async_resources_in_with_bytes(scope, runner, command, options, bytes)
     }
     #[cfg(feature = "async")]
-    fn submit_async_resources_in_with_bytes(
+    pub(in crate::execution) fn submit_async_resources_in_with_bytes(
         &self,
         scope: &OperationScope,
         runner: CommandRunner,
@@ -424,7 +401,7 @@ impl CommandExecutor {
         let bytes = resource_bytes(&options);
         self.submit_resources_in_with_bytes(scope, runner, command, options, bytes)
     }
-    fn submit_resources_in_with_bytes(
+    pub(in crate::execution) fn submit_resources_in_with_bytes(
         &self,
         scope: &OperationScope,
         runner: CommandRunner,
@@ -535,7 +512,7 @@ impl CommandExecutor {
     /// * `command`: Supplies the command value used by this operation.
     /// * `options`: Supplies the options value used by this operation.
     /// * `deadline`: Supplies the deadline value used by this operation.
-    fn submit_resources_manager(
+    pub(in crate::execution) fn submit_resources_manager(
         &self,
         manager: &OperationManager,
         runner: CommandRunner,
@@ -951,7 +928,7 @@ impl CommandExecutor {
     /// * `options`: Supplies the options value used by this operation.
     /// * `context`: Supplies the context value used by this operation.
     #[cfg(feature = "async")]
-    fn submit_async_resources_manager(
+    pub(in crate::execution) fn submit_async_resources_manager(
         &self,
         manager: &OperationManager,
         runner: CommandRunner,
@@ -1048,7 +1025,7 @@ impl CommandExecutor {
 ///
 /// Metadata lookup failures contribute zero bytes. Summation saturates at
 /// `usize::MAX` so a large combined estimate cannot wrap below the limit.
-fn resource_bytes(options: &CommandResourceRunOptions) -> usize {
+pub(in crate::execution) fn resource_bytes(options: &CommandResourceRunOptions) -> usize {
     [
         options
             .configured_stdin()
@@ -1383,7 +1360,7 @@ async fn wait_busy_async(
 /// # Errors
 /// Returns a waiter quota failure when no scheduler waiter slot is available.
 #[cfg(feature = "async")]
-async fn wait_retryable_async(
+pub(in crate::execution) async fn wait_retryable_async(
     scheduler: BoundedScheduler,
     bytes: usize,
     reason: &CommandSubmitFailureReason,
@@ -1406,7 +1383,9 @@ async fn wait_retryable_async(
 /// # Parameters
 /// * `context`: Supplies the context value used by this operation.
 #[cfg(feature = "async")]
-async fn wait_retry_tick(context: Option<OperationContext>) -> Result<bool, RetryTimerFailure> {
+pub(in crate::execution) async fn wait_retry_tick(
+    context: Option<OperationContext>,
+) -> Result<bool, RetryTimerFailure> {
     let mut delay = Box::pin(RetryDelay::new());
     if let Some(context) = context {
         let mut stop = Box::pin(context.stop_requested());
@@ -2435,45 +2414,12 @@ impl CommandExecutorApi for CommandExecutor {
     /// * `o`: Supplies the o value used by this operation.
     fn submit_wait_blocking_in(
         &self,
-        s: &OperationScope,
-        mut r: CommandRunner,
-        mut c: Command,
-        mut o: CommandRunOptions,
+        scope: &OperationScope,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandRunOptions,
     ) -> Result<CommandOperation, CommandSubmitFailure> {
-        let deadline = s.context();
-        loop {
-            match self.submit_in(s, r, c, o) {
-                Ok(h) => return Ok(h),
-                Err(failure) => {
-                    let CommandSubmitFailure {
-                        runner,
-                        command,
-                        options,
-                        reason,
-                    } = failure;
-                    match retry_wait(&reason, &self.scheduler, 0, Some(deadline.clone())) {
-                        Ok(true) => {
-                            r = *runner;
-                            c = *command;
-                            o = options;
-                            continue;
-                        }
-                        Ok(false) => {
-                            return Err(CommandSubmitFailure {
-                                runner, command, options,
-                                reason: deadline_failure(reason, &deadline),
-                            });
-                        }
-                        Err(wait) => {
-                            return Err(CommandSubmitFailure {
-                                runner, command, options,
-                                reason: CommandSubmitFailureReason::Wait(wait),
-                            });
-                        }
-                    }
-                }
-            }
-        }
+        super::command_executor::CommandExecutor::submit_wait_blocking_in_impl(self, scope, runner, command, options)
     }
     /// Performs the submit wait blocking step in the managed command execution
     /// lifecycle.
@@ -2484,35 +2430,11 @@ impl CommandExecutorApi for CommandExecutor {
     /// * `o`: Supplies the o value used by this operation.
     fn submit_wait_blocking(
         &self,
-        mut r: CommandRunner,
-        mut c: Command,
-        mut o: CommandRunOptions,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandRunOptions,
     ) -> Result<CommandOperation, CommandSubmitFailure> {
-        loop {
-            match self.submit(r, c, o) {
-                Ok(h) => return Ok(h),
-                Err(failure) => {
-                    let CommandSubmitFailure {
-                        runner,
-                        command,
-                        options,
-                        reason,
-                    } = failure;
-                    match retry_wait(&reason, &self.scheduler, 0, None) {
-                        Ok(true) => {
-                            r = *runner;
-                            c = *command;
-                            o = options;
-                            continue;
-                        }
-                        Ok(false) => return Err(CommandSubmitFailure { runner, command, options, reason }),
-                        Err(wait) => return Err(CommandSubmitFailure {
-                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
-                        }),
-                    }
-                }
-            }
-        }
+        super::command_executor::CommandExecutor::submit_wait_blocking_impl(self, runner, command, options)
     }
     /// Performs the submit wait resources blocking step in the managed command
     /// execution lifecycle.
@@ -2523,36 +2445,11 @@ impl CommandExecutorApi for CommandExecutor {
     /// * `o`: Supplies the o value used by this operation.
     fn submit_wait_resources_blocking(
         &self,
-        mut r: CommandRunner,
-        mut c: Command,
-        mut o: CommandResourceRunOptions,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandResourceRunOptions,
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
-        loop {
-            let bytes = resource_bytes(&o);
-            match self.submit_resources_manager(&self.manager, r, c, o, bytes, None) {
-                Ok(h) => return Ok(h),
-                Err(failure) => {
-                    let CommandResourceSubmitFailure {
-                        runner,
-                        command,
-                        options,
-                        reason,
-                    } = failure;
-                    match retry_wait(&reason, &self.scheduler, bytes, None) {
-                        Ok(true) => {
-                            r = *runner;
-                            c = *command;
-                            o = *options;
-                            continue;
-                        }
-                        Ok(false) => return Err(CommandResourceSubmitFailure { runner, command, options, reason }),
-                        Err(wait) => return Err(CommandResourceSubmitFailure {
-                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
-                        }),
-                    }
-                }
-            }
-        }
+        super::command_executor::CommandExecutor::submit_wait_resources_blocking_impl(self, runner, command, options)
     }
     /// Performs the submit wait resources blocking in step in the managed
     /// command execution lifecycle.
@@ -2564,46 +2461,14 @@ impl CommandExecutorApi for CommandExecutor {
     /// * `o`: Supplies the o value used by this operation.
     fn submit_wait_resources_blocking_in(
         &self,
-        s: &OperationScope,
-        mut r: CommandRunner,
-        mut c: Command,
-        mut o: CommandResourceRunOptions,
+        scope: &OperationScope,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandResourceRunOptions,
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
-        let deadline = s.context();
-        loop {
-            let bytes = resource_bytes(&o);
-            match self.submit_resources_in_with_bytes(s, r, c, o, bytes) {
-                Ok(h) => return Ok(h),
-                Err(failure) => {
-                    let CommandResourceSubmitFailure {
-                        runner,
-                        command,
-                        options,
-                        reason,
-                    } = failure;
-                    match retry_wait(&reason, &self.scheduler, bytes, Some(deadline.clone())) {
-                        Ok(true) => {
-                            r = *runner;
-                            c = *command;
-                            o = *options;
-                            continue;
-                        }
-                        Ok(false) => {
-                            return Err(CommandResourceSubmitFailure {
-                                runner, command, options,
-                                reason: deadline_failure(reason, &deadline),
-                            });
-                        }
-                        Err(wait) => {
-                            return Err(CommandResourceSubmitFailure {
-                                runner, command, options,
-                                reason: CommandSubmitFailureReason::Wait(wait),
-                            });
-                        }
-                    }
-                }
-            }
-        }
+        super::command_executor::CommandExecutor::submit_wait_resources_blocking_in_impl(
+            self, scope, runner, command, options,
+        )
     }
     /// Performs the submit wait step in the managed command execution
     /// lifecycle.
@@ -2615,43 +2480,11 @@ impl CommandExecutorApi for CommandExecutor {
     #[cfg(feature = "async")]
     async fn submit_wait(
         &self,
-        mut r: CommandRunner,
-        mut c: Command,
-        mut o: CommandRunOptions,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandRunOptions,
     ) -> Result<super::AsyncCommandOperation, CommandSubmitFailure> {
-        loop {
-            match self.submit_async(r, c, o) {
-                Ok(h) => return Ok(h),
-                Err(f) => {
-                    let CommandSubmitFailure {
-                        runner,
-                        command,
-                        options,
-                        reason,
-                    } = f;
-                    if !retryable_async(&reason) {
-                        return Err(CommandSubmitFailure {
-                            runner,
-                            command,
-                            options,
-                            reason,
-                        });
-                    }
-                    match wait_retryable_async(self.scheduler.as_ref().clone(), 0, &reason, None).await {
-                        Ok(true) => {
-                            r = *runner;
-                            c = *command;
-                            o = options;
-                            continue;
-                        }
-                        Ok(false) => return Err(CommandSubmitFailure { runner, command, options, reason }),
-                        Err(wait) => return Err(CommandSubmitFailure {
-                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
-                        }),
-                    }
-                }
-            }
-        }
+        super::command_executor::CommandExecutor::submit_wait_impl(self, runner, command, options).await
     }
     /// Performs the submit wait resources step in the managed command execution
     /// lifecycle.
@@ -2663,51 +2496,11 @@ impl CommandExecutorApi for CommandExecutor {
     #[cfg(feature = "async")]
     async fn submit_wait_resources(
         &self,
-        mut r: CommandRunner,
-        mut c: Command,
-        mut o: CommandResourceRunOptions,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandResourceRunOptions,
     ) -> Result<super::AsyncCommandOperation, CommandResourceSubmitFailure> {
-        loop {
-            let bytes = resource_bytes(&o);
-            match self.submit_async_resources_manager(
-                &self.manager,
-                r,
-                c,
-                o,
-                bytes,
-                AsyncSubmissionContext::plain(None),
-            ) {
-                Ok(h) => return Ok(h),
-                Err(f) => {
-                    let CommandResourceSubmitFailure {
-                        runner,
-                        command,
-                        options,
-                        reason,
-                    } = f;
-                    if !retryable_async(&reason) {
-                        return Err(CommandResourceSubmitFailure {
-                            runner,
-                            command,
-                            options,
-                            reason,
-                        });
-                    }
-                    match wait_retryable_async(self.scheduler.as_ref().clone(), bytes, &reason, None).await {
-                        Ok(true) => {
-                            r = *runner;
-                            c = *command;
-                            o = *options;
-                            continue;
-                        }
-                        Ok(false) => return Err(CommandResourceSubmitFailure { runner, command, options, reason }),
-                        Err(wait) => return Err(CommandResourceSubmitFailure {
-                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
-                        }),
-                    }
-                }
-            }
-        }
+        super::command_executor::CommandExecutor::submit_wait_resources_impl(self, runner, command, options).await
     }
     /// Performs the submit wait resources in step in the managed command
     /// execution lifecycle.
@@ -2720,48 +2513,13 @@ impl CommandExecutorApi for CommandExecutor {
     #[cfg(feature = "async")]
     async fn submit_wait_resources_in<'a>(
         &'a self,
-        s: &'a OperationScope,
-        mut r: CommandRunner,
-        mut c: Command,
-        mut o: CommandResourceRunOptions,
+        scope: &'a OperationScope,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandResourceRunOptions,
     ) -> Result<super::AsyncCommandOperation, CommandResourceSubmitFailure> {
-        let context = s.context();
-        loop {
-            let bytes = resource_bytes(&o);
-            match self.submit_async_resources_in_with_bytes(s, r, c, o, bytes) {
-                Ok(h) => return Ok(h),
-                Err(f) => {
-                    let CommandResourceSubmitFailure {
-                        runner,
-                        command,
-                        options,
-                        reason,
-                    } = f;
-                    if !retryable_async(&reason) {
-                        return Err(CommandResourceSubmitFailure {
-                            runner,
-                            command,
-                            options,
-                            reason,
-                        });
-                    }
-                    match wait_retryable_async(self.scheduler.as_ref().clone(), bytes, &reason, Some(context.clone())).await {
-                        Ok(true) => {
-                            r = *runner;
-                            c = *command;
-                            o = *options;
-                            continue;
-                        }
-                        Ok(false) => return Err(CommandResourceSubmitFailure {
-                            runner, command, options, reason: deadline_failure(reason, &context),
-                        }),
-                        Err(wait) => return Err(CommandResourceSubmitFailure {
-                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
-                        }),
-                    }
-                }
-            }
-        }
+        super::command_executor::CommandExecutor::submit_wait_resources_in_impl(self, scope, runner, command, options)
+            .await
     }
     /// Performs the submit async step in the managed command execution
     /// lifecycle.
@@ -2842,47 +2600,12 @@ impl CommandExecutorApi for CommandExecutor {
     #[cfg(feature = "async")]
     async fn submit_wait_in<'a>(
         &'a self,
-        s: &'a OperationScope,
-        mut r: CommandRunner,
-        mut c: Command,
-        mut o: CommandRunOptions,
+        scope: &'a OperationScope,
+        runner: CommandRunner,
+        command: Command,
+        options: CommandRunOptions,
     ) -> Result<super::AsyncCommandOperation, CommandSubmitFailure> {
-        let context = s.context();
-        loop {
-            match self.submit_async_in(s, r, c, o) {
-                Ok(h) => return Ok(h),
-                Err(f) => {
-                    let CommandSubmitFailure {
-                        runner,
-                        command,
-                        options,
-                        reason,
-                    } = f;
-                    if !retryable_async(&reason) {
-                        return Err(CommandSubmitFailure {
-                            runner,
-                            command,
-                            options,
-                            reason,
-                        });
-                    }
-                    match wait_retryable_async(self.scheduler.as_ref().clone(), 0, &reason, Some(context.clone())).await {
-                        Ok(true) => {
-                            r = *runner;
-                            c = *command;
-                            o = options;
-                            continue;
-                        }
-                        Ok(false) => return Err(CommandSubmitFailure {
-                            runner, command, options, reason: deadline_failure(reason, &context),
-                        }),
-                        Err(wait) => return Err(CommandSubmitFailure {
-                            runner, command, options, reason: CommandSubmitFailureReason::Wait(wait),
-                        }),
-                    }
-                }
-            }
-        }
+        super::command_executor::CommandExecutor::submit_wait_in_impl(self, scope, runner, command, options).await
     }
 }
 /// Performs the build executor step in the managed command execution lifecycle.
