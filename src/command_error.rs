@@ -103,6 +103,20 @@ impl CommandError {
             cleanup_failures,
         } = self;
         let reason = match *reason {
+            CommandErrorReason::OpenInputFailed { source, .. } => {
+                CommandErrorReason::FilePreparationFailed {
+                    stage,
+                    direction: Some(crate::FilePreparationDirection::Stdin),
+                    source,
+                }
+            }
+            CommandErrorReason::NonRegularInputFile { .. } => {
+                CommandErrorReason::FilePreparationFailed {
+                    stage,
+                    direction: Some(crate::FilePreparationDirection::Stdin),
+                    source: io::Error::new(io::ErrorKind::InvalidInput, "input is not a regular file"),
+                }
+            }
             CommandErrorReason::OpenOutputFailed { stream, source, .. } => {
                 let direction = Some(match stream {
                     OutputStream::Stdout => crate::FilePreparationDirection::Stdout,
@@ -867,6 +881,45 @@ mod tests {
                     && source.to_string() == "fixture write denied"
             ));
         }
+    }
+
+    #[test]
+    fn test_resource_stdin_path_failures_map_to_validation_stdin() {
+        let open_error = CommandError::from_reason(
+            "prepared command",
+            CommandErrorReason::OpenInputFailed {
+                path: "missing-input".into(),
+                source: io::Error::new(io::ErrorKind::NotFound, "fixture input failure"),
+            },
+            None,
+        )
+        .into_file_preparation_failure(crate::FilePreparationStage::Validation);
+        assert!(matches!(
+            open_error.reason(),
+            CommandErrorReason::FilePreparationFailed {
+                stage: crate::FilePreparationStage::Validation,
+                direction: Some(crate::FilePreparationDirection::Stdin),
+                source,
+            } if source.kind() == io::ErrorKind::NotFound
+                && source.to_string() == "fixture input failure"
+        ));
+
+        let type_error = CommandError::from_reason(
+            "prepared command",
+            CommandErrorReason::NonRegularInputFile {
+                path: "directory-input".into(),
+            },
+            None,
+        )
+        .into_file_preparation_failure(crate::FilePreparationStage::Validation);
+        assert!(matches!(
+            type_error.reason(),
+            CommandErrorReason::FilePreparationFailed {
+                stage: crate::FilePreparationStage::Validation,
+                direction: Some(crate::FilePreparationDirection::Stdin),
+                source,
+            } if source.kind() == io::ErrorKind::InvalidInput
+        ));
     }
 
     fn status(code: i32) -> ExitStatus {
