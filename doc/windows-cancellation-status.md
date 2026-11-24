@@ -10,13 +10,23 @@ On Windows, successful `CancelSynchronousIo` means that the cancellation request
 
 Callers should preserve the primary error and its `cleanup_failures()`, then check `stdout_complete()` and `stderr_complete()` before treating retained output as complete. Applications that require a hard return deadline should supervise the runner in a separate process boundary; the runner's timeout does not provide that guarantee.
 
-## Current bounded source audit at SHA `36579c289a9cd6e9fb981854e87a7e3137cb6512` (2026-11-23)
+## Bounded source audit at SHA `36579c289a9cd6e9fb981854e87a7e3137cb6512` (2026-11-23)
 
 This audit ran on Linux x86_64 with Rust `1.94.0`. A targeted `git diff --exit-code fcdccb7 --` over the production cancellation/helper, Windows probe, workflow, and identity-gate paths exited 0: those paths are unchanged from the latest recorded source audit. `command -v pwsh` and `command -v powershell` each exited 1. No Windows runtime test, PowerShell identity gate, or new Windows trace was run for this SHA.
 
 The existing production-path probe still does not witness a subsequent blocked production I/O or a production cleanup join waiting on it: its recorded fields include `original_io_return_is_subsequent_io=false`, `production_join_pending_witness=false`, `source_writer_manually_released=true`, and `watchdog_released=false`. The pipe-based interleaving probes and separate watchdog self-test cannot establish the ordinary-file tee or production-stdin causal chain. The existing `windows-2022` workflow and PowerShell identity gate remain the runtime and result-interpretation entry points, but neither was available in this environment.
 
 **Decision:** RC-006 remains **unresolved**. This source comparison confirms only that the inspected paths did not change since `fcdccb7`; it neither confirms nor excludes the suspected production hang and does not establish Windows safety. No production code or probe was changed.
+
+## Native Windows workflow evidence at SHA `c871a25024adb72c1f4bdac7f9e226fb03463cb8` (2026-11-24)
+
+The [Windows Cancellation Interleaving run](https://github.com/qubit-ltd/rs-command/actions/runs/45305695014) completed successfully on `windows-2022` (Windows Server 2022). It selected 14 tests: 12 `windows_` tests and 2 `command_io` tests; all passed. The PowerShell identity-gate fixtures passed, and the result gate reported all 12 required tests as discovered and passed. The [probe artifact](https://github.com/qubit-ltd/rs-command/actions/runs/45305695014/artifacts/14880568265) contains the run, test-list, command-I/O, and gate logs.
+
+The same-run production-path record for `production_command_io_blocked_read` observed a successful native cancellation (`cancel_success=true`), then return from the original blocked read with raw OS error `995`, followed by cleanup join, helper join, and child reaping. The record also states `original_io_return_is_subsequent_io=false`, `production_join_pending_witness=false`, `tee_write_entries=0`, `source_writer_manually_released=true`, and `watchdog_released=false`; its classification remains `unresolved`. Thus the trace did not observe a post-cancellation production tee write/flush or stdin write entering and remaining blocked, nor a production cleanup join held by such later I/O until independent watchdog release.
+
+The separate EOF/flush and readiness probes had zero valid hits. The readiness pipe probe recorded 128 successful cancellations but zero confirmed blocked writes. The stdin check-to-write probe observed its in-flight write return with raw OS error `995` and zero post-cancel write entries. These probe results do not establish the production-file or production-stdin causal chain. The separate watchdog self-test reaped its child, but did not witness or release a production cleanup join.
+
+**Decision:** RC-006 remains **unresolved**. This native run passed its selected tests and identity gate, but it did not produce the required same-helper sequence of successful cancellation, original I/O return, subsequent blocked production I/O, cleanup join waiting on that I/O, independent watchdog release, and recovery. The earlier Linux source audit at `36579c2` remains historical evidence only.
 
 ## Bounded source follow-up (source SHA `5fa0cae06001e07b5053171216b1b9f7da6acb15`, 2026-11-18)
 

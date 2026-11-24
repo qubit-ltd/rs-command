@@ -10,13 +10,23 @@
 
 调用方应保留主错误及其 `cleanup_failures()`，并在把保留输出视为完整内容前检查 `stdout_complete()` 和 `stderr_complete()`。必须保证硬返回期限的应用应通过独立进程边界监督 runner；runner 的 timeout 不提供该保证。
 
-## 当前源码有界核查（源码 SHA `36579c289a9cd6e9fb981854e87a7e3137cb6512`，2026-11-23）
+## 源码有界核查（源码 SHA `36579c289a9cd6e9fb981854e87a7e3137cb6512`，2026-11-23）
 
 本次核查运行于 Linux x86_64、Rust `1.94.0`。针对生产取消/helper、Windows 探针、workflow 和身份门禁路径执行 `git diff --exit-code fcdccb7 --`，退出码为 0：这些路径相对最近一次记录的源码核查未变化。`command -v pwsh` 与 `command -v powershell` 均退出码为 1。本 SHA 未运行 Windows runtime 测试、PowerShell 身份门禁，也未生成新的 Windows trace。
 
 现有生产路径探针仍未见证后续阻塞的生产 I/O，也未见证因此等待的生产 cleanup join；记录字段仍包括 `original_io_return_is_subsequent_io=false`、`production_join_pending_witness=false`、`source_writer_manually_released=true` 和 `watchdog_released=false`。基于管道的交错探针及独立 watchdog 自测不能证明普通文件 tee 或生产 stdin 的因果链。现有 `windows-2022` workflow 和 PowerShell 身份门禁仍是 runtime 运行及判读入口，但本环境无法运行它们。
 
 **结论：** RC-006 仍为 **unresolved（未解决）**。本次源码比较只确认受检路径自 `fcdccb7` 起没有变化；既未证实也未排除疑似生产挂起，也不证明 Windows 安全。未修改生产代码或探针。
+
+## 原生 Windows workflow 证据（源码 SHA `c871a25024adb72c1f4bdac7f9e226fb03463cb8`，2026-11-24）
+
+[Windows Cancellation Interleaving run](https://github.com/qubit-ltd/rs-command/actions/runs/45305695014) 在 `windows-2022`（Windows Server 2022）成功完成。共选中 14 项测试：12 项 `windows_` 测试和 2 项 `command_io` 测试，全部通过。PowerShell identity-gate fixtures 通过；结果门禁报告 12 项必需测试均已发现且通过。[Probe artifact](https://github.com/qubit-ltd/rs-command/actions/runs/45305695014/artifacts/14880568265) 包含运行、测试列表、command-I/O 和门禁日志。
+
+同一次运行中的生产路径记录 `production_command_io_blocked_read` 观察到原生取消成功（`cancel_success=true`），随后原始阻塞 read 以原始 OS 错误 `995` 返回，接着 cleanup join、helper join 和 child 回收。记录同时显示 `original_io_return_is_subsequent_io=false`、`production_join_pending_witness=false`、`tee_write_entries=0`、`source_writer_manually_released=true` 和 `watchdog_released=false`；分类仍为 `unresolved`。因此 trace 未观察到取消后的生产 tee 写入/flush 或 stdin 写入进入并持续阻塞，也未观察到生产 cleanup join 因这类后续 I/O 而等待独立 watchdog 释放。
+
+独立 EOF/flush 与 readiness 探针均没有 valid hit。readiness 管道探针记录 128 次成功取消，但没有确认阻塞写入。stdin check-to-write 探针观察到取消时已经在途的 write 以原始 OS 错误 `995` 返回，且没有 post-cancel write entry。这些探针结果不能建立生产文件或生产 stdin 的因果链。单独的 watchdog 自测回收了自己的 child，但没有见证或释放生产 cleanup join。
+
+**结论：** RC-006 仍为 **unresolved（未解决）**。本次原生运行的筛选测试和身份门禁均通过，但没有取得同一 helper 上计划要求的完整顺序：成功取消、原 I/O 返回、后续生产 I/O 持续阻塞、cleanup join 等待该 I/O、独立 watchdog 释放及资源回收。先前 `36579c2` 的 Linux 源码核查保留为历史证据。
 
 ## 实施阶段有界源码复核（源码 SHA `5fa0cae06001e07b5053171216b1b9f7da6acb15`，2026-11-18）
 
