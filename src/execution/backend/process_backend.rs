@@ -166,12 +166,12 @@ impl Backend for ProcessBackend {
         } else {
             options
         };
+        stop.observe_external_cancellation();
         if request
             .deadline
             .as_ref()
             .is_some_and(qubit_operation::OperationContext::is_expired)
         {
-            stop.observe_external_cancellation();
             stop.request_stop(StopReason::Timeout);
         }
         if stop.authorize().is_none() {
@@ -186,12 +186,12 @@ impl Backend for ProcessBackend {
             );
             return;
         }
+        stop.observe_external_cancellation();
         if request
             .deadline
             .as_ref()
             .is_some_and(qubit_operation::OperationContext::is_expired)
         {
-            stop.observe_external_cancellation();
             stop.request_stop(StopReason::Timeout);
             finish_pre_start_stop(
                 sink,

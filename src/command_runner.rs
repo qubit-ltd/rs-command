@@ -1720,14 +1720,16 @@ impl CommandRunner {
             },
             None => None,
         };
+        if let Some(gate) = start_gate.as_ref() {
+            gate.observe_external_cancellation();
+        }
         if let Some(context) = operation_context.as_ref()
             && context.is_expired()
         {
-            context.request_stop(qubit_operation::StopReason::Timeout);
             if let Some(gate) = start_gate.as_ref() {
-                gate.observe_external_cancellation();
                 gate.request_stop(qubit_operation::StopReason::Timeout);
             }
+            context.request_stop(qubit_operation::StopReason::Timeout);
             return Err(CommandError::from_reason(
                 prepared.command_text,
                 CommandErrorReason::CancelledBeforeStart,
