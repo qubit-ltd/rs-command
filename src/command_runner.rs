@@ -1078,23 +1078,68 @@ mod tests {
     }
 
     #[test]
-    fn test_managed_final_output_open_failure_is_typed_and_keeps_source() {
-        let directory = tempfile::tempdir().expect("directory fixture should be created");
-        let missing_parent_output = directory.path().join("missing-parent").join("stdout");
-        let prepared = prepared_command("unused-test-program", Some(&missing_parent_output), None);
-        let managed = PreparedFiles::new(None, None, None);
-        let error = match prepared.commit_with_managed_files(Some(&managed)) {
-            Err(error) => error,
-            Ok(_) => panic!("a missing parent should fail when opening the final tee"),
-        };
-        assert!(matches!(
-            error.reason(),
-            CommandErrorReason::FilePreparationFailed {
-                stage: crate::FilePreparationStage::Validation,
-                direction: Some(crate::FilePreparationDirection::Stdout),
-                source,
-            } if source.kind() == io::ErrorKind::NotFound
-        ));
+    fn test_managed_output_preflight_failures_are_typed_by_direction() {
+        for direction in [OutputStream::Stdout, OutputStream::Stderr] {
+            let directory = tempfile::tempdir().expect("directory fixture should be created");
+            let (stdout, stderr) = match direction {
+                OutputStream::Stdout => (Some(directory.path()), None),
+                OutputStream::Stderr => (None, Some(directory.path())),
+            };
+            let error = match PreparedCommand::prepare(
+                crate::Command::new("unused-test-program"),
+                &RedactionPolicy::default(),
+                None,
+                stdout,
+                stderr,
+                false,
+            ) {
+                Err(error) => error,
+                Ok(_) => panic!("a directory path must fail output preflight"),
+            };
+            let error = error.into_file_preparation_failure(crate::FilePreparationStage::Validation);
+            let expected = match direction {
+                OutputStream::Stdout => crate::FilePreparationDirection::Stdout,
+                OutputStream::Stderr => crate::FilePreparationDirection::Stderr,
+            };
+            assert!(matches!(
+                error.reason(),
+                CommandErrorReason::FilePreparationFailed {
+                    stage: crate::FilePreparationStage::Validation,
+                    direction: Some(actual),
+                    source,
+                } if *actual == expected && source.kind() == io::ErrorKind::InvalidInput
+            ));
+        }
+    }
+
+    #[test]
+    fn test_managed_final_output_open_failures_are_typed_by_direction_and_keep_source() {
+        for direction in [OutputStream::Stdout, OutputStream::Stderr] {
+            let directory = tempfile::tempdir().expect("directory fixture should be created");
+            let missing_parent_output = directory.path().join("missing-parent").join("output");
+            let (stdout, stderr) = match direction {
+                OutputStream::Stdout => (Some(missing_parent_output.as_path()), None),
+                OutputStream::Stderr => (None, Some(missing_parent_output.as_path())),
+            };
+            let prepared = prepared_command("unused-test-program", stdout, stderr);
+            let managed = PreparedFiles::new(None, None, None);
+            let error = match prepared.commit_with_managed_files(Some(&managed)) {
+                Err(error) => error,
+                Ok(_) => panic!("a missing parent should fail when opening the final tee"),
+            };
+            let expected = match direction {
+                OutputStream::Stdout => crate::FilePreparationDirection::Stdout,
+                OutputStream::Stderr => crate::FilePreparationDirection::Stderr,
+            };
+            assert!(matches!(
+                error.reason(),
+                CommandErrorReason::FilePreparationFailed {
+                    stage: crate::FilePreparationStage::Validation,
+                    direction: Some(actual),
+                    source,
+                } if *actual == expected && source.kind() == io::ErrorKind::NotFound
+            ));
+        }
     }
 
     #[cfg(unix)]

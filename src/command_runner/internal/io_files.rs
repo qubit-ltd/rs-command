@@ -308,12 +308,14 @@ impl IoFiles {
                 error
             }
         })?;
-        validate_file_identities(
-            command,
-            self.stdin_path.as_deref().zip(self.stdin_file.as_ref()),
-            stdout_tee.as_ref().map(|tee| (tee.path(), tee.file())),
-            stderr_tee.as_ref().map(|tee| (tee.path(), tee.file())),
-        )?;
+        if managed_files.is_none() {
+            validate_file_identities(
+                command,
+                self.stdin_path.as_deref().zip(self.stdin_file.as_ref()),
+                stdout_tee.as_ref().map(|tee| (tee.path(), tee.file())),
+                stderr_tee.as_ref().map(|tee| (tee.path(), tee.file())),
+            )?;
+        }
         validate_managed_file_identities(
             command,
             self.stdin_file.as_ref(),
@@ -363,12 +365,12 @@ fn validate_managed_file_identities(
     let Some(managed) = managed else {
         return Ok(());
     };
-    let mut opened = Vec::new();
+    let mut opened: Vec<(crate::FilePreparationDirection, File)> = Vec::new();
     if let Some(file) = command_stdin {
         opened.push((
-            "stdin",
+            crate::FilePreparationDirection::Stdin,
             file.try_clone()
-                .map_err(|source| managed_identity_error(command, "stdin", source))?,
+                .map_err(|source| managed_identity_error(command, crate::FilePreparationDirection::Stdin, source))?,
         ));
     }
     if let Some(resource) = managed.stdin.as_ref() {
@@ -376,10 +378,13 @@ fn validate_managed_file_identities(
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .try_clone()
-            .map_err(|source| managed_identity_error(command, "stdin", source))?;
-        opened.push(("stdin", file));
+            .map_err(|source| managed_identity_error(command, crate::FilePreparationDirection::Stdin, source))?;
+        opened.push((crate::FilePreparationDirection::Stdin, file));
     }
-    for (direction, sink) in [("stdout", managed.stdout.as_ref()), ("stderr", managed.stderr.as_ref())] {
+    for (direction, sink) in [
+        (crate::FilePreparationDirection::Stdout, managed.stdout.as_ref()),
+        (crate::FilePreparationDirection::Stderr, managed.stderr.as_ref()),
+    ] {
         if let Some(sink) = sink {
             let file = sink
                 .file
@@ -392,36 +397,36 @@ fn validate_managed_file_identities(
     }
     if let Some(file) = stdout_tee {
         opened.push((
-            "stdout",
+            crate::FilePreparationDirection::Stdout,
             file.try_clone()
-                .map_err(|source| managed_identity_error(command, "stdout", source))?,
+                .map_err(|source| managed_identity_error(command, crate::FilePreparationDirection::Stdout, source))?,
         ));
     }
     if let Some(file) = stderr_tee {
         opened.push((
-            "stderr",
+            crate::FilePreparationDirection::Stderr,
             file.try_clone()
-                .map_err(|source| managed_identity_error(command, "stderr", source))?,
+                .map_err(|source| managed_identity_error(command, crate::FilePreparationDirection::Stderr, source))?,
         ));
     }
-    let mut identities = Vec::with_capacity(opened.len());
+    let mut identities: Vec<(crate::FilePreparationDirection, Handle)> = Vec::with_capacity(opened.len());
     for (direction, file) in &opened {
         let identity = Handle::from_file(
             file.try_clone()
-                .map_err(|source| managed_identity_error(command, direction, source))?,
+                .map_err(|source| managed_identity_error(command, *direction, source))?,
         )
-        .map_err(|source| managed_identity_error(command, direction, source))?;
+        .map_err(|source| managed_identity_error(command, *direction, source))?;
         if identities.iter().any(|(_, existing)| existing == &identity) {
             return Err(managed_identity_error(
                 command,
-                direction,
+                *direction,
                 io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "configured file streams identify the same file",
                 ),
             ));
         }
-        identities.push((direction, identity));
+        identities.push((*direction, identity));
     }
     Ok(())
 }
@@ -434,13 +439,11 @@ fn validate_managed_file_identities(
 /// * `command` - Redacted command text used in the resulting error.
 /// * `direction` - Standard stream whose identity check failed.
 /// * `source` - Original file identity or handle I/O failure.
-fn managed_identity_error(command: &str, direction: &str, source: io::Error) -> CommandError {
-    let direction = match direction {
-        "stdin" => crate::FilePreparationDirection::Stdin,
-        "stdout" => crate::FilePreparationDirection::Stdout,
-        "stderr" => crate::FilePreparationDirection::Stderr,
-        _ => unreachable!("all managed file directions are known"),
-    };
+fn managed_identity_error(
+    command: &str,
+    direction: crate::FilePreparationDirection,
+    source: io::Error,
+) -> CommandError {
     CommandError::from_reason(
         command,
         CommandErrorReason::FilePreparationFailed {

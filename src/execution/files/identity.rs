@@ -17,39 +17,45 @@ use super::identity_failure::IdentityFailure;
 /// themselves.
 ///
 /// # Parameters
-pub(super) fn validate_files(files: &[(&'static str, &File)]) -> Result<(), IdentityFailure> {
+pub(super) fn validate_files(files: &[(crate::FilePreparationDirection, &File)]) -> Result<(), IdentityFailure> {
     let mut identities = Vec::with_capacity(files.len());
-    for (name, file) in files {
-        let direction = file_direction(name);
+    for (direction, file) in files {
+        let name = direction_name(*direction);
         if !file
             .metadata()
-            .map_err(|source| IdentityFailure { direction, source })?
+            .map_err(|source| IdentityFailure {
+                direction: *direction,
+                source,
+            })?
             .file_type()
             .is_file()
         {
             return Err(IdentityFailure {
-                direction,
+                direction: *direction,
                 source: io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!("{name} must refer to a regular file"),
                 ),
             });
         }
-        let identity = Handle::from_file(
-            file.try_clone()
-                .map_err(|source| IdentityFailure { direction, source })?,
-        )
-        .map_err(|source| IdentityFailure { direction, source })?;
+        let identity = Handle::from_file(file.try_clone().map_err(|source| IdentityFailure {
+            direction: *direction,
+            source,
+        })?)
+        .map_err(|source| IdentityFailure {
+            direction: *direction,
+            source,
+        })?;
         if identities.iter().any(|(_, previous)| previous == &identity) {
             return Err(IdentityFailure {
-                direction,
+                direction: *direction,
                 source: io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!("{name} conflicts with another configured file"),
                 ),
             });
         }
-        identities.push((*name, identity));
+        identities.push((*direction, identity));
     }
     Ok(())
 }
@@ -60,27 +66,32 @@ pub(super) fn validate_files(files: &[(&'static str, &File)]) -> Result<(), Iden
 /// * `files`: Supplies the files value used by this operation.
 /// * `tee_paths`: Supplies the tee paths value used by this operation.
 pub(super) fn validate_tee_paths(
-    files: &[(&'static str, &File)],
-    tee_paths: &[(&'static str, &Path)],
+    files: &[(crate::FilePreparationDirection, &File)],
+    tee_paths: &[(crate::FilePreparationDirection, &Path)],
 ) -> Result<(), IdentityFailure> {
+    if tee_paths.is_empty() {
+        return Ok(());
+    }
     let owned = files
         .iter()
-        .map(|(name, file)| {
-            let direction = file_direction(name);
-            let identity = Handle::from_file(
-                file.try_clone()
-                    .map_err(|source| IdentityFailure { direction, source })?,
-            )
-            .map_err(|source| IdentityFailure { direction, source })?;
-            Ok((*name, identity))
+        .map(|(direction, file)| {
+            let identity = Handle::from_file(file.try_clone().map_err(|source| IdentityFailure {
+                direction: *direction,
+                source,
+            })?)
+            .map_err(|source| IdentityFailure {
+                direction: *direction,
+                source,
+            })?;
+            Ok((*direction, identity))
         })
         .collect::<Result<Vec<_>, IdentityFailure>>()?;
-    for (tee_name, path) in tee_paths {
-        let direction = file_direction(tee_name);
+    for (direction, path) in tee_paths {
+        let tee_name = direction_name(*direction);
         match std::fs::metadata(path) {
             Ok(metadata) if !metadata.file_type().is_file() => {
                 return Err(IdentityFailure {
-                    direction,
+                    direction: *direction,
                     source: io::Error::new(
                         io::ErrorKind::InvalidInput,
                         format!("{tee_name} tee must refer to a regular file"),
@@ -88,15 +99,25 @@ pub(super) fn validate_tee_paths(
                 });
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(source) => return Err(IdentityFailure { direction, source }),
+            Err(source) => {
+                return Err(IdentityFailure {
+                    direction: *direction,
+                    source,
+                });
+            }
             _ => {}
         }
-        let tee_identity =
-            Handle::from_file(open_tee_identity(path).map_err(|source| IdentityFailure { direction, source })?)
-                .map_err(|source| IdentityFailure { direction, source })?;
+        let tee_identity = Handle::from_file(open_tee_identity(path).map_err(|source| IdentityFailure {
+            direction: *direction,
+            source,
+        })?)
+        .map_err(|source| IdentityFailure {
+            direction: *direction,
+            source,
+        })?;
         if owned.iter().any(|(_, identity)| identity == &tee_identity) {
             return Err(IdentityFailure {
-                direction,
+                direction: *direction,
                 source: io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!("{tee_name} tee conflicts with an owned file"),
@@ -112,12 +133,11 @@ pub(super) fn validate_tee_paths(
 /// # Parameters
 ///
 /// * `name` - Static stream label used by file identity validation.
-fn file_direction(name: &str) -> crate::FilePreparationDirection {
-    match name {
-        "stdin" => crate::FilePreparationDirection::Stdin,
-        "stdout" => crate::FilePreparationDirection::Stdout,
-        "stderr" => crate::FilePreparationDirection::Stderr,
-        _ => unreachable!("file validation only uses standard stream names"),
+fn direction_name(direction: crate::FilePreparationDirection) -> &'static str {
+    match direction {
+        crate::FilePreparationDirection::Stdin => "stdin",
+        crate::FilePreparationDirection::Stdout => "stdout",
+        crate::FilePreparationDirection::Stderr => "stderr",
     }
 }
 
@@ -196,8 +216,11 @@ mod tests {
     fn test_identity_uses_open_handles_and_detects_cloned_file_aliases() {
         let file = tempfile::tempfile().expect("temporary file should be created");
         let alias = file.try_clone().expect("file handle should be cloned");
-        let error = validate_files(&[("stdin", &file), ("stdout", &alias)])
-            .expect_err("the same file identity must be rejected");
+        let error = validate_files(&[
+            (crate::FilePreparationDirection::Stdin, &file),
+            (crate::FilePreparationDirection::Stdout, &alias),
+        ])
+        .expect_err("the same file identity must be rejected");
         assert_eq!(error.source.kind(), std::io::ErrorKind::InvalidInput);
     }
 
@@ -216,7 +239,8 @@ mod tests {
                 .open(std::env::temp_dir())
                 .expect("temp directory should open")
         };
-        let error = validate_files(&[("stdin", &directory)]).expect_err("directories are not valid file streams");
+        let error = validate_files(&[(crate::FilePreparationDirection::Stdin, &directory)])
+            .expect_err("directories are not valid file streams");
         assert_eq!(error.source.kind(), std::io::ErrorKind::InvalidInput);
     }
 
@@ -230,7 +254,7 @@ mod tests {
             .expect("tee permissions should be restricted");
 
         let open_result = std::fs::OpenOptions::new().write(true).open(&path);
-        let validation = validate_tee_paths(&[], &[("stdout", path.as_path())]);
+        let validation = validate_tee_paths(&[], &[(crate::FilePreparationDirection::Stdout, path.as_path())]);
         match open_result {
             Err(error) if error.kind() == ErrorKind::PermissionDenied => {
                 let failure = validation.expect_err("an unopenable regular tee should fail validation");
@@ -261,7 +285,7 @@ mod tests {
 
         let metadata_result = std::fs::metadata(&path);
         let open_result = std::fs::OpenOptions::new().write(true).open(&path);
-        let validation = validate_tee_paths(&[], &[("stderr", path.as_path())]);
+        let validation = validate_tee_paths(&[], &[(crate::FilePreparationDirection::Stderr, path.as_path())]);
         std::fs::set_permissions(&protected_directory, std::fs::Permissions::from_mode(0o700))
             .expect("directory permissions should be restored for cleanup");
 
