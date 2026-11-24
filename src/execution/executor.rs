@@ -291,6 +291,14 @@ impl CommandExecutor {
         let bytes = resource_bytes(&options);
         self.submit_async_resources_in_with_bytes(scope, runner, command, options, bytes)
     }
+    /// Submits resource options with a precomputed byte estimate.
+    ///
+    /// # Parameters
+    /// * `scope`: Scope that binds the executor operation group.
+    /// * `runner`: Runner configuration for the child process.
+    /// * `command`: Command to submit.
+    /// * `options`: Resource-backed stream options.
+    /// * `bytes`: File byte estimate used for capacity admission.
     #[cfg(feature = "async")]
     pub(in crate::execution) fn submit_async_resources_in_with_bytes(
         &self,
@@ -401,6 +409,14 @@ impl CommandExecutor {
         let bytes = resource_bytes(&options);
         self.submit_resources_in_with_bytes(scope, runner, command, options, bytes)
     }
+    /// Submits resource options with a precomputed byte estimate.
+    ///
+    /// # Parameters
+    /// * `scope`: Scope that binds the executor operation group.
+    /// * `runner`: Runner configuration for the child process.
+    /// * `command`: Command to submit.
+    /// * `options`: Resource-backed stream options.
+    /// * `bytes`: File byte estimate used for capacity admission.
     pub(in crate::execution) fn submit_resources_in_with_bytes(
         &self,
         scope: &OperationScope,
@@ -1493,16 +1509,27 @@ fn make_request(
 }
 
 /// Reports whether a path needs the captured parent directory as its base.
+///
+/// # Parameters
+/// * `path`: Path tested for relative path semantics.
 fn needs_parent_directory(path: &std::path::Path) -> bool {
     !path.is_absolute() && !has_platform_prefix(path)
 }
 
+/// Returns whether a Windows path has a drive or namespace prefix.
+///
+/// # Parameters
+/// * `path`: Path whose first component is inspected.
 #[cfg(windows)]
 fn has_platform_prefix(path: &std::path::Path) -> bool {
     use std::path::Component;
     matches!(path.components().next(), Some(Component::Prefix(_)))
 }
 
+/// Returns false because non-Windows paths have no Windows platform prefix.
+///
+/// # Parameters
+/// * `_`: Unused path on non-Windows targets.
 #[cfg(not(windows))]
 fn has_platform_prefix(_: &std::path::Path) -> bool {
     false
@@ -2293,7 +2320,7 @@ mod snapshot_failure_tests {
             let async_failure = match executor.submit_async(
                 CommandRunner::without_timeout(),
                 Command::new("must-not-run-after-async-snapshot-failure"),
-                Default::default(),
+                CommandRunOptions::new().tee_stdout_to_file("relative-async-output.log"),
             ) {
                 Ok(_) => panic!("async submission must reject a missing working-directory snapshot"),
                 Err(failure) => failure,
@@ -2305,7 +2332,7 @@ mod snapshot_failure_tests {
             assert!(matches!(
                 async_failure.reason,
                 CommandSubmitFailureReason::Snapshot(ref snapshot)
-                    if snapshot.diagnostic.contains("working directory snapshot failed")
+                    if snapshot.diagnostic.contains("parent directory snapshot failed")
             ));
 
             let mut input = tempfile::tempfile().expect("async stdin file should be created");
@@ -2314,7 +2341,9 @@ mod snapshot_failure_tests {
             let async_resource_failure = match executor.submit_async_resources(
                 CommandRunner::without_timeout(),
                 Command::new("must-not-run-after-async-resource-snapshot-failure"),
-                CommandResourceRunOptions::new().stdin_file(input),
+                CommandResourceRunOptions::new()
+                    .options(CommandRunOptions::new().tee_stdout_to_file("relative-async-resource-output.log"))
+                    .stdin_file(input),
             ) {
                 Ok(_) => panic!("async resource submission must reject a missing working-directory snapshot"),
                 Err(failure) => failure,
@@ -2322,7 +2351,7 @@ mod snapshot_failure_tests {
             assert!(matches!(
                 async_resource_failure.reason,
                 CommandSubmitFailureReason::Snapshot(ref snapshot)
-                    if snapshot.diagnostic.contains("working directory snapshot failed")
+                    if snapshot.diagnostic.contains("parent directory snapshot failed")
             ));
             let mut returned_input = async_resource_failure
                 .options
@@ -4557,7 +4586,6 @@ mod command_executor_api_tests {
         #[test]
         fn test_async_wait_returns_capacity_error_when_waiter_limit_is_zero() {
             block_on(async {
-                use crate::execution::CapacityFailure;
                 use crate::execution::CommandSubmitFailureReason;
 
                 let manager = super::super::OperationManager::new(Default::default()).unwrap();
@@ -4600,7 +4628,7 @@ mod command_executor_api_tests {
                 };
                 assert_eq!(
                     failure.reason,
-                    CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull)
+                    CommandSubmitFailureReason::Wait(crate::execution::CommandSubmitWaitFailure::WaiterLimit)
                 );
                 assert_eq!(failure.command.program(), "must-not-run-after-waiter-limit-rejection");
                 assert_eq!(executor.scheduler_snapshot().waiters, 0);

@@ -25,6 +25,8 @@ use qubit_operation::ManagerOptions;
 #[cfg(unix)]
 use qubit_operation::OperationManager;
 #[cfg(unix)]
+use qubit_operation::OperationOptions;
+#[cfg(unix)]
 use qubit_operation::OperationOutcome;
 
 #[cfg(unix)]
@@ -80,6 +82,47 @@ fn test_blocking_wait_submission_runs_after_active_slot_is_released() {
         OperationOutcome::Succeeded(output) => assert_eq!(output.stdout(), b"second"),
         other => panic!("waiting submission failed: {other:?}"),
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_accepted_queued_command_dispatches_after_active_slot_is_released() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(
+        manager,
+        CommandExecutionConfig {
+            max_active: 1,
+            max_queued: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut active = executor
+        .submit(
+            CommandRunner::without_timeout(),
+            Command::new("sh").arg("-c").arg("sleep 0.15; printf active"),
+            Default::default(),
+        )
+        .unwrap();
+    let mut queued = executor
+        .submit(
+            CommandRunner::without_timeout(),
+            Command::new("sh").arg("-c").arg("printf queued"),
+            Default::default(),
+        )
+        .expect("second command should be accepted into the queue");
+    assert_eq!(executor.scheduler_snapshot().queued, 1);
+
+    match active.wait_outcome().unwrap() {
+        OperationOutcome::Succeeded(output) => assert_eq!(output.stdout(), b"active"),
+        other => panic!("active command failed: {other:?}"),
+    }
+    assert!(active.wait_settlement().unwrap().all_released());
+    match queued.wait_outcome().unwrap() {
+        OperationOutcome::Succeeded(output) => assert_eq!(output.stdout(), b"queued"),
+        other => panic!("queued command failed: {other:?}"),
+    }
+    assert!(queued.wait_settlement().unwrap().all_released());
 }
 
 #[cfg(unix)]
@@ -141,6 +184,116 @@ fn test_scoped_blocking_wait_rejects_foreign_manager_scope() {
         })
         .unwrap();
     assert!(matches!(outcome, OperationOutcome::Succeeded(())));
+}
+
+#[cfg(all(feature = "async", unix))]
+#[test]
+fn test_scoped_wait_api_entry_points_complete_and_settle() {
+    use std::future::Future;
+    use std::sync::Arc;
+    use std::task::Context;
+    use std::task::Poll;
+    use std::task::Wake;
+    use std::task::Waker;
+
+    struct ThreadWake(std::thread::Thread);
+    impl Wake for ThreadWake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+        let mut context = Context::from_waker(&waker);
+        let mut future = Box::pin(future);
+        loop {
+            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
+                return value;
+            }
+            std::thread::park_timeout(Duration::from_secs(2));
+        }
+    }
+
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).unwrap();
+    let result = manager
+        .run(OperationOptions::default(), move |scope| {
+            let mut standard = block_on(<CommandExecutor as CommandExecutorApi>::submit_wait_in(
+                &executor,
+                &scope,
+                CommandRunner::without_timeout(),
+                Command::new("sh").arg("-c").arg("printf scoped-wait"),
+                Default::default(),
+            ))
+            .expect("scoped standard wait should submit");
+            assert!(matches!(
+                block_on(standard.wait_outcome()).expect("standard operation should finish"),
+                OperationOutcome::Succeeded(_)
+            ));
+            assert!(block_on(standard.wait_settlement()).all_released());
+
+            let mut resources = block_on(<CommandExecutor as CommandExecutorApi>::submit_wait_resources_in(
+                &executor,
+                &scope,
+                CommandRunner::without_timeout(),
+                Command::new("sh").arg("-c").arg("printf scoped-resource-wait"),
+                CommandResourceRunOptions::new(),
+            ))
+            .expect("scoped resource wait should submit");
+            assert!(matches!(
+                block_on(resources.wait_outcome()).expect("resource operation should finish"),
+                OperationOutcome::Succeeded(_)
+            ));
+            assert!(block_on(resources.wait_settlement()).all_released());
+
+            let mut submitted_resources = <CommandExecutor as CommandExecutorApi>::submit_resources_in(
+                &executor,
+                &scope,
+                CommandRunner::without_timeout(),
+                Command::new("sh").arg("-c").arg("printf scoped-resource-submit"),
+                CommandResourceRunOptions::new(),
+            )
+            .expect("scoped resource submission should succeed");
+            assert!(matches!(
+                submitted_resources
+                    .wait_outcome()
+                    .expect("resource submission should finish"),
+                OperationOutcome::Succeeded(_)
+            ));
+            assert!(
+                submitted_resources
+                    .wait_settlement()
+                    .expect("resource submission should settle")
+                    .all_released()
+            );
+
+            let mut blocking_resources = <CommandExecutor as CommandExecutorApi>::submit_wait_resources_blocking_in(
+                &executor,
+                &scope,
+                CommandRunner::without_timeout(),
+                Command::new("sh").arg("-c").arg("printf scoped-blocking-resource-wait"),
+                CommandResourceRunOptions::new(),
+            )
+            .expect("scoped blocking resource wait should succeed");
+            assert!(matches!(
+                blocking_resources
+                    .wait_outcome()
+                    .expect("blocking resource wait should finish"),
+                OperationOutcome::Succeeded(_)
+            ));
+            assert!(
+                blocking_resources
+                    .wait_settlement()
+                    .expect("blocking resource wait should settle")
+                    .all_released()
+            );
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    assert!(matches!(result, OperationOutcome::Succeeded(())));
 }
 
 #[cfg(all(feature = "async", unix))]
@@ -210,6 +363,69 @@ fn test_async_owned_wait_submission_resumes_after_capacity_release() {
         OperationOutcome::Succeeded(output) => assert_eq!(output.stdout(), b"async-queued-input"),
         other => panic!("async owned waiting submission failed: {other:?}"),
     }
+}
+
+#[cfg(all(feature = "async", unix))]
+#[test]
+fn test_async_wait_submissions_report_closed_after_shutdown_wakes_waiters() {
+    use std::future::Future;
+    use std::sync::Arc;
+    use std::task::Context;
+    use std::task::Poll;
+    use std::task::Wake;
+    use std::task::Waker;
+
+    struct ThreadWake(std::thread::Thread);
+    impl Wake for ThreadWake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    let executor = new_executor();
+    let mut first = occupying_command(&executor);
+    let mut waiting = Box::pin(executor.submit_wait(
+        CommandRunner::without_timeout(),
+        Command::new("sh").arg("-c").arg("printf should-not-run"),
+        Default::default(),
+    ));
+    let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+    let mut context = Context::from_waker(&waker);
+    assert!(matches!(waiting.as_mut().poll(&mut context), Poll::Pending));
+    assert_eq!(executor.scheduler_snapshot().waiters, 1);
+    let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
+    assert!(matches!(
+        waiting.as_mut().poll(&mut context),
+        Poll::Ready(Err(failure))
+            if matches!(failure.reason, qubit_command::CommandSubmitFailureReason::Capacity(
+                qubit_command::execution::CapacityFailure::Closed
+            ))
+    ));
+    let _ = first.wait_outcome();
+
+    let executor = new_executor();
+    let mut first = occupying_command(&executor);
+    let mut waiting = Box::pin(executor.submit_wait_resources(
+        CommandRunner::without_timeout(),
+        Command::new("sh").arg("-c").arg("printf should-not-run"),
+        CommandResourceRunOptions::new(),
+    ));
+    let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+    let mut context = Context::from_waker(&waker);
+    assert!(matches!(waiting.as_mut().poll(&mut context), Poll::Pending));
+    assert_eq!(executor.scheduler_snapshot().waiters, 1);
+    let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
+    assert!(matches!(
+        waiting.as_mut().poll(&mut context),
+        Poll::Ready(Err(failure))
+            if matches!(failure.reason, qubit_command::CommandSubmitFailureReason::Capacity(
+                qubit_command::execution::CapacityFailure::Closed
+            ))
+    ));
+    let _ = first.wait_outcome();
 }
 
 #[cfg(all(feature = "async", unix))]

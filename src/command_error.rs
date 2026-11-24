@@ -726,6 +726,45 @@ mod tests {
     use super::CommandOutput;
     use super::OutputStream;
 
+    #[test]
+    fn test_file_preparation_mapping_preserves_source_and_stream_direction() {
+        for (stream, direction, path) in [
+            (
+                OutputStream::Stdout,
+                crate::FilePreparationDirection::Stdout,
+                "stdout.log",
+            ),
+            (
+                OutputStream::Stderr,
+                crate::FilePreparationDirection::Stderr,
+                "stderr.log",
+            ),
+        ] {
+            let error = CommandError::from_reason(
+                "prepared command",
+                CommandErrorReason::WriteOutputFailed {
+                    stream,
+                    path: path.into(),
+                    source: io::Error::new(io::ErrorKind::PermissionDenied, "fixture write denied"),
+                },
+                None,
+            )
+            .into_file_preparation_failure(crate::FilePreparationStage::Validation);
+
+            assert_eq!(error.kind(), CommandErrorKind::FilePreparationFailed);
+            assert!(matches!(
+                error.reason(),
+                CommandErrorReason::FilePreparationFailed {
+                    stage: crate::FilePreparationStage::Validation,
+                    direction: Some(actual_direction),
+                    source,
+                } if *actual_direction == direction
+                    && source.kind() == io::ErrorKind::PermissionDenied
+                    && source.to_string() == "fixture write denied"
+            ));
+        }
+    }
+
     fn status(code: i32) -> ExitStatus {
         #[cfg(unix)]
         {

@@ -29,6 +29,7 @@ use qubit_command::CommandExecutor;
 #[cfg(all(feature = "async", unix))]
 use qubit_command::CommandExecutorApi;
 use qubit_command::CommandResourceRunOptions;
+#[cfg(unix)]
 use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
 use qubit_command::FileSinkPolicy;

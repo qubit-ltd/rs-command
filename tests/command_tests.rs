@@ -14,6 +14,7 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 
 use qubit_command::Command;
+#[cfg(unix)]
 use qubit_command::CommandRunner;
 
 #[test]

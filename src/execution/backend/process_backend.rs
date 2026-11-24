@@ -516,6 +516,33 @@ mod tests {
     #[cfg(unix)]
     use crate::resource_run_options::FileSinkPolicy;
 
+    #[cfg(unix)]
+    fn run_release_observation_test(test: impl FnOnce()) {
+        const CHILD_MARKER: &str = "QUBIT_COMMAND_RELEASE_OBSERVATION_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_some() {
+            test();
+            return;
+        }
+
+        let test_name = std::thread::current()
+            .name()
+            .expect("release observation test should have a name")
+            .to_owned();
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary should be available"))
+            .arg("--exact")
+            .arg(test_name)
+            .arg("--nocapture")
+            .env(CHILD_MARKER, "1")
+            .output()
+            .expect("isolated release observation test should start");
+        assert!(
+            output.status.success(),
+            "isolated release observation test failed\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     #[test]
     fn test_late_stop_does_not_replace_runner_error_or_its_diagnostics() {
         let error = CommandError::from_reason(
@@ -714,88 +741,90 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_stop_before_backend_start_publishes_stopped_release_and_settlement() {
-        let manager = OperationManager::new(Default::default()).unwrap();
-        let backend = Arc::new(ProcessBackend::new());
-        let sink = Arc::new(RecordingSink::default());
-        let reservation_released = Arc::new(AtomicBool::new(false));
-        let operation_backend = Arc::clone(&backend);
-        let operation_sink = Arc::clone(&sink);
-        let operation_reservation_released = Arc::clone(&reservation_released);
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("must-not-start");
-        let operation_path = path.clone();
-        let input = tempfile::NamedTempFile::new().unwrap();
-        let input_path = input.path().to_path_buf();
-        let input_file = input.reopen().unwrap();
-        assert_eq!(
-            unsafe {
-                libc::flock(
-                    std::os::fd::AsRawFd::as_raw_fd(&input_file),
-                    libc::LOCK_EX | libc::LOCK_NB,
-                )
-            },
-            0
-        );
-        *sink.release_probe_path.lock().unwrap() = Some(input_path);
+        run_release_observation_test(|| {
+            let manager = OperationManager::new(Default::default()).unwrap();
+            let backend = Arc::new(ProcessBackend::new());
+            let sink = Arc::new(RecordingSink::default());
+            let reservation_released = Arc::new(AtomicBool::new(false));
+            let operation_backend = Arc::clone(&backend);
+            let operation_sink = Arc::clone(&sink);
+            let operation_reservation_released = Arc::clone(&reservation_released);
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("must-not-start");
+            let operation_path = path.clone();
+            let input = tempfile::NamedTempFile::new().unwrap();
+            let input_path = input.path().to_path_buf();
+            let input_file = input.reopen().unwrap();
+            assert_eq!(
+                unsafe {
+                    libc::flock(
+                        std::os::fd::AsRawFd::as_raw_fd(&input_file),
+                        libc::LOCK_EX | libc::LOCK_NB,
+                    )
+                },
+                0
+            );
+            *sink.release_probe_path.lock().unwrap() = Some(input_path);
 
-        let mut operation = manager
-            .try_submit(OperationOptions::default(), move |scope| {
-                let operation_id = scope.id();
-                let stop = operation_backend.stop_port(operation_id);
-                StopPort::request_stop(&*stop, StopReason::Timeout);
-                let reservation = Reservation::new(
-                    1,
-                    1,
-                    move |_| operation_reservation_released.store(true, Ordering::SeqCst),
-                    |_| crate::execution::contracts::ReservationLease::new(|| {}),
-                );
-                let request = Request {
-                    operation_id: None,
-                    runner: CommandRunner::without_timeout(),
-                    command: Command::new("sh")
-                        .arg("-c")
-                        .arg(&format!("touch {}", operation_path.display())),
-                    options: RequestOptions::Resources(CommandResourceRunOptions::new().stdin_file(input_file)),
-                    snapshot: ExecutionSnapshot {
-                        working_directory: std::env::current_dir().unwrap(),
-                        environment: Vec::new(),
-                    },
-                    io_paths: IoPathSnapshot::default(),
-                    deadline: None,
-                };
-                operation_backend.run(
-                    ActivatedRequest {
-                        operation_id,
-                        scope,
-                        request,
-                        reservation,
-                        facts: operation_sink.clone(),
-                        session_bridge: None,
-                    },
-                    operation_sink,
-                );
-                Ok::<_, ()>(())
-            })
-            .unwrap();
+            let mut operation = manager
+                .try_submit(OperationOptions::default(), move |scope| {
+                    let operation_id = scope.id();
+                    let stop = operation_backend.stop_port(operation_id);
+                    StopPort::request_stop(&*stop, StopReason::Timeout);
+                    let reservation = Reservation::new(
+                        1,
+                        1,
+                        move |_| operation_reservation_released.store(true, Ordering::SeqCst),
+                        |_| crate::execution::contracts::ReservationLease::new(|| {}),
+                    );
+                    let request = Request {
+                        operation_id: None,
+                        runner: CommandRunner::without_timeout(),
+                        command: Command::new("sh")
+                            .arg("-c")
+                            .arg(&format!("touch {}", operation_path.display())),
+                        options: RequestOptions::Resources(CommandResourceRunOptions::new().stdin_file(input_file)),
+                        snapshot: ExecutionSnapshot {
+                            working_directory: std::env::current_dir().unwrap(),
+                            environment: Vec::new(),
+                        },
+                        io_paths: IoPathSnapshot::default(),
+                        deadline: None,
+                    };
+                    operation_backend.run(
+                        ActivatedRequest {
+                            operation_id,
+                            scope,
+                            request,
+                            reservation,
+                            facts: operation_sink.clone(),
+                            session_bridge: None,
+                        },
+                        operation_sink,
+                    );
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
 
-        assert!(matches!(
-            operation.wait_outcome().unwrap(),
-            OperationOutcome::Succeeded(())
-        ));
-        operation.wait_settlement().unwrap();
-        assert!(
-            !path.exists(),
-            "a stop that wins before authorization must prevent spawn"
-        );
-        assert!(reservation_released.load(Ordering::SeqCst));
-        assert!(sink.released.load(Ordering::SeqCst));
-        assert!(sink.release_observed_unlocked.load(Ordering::SeqCst));
-        assert!(matches!(
-            sink.outcome.lock().unwrap().take(),
-            Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
-        ));
-        let report = sink.settlement.lock().unwrap().take().unwrap();
-        assert!(report.all_released());
+            assert!(matches!(
+                operation.wait_outcome().unwrap(),
+                OperationOutcome::Succeeded(())
+            ));
+            operation.wait_settlement().unwrap();
+            assert!(
+                !path.exists(),
+                "a stop that wins before authorization must prevent spawn"
+            );
+            assert!(reservation_released.load(Ordering::SeqCst));
+            assert!(sink.released.load(Ordering::SeqCst));
+            assert!(sink.release_observed_unlocked.load(Ordering::SeqCst));
+            assert!(matches!(
+                sink.outcome.lock().unwrap().take(),
+                Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
+            ));
+            let report = sink.settlement.lock().unwrap().take().unwrap();
+            assert!(report.all_released());
+        });
     }
 
     #[cfg(unix)]
@@ -1293,195 +1322,199 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_expired_deadline_stops_backend_before_spawn() {
-        let manager = OperationManager::new(Default::default()).unwrap();
-        let backend = Arc::new(ProcessBackend::new());
-        let sink = Arc::new(RecordingSink::default());
-        let operation_backend = Arc::clone(&backend);
-        let operation_sink = Arc::clone(&sink);
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("must-not-start-after-deadline");
-        let operation_path = path.clone();
-        let input = tempfile::NamedTempFile::new().unwrap();
-        let input_path = input.path().to_path_buf();
-        let input_file = input.reopen().unwrap();
-        assert_eq!(
-            unsafe {
-                libc::flock(
-                    std::os::fd::AsRawFd::as_raw_fd(&input_file),
-                    libc::LOCK_EX | libc::LOCK_NB,
-                )
-            },
-            0
-        );
-        *sink.release_probe_path.lock().unwrap() = Some(input_path);
-        let domain = ClockDomainId::new_unique();
-        let deadline = OperationContext::new(ContextOptions {
-            clock: Some(Arc::new(ExpiredClock(domain))),
-            deadline: Some(Deadline::at(MonotonicTime::new(domain, 0))),
-            budget: None,
-        })
-        .unwrap();
-
-        let mut operation = manager
-            .try_submit(OperationOptions::default(), move |scope| {
-                let operation_id = scope.id();
-                let reservation = Reservation::new(
-                    1,
-                    1,
-                    |_| {},
-                    |_| crate::execution::contracts::ReservationLease::new(|| {}),
-                );
-                let request = Request {
-                    operation_id: None,
-                    runner: CommandRunner::without_timeout(),
-                    command: Command::new("sh")
-                        .arg("-c")
-                        .arg(&format!("touch {}", operation_path.display())),
-                    options: RequestOptions::Resources(CommandResourceRunOptions::new().stdin_file(input_file)),
-                    snapshot: ExecutionSnapshot {
-                        working_directory: std::env::current_dir().unwrap(),
-                        environment: Vec::new(),
-                    },
-                    io_paths: IoPathSnapshot::default(),
-                    deadline: Some(deadline),
-                };
-                operation_backend.run(
-                    ActivatedRequest {
-                        operation_id,
-                        scope,
-                        request,
-                        reservation,
-                        facts: operation_sink.clone(),
-                        session_bridge: None,
-                    },
-                    operation_sink,
-                );
-                Ok::<_, ()>(())
+        run_release_observation_test(|| {
+            let manager = OperationManager::new(Default::default()).unwrap();
+            let backend = Arc::new(ProcessBackend::new());
+            let sink = Arc::new(RecordingSink::default());
+            let operation_backend = Arc::clone(&backend);
+            let operation_sink = Arc::clone(&sink);
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("must-not-start-after-deadline");
+            let operation_path = path.clone();
+            let input = tempfile::NamedTempFile::new().unwrap();
+            let input_path = input.path().to_path_buf();
+            let input_file = input.reopen().unwrap();
+            assert_eq!(
+                unsafe {
+                    libc::flock(
+                        std::os::fd::AsRawFd::as_raw_fd(&input_file),
+                        libc::LOCK_EX | libc::LOCK_NB,
+                    )
+                },
+                0
+            );
+            *sink.release_probe_path.lock().unwrap() = Some(input_path);
+            let domain = ClockDomainId::new_unique();
+            let deadline = OperationContext::new(ContextOptions {
+                clock: Some(Arc::new(ExpiredClock(domain))),
+                deadline: Some(Deadline::at(MonotonicTime::new(domain, 0))),
+                budget: None,
             })
             .unwrap();
 
-        assert!(matches!(
-            operation.wait_outcome().unwrap(),
-            OperationOutcome::Succeeded(())
-        ));
-        operation.wait_settlement().unwrap();
-        assert!(!path.exists(), "an expired request must not spawn");
-        assert!(matches!(
-            sink.outcome.lock().unwrap().take(),
-            Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
-        ));
-        assert!(sink.released.load(Ordering::SeqCst));
-        assert!(sink.release_observed_unlocked.load(Ordering::SeqCst));
-        assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
+            let mut operation = manager
+                .try_submit(OperationOptions::default(), move |scope| {
+                    let operation_id = scope.id();
+                    let reservation = Reservation::new(
+                        1,
+                        1,
+                        |_| {},
+                        |_| crate::execution::contracts::ReservationLease::new(|| {}),
+                    );
+                    let request = Request {
+                        operation_id: None,
+                        runner: CommandRunner::without_timeout(),
+                        command: Command::new("sh")
+                            .arg("-c")
+                            .arg(&format!("touch {}", operation_path.display())),
+                        options: RequestOptions::Resources(CommandResourceRunOptions::new().stdin_file(input_file)),
+                        snapshot: ExecutionSnapshot {
+                            working_directory: std::env::current_dir().unwrap(),
+                            environment: Vec::new(),
+                        },
+                        io_paths: IoPathSnapshot::default(),
+                        deadline: Some(deadline),
+                    };
+                    operation_backend.run(
+                        ActivatedRequest {
+                            operation_id,
+                            scope,
+                            request,
+                            reservation,
+                            facts: operation_sink.clone(),
+                            session_bridge: None,
+                        },
+                        operation_sink,
+                    );
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
+
+            assert!(matches!(
+                operation.wait_outcome().unwrap(),
+                OperationOutcome::Succeeded(())
+            ));
+            operation.wait_settlement().unwrap();
+            assert!(!path.exists(), "an expired request must not spawn");
+            assert!(matches!(
+                sink.outcome.lock().unwrap().take(),
+                Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
+            ));
+            assert!(sink.released.load(Ordering::SeqCst));
+            assert!(sink.release_observed_unlocked.load(Ordering::SeqCst));
+            assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
+        });
     }
 
     #[cfg(unix)]
     #[test]
     fn test_deadline_expiring_after_initial_check_stops_before_spawn_and_releases() {
-        let manager = OperationManager::new(Default::default()).unwrap();
-        let backend = Arc::new(ProcessBackend::new());
-        let sink = Arc::new(RecordingSink::default());
-        let reservation_released = Arc::new(AtomicBool::new(false));
-        let lease_created = Arc::new(AtomicBool::new(false));
-        let operation_backend = Arc::clone(&backend);
-        let operation_sink = Arc::clone(&sink);
-        let operation_reservation_released = Arc::clone(&reservation_released);
-        let operation_lease_created = Arc::clone(&lease_created);
-        let directory = tempfile::tempdir().unwrap();
-        let marker = directory.path().join("must-not-start-after-second-deadline-check");
-        let operation_marker = marker.clone();
-        let input = tempfile::NamedTempFile::new().unwrap();
-        let input_path = input.path().to_path_buf();
-        let input_file = input.reopen().unwrap();
-        assert_eq!(
-            unsafe {
-                libc::flock(
-                    std::os::fd::AsRawFd::as_raw_fd(&input_file),
-                    libc::LOCK_EX | libc::LOCK_NB,
-                )
-            },
-            0
-        );
-        *sink.release_probe_path.lock().unwrap() = Some(input_path);
-        let domain = ClockDomainId::new_unique();
-        let clock_calls = Arc::new(AtomicUsize::new(0));
-        let clock: Arc<dyn ClockSource> =
-            Arc::new(DeadlineExpiresBeforeAuthorization(domain, Arc::clone(&clock_calls)));
-        let deadline = OperationContext::new(ContextOptions {
-            clock: Some(Arc::clone(&clock)),
-            deadline: Some(Deadline::at(MonotonicTime::new(domain, 1))),
-            budget: None,
-        })
-        .unwrap();
-
-        let mut operation = manager
-            .try_submit(OperationOptions::default(), move |scope| {
-                let operation_id = scope.id();
-                let reservation = Reservation::new(
-                    1,
-                    1,
-                    move |_| operation_reservation_released.store(true, Ordering::SeqCst),
-                    move |_| {
-                        operation_lease_created.store(true, Ordering::SeqCst);
-                        crate::execution::contracts::ReservationLease::new(|| {})
-                    },
-                );
-                let request = Request {
-                    operation_id: None,
-                    runner: CommandRunner::without_timeout(),
-                    command: Command::new("sh")
-                        .arg("-c")
-                        .arg(&format!("touch {}", operation_marker.display())),
-                    options: RequestOptions::Resources(CommandResourceRunOptions::new().stdin_file(input_file)),
-                    snapshot: ExecutionSnapshot {
-                        working_directory: std::env::current_dir().unwrap(),
-                        environment: Vec::new(),
-                    },
-                    io_paths: IoPathSnapshot::default(),
-                    deadline: Some(deadline),
-                };
-                operation_backend.run(
-                    ActivatedRequest {
-                        operation_id,
-                        scope,
-                        request,
-                        reservation,
-                        facts: operation_sink.clone(),
-                        session_bridge: None,
-                    },
-                    operation_sink,
-                );
-                Ok::<_, ()>(())
+        run_release_observation_test(|| {
+            let manager = OperationManager::new(Default::default()).unwrap();
+            let backend = Arc::new(ProcessBackend::new());
+            let sink = Arc::new(RecordingSink::default());
+            let reservation_released = Arc::new(AtomicBool::new(false));
+            let lease_created = Arc::new(AtomicBool::new(false));
+            let operation_backend = Arc::clone(&backend);
+            let operation_sink = Arc::clone(&sink);
+            let operation_reservation_released = Arc::clone(&reservation_released);
+            let operation_lease_created = Arc::clone(&lease_created);
+            let directory = tempfile::tempdir().unwrap();
+            let marker = directory.path().join("must-not-start-after-second-deadline-check");
+            let operation_marker = marker.clone();
+            let input = tempfile::NamedTempFile::new().unwrap();
+            let input_path = input.path().to_path_buf();
+            let input_file = input.reopen().unwrap();
+            assert_eq!(
+                unsafe {
+                    libc::flock(
+                        std::os::fd::AsRawFd::as_raw_fd(&input_file),
+                        libc::LOCK_EX | libc::LOCK_NB,
+                    )
+                },
+                0
+            );
+            *sink.release_probe_path.lock().unwrap() = Some(input_path);
+            let domain = ClockDomainId::new_unique();
+            let clock_calls = Arc::new(AtomicUsize::new(0));
+            let clock: Arc<dyn ClockSource> =
+                Arc::new(DeadlineExpiresBeforeAuthorization(domain, Arc::clone(&clock_calls)));
+            let deadline = OperationContext::new(ContextOptions {
+                clock: Some(Arc::clone(&clock)),
+                deadline: Some(Deadline::at(MonotonicTime::new(domain, 1))),
+                budget: None,
             })
             .unwrap();
 
-        assert!(matches!(
-            operation.wait_outcome().unwrap(),
-            OperationOutcome::Succeeded(())
-        ));
-        operation.wait_settlement().unwrap();
+            let mut operation = manager
+                .try_submit(OperationOptions::default(), move |scope| {
+                    let operation_id = scope.id();
+                    let reservation = Reservation::new(
+                        1,
+                        1,
+                        move |_| operation_reservation_released.store(true, Ordering::SeqCst),
+                        move |_| {
+                            operation_lease_created.store(true, Ordering::SeqCst);
+                            crate::execution::contracts::ReservationLease::new(|| {})
+                        },
+                    );
+                    let request = Request {
+                        operation_id: None,
+                        runner: CommandRunner::without_timeout(),
+                        command: Command::new("sh")
+                            .arg("-c")
+                            .arg(&format!("touch {}", operation_marker.display())),
+                        options: RequestOptions::Resources(CommandResourceRunOptions::new().stdin_file(input_file)),
+                        snapshot: ExecutionSnapshot {
+                            working_directory: std::env::current_dir().unwrap(),
+                            environment: Vec::new(),
+                        },
+                        io_paths: IoPathSnapshot::default(),
+                        deadline: Some(deadline),
+                    };
+                    operation_backend.run(
+                        ActivatedRequest {
+                            operation_id,
+                            scope,
+                            request,
+                            reservation,
+                            facts: operation_sink.clone(),
+                            session_bridge: None,
+                        },
+                        operation_sink,
+                    );
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
 
-        assert!(
-            !marker.exists(),
-            "deadline expiry after authorization must still prevent spawn"
-        );
-        assert_eq!(
-            clock_calls.load(Ordering::SeqCst),
-            3,
-            "the deadline should expire at the second backend check"
-        );
-        assert!(reservation_released.load(Ordering::SeqCst));
-        assert!(
-            !lease_created.load(Ordering::SeqCst),
-            "pre-start stop should not retain process capacity"
-        );
-        assert!(matches!(
-            sink.outcome.lock().unwrap().take(),
-            Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
-        ));
-        assert!(sink.released.load(Ordering::SeqCst));
-        assert!(sink.release_observed_unlocked.load(Ordering::SeqCst));
-        assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
+            assert!(matches!(
+                operation.wait_outcome().unwrap(),
+                OperationOutcome::Succeeded(())
+            ));
+            operation.wait_settlement().unwrap();
+
+            assert!(
+                !marker.exists(),
+                "deadline expiry after authorization must still prevent spawn"
+            );
+            assert_eq!(
+                clock_calls.load(Ordering::SeqCst),
+                3,
+                "the deadline should expire at the second backend check"
+            );
+            assert!(reservation_released.load(Ordering::SeqCst));
+            assert!(
+                !lease_created.load(Ordering::SeqCst),
+                "pre-start stop should not retain process capacity"
+            );
+            assert!(matches!(
+                sink.outcome.lock().unwrap().take(),
+                Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
+            ));
+            assert!(sink.released.load(Ordering::SeqCst));
+            assert!(sink.release_observed_unlocked.load(Ordering::SeqCst));
+            assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
+        });
     }
 
     #[cfg(unix)]

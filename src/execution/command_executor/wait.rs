@@ -26,6 +26,12 @@ use crate::execution::scheduler::BoundedScheduler;
 
 impl CommandExecutor {
     /// Implements the scoped blocking wait submission loop.
+    ///
+    /// # Parameters
+    /// * `scope`: Scope whose deadline and stop state govern admission.
+    /// * `runner`: Runner configuration to submit and return on rejection.
+    /// * `command`: Command to submit and return on rejection.
+    /// * `options`: Standard stream options to submit and return on rejection.
     pub(in crate::execution) fn submit_wait_blocking_in_impl(
         &self,
         scope: &qubit_operation::OperationScope,
@@ -73,6 +79,11 @@ impl CommandExecutor {
     }
 
     /// Implements the root blocking wait submission loop.
+    ///
+    /// # Parameters
+    /// * `runner`: Runner configuration to submit and return on rejection.
+    /// * `command`: Command to submit and return on rejection.
+    /// * `options`: Standard stream options to submit and return on rejection.
     pub(in crate::execution) fn submit_wait_blocking_impl(
         &self,
         mut runner: CommandRunner,
@@ -118,6 +129,11 @@ impl CommandExecutor {
     }
 
     /// Implements the root blocking resource wait submission loop.
+    ///
+    /// # Parameters
+    /// * `runner`: Runner configuration to submit and return on rejection.
+    /// * `command`: Command to submit and return on rejection.
+    /// * `options`: Resource options to submit and return on rejection.
     pub(in crate::execution) fn submit_wait_resources_blocking_impl(
         &self,
         mut runner: CommandRunner,
@@ -165,6 +181,12 @@ impl CommandExecutor {
     }
 
     /// Implements the scoped blocking resource wait submission loop.
+    ///
+    /// # Parameters
+    /// * `scope`: Scope whose deadline and stop state govern admission.
+    /// * `runner`: Runner configuration to submit and return on rejection.
+    /// * `command`: Command to submit and return on rejection.
+    /// * `options`: Resource options to submit and return on rejection.
     pub(in crate::execution) fn submit_wait_resources_blocking_in_impl(
         &self,
         scope: &qubit_operation::OperationScope,
@@ -213,6 +235,11 @@ impl CommandExecutor {
     }
 
     /// Implements the root asynchronous wait submission loop.
+    ///
+    /// # Parameters
+    /// * `runner`: Runner configuration to submit and return on rejection.
+    /// * `command`: Command to submit and return on rejection.
+    /// * `options`: Standard stream options to submit and return on rejection.
     #[cfg(feature = "async")]
     pub(in crate::execution) async fn submit_wait_impl(
         &self,
@@ -249,7 +276,7 @@ impl CommandExecutor {
                                 runner: failed_runner,
                                 command: failed_command,
                                 options: failed_options,
-                                reason,
+                                reason: async_wait_failure_reason(reason, &self.scheduler, None),
                             });
                         }
                         Err(wait) => {
@@ -267,6 +294,11 @@ impl CommandExecutor {
     }
 
     /// Implements the root asynchronous resource wait submission loop.
+    ///
+    /// # Parameters
+    /// * `runner`: Runner configuration to submit and return on rejection.
+    /// * `command`: Command to submit and return on rejection.
+    /// * `options`: Resource options to submit and return on rejection.
     #[cfg(feature = "async")]
     pub(in crate::execution) async fn submit_wait_resources_impl(
         &self,
@@ -312,7 +344,7 @@ impl CommandExecutor {
                                 runner: failed_runner,
                                 command: failed_command,
                                 options: failed_options,
-                                reason,
+                                reason: async_wait_failure_reason(reason, &self.scheduler, None),
                             });
                         }
                         Err(wait) => {
@@ -330,6 +362,12 @@ impl CommandExecutor {
     }
 
     /// Implements the scoped asynchronous resource wait submission loop.
+    ///
+    /// # Parameters
+    /// * `scope`: Scope whose deadline and stop state govern admission.
+    /// * `runner`: Runner configuration to submit and return on rejection.
+    /// * `command`: Command to submit and return on rejection.
+    /// * `options`: Resource options to submit and return on rejection.
     #[cfg(feature = "async")]
     pub(in crate::execution) async fn submit_wait_resources_in_impl(
         &self,
@@ -376,7 +414,7 @@ impl CommandExecutor {
                                 runner: failed_runner,
                                 command: failed_command,
                                 options: failed_options,
-                                reason: deadline_failure(reason, &context),
+                                reason: async_wait_failure_reason(reason, &self.scheduler, Some(&context)),
                             });
                         }
                         Err(wait) => {
@@ -394,6 +432,12 @@ impl CommandExecutor {
     }
 
     /// Implements the scoped asynchronous standard-option wait submission loop.
+    ///
+    /// # Parameters
+    /// * `scope`: Scope whose deadline and stop state govern admission.
+    /// * `runner`: Runner configuration to submit and return on rejection.
+    /// * `command`: Command to submit and return on rejection.
+    /// * `options`: Standard stream options to submit and return on rejection.
     #[cfg(feature = "async")]
     pub(in crate::execution) async fn submit_wait_in_impl(
         &self,
@@ -439,7 +483,7 @@ impl CommandExecutor {
                                 runner: failed_runner,
                                 command: failed_command,
                                 options: failed_options,
-                                reason: deadline_failure(reason, &context),
+                                reason: async_wait_failure_reason(reason, &self.scheduler, Some(&context)),
                             });
                         }
                         Err(wait) => {
@@ -499,6 +543,36 @@ pub(in crate::execution) fn deadline_failure(
     }
 }
 
+/// Resolves an async wait termination as scope stop, deadline, or closure.
+///
+/// # Parameters
+/// * `reason`: Submission failure that initiated the wait.
+/// * `scheduler`: Scheduler whose closure state may have ended the wait.
+/// * `context`: Optional scope state checked before reporting scheduler
+///   closure.
+#[cfg(feature = "async")]
+pub(in crate::execution) fn async_wait_failure_reason(
+    reason: CommandSubmitFailureReason,
+    scheduler: &BoundedScheduler,
+    context: Option<&OperationContext>,
+) -> CommandSubmitFailureReason {
+    let reason = if let Some(context) = context {
+        deadline_failure(reason, context)
+    } else {
+        reason
+    };
+    if scheduler.is_closed()
+        && matches!(
+            reason,
+            CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull | CapacityFailure::QueueFull)
+        )
+    {
+        CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
+    } else {
+        reason
+    }
+}
+
 /// Reports whether an async submission failure can make progress by waiting.
 ///
 /// # Parameters
@@ -522,4 +596,28 @@ pub(in crate::execution) fn retryable_async(reason: &CommandSubmitFailureReason)
             reason,
             CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy)
         )
+}
+
+#[cfg(all(test, feature = "async"))]
+mod tests {
+    use super::async_wait_failure_reason;
+    use crate::execution::CommandExecutionConfig;
+    use crate::execution::CommandSubmitFailureReason;
+    use crate::execution::contracts::CapacityFailure;
+    use crate::execution::contracts::Scheduler;
+    use crate::execution::scheduler::BoundedScheduler;
+
+    #[test]
+    fn test_async_wait_failure_maps_closed_scheduler_capacity() {
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig::default()).unwrap();
+        Scheduler::close_admission(&scheduler);
+
+        let reason = async_wait_failure_reason(
+            CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull),
+            &scheduler,
+            None,
+        );
+
+        assert_eq!(reason, CommandSubmitFailureReason::Capacity(CapacityFailure::Closed));
+    }
 }

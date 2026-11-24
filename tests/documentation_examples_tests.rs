@@ -383,12 +383,10 @@ fn test_required_production_markers_fail_when_removed() {
         let parsed = extract_examples(&source, relative).unwrap();
         assert!(require_markers(&parsed, expected, relative).is_ok());
         let removed = source.replace(&format!("<!-- doc-example:{marker}:compile -->\n"), "");
-        match extract_examples(&removed, relative) {
-            Ok(parsed_without_marker) => {
-                assert!(require_markers(&parsed_without_marker, expected, relative).is_err());
-            }
-            Err(_) => {} // An unclassified Rust fence also fails the document gate.
+        if let Ok(parsed_without_marker) = extract_examples(&removed, relative) {
+            assert!(require_markers(&parsed_without_marker, expected, relative).is_err());
         }
+        // An unclassified Rust fence also fails the document gate.
     }
 }
 

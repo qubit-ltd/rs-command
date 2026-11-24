@@ -2,6 +2,8 @@
 //    Copyright (c) 2025 - 2026 Haixing Hu.
 //
 //    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 
 #[cfg(feature = "async")]
@@ -25,6 +27,9 @@ pub(in crate::execution) struct AsyncSubmissionContext {
 #[cfg(feature = "async")]
 impl AsyncSubmissionContext {
     /// Builds a non-session admission context with an optional scope deadline.
+    ///
+    /// # Parameters
+    /// * `deadline`: Optional operation scope context applied during admission.
     pub(in crate::execution) fn plain(deadline: Option<OperationContext>) -> Self {
         Self {
             bridge: None,

@@ -17,7 +17,7 @@ fn test_managed_process_backend_contract_is_available() {
 
 #[cfg(unix)]
 #[test]
-fn test_managed_backend_resolves_relative_tee_paths_from_runner_directory() {
+fn test_managed_backend_writes_to_absolute_tee_paths() {
     use std::time::Duration;
 
     use qubit_command::Command;
@@ -30,6 +30,8 @@ fn test_managed_backend_resolves_relative_tee_paths_from_runner_directory() {
     use qubit_operation::OperationOutcome;
 
     let directory = tempfile::tempdir().unwrap();
+    let stdout_path = directory.path().join("stdout.log");
+    let stderr_path = directory.path().join("stderr.log");
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
     let mut operation = executor
@@ -37,8 +39,8 @@ fn test_managed_backend_resolves_relative_tee_paths_from_runner_directory() {
             CommandRunner::new(Duration::from_secs(5)).working_directory(directory.path()),
             Command::new("sh").arg("-c").arg("printf stdout; printf stderr >&2"),
             CommandRunOptions::new()
-                .tee_stdout_to_file("stdout.log")
-                .tee_stderr_to_file("stderr.log"),
+                .tee_stdout_to_file(&stdout_path)
+                .tee_stderr_to_file(&stderr_path),
         )
         .unwrap();
     match operation.wait_outcome().unwrap() {
@@ -48,8 +50,8 @@ fn test_managed_backend_resolves_relative_tee_paths_from_runner_directory() {
         }
         other => panic!("managed command failed: {other:?}"),
     }
-    assert_eq!(std::fs::read(directory.path().join("stdout.log")).unwrap(), b"stdout");
-    assert_eq!(std::fs::read(directory.path().join("stderr.log")).unwrap(), b"stderr");
+    assert_eq!(std::fs::read(stdout_path).unwrap(), b"stdout");
+    assert_eq!(std::fs::read(stderr_path).unwrap(), b"stderr");
 }
 
 #[test]
