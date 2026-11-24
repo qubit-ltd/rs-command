@@ -363,7 +363,7 @@ fn test_retry_timer_worker_panic_disconnects_queued_and_pending_waiters() {
     assert_eq!(timer.in_flight(), 2);
 
     let worker = std::thread::spawn(move || {
-        let _pending = vec![pending];
+        let _pending = [pending];
         let _receiver = rx;
         panic!("controlled timer worker failure");
     });

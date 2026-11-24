@@ -561,7 +561,7 @@ fn test_scoped_blocking_standard_wait_returns_closed_after_shutdown() {
     let reason = rx
         .recv_timeout(Duration::from_secs(3))
         .expect("closed scoped wait should return");
-    let _ = submitter.join().unwrap();
+    submitter.join().unwrap();
     assert!(matches!(
         reason,
         qubit_command::CommandSubmitFailureReason::Capacity(qubit_command::execution::CapacityFailure::Closed)
@@ -1117,7 +1117,7 @@ fn test_scoped_async_resource_wait_returns_closed_after_shutdown() {
     let waiting_executor = executor.clone();
     let waiting_manager = manager.clone();
     let submitter = std::thread::spawn(move || {
-        block_on(
+        let outcome = block_on(
             waiting_manager
                 .as_async()
                 .run(Default::default(), move |scope| async move {
@@ -1146,6 +1146,8 @@ fn test_scoped_async_resource_wait_returns_closed_after_shutdown() {
                     Ok::<_, ()>(())
                 }),
         )
+        .unwrap();
+        assert!(matches!(outcome, OperationOutcome::Succeeded(())));
     });
 
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
@@ -1160,7 +1162,7 @@ fn test_scoped_async_resource_wait_returns_closed_after_shutdown() {
     let (reason, bytes) = rx
         .recv_timeout(Duration::from_secs(3))
         .expect("closed scoped async wait should return");
-    let _ = submitter.join().unwrap();
+    submitter.join().unwrap();
     assert!(matches!(
         reason,
         qubit_command::CommandSubmitFailureReason::Capacity(qubit_command::execution::CapacityFailure::Closed)
@@ -1250,7 +1252,7 @@ fn test_scoped_async_standard_wait_returns_closed_after_shutdown() {
     let reason = rx
         .recv_timeout(Duration::from_secs(3))
         .expect("closed scoped async wait should return");
-    let _ = submitter.join().unwrap();
+    submitter.join().unwrap();
     assert!(matches!(
         reason,
         qubit_command::CommandSubmitFailureReason::Capacity(qubit_command::execution::CapacityFailure::Closed)
