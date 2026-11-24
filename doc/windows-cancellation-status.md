@@ -4,6 +4,8 @@
 
 The `qubit-command` 0.12 managed API adds process-tree ownership and a separate settlement report; it does not change this helper-join evidence or establish a hard return deadline on Windows. A `Managed` process-tree policy must not be read as proof that every helper join is bounded. The same limitation applies to managed commands; inspect settlement and cleanup reports, and use a separate process boundary when the application requires a hard deadline.
 
+RC-002 and CMD-003 are historical tracking IDs for this same Windows cancellation, subsequent-I/O, and helper-wait concern. They come from different review stages; each run or source audit remains tied to its recorded SHA and environment.
+
 ## Integrated source audit at SHA `c4dfbd7593f1807d2c5758305990452d5301f44b` (2026-11-24)
 
 This was a Linux source-only audit of commit `c4dfbd7593f1807d2c5758305990452d5301f44b`, inspected with `git show` without switching the assigned worktree. In the managed startup-abort and runtime uncertain-handoff paths, an unavailable reaper service now leaves the cleanup owner with `ReaperObserver`; a full bounded queue continues through deferred recovery. After the runner returns, `ProcessBackend` preserves and publishes its selected outcome, then runs a retained local cleanup owner on the bounded backend worker before dropping the session bridge and operation scope or publishing release and settlement. This keeps cleanup completion ahead of release facts and retains the runner-selected primary error. T3's resource conflict mapping is also present: input/output conflict uses the conflicting output direction, and output/output conflict uses stderr, both as validation-stage `InvalidInput` preparation failures.
