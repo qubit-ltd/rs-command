@@ -239,7 +239,10 @@ mod tests {
             }
             Ok(file) => {
                 drop(file);
-                assert!(validation.is_ok(), "validation should succeed when the current user can open the tee");
+                assert!(
+                    validation.is_ok(),
+                    "validation should succeed when the current user can open the tee"
+                );
             }
             Err(error) => panic!("tee open should fail only when permission is denied: {error}"),
         }
@@ -276,7 +279,10 @@ mod tests {
                 }
                 Ok(file) => {
                     drop(file);
-                    assert!(validation.is_ok(), "validation should succeed when the current user can access the tee");
+                    assert!(
+                        validation.is_ok(),
+                        "validation should succeed when the current user can access the tee"
+                    );
                 }
                 Err(error) => panic!("tee open should fail only when permission is denied: {error}"),
             },
