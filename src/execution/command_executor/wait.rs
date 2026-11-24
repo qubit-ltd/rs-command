@@ -152,15 +152,8 @@ impl CommandExecutor {
     ) -> Result<crate::CommandOperation, CommandResourceSubmitFailure> {
         loop {
             let bytes = executor::resource_bytes(&options);
-            match CommandExecutor::submit_resources_manager(
-                self,
-                &self.manager,
-                runner,
-                command,
-                options,
-                bytes,
-                None,
-            ) {
+            match CommandExecutor::submit_resources_manager(self, &self.manager, runner, command, options, bytes, None)
+            {
                 Ok(operation) => return Ok(operation),
                 Err(failure) => {
                     let CommandResourceSubmitFailure {
@@ -206,9 +199,7 @@ impl CommandExecutor {
         let deadline = scope.context();
         loop {
             let bytes = executor::resource_bytes(&options);
-            match CommandExecutor::submit_resources_in_with_bytes(
-                self, scope, runner, command, options, bytes,
-            ) {
+            match CommandExecutor::submit_resources_in_with_bytes(self, scope, runner, command, options, bytes) {
                 Ok(operation) => return Ok(operation),
                 Err(failure) => {
                     let CommandResourceSubmitFailure {
@@ -217,12 +208,7 @@ impl CommandExecutor {
                         options: failed_options,
                         reason,
                     } = failure;
-                    match retry_wait_outcome(
-                        &reason,
-                        &self.scheduler,
-                        bytes,
-                        Some(deadline.clone()),
-                    ) {
+                    match retry_wait_outcome(&reason, &self.scheduler, bytes, Some(deadline.clone())) {
                         WaitResult::Retry => {
                             runner = *failed_runner;
                             command = *failed_command;
@@ -273,14 +259,7 @@ impl CommandExecutor {
                             reason,
                         });
                     }
-                    match executor::wait_retryable_async(
-                        self.scheduler.as_ref().clone(),
-                        0,
-                        &reason,
-                        None,
-                    )
-                    .await
-                    {
+                    match executor::wait_retryable_async(self.scheduler.as_ref().clone(), 0, &reason, None).await {
                         Ok(WaitResult::Retry) => {
                             runner = *failed_runner;
                             command = *failed_command;
@@ -348,14 +327,7 @@ impl CommandExecutor {
                             reason,
                         });
                     }
-                    match executor::wait_retryable_async(
-                        self.scheduler.as_ref().clone(),
-                        bytes,
-                        &reason,
-                        None,
-                    )
-                    .await
-                    {
+                    match executor::wait_retryable_async(self.scheduler.as_ref().clone(), bytes, &reason, None).await {
                         Ok(WaitResult::Retry) => {
                             runner = *failed_runner;
                             command = *failed_command;
@@ -401,9 +373,7 @@ impl CommandExecutor {
         let context = scope.context();
         loop {
             let bytes = executor::resource_bytes(&options);
-            match CommandExecutor::submit_async_resources_in_with_bytes(
-                self, scope, runner, command, options, bytes,
-            ) {
+            match CommandExecutor::submit_async_resources_in_with_bytes(self, scope, runner, command, options, bytes) {
                 Ok(operation) => return Ok(operation),
                 Err(failure) => {
                     let CommandResourceSubmitFailure {
@@ -539,9 +509,7 @@ pub(in crate::execution) fn retry_wait_outcome(
     context: Option<OperationContext>,
 ) -> WaitResult {
     match reason {
-        CommandSubmitFailureReason::Capacity(
-            CapacityFailure::ActiveFull | CapacityFailure::QueueFull,
-        ) => scheduler
+        CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull | CapacityFailure::QueueFull) => scheduler
             .wait_for_capacity_registered_outcome(bytes, context)
             .map(map_wait_outcome)
             .unwrap_or_else(WaitResult::Failed),
@@ -563,25 +531,15 @@ pub(in crate::execution) fn retry_wait(
     match retry_wait_outcome(reason, scheduler, bytes, context) {
         WaitResult::Retry => Ok(true),
         WaitResult::Failed(failure) => Err(failure),
-        WaitResult::Closed
-        | WaitResult::Stopped
-        | WaitResult::DeadlineExpired
-        | WaitResult::NotRetryable => Ok(false),
+        WaitResult::Closed | WaitResult::Stopped | WaitResult::DeadlineExpired | WaitResult::NotRetryable => Ok(false),
     }
 }
 
-fn wait_result_reason(
-    reason: CommandSubmitFailureReason,
-    result: WaitResult,
-) -> CommandSubmitFailureReason {
+fn wait_result_reason(reason: CommandSubmitFailureReason, result: WaitResult) -> CommandSubmitFailureReason {
     match result {
         WaitResult::Closed => CommandSubmitFailureReason::Capacity(CapacityFailure::Closed),
-        WaitResult::Stopped => {
-            CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Stopped)
-        }
-        WaitResult::DeadlineExpired => {
-            CommandSubmitFailureReason::Capacity(CapacityFailure::DeadlineExpired)
-        }
+        WaitResult::Stopped => CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Stopped),
+        WaitResult::DeadlineExpired => CommandSubmitFailureReason::Capacity(CapacityFailure::DeadlineExpired),
         WaitResult::Failed(wait) => CommandSubmitFailureReason::Wait(wait),
         WaitResult::Retry | WaitResult::NotRetryable => reason,
     }
@@ -627,9 +585,7 @@ pub(in crate::execution) fn async_wait_failure_reason(
     if scheduler.is_closed()
         && matches!(
             reason,
-            CommandSubmitFailureReason::Capacity(
-                CapacityFailure::ActiveFull | CapacityFailure::QueueFull
-            )
+            CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull | CapacityFailure::QueueFull)
         )
     {
         CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
@@ -646,9 +602,7 @@ pub(in crate::execution) fn async_wait_failure_reason(
 pub(in crate::execution) fn async_capacity_retry(reason: &CommandSubmitFailureReason) -> bool {
     matches!(
         reason,
-        CommandSubmitFailureReason::Capacity(
-            CapacityFailure::ActiveFull | CapacityFailure::QueueFull
-        )
+        CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull | CapacityFailure::QueueFull)
     )
 }
 
@@ -685,9 +639,6 @@ mod tests {
             None,
         );
 
-        assert_eq!(
-            reason,
-            CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
-        );
+        assert_eq!(reason, CommandSubmitFailureReason::Capacity(CapacityFailure::Closed));
     }
 }

@@ -71,17 +71,13 @@ fn wait_outcome(closed: bool, context: Option<&OperationContext>) -> Option<Wait
 /// Represents the bounded scheduler state or contract used by managed command
 /// execution.
 #[derive(Clone)]
-pub struct BoundedScheduler(
-    #[doc = "Shared queue and permit state owned by this scheduler."] Arc<Shared>,
-);
+pub struct BoundedScheduler(#[doc = "Shared queue and permit state owned by this scheduler."] Arc<Shared>);
 impl BoundedScheduler {
     /// Performs the new step in the managed command execution lifecycle.
     ///
     /// # Parameters
     /// * `config`: Supplies the config value used by this operation.
-    pub fn new(
-        config: CommandExecutionConfig,
-    ) -> Result<Self, crate::execution::CommandExecutorCreateError> {
+    pub fn new(config: CommandExecutionConfig) -> Result<Self, crate::execution::CommandExecutorCreateError> {
         config.validate()?;
         let id = NEXT_SCHEDULER_ID.fetch_add(1, Ordering::Relaxed);
         Ok(Self(Arc::new(Shared {
@@ -131,11 +127,7 @@ impl BoundedScheduler {
     /// # Parameters
     /// * `input_bytes`: Supplies the input bytes value used by this operation.
     /// * `waker`: Supplies the waker value used by this operation.
-    pub fn register_waiter_if_full(
-        &self,
-        input_bytes: usize,
-        waker: &Waker,
-    ) -> Result<Option<u64>, CapacityFailure> {
+    pub fn register_waiter_if_full(&self, input_bytes: usize, waker: &Waker) -> Result<Option<u64>, CapacityFailure> {
         let mut s = self.0.state.lock().unwrap();
         if s.closed {
             return Err(CapacityFailure::Closed);
@@ -220,11 +212,7 @@ impl BoundedScheduler {
     /// # Parameters
     /// * `input_bytes`: Supplies the input bytes value used by this operation.
     /// * `deadline`: Supplies the deadline value used by this operation.
-    pub fn wait_for_capacity(
-        &self,
-        input_bytes: usize,
-        deadline: Option<OperationContext>,
-    ) -> bool {
+    pub fn wait_for_capacity(&self, input_bytes: usize, deadline: Option<OperationContext>) -> bool {
         self.wait_for_capacity_registered(input_bytes, deadline)
             .unwrap_or(false)
     }
@@ -274,11 +262,7 @@ impl BoundedScheduler {
                 break WaitOutcome::Retry;
             }
             if context.is_some() {
-                let (next, _) = self
-                    .0
-                    .changed
-                    .wait_timeout(s, CLOCK_RECHECK_INTERVAL)
-                    .unwrap();
+                let (next, _) = self.0.changed.wait_timeout(s, CLOCK_RECHECK_INTERVAL).unwrap();
                 s = next;
             } else {
                 s = self.0.changed.wait(s).unwrap();
@@ -356,11 +340,7 @@ impl BoundedScheduler {
     /// # Parameters
     /// * `input_bytes`: Supplies the input bytes value used by this operation.
     /// * `deadline`: Supplies the deadline value used by this operation.
-    fn reserve(
-        &self,
-        input_bytes: usize,
-        deadline: Option<OperationContext>,
-    ) -> Result<Reservation, CapacityFailure> {
+    fn reserve(&self, input_bytes: usize, deadline: Option<OperationContext>) -> Result<Reservation, CapacityFailure> {
         let mut s = self.0.state.lock().unwrap();
         if s.closed {
             return Err(CapacityFailure::Closed);
@@ -476,11 +456,7 @@ impl BoundedScheduler {
             false
         };
         s.residual_helpers = s.residual_helpers.saturating_sub(1);
-        let freed_active = if remove {
-            remove_record(&mut s, token)
-        } else {
-            false
-        };
+        let freed_active = if remove { remove_record(&mut s, token) } else { false };
         if freed_active {
             promote_queued(&mut s, &shared.config)
         }
@@ -769,18 +745,12 @@ impl Scheduler for BoundedScheduler {
                 return None;
             }
             let has_deadline = s.workers.jobs.iter().any(|q| {
-                s.records.get(&q.permit.token).is_some_and(|r| {
-                    r.deadline
-                        .as_ref()
-                        .is_some_and(|context| context.deadline().is_some())
-                })
+                s.records
+                    .get(&q.permit.token)
+                    .is_some_and(|r| r.deadline.as_ref().is_some_and(|context| context.deadline().is_some()))
             });
             if has_deadline {
-                let (ns, _) = self
-                    .0
-                    .changed
-                    .wait_timeout(s, CLOCK_RECHECK_INTERVAL)
-                    .unwrap();
+                let (ns, _) = self.0.changed.wait_timeout(s, CLOCK_RECHECK_INTERVAL).unwrap();
                 s = ns
             } else {
                 s = self.0.changed.wait(s).unwrap()
@@ -841,11 +811,7 @@ mod tests {
             MonotonicTime::new(self.domain, self.ticks.load(Ordering::SeqCst))
         }
 
-        fn register_deadline(
-            &self,
-            _deadline: MonotonicTime,
-            _waker: Waker,
-        ) -> Box<dyn TimerRegistration> {
+        fn register_deadline(&self, _deadline: MonotonicTime, _waker: Waker) -> Box<dyn TimerRegistration> {
             Box::new(NoopRegistration)
         }
     }
@@ -906,10 +872,7 @@ mod tests {
 
         assert_eq!(scheduler.register_waiter_if_full(0, &waker), Ok(None));
         let permit = scheduler.try_reserve(0).unwrap();
-        let id = scheduler
-            .register_waiter_if_full(0, &waker)
-            .unwrap()
-            .unwrap();
+        let id = scheduler.register_waiter_if_full(0, &waker).unwrap().unwrap();
         assert_eq!(scheduler.snapshot().waiters, 1);
         scheduler.cancel_waiter(id);
         drop(permit);
@@ -917,10 +880,7 @@ mod tests {
         assert_eq!(scheduler.snapshot().waiters, 0);
 
         scheduler.close_admission();
-        assert_eq!(
-            scheduler.register_waiter(None),
-            Err(CapacityFailure::Closed)
-        );
+        assert_eq!(scheduler.register_waiter(None), Err(CapacityFailure::Closed));
         assert_eq!(
             scheduler.register_waiter_if_full(0, &waker),
             Err(CapacityFailure::Closed)
@@ -969,8 +929,7 @@ mod tests {
         drop(done_tx);
 
         let registration_deadline = Instant::now() + Duration::from_secs(2);
-        while scheduler.snapshot().waiters != waiter_count && Instant::now() < registration_deadline
-        {
+        while scheduler.snapshot().waiters != waiter_count && Instant::now() < registration_deadline {
             std::thread::yield_now();
         }
         assert_eq!(scheduler.snapshot().waiters, waiter_count);
@@ -984,9 +943,7 @@ mod tests {
             );
         }
         for thread in threads {
-            thread
-                .join()
-                .expect("capacity waiter should exit after close");
+            thread.join().expect("capacity waiter should exit after close");
         }
         assert_eq!(scheduler.snapshot().waiters, 0);
         assert_eq!(scheduler.snapshot().active, 1);
@@ -1032,22 +989,10 @@ mod tests {
     fn test_reservation_without_inherited_deadline_releases_on_owner_drop() {
         let scheduler = BoundedScheduler::new(config(0, 1)).unwrap();
         let reservation = scheduler.try_reserve_until(6, None).unwrap();
-        assert_eq!(
-            (
-                scheduler.snapshot().active,
-                scheduler.snapshot().input_bytes,
-            ),
-            (1, 6)
-        );
+        assert_eq!((scheduler.snapshot().active, scheduler.snapshot().input_bytes,), (1, 6));
 
         drop(reservation);
-        assert_eq!(
-            (
-                scheduler.snapshot().active,
-                scheduler.snapshot().input_bytes,
-            ),
-            (0, 0)
-        );
+        assert_eq!((scheduler.snapshot().active, scheduler.snapshot().input_bytes,), (0, 0));
     }
 
     #[test]
@@ -1075,16 +1020,10 @@ mod tests {
 
         let active = scheduler.try_reserve(0).unwrap();
         let queued = scheduler.try_reserve(0).unwrap();
-        assert_eq!(
-            scheduler.try_reserve(0).unwrap_err(),
-            CapacityFailure::QueueFull
-        );
+        assert_eq!(scheduler.try_reserve(0).unwrap_err(), CapacityFailure::QueueFull);
 
         scheduler.close_admission();
-        assert_eq!(
-            scheduler.try_reserve(0).unwrap_err(),
-            CapacityFailure::Closed
-        );
+        assert_eq!(scheduler.try_reserve(0).unwrap_err(), CapacityFailure::Closed);
         drop((active, queued));
     }
 
@@ -1103,19 +1042,10 @@ mod tests {
             budget: None,
         })
         .unwrap();
-        let mut deadline_signal = Box::pin(
-            context
-                .deadline_signal()
-                .expect("context should have a deadline"),
-        );
+        let mut deadline_signal = Box::pin(context.deadline_signal().expect("context should have a deadline"));
         let waker = Waker::noop().clone();
         let mut task_context = Context::from_waker(&waker);
-        assert!(
-            deadline_signal
-                .as_mut()
-                .poll(&mut task_context)
-                .is_pending()
-        );
+        assert!(deadline_signal.as_mut().poll(&mut task_context).is_pending());
         let permit = scheduler
             .try_reserve_until(3, Some(context))
             .expect("reservation should succeed before its deadline");
@@ -1153,13 +1083,7 @@ mod tests {
             invoked.load(Ordering::SeqCst),
             "rejected enqueue must return the original job"
         );
-        assert_eq!(
-            (
-                scheduler.snapshot().active,
-                scheduler.snapshot().input_bytes
-            ),
-            (0, 0)
-        );
+        assert_eq!((scheduler.snapshot().active, scheduler.snapshot().input_bytes), (0, 0));
     }
 
     #[test]
@@ -1201,18 +1125,9 @@ mod tests {
             .expect("expired work remains dispatchable after stop");
 
         assert_eq!(stops.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            (scheduler.snapshot().active, scheduler.snapshot().queued),
-            (1, 0)
-        );
+        assert_eq!((scheduler.snapshot().active, scheduler.snapshot().queued), (1, 0));
         drop(permit);
-        assert_eq!(
-            (
-                scheduler.snapshot().active,
-                scheduler.snapshot().input_bytes
-            ),
-            (0, 0)
-        );
+        assert_eq!((scheduler.snapshot().active, scheduler.snapshot().input_bytes), (0, 0));
     }
 
     #[test]
@@ -1223,10 +1138,7 @@ mod tests {
         let waker = Waker::from(counter.clone());
 
         let waiter_id = scheduler.register_waiter(Some(&waker)).unwrap();
-        assert_eq!(
-            scheduler.register_waiter(None),
-            Err(CapacityFailure::QueueFull)
-        );
+        assert_eq!(scheduler.register_waiter(None), Err(CapacityFailure::QueueFull));
         drop(permit);
         assert_eq!(counter.0.load(Ordering::SeqCst), 1);
         assert_eq!(scheduler.snapshot().waiters, 1);
@@ -1306,9 +1218,7 @@ mod tests {
         let waiting = scheduler.clone();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let thread = std::thread::spawn(move || {
-            done_tx
-                .send(waiting.wait_for_capacity(0, Some(context)))
-                .unwrap();
+            done_tx.send(waiting.wait_for_capacity(0, Some(context))).unwrap();
         });
 
         let setup_deadline = Instant::now() + Duration::from_secs(2);
@@ -1353,9 +1263,7 @@ mod tests {
             )
             .unwrap();
 
-        let (job, permit) = scheduler
-            .try_next()
-            .expect("enqueued job should be available");
+        let (job, permit) = scheduler.try_next().expect("enqueued job should be available");
         (job.run)(permit);
 
         assert!(invoked.load(Ordering::SeqCst));
@@ -1400,25 +1308,17 @@ mod tests {
             )
             .unwrap();
 
-        let (job, permit) = scheduler
-            .try_next()
-            .expect("active reservation should dispatch first");
+        let (job, permit) = scheduler.try_next().expect("active reservation should dispatch first");
         (job.run)(permit);
         assert_eq!(*dispatched.lock().unwrap(), ["active"]);
-        assert_eq!(
-            (scheduler.snapshot().active, scheduler.snapshot().queued),
-            (1, 0)
-        );
+        assert_eq!((scheduler.snapshot().active, scheduler.snapshot().queued), (1, 0));
 
         let (job, permit) = scheduler
             .try_next()
             .expect("queued reservation should promote and dispatch");
         (job.run)(permit);
         assert_eq!(*dispatched.lock().unwrap(), ["active", "queued"]);
-        assert_eq!(
-            (scheduler.snapshot().active, scheduler.snapshot().queued),
-            (0, 0)
-        );
+        assert_eq!((scheduler.snapshot().active, scheduler.snapshot().queued), (0, 0));
     }
 
     #[test]
@@ -1436,8 +1336,7 @@ mod tests {
         let permit = Scheduler::try_reserve(&scheduler, 0).unwrap();
 
         Scheduler::enqueue(&scheduler, job, permit).unwrap();
-        let (job, permit) =
-            Scheduler::wait_next(&scheduler).expect("queued work should be dispatched");
+        let (job, permit) = Scheduler::wait_next(&scheduler).expect("queued work should be dispatched");
         (job.run)(permit);
         assert_eq!(executed.load(Ordering::SeqCst), 1);
         assert_eq!(scheduler.snapshot().active, 0);

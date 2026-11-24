@@ -23,6 +23,11 @@ use super::super::adapter::AdapterState;
 use super::super::command_executor::internal::async_submission_context::AsyncSubmissionContext;
 use super::super::contracts::Request;
 use super::super::contracts::RequestOptions;
+use super::super::executor::make_request;
+#[cfg(feature = "async")]
+use super::super::executor::managed_failure;
+use super::super::executor::resource_bytes;
+use super::CommandExecutor;
 use crate::Command;
 #[cfg(feature = "async")]
 use crate::CommandError;
@@ -32,19 +37,12 @@ use crate::CommandRunner;
 #[cfg(feature = "async")]
 use crate::execution::AsyncCommandOperation;
 
-#[cfg(feature = "async")]
-use super::super::executor::managed_failure;
-use super::super::executor::{make_request, resource_bytes};
-use super::CommandExecutor;
-
 /// Stores the session channels value used by this execution component.
 ///
 /// # Parameters
 /// * `runner`: Supplies the runner value used by this operation.
 #[cfg(feature = "async")]
-pub(in crate::execution) fn session_channels(
-    runner: &CommandRunner,
-) -> crate::session::channel::SessionChannels {
+pub(in crate::execution) fn session_channels(runner: &CommandRunner) -> crate::session::channel::SessionChannels {
     match runner.configured_max_total_output_bytes() {
         Some(limit) => crate::session::channel::SessionChannels::with_policy(
             crate::session::contracts::SessionStreamPolicy::TerminateAfterBytes(limit),
@@ -417,14 +415,7 @@ impl CommandExecutor {
                 });
             }
         };
-        self.submit_resources_manager(
-            &manager,
-            runner,
-            command,
-            options,
-            bytes,
-            Some(scope.context()),
-        )
+        self.submit_resources_manager(&manager, runner, command, options, bytes, Some(scope.context()))
     }
     /// Performs the submit in manager step in the managed command execution
     /// lifecycle.
@@ -443,21 +434,18 @@ impl CommandExecutor {
         options: CommandRunOptions,
         deadline: Option<OperationContext>,
     ) -> Result<CommandOperation, CommandSubmitFailure> {
-        let request =
-            make_request(runner, command, RequestOptions::Standard(options)).map_err(|error| {
-                let (runner, command, options, message) = *error;
-                let RequestOptions::Standard(options) = options else {
-                    unreachable!()
-                };
-                CommandSubmitFailure {
-                    runner: Box::new(runner),
-                    command: Box::new(command),
-                    options,
-                    reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure {
-                        diagnostic: message,
-                    }),
-                }
-            })?;
+        let request = make_request(runner, command, RequestOptions::Standard(options)).map_err(|error| {
+            let (runner, command, options, message) = *error;
+            let RequestOptions::Standard(options) = options else {
+                unreachable!()
+            };
+            CommandSubmitFailure {
+                runner: Box::new(runner),
+                command: Box::new(command),
+                options,
+                reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure { diagnostic: message }),
+            }
+        })?;
         let permit = match self.scheduler.try_reserve_until(0, deadline.clone()) {
             Ok(p) => p,
             Err(reason) => {
@@ -492,16 +480,11 @@ impl CommandExecutor {
         match manager.try_submit_external(OperationOptions::default(), Arc::clone(&prepared)) {
             Ok(handle) => {
                 prepared.set_operation_observer(handle.observer());
-                Ok(CommandOperation::new(
-                    handle,
-                    prepared.stop_diagnostic_slot(),
-                ))
+                Ok(CommandOperation::new(handle, prepared.stop_diagnostic_slot()))
             }
             Err(error) => {
                 let (reason, _) = error.into_parts();
-                let request = prepared
-                    .restore()
-                    .expect("unactivated submission retains request");
+                let request = prepared.restore().expect("unactivated submission retains request");
                 let options = match request.options {
                     RequestOptions::Standard(o) => o,
                     _ => unreachable!(),
@@ -533,21 +516,18 @@ impl CommandExecutor {
         bytes: usize,
         deadline: Option<OperationContext>,
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
-        let request =
-            make_request(runner, command, RequestOptions::Resources(options)).map_err(|error| {
-                let (runner, command, options, message) = *error;
-                let RequestOptions::Resources(options) = options else {
-                    unreachable!()
-                };
-                CommandResourceSubmitFailure {
-                    runner: Box::new(runner),
-                    command: Box::new(command),
-                    options: Box::new(options),
-                    reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure {
-                        diagnostic: message,
-                    }),
-                }
-            })?;
+        let request = make_request(runner, command, RequestOptions::Resources(options)).map_err(|error| {
+            let (runner, command, options, message) = *error;
+            let RequestOptions::Resources(options) = options else {
+                unreachable!()
+            };
+            CommandResourceSubmitFailure {
+                runner: Box::new(runner),
+                command: Box::new(command),
+                options: Box::new(options),
+                reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure { diagnostic: message }),
+            }
+        })?;
         let permit = match self.scheduler.try_reserve_until(bytes, deadline.clone()) {
             Ok(p) => p,
             Err(reason) => {
@@ -582,16 +562,11 @@ impl CommandExecutor {
         match manager.try_submit_external(OperationOptions::default(), Arc::clone(&prepared)) {
             Ok(handle) => {
                 prepared.set_operation_observer(handle.observer());
-                Ok(CommandOperation::new(
-                    handle,
-                    prepared.stop_diagnostic_slot(),
-                ))
+                Ok(CommandOperation::new(handle, prepared.stop_diagnostic_slot()))
             }
             Err(error) => {
                 let (reason, _) = error.into_parts();
-                let request = prepared
-                    .restore()
-                    .expect("unactivated submission retains request");
+                let request = prepared.restore().expect("unactivated submission retains request");
                 let RequestOptions::Resources(options) = request.options else {
                     unreachable!()
                 };
@@ -631,21 +606,18 @@ impl CommandExecutor {
         let RequestOptions::Standard(options) = request_options else {
             unreachable!()
         };
-        let request =
-            make_request(runner, command, RequestOptions::Standard(options)).map_err(|error| {
-                let (runner, command, options, message) = *error;
-                let RequestOptions::Standard(options) = options else {
-                    unreachable!()
-                };
-                CommandSubmitFailure {
-                    runner: Box::new(runner),
-                    command: Box::new(command),
-                    options,
-                    reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure {
-                        diagnostic: message,
-                    }),
-                }
-            })?;
+        let request = make_request(runner, command, RequestOptions::Standard(options)).map_err(|error| {
+            let (runner, command, options, message) = *error;
+            let RequestOptions::Standard(options) = options else {
+                unreachable!()
+            };
+            CommandSubmitFailure {
+                runner: Box::new(runner),
+                command: Box::new(command),
+                options,
+                reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure { diagnostic: message }),
+            }
+        })?;
         let permit = match self.scheduler.try_reserve_until(0, deadline.clone()) {
             Ok(p) => p,
             Err(reason) => {
@@ -688,10 +660,7 @@ impl CommandExecutor {
         {
             Ok(handle) => {
                 prepared.set_operation_observer(handle.observer().as_sync());
-                Ok(AsyncCommandOperation::new(
-                    handle,
-                    prepared.stop_diagnostic_slot(),
-                ))
+                Ok(AsyncCommandOperation::new(handle, prepared.stop_diagnostic_slot()))
             }
             Err(error) => {
                 let (reason, _) = error.into_parts();
@@ -766,13 +735,7 @@ impl CommandExecutor {
             .manager()
             .with_group(&self.group)
             .map_err(|e| managed_failure(format!("group binding failed: {e}")))?;
-        self.start_session_managed_in_manager(
-            &manager,
-            runner,
-            command,
-            options,
-            Some(scope.context()),
-        )
+        self.start_session_managed_in_manager(&manager, runner, command, options, Some(scope.context()))
     }
     /// Starts a managed asynchronous command session and returns its stdin,
     /// stdout, and stderr endpoints with the operation handle. Admission is
@@ -801,13 +764,7 @@ impl CommandExecutor {
         command: Command,
         options: CommandResourceRunOptions,
     ) -> Result<crate::session::CommandSession, CommandError> {
-        self.start_session_resources_managed_in_manager(
-            &self.manager,
-            runner,
-            command,
-            options,
-            None,
-        )
+        self.start_session_resources_managed_in_manager(&self.manager, runner, command, options, None)
     }
     /// Starts a managed asynchronous command session and returns its stdin,
     /// stdout, and stderr endpoints with the operation handle. Admission is
@@ -845,13 +802,7 @@ impl CommandExecutor {
             .manager()
             .with_group(&self.group)
             .map_err(|e| managed_failure(format!("group binding failed: {e}")))?;
-        self.start_session_resources_managed_in_manager(
-            &manager,
-            runner,
-            command,
-            options,
-            Some(scope.context()),
-        )
+        self.start_session_resources_managed_in_manager(&manager, runner, command, options, Some(scope.context()))
     }
     /// Performs the start session managed in manager step in the managed
     /// command execution lifecycle.
@@ -897,9 +848,7 @@ impl CommandExecutor {
                     deadline,
                 },
             )
-            .map_err(|e| {
-                managed_failure(format!("managed session admission failed: {:?}", e.reason))
-            })?;
+            .map_err(|e| managed_failure(format!("managed session admission failed: {:?}", e.reason)))?;
         Ok(crate::session::CommandSession {
             operation: Some(operation.into_sync()),
             stdin: Some(stdin),
@@ -953,12 +902,7 @@ impl CommandExecutor {
                     deadline,
                 },
             )
-            .map_err(|e| {
-                managed_failure(format!(
-                    "managed resource session admission failed: {:?}",
-                    e.reason
-                ))
-            })?;
+            .map_err(|e| managed_failure(format!("managed resource session admission failed: {:?}", e.reason)))?;
         Ok(crate::session::CommandSession {
             operation: Some(operation.into_sync()),
             stdin: Some(stdin),
@@ -990,21 +934,18 @@ impl CommandExecutor {
             keepalive,
             deadline,
         } = context;
-        let request =
-            make_request(runner, command, RequestOptions::Resources(options)).map_err(|error| {
-                let (runner, command, options, message) = *error;
-                let RequestOptions::Resources(options) = options else {
-                    unreachable!()
-                };
-                CommandResourceSubmitFailure {
-                    runner: Box::new(runner),
-                    command: Box::new(command),
-                    options: Box::new(options),
-                    reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure {
-                        diagnostic: message,
-                    }),
-                }
-            })?;
+        let request = make_request(runner, command, RequestOptions::Resources(options)).map_err(|error| {
+            let (runner, command, options, message) = *error;
+            let RequestOptions::Resources(options) = options else {
+                unreachable!()
+            };
+            CommandResourceSubmitFailure {
+                runner: Box::new(runner),
+                command: Box::new(command),
+                options: Box::new(options),
+                reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure { diagnostic: message }),
+            }
+        })?;
         let permit = match self.scheduler.try_reserve_until(bytes, deadline.clone()) {
             Ok(p) => p,
             Err(reason) => {
@@ -1046,10 +987,7 @@ impl CommandExecutor {
         {
             Ok(handle) => {
                 prepared.set_operation_observer(handle.observer().as_sync());
-                Ok(AsyncCommandOperation::new(
-                    handle,
-                    prepared.stop_diagnostic_slot(),
-                ))
+                Ok(AsyncCommandOperation::new(handle, prepared.stop_diagnostic_slot()))
             }
             Err(error) => {
                 let (reason, _) = error.into_parts();

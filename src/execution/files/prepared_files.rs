@@ -23,17 +23,33 @@ use crate::execution::contracts::PreparedSink;
 use crate::resource_run_options::FileSinkPolicy;
 
 #[cfg(test)]
-type RegistrationGate = (qubit_operation::OperationId, Arc<(Barrier, Barrier)>);
+pub(crate) type RegistrationGate = (qubit_operation::OperationId, Arc<(Barrier, Barrier)>);
 #[cfg(test)]
 type RegistrationGateSlot = OnceLock<Mutex<Option<RegistrationGate>>>;
 #[cfg(test)]
 static AFTER_FIRST_REGISTRATION: RegistrationGateSlot = OnceLock::new();
 
 /// Stores the registration failure value used by this execution component.
-type RegistrationFailure = (io::Error, Option<PreparedFiles>, [Option<File>; 3]);
+type RegistrationFailure = (
+    io::Error,
+    crate::FilePreparationDirection,
+    Option<PreparedFiles>,
+    [Option<File>; 3],
+);
+
+#[derive(Debug)]
+struct RegistrationCategory(qubit_operation::ResourceManageErrorKind);
+
+impl std::fmt::Display for RegistrationCategory {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "resource registration failed: {:?}", self.0)
+    }
+}
+
+impl std::error::Error for RegistrationCategory {}
 
 #[cfg(test)]
-pub(super) fn gate_after_first_registration(gate: Option<RegistrationGate>) {
+pub(crate) fn gate_after_first_registration(gate: Option<RegistrationGate>) {
     *AFTER_FIRST_REGISTRATION
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -69,6 +85,7 @@ pub(super) fn register_files(
             values[index] = Some(file);
             return Err(Box::new((
                 io::Error::other("missing reserved resource slot"),
+                file_direction(index),
                 partial(refs, policies),
                 values,
             )));
@@ -92,10 +109,11 @@ pub(super) fn register_files(
                 }
             }
             Err(error) => {
-                let (_, recovered_file, _) = error.into_parts();
+                let (category, recovered_file, _) = error.into_parts();
                 values[index] = Some(recovered_file.into_inner().unwrap_or_else(|e| e.into_inner()));
                 return Err(Box::new((
-                    io::Error::other("resource registration failed"),
+                    io::Error::other(RegistrationCategory(category)),
+                    file_direction(index),
                     partial(refs, policies),
                     values,
                 )));
@@ -103,6 +121,15 @@ pub(super) fn register_files(
         }
     }
     Ok(build(refs, policies))
+}
+
+fn file_direction(index: usize) -> crate::FilePreparationDirection {
+    match index {
+        0 => crate::FilePreparationDirection::Stdin,
+        1 => crate::FilePreparationDirection::Stdout,
+        2 => crate::FilePreparationDirection::Stderr,
+        _ => unreachable!("only the three standard streams are registered"),
+    }
 }
 
 /// Performs the partial step in the managed command execution lifecycle.
@@ -230,6 +257,7 @@ fn record_effect(
 
 #[cfg(test)]
 mod tests {
+    use std::io;
     use std::io::Write;
     use std::panic::AssertUnwindSafe;
 
@@ -237,9 +265,20 @@ mod tests {
     use qubit_operation::OperationOptions;
     use qubit_operation::OperationOutcome;
 
+    use super::RegistrationCategory;
     use super::register_files;
     use super::truncate_sinks;
     use crate::resource_run_options::FileSinkPolicy;
+
+    #[test]
+    fn test_registration_category_is_preserved_in_source_chain() {
+        let error = io::Error::other(RegistrationCategory(qubit_operation::ResourceManageErrorKind::Stopped));
+        let category = error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<RegistrationCategory>())
+            .expect("non-error manager category should have an inspectable source carrier");
+        assert_eq!(category.0, qubit_operation::ResourceManageErrorKind::Stopped);
+    }
 
     #[test]
     fn test_truncating_prepared_sink_records_known_effect_and_clears_file() {
@@ -507,9 +546,10 @@ mod tests {
                 let mut reservations = Vec::new();
                 let failure = register_files(&scope, &mut reservations, Some(input), None, None)
                     .expect_err("input registration requires a reserved resource slot");
-                let (error, prepared, mut raw_files) = *failure;
+                let (error, direction, prepared, mut raw_files) = *failure;
 
                 assert!(error.to_string().contains("missing reserved resource slot"));
+                assert_eq!(direction, crate::FilePreparationDirection::Stdin);
                 assert!(prepared.is_none());
                 assert!(raw_files[0].take().is_some());
                 assert!(raw_files[1].is_none());
@@ -541,10 +581,11 @@ mod tests {
                     None,
                 )
                 .expect_err("stdout registration should fail after the input takes the only slot");
-                let (error, prepared, mut raw_files) = *failure;
+                let (error, direction, prepared, mut raw_files) = *failure;
                 let partial = prepared.expect("successfully registered stdin stays owned");
 
                 assert!(error.to_string().contains("missing reserved resource slot"));
+                assert_eq!(direction, crate::FilePreparationDirection::Stdout);
                 assert!(reservations.is_empty());
                 assert!(partial.stdin.is_some());
                 assert!(partial.stdout.is_none());
@@ -586,10 +627,11 @@ mod tests {
                     Some((stderr, FileSinkPolicy::Preserve)),
                 )
                 .expect_err("stderr registration should fail after stdin and stdout consume both slots");
-                let (error, prepared, mut raw_files) = *failure;
+                let (error, direction, prepared, mut raw_files) = *failure;
                 let partial = prepared.expect("registered stdin and stdout owners should be returned");
 
                 assert!(error.to_string().contains("missing reserved resource slot"));
+                assert_eq!(direction, crate::FilePreparationDirection::Stderr);
                 assert!(reservations.is_empty());
                 assert!(partial.stdin.is_some());
                 let stdout = partial.stdout.as_ref().expect("stdout owner should remain registered");

@@ -28,6 +28,14 @@
 
 **结论：** RC-006 仍为 **unresolved（未解决）**。本次原生运行的筛选测试和身份门禁均通过，但没有取得同一 helper 上计划要求的完整顺序：成功取消、原 I/O 返回、后续生产 I/O 持续阻塞、cleanup join 等待该 I/O、独立 watchdog 释放及资源回收。先前 `36579c2` 的 Linux 源码核查保留为历史证据。
 
+## 源码有界核查（源码 SHA `dec767dff01f9fb6c97c923628d472f9a81f33cd`，2026-11-24）
+
+本次核查运行于 Linux x86_64（`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`）、Rust `1.94.0` 和 Cargo `1.94.0`。针对生产取消/helper、Windows 探针、workflow 和身份门禁路径执行 `git diff --exit-code c871a25024adb72c1f4bdac7f9e226fb03463cb8 --`，退出码为 0。`command -v pwsh` 和 `command -v powershell` 均退出码为 1。本 SHA 未运行 Windows runtime 测试、PowerShell 身份门禁，也未生成新的 Windows trace。
+
+检查的生产路径中，Windows 取消成功后仍会直接 join helper，不受确认期限约束。生产探针记录 `production_join_pending_witness=false`、`original_io_return_is_subsequent_io=false`、`source_writer_manually_released=true` 和 `watchdog_released=false`；管道探针不能证明生产文件或生产 stdin 的因果链。现有 `windows-2022` workflow 仍是可用的 runtime 入口：固定 Rust `1.94.0`，运行 Windows 与 command-I/O 测试筛选，并应用 PowerShell 身份门禁。本次核查未触发该 workflow。
+
+**结论：** RC-006 仍为 **unresolved（未解决）**。本次源码比较只确认受检路径与记录的 `c871a250` run 一致；既未证实也未排除疑似生产挂起，也不证明 Windows 安全。未修改生产代码或探针，也未生成 artifact。
+
 ## 实施阶段有界源码复核（源码 SHA `5fa0cae06001e07b5053171216b1b9f7da6acb15`，2026-11-18）
 
 本次实施阶段源码检查运行于 Linux x86_64、Rust `1.94.0`。`src/execution/executor.rs` 中的 retry timer 测试改动未改变 Windows 取消、helper I/O 或 join 路径；停止诊断改动仅涉及文档。针对生产取消/helper、Windows 探针、workflow 和身份门禁路径执行 `git diff --exit-code fcdccb7 --`，退出码为 0。系统未安装 `pwsh` 或 `powershell`，因此未运行 Windows runtime 测试、PowerShell 门禁或新的 Windows trace。

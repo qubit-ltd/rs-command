@@ -107,11 +107,9 @@ impl CommandExecutor {
         config: CommandExecutionConfig,
     ) -> Result<Self, CommandExecutorCreateError> {
         config.validate()?;
-        let (scheduler, backend, group, recovery, manager) =
-            executor::build_executor(manager.clone(), config.clone())?;
+        let (scheduler, backend, group, recovery, manager) = executor::build_executor(manager.clone(), config.clone())?;
         let scheduler = std::sync::Arc::new(scheduler);
-        let lifetime =
-            std::sync::Arc::new(ExecutorLifetime::new(std::sync::Arc::clone(&scheduler)));
+        let lifetime = std::sync::Arc::new(ExecutorLifetime::new(std::sync::Arc::clone(&scheduler)));
         Ok(Self {
             manager,
             config,
@@ -156,13 +154,8 @@ mod tests {
         assert_eq!(executor.config(), &config);
         let outcome = executor
             .manager()
-            .run(OperationOptions::default(), |_| {
-                Ok::<_, ()>("manager view works")
-            })
+            .run(OperationOptions::default(), |_| Ok::<_, ()>("manager view works"))
             .unwrap();
-        assert!(matches!(
-            outcome,
-            OperationOutcome::Succeeded("manager view works")
-        ));
+        assert!(matches!(outcome, OperationOutcome::Succeeded("manager view works")));
     }
 }

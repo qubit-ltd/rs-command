@@ -84,8 +84,7 @@ impl RetryTimer {
     }
 }
 
-static RETRY_TIMER: std::sync::OnceLock<Result<RetryTimer, RetryTimerFailure>> =
-    std::sync::OnceLock::new();
+static RETRY_TIMER: std::sync::OnceLock<Result<RetryTimer, RetryTimerFailure>> = std::sync::OnceLock::new();
 
 /// Returns the process-wide retry timer, starting its worker on first use.
 pub(super) fn retry_timer() -> Result<&'static RetryTimer, RetryTimerFailure> {

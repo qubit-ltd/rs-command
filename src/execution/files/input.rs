@@ -133,15 +133,14 @@ impl CommandResourceRunOptions {
         .into_iter()
         .flatten()
         .collect();
-        if let Err(error) = validate_files(&files).and_then(|()| {
+        if let Err(failure) = validate_files(&files).and_then(|()| {
             let paths: Vec<_> = tee_paths.iter().map(|(name, path)| (*name, path.as_path())).collect();
             validate_tee_paths(&files, &paths)
         }) {
-            let direction = preparation_direction(&error);
             return Err(managed_failure(
-                error,
+                failure.source,
                 crate::FilePreparationStage::Validation,
-                direction,
+                Some(failure.direction),
                 None,
                 Some(restore_input(options, input, stdout, stderr)),
             ));
@@ -153,9 +152,8 @@ impl CommandResourceRunOptions {
             match scope.reserve_resource() {
                 Ok(reservation) => reservations.push(reservation),
                 Err(error) => {
-                    let kind = format!("resource capacity reservation failed: {error:?}");
                     return Err(managed_failure(
-                        io::Error::other(kind),
+                        io::Error::other(error),
                         crate::FilePreparationStage::ResourceReservation,
                         None,
                         None,
@@ -171,7 +169,7 @@ impl CommandResourceRunOptions {
         let prepared = match registered {
             Ok(prepared) => prepared,
             Err(error) => {
-                let (error, recovered, mut raw) = *error;
+                let (source, direction, recovered, mut raw) = *error;
                 let raw_input = restore_input(
                     options,
                     raw[0].take(),
@@ -179,9 +177,9 @@ impl CommandResourceRunOptions {
                     raw[2].take().zip(stderr_policy),
                 );
                 return Err(managed_failure(
-                    error,
+                    source,
                     crate::FilePreparationStage::Registration,
-                    None,
+                    Some(direction),
                     recovered,
                     Some(raw_input),
                 ));
@@ -206,6 +204,7 @@ impl CommandResourceRunOptions {
     /// * `scope`: Operation scope that owns prepared file resources.
     /// * `snapshot`: Submission-time path snapshot used for tee identity
     ///   checks.
+    /// * `command_stdin`: Command stdin category checked against owned stdin.
     /// * `session_stdin`: Whether the command uses a session stdin pipe.
     ///
     /// # Returns
@@ -214,12 +213,17 @@ impl CommandResourceRunOptions {
         self,
         scope: &OperationScope,
         snapshot: &ExecutionSnapshot,
+        command_stdin: crate::internal::command_stdin::CommandStdinMode,
         session_stdin: bool,
     ) -> Result<PreparedFiles, ManagedPreparationFailure> {
-        if session_stdin && self.configured_stdin().is_some() {
+        let command_uses_file = command_stdin == crate::internal::command_stdin::CommandStdinMode::File;
+        let command_uses_bytes = command_stdin == crate::internal::command_stdin::CommandStdinMode::Bytes;
+        if (session_stdin && (self.configured_stdin().is_some() || command_uses_file))
+            || (self.configured_stdin().is_some() && (command_uses_file || command_uses_bytes))
+        {
             let source = io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "session stdin cannot be combined with an owned stdin file",
+                "configured stdin sources cannot be combined",
             );
             return Err(managed_failure(
                 source,
@@ -280,26 +284,6 @@ fn managed_failure(
     }
 }
 
-/// Infers a stream from a validation error's stable safe prefix.
-///
-/// # Parameters
-/// * `error`: Validation error returned by the file identity checks.
-///
-/// # Returns
-/// The direction named by the validation message, when available.
-fn preparation_direction(error: &io::Error) -> Option<crate::FilePreparationDirection> {
-    let message = error.to_string();
-    if message.starts_with("stdin") {
-        Some(crate::FilePreparationDirection::Stdin)
-    } else if message.starts_with("stdout") {
-        Some(crate::FilePreparationDirection::Stdout)
-    } else if message.starts_with("stderr") {
-        Some(crate::FilePreparationDirection::Stderr)
-    } else {
-        None
-    }
-}
-
 /// Performs the restore input step in the managed command execution lifecycle.
 ///
 /// # Parameters
@@ -337,7 +321,7 @@ fn _policy_is_exhaustive(policy: FileSinkPolicy) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::fs::File;
     use std::fs::OpenOptions;
     use std::path::Path;
@@ -354,7 +338,7 @@ mod tests {
     use crate::execution::contracts::ExecutionSnapshot;
     use crate::resource_run_options::CommandResourceRunOptions;
     use crate::resource_run_options::FileSinkPolicy;
-    static PREPARATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(crate) static PREPARATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn test_file_sink_policy_exhaustiveness_covers_every_supported_policy() {
@@ -381,8 +365,12 @@ mod tests {
                     .expect("sink should open");
                 let error = match CommandResourceRunOptions::new()
                     .stdout_sink(file, FileSinkPolicy::Truncate)
-                    .prepare_for_managed(&scope, &ExecutionSnapshot::default(), false)
-                {
+                    .prepare_for_managed(
+                        &scope,
+                        &ExecutionSnapshot::default(),
+                        crate::internal::command_stdin::CommandStdinMode::Default,
+                        false,
+                    ) {
                     Ok(_) => panic!("zero resource capacity must reject preparation"),
                     Err(error) => error,
                 };
@@ -391,6 +379,13 @@ mod tests {
                 assert!(error.failure.input.is_some());
                 assert!(error.failure.prepared.is_none());
                 assert_eq!(error.source.kind(), std::io::ErrorKind::Other);
+                assert_eq!(
+                    error
+                        .source
+                        .get_ref()
+                        .and_then(|source| source.downcast_ref::<qubit_operation::ResourceCapacityError>()),
+                    Some(&qubit_operation::ResourceCapacityError::CapacityExceeded),
+                );
                 assert_eq!(std::fs::read(&sink_path).unwrap(), b"must survive");
                 drop(reservations);
                 Ok::<_, std::convert::Infallible>(())

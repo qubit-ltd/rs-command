@@ -82,10 +82,7 @@ pub(super) fn run_retry_timer_with_before_wait(
         }
         let wait = pending
             .iter()
-            .map(|item| {
-                item.due
-                    .saturating_duration_since(std::time::Instant::now())
-            })
+            .map(|item| item.due.saturating_duration_since(std::time::Instant::now()))
             .min()
             .unwrap_or(std::time::Duration::from_secs(30));
         before_wait();

@@ -113,11 +113,7 @@ fn test_retry_timer_wakes_the_most_recently_registered_waker() {
             .poll_with_schedule(&mut second_context, reject_retry_schedule)
             .is_pending()
     );
-    complete_retry_timer(
-        scheduled
-            .take()
-            .expect("first poll must schedule a message"),
-    );
+    complete_retry_timer(scheduled.take().expect("first poll must schedule a message"));
 
     assert_eq!(first.0.load(Ordering::SeqCst), 0);
     assert_eq!(second.0.load(Ordering::SeqCst), 1);
@@ -149,9 +145,7 @@ fn test_retry_delay_schedule_and_completion_boundaries() {
             })
             .is_pending()
     );
-    let item = scheduled
-        .take()
-        .expect("retry poll must construct timer message");
+    let item = scheduled.take().expect("retry poll must construct timer message");
     let state = Arc::clone(&item.state);
     drop(delay);
     assert!(state.is_cancelled());
@@ -244,8 +238,7 @@ fn test_retry_timer_processes_expired_pending_while_queue_has_messages() {
     let (tx, rx) = std::sync::mpsc::sync_channel(64);
     let timer = RetryTimer::new(tx, 64);
     let wakes = Arc::new(CountWake(AtomicUsize::new(0)));
-    let expired =
-        retry_timer_message(std::time::Instant::now() - std::time::Duration::from_millis(1));
+    let expired = retry_timer_message(std::time::Instant::now() - std::time::Duration::from_millis(1));
     expired.state.inner.lock().unwrap().waker = Some(Waker::from(wakes.clone()));
     let mut pending = vec![expired];
     for _ in 0..64 {
@@ -305,11 +298,7 @@ fn test_retry_timer_recovers_poisoned_waker_slots() {
             .is_pending()
     );
     drop(delay);
-    complete_retry_timer(
-        scheduled
-            .take()
-            .expect("first poll must schedule a message"),
-    );
+    complete_retry_timer(scheduled.take().expect("first poll must schedule a message"));
 
     let state = Arc::new(RetryTimerState::new());
     let poison = Arc::clone(&state);

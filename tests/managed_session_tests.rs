@@ -223,6 +223,86 @@ fn test_resource_session_owned_stdin_conflict_preserves_sink_before_start() {
 
 #[cfg(unix)]
 #[test]
+fn test_resource_session_rejects_path_stdin_before_registration_or_start() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let input_path = directory.path().join("input");
+    let output_path = directory.path().join("output");
+    let started_path = directory.path().join("started");
+    std::fs::write(&input_path, b"path input").unwrap();
+    std::fs::write(&output_path, b"preserve sink").unwrap();
+    let output = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&output_path)
+        .unwrap();
+    let mut session = block_on(
+        CommandRunner::without_timeout().start_session_resources(
+            &executor,
+            Command::new("sh")
+                .arg("-c")
+                .arg("touch \"$1\"")
+                .arg("resource-session-path-stdin")
+                .arg(started_path.to_str().unwrap())
+                .stdin_file(&input_path),
+            CommandResourceRunOptions::new().stdout_sink(output, qubit_command::FileSinkPolicy::Truncate),
+        ),
+    )
+    .unwrap();
+    let mut operation = session.take_operation().unwrap();
+    let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
+        panic!("resource sessions must reject path stdin before startup");
+    };
+    assert!(matches!(
+        error.reason(),
+        qubit_command::CommandErrorReason::FilePreparationFailed {
+            stage: qubit_command::FilePreparationStage::Validation,
+            direction: Some(qubit_command::FilePreparationDirection::Stdin),
+            source,
+        } if source.kind() == std::io::ErrorKind::InvalidInput
+    ));
+    assert_eq!(std::fs::read(&output_path).unwrap(), b"preserve sink");
+    assert!(!started_path.exists());
+    let settlement = operation.wait_settlement().unwrap();
+    assert_eq!(settlement.status, qubit_operation::SettlementStatus::RecoveryRequired);
+    assert_eq!(settlement.effects_total, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_resource_session_allows_command_byte_prefix_and_owned_sink() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let output = tempfile::NamedTempFile::new().unwrap();
+    let output_path = output.path().to_path_buf();
+    std::fs::write(&output_path, b"old sink").unwrap();
+    let sink = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&output_path)
+        .unwrap();
+    let mut session = block_on(CommandRunner::without_timeout().start_session_resources(
+        &executor,
+        Command::new("sh").arg("-c").arg("cat").stdin_bytes(b"prefix-"),
+        CommandResourceRunOptions::new().stdout_sink(sink, qubit_command::FileSinkPolicy::Truncate),
+    ))
+    .unwrap();
+    let mut input = session.take_stdin().unwrap();
+    block_on(poll_fn(|cx| Pin::new(&mut input).poll_write(cx, b"session"))).unwrap();
+    block_on(poll_fn(|cx| Pin::new(&mut input).poll_close(cx))).unwrap();
+    drop(input);
+    let mut operation = session.take_operation().unwrap();
+    let OperationOutcome::Succeeded(output) = operation.wait_outcome().unwrap() else {
+        panic!("session pipe should accept its command byte prefix");
+    };
+    assert_eq!(output.stdout(), b"prefix-session");
+    assert_eq!(std::fs::read(output_path).unwrap(), b"prefix-session");
+    assert!(operation.wait_settlement().unwrap().all_released());
+}
+
+#[cfg(unix)]
+#[test]
 fn test_scoped_resource_session_owned_stdin_conflict_preserves_sink_before_start() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let child_manager = manager.clone();

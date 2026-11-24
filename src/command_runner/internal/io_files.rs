@@ -27,6 +27,7 @@ use crate::CommandError;
 use crate::CommandErrorReason;
 use crate::OutputStream;
 use crate::command_stdin::CommandStdin;
+use crate::execution::contracts::PreparedFiles;
 
 /// Opened stdin path, file handle, and optional buffered input bytes.
 type PreparedInputParts = (Option<PathBuf>, Option<File>, Option<Vec<u8>>);
@@ -257,12 +258,24 @@ impl IoFiles {
     /// not a regular file, conflicts with stdin or the other output file, or
     /// cannot be truncated. A failure can occur after earlier file creation
     /// or truncation side effects.
+    #[cfg(test)]
     pub(in crate::command_runner) fn commit(
         &mut self,
         command: &str,
         stdout_path: Option<&Path>,
         stderr_path: Option<&Path>,
         process_command: &mut ProcessCommand,
+    ) -> Result<(), CommandError> {
+        self.commit_with_managed_files(command, stdout_path, stderr_path, process_command, None)
+    }
+
+    pub(in crate::command_runner) fn commit_with_managed_files(
+        &mut self,
+        command: &str,
+        stdout_path: Option<&Path>,
+        stderr_path: Option<&Path>,
+        process_command: &mut ProcessCommand,
+        managed_files: Option<&PreparedFiles>,
     ) -> Result<(), CommandError> {
         let stdout_tee = open_output(command, OutputStream::Stdout, stdout_path)?;
         let stderr_tee = open_output(command, OutputStream::Stderr, stderr_path)?;
@@ -271,6 +284,13 @@ impl IoFiles {
             self.stdin_path.as_deref().zip(self.stdin_file.as_ref()),
             stdout_tee.as_ref().map(|tee| (tee.path(), tee.file())),
             stderr_tee.as_ref().map(|tee| (tee.path(), tee.file())),
+        )?;
+        validate_managed_file_identities(
+            command,
+            self.stdin_file.as_ref(),
+            stdout_tee.as_ref().map(FileTee::file),
+            stderr_tee.as_ref().map(FileTee::file),
+            managed_files,
         )?;
         truncate_outputs_with(
             command,
@@ -287,6 +307,99 @@ impl IoFiles {
         self.stderr_tee = stderr_tee;
         Ok(())
     }
+}
+
+/// Compares command file handles with the handles retained by managed
+/// resources.
+fn validate_managed_file_identities(
+    command: &str,
+    command_stdin: Option<&File>,
+    stdout_tee: Option<&File>,
+    stderr_tee: Option<&File>,
+    managed: Option<&PreparedFiles>,
+) -> Result<(), CommandError> {
+    let Some(managed) = managed else {
+        return Ok(());
+    };
+    let mut opened = Vec::new();
+    if let Some(file) = command_stdin {
+        opened.push((
+            "stdin",
+            file.try_clone()
+                .map_err(|source| managed_identity_error(command, "stdin", source))?,
+        ));
+    }
+    if let Some(resource) = managed.stdin.as_ref() {
+        let file = resource
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .try_clone()
+            .map_err(|source| managed_identity_error(command, "stdin", source))?;
+        opened.push(("stdin", file));
+    }
+    for (direction, sink) in [("stdout", managed.stdout.as_ref()), ("stderr", managed.stderr.as_ref())] {
+        if let Some(sink) = sink {
+            let file = sink
+                .file
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .try_clone()
+                .map_err(|source| managed_identity_error(command, direction, source))?;
+            opened.push((direction, file));
+        }
+    }
+    if let Some(file) = stdout_tee {
+        opened.push((
+            "stdout",
+            file.try_clone()
+                .map_err(|source| managed_identity_error(command, "stdout", source))?,
+        ));
+    }
+    if let Some(file) = stderr_tee {
+        opened.push((
+            "stderr",
+            file.try_clone()
+                .map_err(|source| managed_identity_error(command, "stderr", source))?,
+        ));
+    }
+    let mut identities = Vec::with_capacity(opened.len());
+    for (direction, file) in &opened {
+        let identity = Handle::from_file(
+            file.try_clone()
+                .map_err(|source| managed_identity_error(command, direction, source))?,
+        )
+        .map_err(|source| managed_identity_error(command, direction, source))?;
+        if identities.iter().any(|(_, existing)| existing == &identity) {
+            return Err(managed_identity_error(
+                command,
+                direction,
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "configured file streams identify the same file",
+                ),
+            ));
+        }
+        identities.push((direction, identity));
+    }
+    Ok(())
+}
+
+fn managed_identity_error(command: &str, direction: &str, source: io::Error) -> CommandError {
+    let direction = match direction {
+        "stdin" => crate::FilePreparationDirection::Stdin,
+        "stdout" => crate::FilePreparationDirection::Stdout,
+        "stderr" => crate::FilePreparationDirection::Stderr,
+        _ => unreachable!("all managed file directions are known"),
+    };
+    CommandError::from_reason(
+        command,
+        CommandErrorReason::FilePreparationFailed {
+            stage: crate::FilePreparationStage::Validation,
+            direction: Some(direction),
+            source,
+        },
+        None,
+    )
 }
 
 /// Opens stdin or configures a non-file stdin mode.
@@ -1184,7 +1297,9 @@ mod tests {
             &mut process,
         ) {
             Err(error) => error,
-            Ok(_) => panic!("relative stdin and its absolute stdout path must be recognized as one file"),
+            Ok(_) => {
+                panic!("relative stdin and its absolute stdout path must be recognized as one file")
+            }
         };
 
         assert_eq!(error.kind(), CommandErrorKind::InputOutputConflict);
