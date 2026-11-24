@@ -569,7 +569,7 @@ pub(in crate::execution) fn deadline_failure(
 /// * `scheduler`: Scheduler whose closure state may have ended the wait.
 /// * `context`: Optional scope state checked before reporting scheduler
 ///   closure.
-#[cfg(test)]
+#[cfg(all(test, feature = "async"))]
 pub(in crate::execution) fn async_wait_failure_reason(
     reason: CommandSubmitFailureReason,
     scheduler: &BoundedScheduler,

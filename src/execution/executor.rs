@@ -22,7 +22,7 @@ use super::CommandExecutorCreateError;
 use super::CommandOperation;
 use super::CommandResourceSubmitFailure;
 use super::CommandSubmitFailure;
-#[cfg(feature = "async")]
+#[cfg(any(feature = "async", test))]
 use super::CommandSubmitFailureReason;
 #[cfg(feature = "async")]
 use super::RetryTimerFailure;
