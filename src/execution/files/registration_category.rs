@@ -9,9 +9,9 @@
 
 /// Retains the manager's category as the source of an I/O error.
 #[derive(Debug)]
-pub(super) struct RegistrationCategory(
+pub(crate) struct RegistrationCategory(
     /// Manager classification returned when resource registration fails.
-    pub(super) qubit_operation::ResourceManageErrorKind,
+    pub(crate) qubit_operation::ResourceManageErrorKind,
 );
 
 impl std::fmt::Display for RegistrationCategory {

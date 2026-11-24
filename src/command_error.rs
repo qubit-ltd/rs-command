@@ -103,6 +103,28 @@ impl CommandError {
             cleanup_failures,
         } = self;
         let reason = match *reason {
+            CommandErrorReason::OpenOutputFailed { stream, source, .. } => {
+                let direction = Some(match stream {
+                    OutputStream::Stdout => crate::FilePreparationDirection::Stdout,
+                    OutputStream::Stderr => crate::FilePreparationDirection::Stderr,
+                });
+                CommandErrorReason::FilePreparationFailed {
+                    stage,
+                    direction,
+                    source,
+                }
+            }
+            CommandErrorReason::NonRegularOutputFile { stream, .. } => {
+                let direction = Some(match stream {
+                    OutputStream::Stdout => crate::FilePreparationDirection::Stdout,
+                    OutputStream::Stderr => crate::FilePreparationDirection::Stderr,
+                });
+                CommandErrorReason::FilePreparationFailed {
+                    stage,
+                    direction,
+                    source: io::Error::new(io::ErrorKind::InvalidInput, "output is not a regular file"),
+                }
+            }
             CommandErrorReason::WriteOutputFailed { stream, source, .. } => {
                 let direction = Some(match stream {
                     OutputStream::Stdout => crate::FilePreparationDirection::Stdout,
@@ -246,6 +268,26 @@ impl CommandError {
     #[inline(always)]
     pub fn reason(&self) -> &CommandErrorReason {
         self.reason.as_ref()
+    }
+
+    /// Returns the resource manager's classification when registration failed.
+    ///
+    /// # Returns
+    ///
+    /// The original manager category for a resource registration failure, or
+    /// `None` when this error did not originate from resource registration.
+    #[must_use]
+    pub fn resource_registration_error_kind(&self) -> Option<qubit_operation::ResourceManageErrorKind> {
+        let source = match self.reason.as_ref() {
+            CommandErrorReason::FilePreparationFailed { source, .. } => source,
+            _ => return None,
+        };
+        source
+            .get_ref()
+            .and_then(|source| {
+                source.downcast_ref::<crate::execution::files::registration_category::RegistrationCategory>()
+            })
+            .map(|category| category.0)
     }
 
     /// Returns the operation-manager stop cause associated with this error.
@@ -727,6 +769,27 @@ mod tests {
     use super::OutputStream;
 
     #[test]
+    fn test_resource_registration_category_accessor_reads_typed_source() {
+        let error = CommandError::from_reason(
+            "managed command",
+            CommandErrorReason::FilePreparationFailed {
+                stage: crate::FilePreparationStage::Validation,
+                direction: Some(crate::FilePreparationDirection::Stdin),
+                source: io::Error::other(crate::execution::files::registration_category::RegistrationCategory(
+                    qubit_operation::ResourceManageErrorKind::Stopped,
+                )),
+            },
+            None,
+        );
+        assert_eq!(
+            error.resource_registration_error_kind(),
+            Some(qubit_operation::ResourceManageErrorKind::Stopped)
+        );
+        let unrelated = CommandError::from_reason("command", CommandErrorReason::CancelledBeforeStart, None);
+        assert_eq!(unrelated.resource_registration_error_kind(), None);
+    }
+
+    #[test]
     fn test_file_preparation_mapping_preserves_source_and_stream_direction() {
         for (stream, direction, path) in [
             (
@@ -740,6 +803,25 @@ mod tests {
                 "stderr.log",
             ),
         ] {
+            let open_error = CommandError::from_reason(
+                "prepared command",
+                CommandErrorReason::OpenOutputFailed {
+                    stream,
+                    path: path.into(),
+                    source: io::Error::new(io::ErrorKind::NotFound, "fixture open failure"),
+                },
+                None,
+            )
+            .into_file_preparation_failure(crate::FilePreparationStage::Validation);
+            assert!(matches!(
+                open_error.reason(),
+                CommandErrorReason::FilePreparationFailed {
+                    stage: crate::FilePreparationStage::Validation,
+                    direction: Some(actual),
+                    source,
+                } if *actual == direction && source.kind() == io::ErrorKind::NotFound
+            ));
+
             let error = CommandError::from_reason(
                 "prepared command",
                 CommandErrorReason::WriteOutputFailed {

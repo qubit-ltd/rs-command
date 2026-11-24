@@ -98,15 +98,15 @@ impl CommandResourceRunOptions {
 
         let mut all = Vec::new();
         if let Some(file) = input.as_ref() {
-            all.push(("stdin", file));
+            all.push((crate::FilePreparationDirection::Stdin, file));
         }
         if let Some((file, _)) = stdout.as_ref() {
-            all.push(("stdout", file));
+            all.push((crate::FilePreparationDirection::Stdout, file));
         }
         if let Some((file, _)) = stderr.as_ref() {
-            all.push(("stderr", file));
+            all.push((crate::FilePreparationDirection::Stderr, file));
         }
-        let files: Vec<(&'static str, &File)> = all;
+        let files: Vec<(crate::FilePreparationDirection, &File)> = all;
         let base = match working_directory {
             Some(directory) => directory.to_path_buf(),
             None => match std::env::current_dir() {
@@ -122,19 +122,28 @@ impl CommandResourceRunOptions {
                 }
             },
         };
-        let tee_paths: Vec<(&'static str, PathBuf)> = [
-            options
-                .configured_stdout_file()
-                .map(|path| ("stdout", super::identity::resolve_io_path(&base, path))),
-            options
-                .configured_stderr_file()
-                .map(|path| ("stderr", super::identity::resolve_io_path(&base, path))),
+        let tee_paths: Vec<(crate::FilePreparationDirection, PathBuf)> = [
+            options.configured_stdout_file().map(|path| {
+                (
+                    crate::FilePreparationDirection::Stdout,
+                    super::identity::resolve_io_path(&base, path),
+                )
+            }),
+            options.configured_stderr_file().map(|path| {
+                (
+                    crate::FilePreparationDirection::Stderr,
+                    super::identity::resolve_io_path(&base, path),
+                )
+            }),
         ]
         .into_iter()
         .flatten()
         .collect();
         if let Err(failure) = validate_files(&files).and_then(|()| {
-            let paths: Vec<_> = tee_paths.iter().map(|(name, path)| (*name, path.as_path())).collect();
+            let paths: Vec<_> = tee_paths
+                .iter()
+                .map(|(direction, path)| (*direction, path.as_path()))
+                .collect();
             validate_tee_paths(&files, &paths)
         }) {
             return Err(managed_failure(

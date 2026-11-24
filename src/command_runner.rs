@@ -135,140 +135,6 @@ fn validate_prepared_files(
             ),
         ));
     }
-    let stdin = files
-        .stdin
-        .as_ref()
-        .map(|resource| resource.lock().unwrap_or_else(|e| e.into_inner()).try_clone())
-        .transpose()
-        .map_err(|source| {
-            file_preparation_error(
-                command,
-                crate::FilePreparationStage::Validation,
-                Some(crate::FilePreparationDirection::Stdin),
-                source,
-            )
-        })?;
-    let stdout = files
-        .stdout
-        .as_ref()
-        .map(|sink| sink.file.lock().unwrap_or_else(|e| e.into_inner()).try_clone())
-        .transpose()
-        .map_err(|source| {
-            file_preparation_error(
-                command,
-                crate::FilePreparationStage::Validation,
-                Some(crate::FilePreparationDirection::Stdout),
-                source,
-            )
-        })?;
-    let stderr = files
-        .stderr
-        .as_ref()
-        .map(|sink| sink.file.lock().unwrap_or_else(|e| e.into_inner()).try_clone())
-        .transpose()
-        .map_err(|source| {
-            file_preparation_error(
-                command,
-                crate::FilePreparationStage::Validation,
-                Some(crate::FilePreparationDirection::Stderr),
-                source,
-            )
-        })?;
-    let handle = |direction, file: &std::fs::File| {
-        file.try_clone()
-            .and_then(same_file::Handle::from_file)
-            .map_err(|source| {
-                file_preparation_error(
-                    command,
-                    crate::FilePreparationStage::Validation,
-                    Some(direction),
-                    source,
-                )
-            })
-    };
-    let stdin_handle = stdin
-        .as_ref()
-        .map(|file| handle(crate::FilePreparationDirection::Stdin, file))
-        .transpose()?;
-    let stdout_handle = stdout
-        .as_ref()
-        .map(|file| handle(crate::FilePreparationDirection::Stdout, file))
-        .transpose()?;
-    let stderr_handle = stderr
-        .as_ref()
-        .map(|file| handle(crate::FilePreparationDirection::Stderr, file))
-        .transpose()?;
-    if stdin_handle
-        .as_ref()
-        .zip(stdout_handle.as_ref())
-        .is_some_and(|(a, b)| a == b)
-    {
-        return Err(file_preparation_error(
-            command,
-            crate::FilePreparationStage::Validation,
-            Some(crate::FilePreparationDirection::Stdout),
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "stdin and output sink refer to the same file",
-            ),
-        ));
-    }
-    if stdin_handle
-        .as_ref()
-        .zip(stderr_handle.as_ref())
-        .is_some_and(|(a, b)| a == b)
-    {
-        return Err(file_preparation_error(
-            command,
-            crate::FilePreparationStage::Validation,
-            Some(crate::FilePreparationDirection::Stderr),
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "stdin and stderr sink refer to the same file",
-            ),
-        ));
-    }
-    if stdout_handle
-        .as_ref()
-        .zip(stderr_handle.as_ref())
-        .is_some_and(|(a, b)| a == b)
-    {
-        return Err(file_preparation_error(
-            command,
-            crate::FilePreparationStage::Validation,
-            Some(crate::FilePreparationDirection::Stderr),
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "stdout and stderr sinks refer to the same file",
-            ),
-        ));
-    }
-    if let Some(command_stdin) = prepared.stdin_file.as_ref() {
-        let command_identity = command_stdin
-            .try_clone()
-            .and_then(same_file::Handle::from_file)
-            .map_err(|source| {
-                file_preparation_error(
-                    command,
-                    crate::FilePreparationStage::Validation,
-                    Some(crate::FilePreparationDirection::Stdin),
-                    source,
-                )
-            })?;
-        for (direction, identity) in [
-            (crate::FilePreparationDirection::Stdout, stdout_handle.as_ref()),
-            (crate::FilePreparationDirection::Stderr, stderr_handle.as_ref()),
-        ] {
-            if identity.is_some_and(|identity| identity == &command_identity) {
-                return Err(file_preparation_error(
-                    command,
-                    crate::FilePreparationStage::Validation,
-                    Some(direction),
-                    io::Error::new(io::ErrorKind::InvalidInput, "stdin conflicts with an owned output sink"),
-                ));
-            }
-        }
-    }
     Ok(())
 }
 
@@ -1119,136 +985,48 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_prepared_files_rejects_owned_file_aliases_and_path_tees() {
+    fn test_validate_prepared_files_rejects_owned_sinks_with_path_tees() {
         let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
         let outcome = manager
             .run(qubit_operation::OperationOptions::default(), |scope| {
                 let shared = managed_file(&scope, tempfile::tempfile().expect("fixture file should open"));
-                let same_stdin_and_stdout = PreparedFiles::new(
-                    Some(shared.clone()),
-                    Some(PreparedSink {
-                        file: shared.clone(),
-                        policy: FileSinkPolicy::Preserve,
-                    }),
-                    None,
-                );
-                let error = validate_prepared_files(
-                    "test",
-                    &same_stdin_and_stdout,
-                    &prepared_command("unused-test-program", None, None),
-                )
-                .expect_err("stdin and stdout must not identify one file");
-                assert!(matches!(
-                    error.reason(),
-                    CommandErrorReason::FilePreparationFailed {
-                        stage: crate::FilePreparationStage::Validation,
-                        direction: Some(crate::FilePreparationDirection::Stdout),
-                        source,
-                    } if source.kind() == io::ErrorKind::InvalidInput
-                ));
-
-                let same_outputs = PreparedFiles::new(
-                    None,
-                    Some(PreparedSink {
-                        file: shared.clone(),
-                        policy: FileSinkPolicy::Preserve,
-                    }),
-                    Some(PreparedSink {
-                        file: shared.clone(),
-                        policy: FileSinkPolicy::Preserve,
-                    }),
-                );
-                let error = validate_prepared_files(
-                    "test",
-                    &same_outputs,
-                    &prepared_command("unused-test-program", None, None),
-                )
-                .expect_err("stdout and stderr must not identify one file");
-                assert!(matches!(
-                    error.reason(),
-                    CommandErrorReason::FilePreparationFailed {
-                        stage: crate::FilePreparationStage::Validation,
-                        direction: Some(crate::FilePreparationDirection::Stderr),
-                        source,
-                    } if source.kind() == io::ErrorKind::InvalidInput
-                ));
-
-                let same_stdin_and_stderr = PreparedFiles::new(
-                    Some(shared.clone()),
-                    None,
-                    Some(PreparedSink {
-                        file: shared.clone(),
-                        policy: FileSinkPolicy::Preserve,
-                    }),
-                );
-                let error = validate_prepared_files(
-                    "test",
-                    &same_stdin_and_stderr,
-                    &prepared_command("unused-test-program", None, None),
-                )
-                .expect_err("stdin and stderr must not identify one file");
-                assert!(matches!(
-                    error.reason(),
-                    CommandErrorReason::FilePreparationFailed {
-                        stage: crate::FilePreparationStage::Validation,
-                        direction: Some(crate::FilePreparationDirection::Stderr),
-                        source,
-                    } if source.kind() == io::ErrorKind::InvalidInput
-                ));
-
                 let path_tee = tempfile::NamedTempFile::new().expect("tee path should be created");
-                let owned_output = PreparedFiles::new(
-                    None,
-                    Some(PreparedSink {
-                        file: shared.clone(),
-                        policy: FileSinkPolicy::Preserve,
-                    }),
-                    None,
-                );
-                let error = validate_prepared_files(
-                    "test",
-                    &owned_output,
-                    &prepared_command("unused-test-program", Some(path_tee.path()), None),
-                )
-                .expect_err("owned sinks cannot be combined with path tees");
-                assert!(matches!(
-                    error.reason(),
-                    CommandErrorReason::FilePreparationFailed {
-                        stage: crate::FilePreparationStage::Validation,
-                        direction: Some(crate::FilePreparationDirection::Stdout),
-                        source,
-                    } if source.kind() == io::ErrorKind::InvalidInput
-                ));
-
-                let stderr_with_path = PreparedFiles::new(
-                    None,
-                    None,
-                    Some(PreparedSink {
-                        file: shared.clone(),
-                        policy: FileSinkPolicy::Preserve,
-                    }),
-                );
-                let error = validate_prepared_files(
-                    "test",
-                    &stderr_with_path,
-                    &prepared_command("unused-test-program", None, Some(path_tee.path())),
-                )
-                .expect_err("an owned stderr sink cannot be combined with a path tee");
-                assert!(matches!(
-                    error.reason(),
-                    CommandErrorReason::FilePreparationFailed {
-                        stage: crate::FilePreparationStage::Validation,
-                        direction: Some(crate::FilePreparationDirection::Stderr),
-                        source,
-                    } if source.kind() == io::ErrorKind::InvalidInput
-                ));
+                for (stdout, stderr, expected) in [
+                    (Some(path_tee.path()), None, crate::FilePreparationDirection::Stdout),
+                    (None, Some(path_tee.path()), crate::FilePreparationDirection::Stderr),
+                ] {
+                    let files = PreparedFiles::new(
+                        None,
+                        (expected == crate::FilePreparationDirection::Stdout).then(|| PreparedSink {
+                            file: shared.clone(),
+                            policy: FileSinkPolicy::Preserve,
+                        }),
+                        (expected == crate::FilePreparationDirection::Stderr).then(|| PreparedSink {
+                            file: shared.clone(),
+                            policy: FileSinkPolicy::Preserve,
+                        }),
+                    );
+                    let error = validate_prepared_files(
+                        "test",
+                        &files,
+                        &prepared_command("unused-test-program", stdout, stderr),
+                    )
+                    .expect_err("owned sinks cannot be combined with path tees");
+                    assert!(matches!(
+                        error.reason(),
+                        CommandErrorReason::FilePreparationFailed {
+                            stage: crate::FilePreparationStage::Validation,
+                            direction: Some(direction),
+                            source,
+                        } if *direction == expected && source.kind() == io::ErrorKind::InvalidInput
+                    ));
+                }
                 Ok::<_, std::convert::Infallible>(())
             })
             .expect("validation test operation should finish");
         assert!(matches!(outcome, OperationOutcome::Succeeded(())));
     }
 
-    #[cfg(unix)]
     #[test]
     fn test_commit_rejects_managed_file_replaced_with_path_tee_after_preparation() {
         let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
@@ -1297,6 +1075,71 @@ mod tests {
             })
             .expect("commit identity test should finish");
         assert!(matches!(outcome, OperationOutcome::Succeeded(())));
+    }
+
+    #[test]
+    fn test_managed_output_preflight_failures_are_typed_by_direction() {
+        for direction in [OutputStream::Stdout, OutputStream::Stderr] {
+            let directory = tempfile::tempdir().expect("directory fixture should be created");
+            let (stdout, stderr) = match direction {
+                OutputStream::Stdout => (Some(directory.path()), None),
+                OutputStream::Stderr => (None, Some(directory.path())),
+            };
+            let error = match PreparedCommand::prepare(
+                crate::Command::new("unused-test-program"),
+                &RedactionPolicy::default(),
+                None,
+                stdout,
+                stderr,
+                false,
+            ) {
+                Err(error) => error,
+                Ok(_) => panic!("a directory path must fail output preflight"),
+            };
+            let error = error.into_file_preparation_failure(crate::FilePreparationStage::Validation);
+            let expected = match direction {
+                OutputStream::Stdout => crate::FilePreparationDirection::Stdout,
+                OutputStream::Stderr => crate::FilePreparationDirection::Stderr,
+            };
+            assert!(matches!(
+                error.reason(),
+                CommandErrorReason::FilePreparationFailed {
+                    stage: crate::FilePreparationStage::Validation,
+                    direction: Some(actual),
+                    source,
+                } if *actual == expected && source.kind() == io::ErrorKind::InvalidInput
+            ));
+        }
+    }
+
+    #[test]
+    fn test_managed_final_output_open_failures_are_typed_by_direction_and_keep_source() {
+        for direction in [OutputStream::Stdout, OutputStream::Stderr] {
+            let directory = tempfile::tempdir().expect("directory fixture should be created");
+            let missing_parent_output = directory.path().join("missing-parent").join("output");
+            let (stdout, stderr) = match direction {
+                OutputStream::Stdout => (Some(missing_parent_output.as_path()), None),
+                OutputStream::Stderr => (None, Some(missing_parent_output.as_path())),
+            };
+            let prepared = prepared_command("unused-test-program", stdout, stderr);
+            let managed = PreparedFiles::new(None, None, None);
+            let error = match prepared.commit_with_managed_files(Some(&managed)) {
+                Err(error) => error,
+                Ok(_) => panic!("a missing parent should fail when opening the final tee"),
+            };
+            let expected = match direction {
+                OutputStream::Stdout => crate::FilePreparationDirection::Stdout,
+                OutputStream::Stderr => crate::FilePreparationDirection::Stderr,
+            };
+            assert!(matches!(
+                error.reason(),
+                CommandErrorReason::FilePreparationFailed {
+                    stage: crate::FilePreparationStage::Validation,
+                    direction: Some(actual),
+                    source,
+                } if *actual == expected && source.kind() == io::ErrorKind::NotFound
+            ));
+        }
     }
 
     #[cfg(unix)]
@@ -1690,7 +1533,11 @@ impl CommandRunner {
                 {
                     gate.observe_external_cancellation();
                 }
-                return Err(error);
+                return Err(if prepared_files.is_some() {
+                    error.into_file_preparation_failure(crate::FilePreparationStage::Validation)
+                } else {
+                    error
+                });
             }
         };
         if cancellation.as_ref().is_some_and(CommandCancellation::is_cancelled) {

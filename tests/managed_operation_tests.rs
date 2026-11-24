@@ -337,7 +337,6 @@ fn test_conflicting_owned_sink_and_path_tee_do_not_truncate_before_rejection() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn test_path_stdin_and_owned_truncate_sink_alias_is_rejected_before_spawn() {
     for sink_stream in [0, 1] {
@@ -345,7 +344,6 @@ fn test_path_stdin_and_owned_truncate_sink_alias_is_rejected_before_spawn() {
         let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
         let directory = tempfile::tempdir().unwrap();
         let shared = directory.path().join("shared-input-output");
-        let started = directory.path().join("started");
         std::fs::write(&shared, b"preserve me").unwrap();
         let sink = std::fs::OpenOptions::new()
             .read(true)
@@ -360,12 +358,7 @@ fn test_path_stdin_and_owned_truncate_sink_alias_is_rejected_before_spawn() {
         let mut operation = executor
             .submit_resources(
                 CommandRunner::without_timeout(),
-                Command::new("sh")
-                    .arg("-c")
-                    .arg("touch \"$1\"")
-                    .arg("managed-path-input-alias")
-                    .arg(started.to_str().unwrap())
-                    .stdin_file(&shared),
+                Command::new("__qubit_command_must_not_start_path_stdin_alias__").stdin_file(&shared),
                 resources,
             )
             .unwrap();
@@ -387,7 +380,6 @@ fn test_path_stdin_and_owned_truncate_sink_alias_is_rejected_before_spawn() {
             } && source.kind() == std::io::ErrorKind::InvalidInput
         ));
         assert_eq!(std::fs::read(&shared).unwrap(), b"preserve me");
-        assert!(!started.exists());
         let settlement = operation.wait_settlement().unwrap();
         assert!(settlement.all_released());
         assert_eq!(settlement.effects_total, 0);
@@ -424,7 +416,6 @@ fn test_path_stdin_and_distinct_owned_sink_are_allowed() {
     assert_eq!(std::fs::read(output_path).unwrap(), b"path payload");
 }
 
-#[cfg(unix)]
 #[test]
 fn test_owned_stdin_conflicts_with_command_file_or_bytes_before_start() {
     for command_stdin in [0, 1] {
@@ -433,15 +424,10 @@ fn test_owned_stdin_conflicts_with_command_file_or_bytes_before_start() {
         let directory = tempfile::tempdir().unwrap();
         let owned_input = directory.path().join("owned-input");
         let command_input = directory.path().join("command-input");
-        let started = directory.path().join("started");
         std::fs::write(&owned_input, b"owned input").unwrap();
         std::fs::write(&command_input, b"command input").unwrap();
         let owned = std::fs::File::open(&owned_input).unwrap();
-        let command = Command::new("sh")
-            .arg("-c")
-            .arg("touch \"$1\"")
-            .arg("managed-stdin-conflict")
-            .arg(started.to_str().unwrap());
+        let command = Command::new("__qubit_command_must_not_start_owned_stdin_conflict__");
         let command = if command_stdin == 0 {
             command.stdin_file(&command_input)
         } else {
@@ -469,7 +455,6 @@ fn test_owned_stdin_conflicts_with_command_file_or_bytes_before_start() {
         ));
         assert_eq!(std::fs::read(&owned_input).unwrap(), b"owned input");
         assert_eq!(std::fs::read(&command_input).unwrap(), b"command input");
-        assert!(!started.exists());
         let settlement = operation.wait_settlement().unwrap();
         assert_eq!(settlement.status, SettlementStatus::RecoveryRequired);
         assert_eq!(settlement.effects_total, 0);
