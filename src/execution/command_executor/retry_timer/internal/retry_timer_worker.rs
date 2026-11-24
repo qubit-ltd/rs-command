@@ -7,6 +7,7 @@
 // =============================================================================
 //! Worker loop and completion helpers for retry timer messages.
 use super::retry_timer_message::RetryTimerMessage;
+use super::retry_timer_message::RetryTimerResult;
 
 const RETRY_TIMER_DRAIN_BATCH: usize = 64;
 
@@ -15,14 +16,11 @@ const RETRY_TIMER_DRAIN_BATCH: usize = 64;
 /// # Parameters
 /// * `item`: Completed or cancelled timer message.
 pub(super) fn complete_retry_timer(item: RetryTimerMessage) {
-    if item.cancelled.load(std::sync::atomic::Ordering::Acquire) {
-        return;
-    }
-    drop(item.permit);
-    item.ready.store(true, std::sync::atomic::Ordering::Release);
-    let waker = item.waker.lock().unwrap_or_else(|error| error.into_inner()).take();
+    let mut item = item;
+    let state = std::sync::Arc::clone(&item.state);
+    let waker = state.finish_with(RetryTimerResult::Ready, || drop(item.permit.take()));
     if let Some(waker) = waker {
-        waker.wake();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake()));
     }
 }
 
@@ -34,7 +32,7 @@ pub(super) fn complete_retry_timer(item: RetryTimerMessage) {
 pub(super) fn process_retry_timers(pending: &mut Vec<RetryTimerMessage>, now: std::time::Instant) {
     let mut index = 0;
     while index < pending.len() {
-        if pending[index].cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        if pending[index].state.is_cancelled() {
             pending.swap_remove(index);
         } else if pending[index].due <= now {
             complete_retry_timer(pending.swap_remove(index));
@@ -74,7 +72,10 @@ pub(super) fn run_retry_timer(rx: std::sync::mpsc::Receiver<RetryTimerMessage>) 
         }
         let wait = pending
             .iter()
-            .map(|item| item.due.saturating_duration_since(std::time::Instant::now()))
+            .map(|item| {
+                item.due
+                    .saturating_duration_since(std::time::Instant::now())
+            })
             .min()
             .unwrap_or(std::time::Duration::from_secs(30));
         match rx.recv_timeout(wait) {

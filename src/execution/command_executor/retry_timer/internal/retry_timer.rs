@@ -61,14 +61,25 @@ impl RetryTimer {
             }
         }
         item.permit = Some(RetryTimerPermit(std::sync::Arc::clone(&self.in_flight)));
-        self.tx.try_send(item).map_err(|error| match error {
-            std::sync::mpsc::TrySendError::Full(_) => RetryTimerFailure::Full,
-            std::sync::mpsc::TrySendError::Disconnected(_) => RetryTimerFailure::Disconnected,
-        })
+        item.accepted = true;
+        match self.tx.try_send(item) {
+            Ok(()) => Ok(()),
+            Err(std::sync::mpsc::TrySendError::Full(mut item)) => {
+                item.accepted = false;
+                drop(item);
+                Err(RetryTimerFailure::Full)
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(mut item)) => {
+                item.accepted = false;
+                drop(item);
+                Err(RetryTimerFailure::Disconnected)
+            }
+        }
     }
 }
 
-static RETRY_TIMER: std::sync::OnceLock<Result<RetryTimer, RetryTimerFailure>> = std::sync::OnceLock::new();
+static RETRY_TIMER: std::sync::OnceLock<Result<RetryTimer, RetryTimerFailure>> =
+    std::sync::OnceLock::new();
 
 /// Returns the process-wide retry timer, starting its worker on first use.
 pub(super) fn retry_timer() -> Result<&'static RetryTimer, RetryTimerFailure> {
