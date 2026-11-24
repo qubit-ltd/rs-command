@@ -23,10 +23,11 @@ use super::super::adapter::AdapterState;
 use super::super::command_executor::internal::async_submission_context::AsyncSubmissionContext;
 use super::super::contracts::Request;
 use super::super::contracts::RequestOptions;
-use super::super::executor::make_request;
+use super::super::executor::make_request_with_base;
 #[cfg(feature = "async")]
 use super::super::executor::managed_failure;
 use super::super::executor::resource_bytes;
+use super::super::io_path_base::IoPathBase;
 use super::CommandExecutor;
 use crate::Command;
 #[cfg(feature = "async")]
@@ -74,7 +75,7 @@ impl CommandExecutor {
         command: Command,
         options: CommandRunOptions,
     ) -> Result<CommandOperation, CommandSubmitFailure> {
-        self.submit_in_manager(&self.manager, runner, command, options, None)
+        self.submit_in_manager(&self.manager, runner, command, options, None, None)
     }
     /// Attempts to submit a command without waiting for executor capacity. Use
     /// the waiting submission methods when the caller intends to wait for
@@ -106,7 +107,7 @@ impl CommandExecutor {
         options: CommandResourceRunOptions,
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
         let bytes = resource_bytes(&options);
-        self.submit_resources_manager(&self.manager, runner, command, options, bytes, None)
+        self.submit_resources_manager(&self.manager, runner, command, options, bytes, None, None)
     }
     /// Attempts local admission and returns an asynchronous view of the
     /// submitted operation without waiting for executor capacity. Use the
@@ -347,7 +348,7 @@ impl CommandExecutor {
                 });
             }
         };
-        self.submit_in_manager(&manager, runner, command, options, Some(scope.context()))
+        self.submit_in_manager(&manager, runner, command, options, Some(scope.context()), None)
     }
     /// Attempts to submit a command without waiting for executor capacity. Use
     /// the waiting submission methods when the caller intends to wait for
@@ -415,7 +416,7 @@ impl CommandExecutor {
                 });
             }
         };
-        self.submit_resources_manager(&manager, runner, command, options, bytes, Some(scope.context()))
+        self.submit_resources_manager(&manager, runner, command, options, bytes, Some(scope.context()), None)
     }
     /// Performs the submit in manager step in the managed command execution
     /// lifecycle.
@@ -426,26 +427,28 @@ impl CommandExecutor {
     /// * `command`: Supplies the command value used by this operation.
     /// * `options`: Supplies the options value used by this operation.
     /// * `deadline`: Supplies the deadline value used by this operation.
-    fn submit_in_manager(
+    pub(in crate::execution) fn submit_in_manager(
         &self,
         manager: &OperationManager,
         runner: CommandRunner,
         command: Command,
         options: CommandRunOptions,
         deadline: Option<OperationContext>,
+        base: Option<&IoPathBase>,
     ) -> Result<CommandOperation, CommandSubmitFailure> {
-        let request = make_request(runner, command, RequestOptions::Standard(options)).map_err(|error| {
-            let (runner, command, options, message) = *error;
-            let RequestOptions::Standard(options) = options else {
-                unreachable!()
-            };
-            CommandSubmitFailure {
-                runner: Box::new(runner),
-                command: Box::new(command),
-                options,
-                reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure { diagnostic: message }),
-            }
-        })?;
+        let request =
+            make_request_with_base(runner, command, RequestOptions::Standard(options), base).map_err(|error| {
+                let (runner, command, options, message) = *error;
+                let RequestOptions::Standard(options) = options else {
+                    unreachable!()
+                };
+                CommandSubmitFailure {
+                    runner: Box::new(runner),
+                    command: Box::new(command),
+                    options,
+                    reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure { diagnostic: message }),
+                }
+            })?;
         let permit = match self.scheduler.try_reserve_until(0, deadline.clone()) {
             Ok(p) => p,
             Err(reason) => {
@@ -515,19 +518,21 @@ impl CommandExecutor {
         options: CommandResourceRunOptions,
         bytes: usize,
         deadline: Option<OperationContext>,
+        base: Option<&IoPathBase>,
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
-        let request = make_request(runner, command, RequestOptions::Resources(options)).map_err(|error| {
-            let (runner, command, options, message) = *error;
-            let RequestOptions::Resources(options) = options else {
-                unreachable!()
-            };
-            CommandResourceSubmitFailure {
-                runner: Box::new(runner),
-                command: Box::new(command),
-                options: Box::new(options),
-                reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure { diagnostic: message }),
-            }
-        })?;
+        let request =
+            make_request_with_base(runner, command, RequestOptions::Resources(options), base).map_err(|error| {
+                let (runner, command, options, message) = *error;
+                let RequestOptions::Resources(options) = options else {
+                    unreachable!()
+                };
+                CommandResourceSubmitFailure {
+                    runner: Box::new(runner),
+                    command: Box::new(command),
+                    options: Box::new(options),
+                    reason: CommandSubmitFailureReason::Snapshot(SnapshotFailure { diagnostic: message }),
+                }
+            })?;
         let permit = match self.scheduler.try_reserve_until(bytes, deadline.clone()) {
             Ok(p) => p,
             Err(reason) => {
@@ -590,7 +595,7 @@ impl CommandExecutor {
     ///   operation.
     /// * `context`: Supplies the context value used by this operation.
     #[cfg(feature = "async")]
-    fn submit_async_in_manager(
+    pub(in crate::execution) fn submit_async_in_manager(
         &self,
         manager: &OperationManager,
         runner: CommandRunner,
@@ -602,11 +607,18 @@ impl CommandExecutor {
             bridge,
             keepalive,
             deadline,
+            io_path_base,
         } = context;
         let RequestOptions::Standard(options) = request_options else {
             unreachable!()
         };
-        let request = make_request(runner, command, RequestOptions::Standard(options)).map_err(|error| {
+        let request = make_request_with_base(
+            runner,
+            command,
+            RequestOptions::Standard(options),
+            io_path_base.as_ref(),
+        )
+        .map_err(|error| {
             let (runner, command, options, message) = *error;
             let RequestOptions::Standard(options) = options else {
                 unreachable!()
@@ -839,6 +851,7 @@ impl CommandExecutor {
                 command,
                 RequestOptions::Standard(options),
                 AsyncSubmissionContext {
+                    io_path_base: None,
                     bridge: Some(bridge),
                     keepalive: Some(super::adapter::SessionOwners {
                         _stdin: stdin_reader,
@@ -893,6 +906,7 @@ impl CommandExecutor {
                 options,
                 bytes,
                 AsyncSubmissionContext {
+                    io_path_base: None,
                     bridge: Some(bridge),
                     keepalive: Some(super::adapter::SessionOwners {
                         _stdin: stdin_reader,
@@ -933,8 +947,15 @@ impl CommandExecutor {
             bridge,
             keepalive,
             deadline,
+            io_path_base,
         } = context;
-        let request = make_request(runner, command, RequestOptions::Resources(options)).map_err(|error| {
+        let request = make_request_with_base(
+            runner,
+            command,
+            RequestOptions::Resources(options),
+            io_path_base.as_ref(),
+        )
+        .map_err(|error| {
             let (runner, command, options, message) = *error;
             let RequestOptions::Resources(options) = options else {
                 unreachable!()

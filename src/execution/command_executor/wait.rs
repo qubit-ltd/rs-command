@@ -15,7 +15,6 @@ use crate::CommandResourceRunOptions;
 use crate::CommandRunOptions;
 use crate::CommandRunner;
 use crate::execution::CommandExecutor;
-use crate::execution::CommandExecutorApi;
 use crate::execution::CommandResourceSubmitFailure;
 use crate::execution::CommandSubmitFailure;
 use crate::execution::CommandSubmitFailureReason;
@@ -23,6 +22,7 @@ use crate::execution::CommandSubmitFailureReason;
 use crate::execution::command_executor::internal::async_submission_context::AsyncSubmissionContext;
 use crate::execution::contracts::CapacityFailure;
 use crate::execution::executor;
+use crate::execution::executor::capture_io_path_base;
 use crate::execution::scheduler::BoundedScheduler;
 use crate::execution::scheduler::WaitOutcome as SchedulerWaitOutcome;
 
@@ -55,8 +55,20 @@ impl CommandExecutor {
         mut options: CommandRunOptions,
     ) -> Result<crate::CommandOperation, CommandSubmitFailure> {
         let deadline = scope.context();
+        let base = capture_io_path_base();
+        let manager = match scope.manager().with_group(&self.group) {
+            Ok(manager) => manager,
+            Err(error) => {
+                return Err(CommandSubmitFailure {
+                    runner: Box::new(runner),
+                    command: Box::new(command),
+                    options,
+                    reason: CommandSubmitFailureReason::GroupBinding(error),
+                });
+            }
+        };
         loop {
-            match CommandExecutorApi::submit_in(self, scope, runner, command, options) {
+            match self.submit_in_manager(&manager, runner, command, options, Some(deadline.clone()), Some(&base)) {
                 Ok(operation) => return Ok(operation),
                 Err(failure) => {
                     let CommandSubmitFailure {
@@ -97,8 +109,9 @@ impl CommandExecutor {
         mut command: Command,
         mut options: CommandRunOptions,
     ) -> Result<crate::CommandOperation, CommandSubmitFailure> {
+        let base = capture_io_path_base();
         loop {
-            match CommandExecutorApi::submit(self, runner, command, options) {
+            match self.submit_in_manager(&self.manager, runner, command, options, None, Some(&base)) {
                 Ok(operation) => return Ok(operation),
                 Err(failure) => {
                     let CommandSubmitFailure {
@@ -139,10 +152,19 @@ impl CommandExecutor {
         mut command: Command,
         mut options: CommandResourceRunOptions,
     ) -> Result<crate::CommandOperation, CommandResourceSubmitFailure> {
+        let base = capture_io_path_base();
         loop {
             let bytes = executor::resource_bytes(&options);
-            match CommandExecutor::submit_resources_manager(self, &self.manager, runner, command, options, bytes, None)
-            {
+            match CommandExecutor::submit_resources_manager(
+                self,
+                &self.manager,
+                runner,
+                command,
+                options,
+                bytes,
+                None,
+                Some(&base),
+            ) {
                 Ok(operation) => return Ok(operation),
                 Err(failure) => {
                     let CommandResourceSubmitFailure {
@@ -186,9 +208,30 @@ impl CommandExecutor {
         mut options: CommandResourceRunOptions,
     ) -> Result<crate::CommandOperation, CommandResourceSubmitFailure> {
         let deadline = scope.context();
+        let base = capture_io_path_base();
+        let manager = match scope.manager().with_group(&self.group) {
+            Ok(manager) => manager,
+            Err(error) => {
+                return Err(CommandResourceSubmitFailure {
+                    runner: Box::new(runner),
+                    command: Box::new(command),
+                    options: Box::new(options),
+                    reason: CommandSubmitFailureReason::GroupBinding(error),
+                });
+            }
+        };
         loop {
             let bytes = executor::resource_bytes(&options);
-            match CommandExecutor::submit_resources_in_with_bytes(self, scope, runner, command, options, bytes) {
+            match CommandExecutor::submit_resources_manager(
+                self,
+                &manager,
+                runner,
+                command,
+                options,
+                bytes,
+                Some(deadline.clone()),
+                Some(&base),
+            ) {
                 Ok(operation) => return Ok(operation),
                 Err(failure) => {
                     let CommandResourceSubmitFailure {
@@ -230,8 +273,15 @@ impl CommandExecutor {
         mut command: Command,
         mut options: CommandRunOptions,
     ) -> Result<crate::execution::AsyncCommandOperation, CommandSubmitFailure> {
+        let base = capture_io_path_base();
         loop {
-            match CommandExecutorApi::submit_async(self, runner, command, options) {
+            match self.submit_async_in_manager(
+                &self.manager,
+                runner,
+                command,
+                crate::execution::contracts::RequestOptions::Standard(options),
+                AsyncSubmissionContext::plain(None).with_io_path_base(base.clone()),
+            ) {
                 Ok(operation) => return Ok(operation),
                 Err(failure) => {
                     let CommandSubmitFailure {
@@ -289,6 +339,7 @@ impl CommandExecutor {
         mut command: Command,
         mut options: CommandResourceRunOptions,
     ) -> Result<crate::execution::AsyncCommandOperation, CommandResourceSubmitFailure> {
+        let base = capture_io_path_base();
         loop {
             let bytes = executor::resource_bytes(&options);
             match CommandExecutor::submit_async_resources_manager(
@@ -298,7 +349,7 @@ impl CommandExecutor {
                 command,
                 options,
                 bytes,
-                AsyncSubmissionContext::plain(None),
+                AsyncSubmissionContext::plain(None).with_io_path_base(base.clone()),
             ) {
                 Ok(operation) => return Ok(operation),
                 Err(failure) => {
@@ -360,9 +411,29 @@ impl CommandExecutor {
         mut options: CommandResourceRunOptions,
     ) -> Result<crate::execution::AsyncCommandOperation, CommandResourceSubmitFailure> {
         let context = scope.context();
+        let base = capture_io_path_base();
+        let manager = match scope.manager().with_group(&self.group) {
+            Ok(manager) => manager,
+            Err(error) => {
+                return Err(CommandResourceSubmitFailure {
+                    runner: Box::new(runner),
+                    command: Box::new(command),
+                    options: Box::new(options),
+                    reason: CommandSubmitFailureReason::GroupBinding(error),
+                });
+            }
+        };
         loop {
             let bytes = executor::resource_bytes(&options);
-            match CommandExecutor::submit_async_resources_in_with_bytes(self, scope, runner, command, options, bytes) {
+            match CommandExecutor::submit_async_resources_manager(
+                self,
+                &manager,
+                runner,
+                command,
+                options,
+                bytes,
+                AsyncSubmissionContext::plain(Some(context.clone())).with_io_path_base(base.clone()),
+            ) {
                 Ok(operation) => return Ok(operation),
                 Err(failure) => {
                     let CommandResourceSubmitFailure {
@@ -430,8 +501,26 @@ impl CommandExecutor {
         mut options: CommandRunOptions,
     ) -> Result<crate::execution::AsyncCommandOperation, CommandSubmitFailure> {
         let context = scope.context();
+        let base = capture_io_path_base();
+        let manager = match scope.manager().with_group(&self.group) {
+            Ok(manager) => manager,
+            Err(error) => {
+                return Err(CommandSubmitFailure {
+                    runner: Box::new(runner),
+                    command: Box::new(command),
+                    options,
+                    reason: CommandSubmitFailureReason::GroupBinding(error),
+                });
+            }
+        };
         loop {
-            match CommandExecutorApi::submit_async_in(self, scope, runner, command, options) {
+            match self.submit_async_in_manager(
+                &manager,
+                runner,
+                command,
+                crate::execution::contracts::RequestOptions::Standard(options),
+                AsyncSubmissionContext::plain(Some(context.clone())).with_io_path_base(base.clone()),
+            ) {
                 Ok(operation) => return Ok(operation),
                 Err(failure) => {
                     let CommandSubmitFailure {

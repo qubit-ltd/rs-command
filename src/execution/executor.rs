@@ -46,6 +46,7 @@ use super::contracts::IoPathSnapshot;
 use super::contracts::Request;
 use super::contracts::RequestOptions;
 use super::contracts::Scheduler;
+use super::io_path_base::IoPathBase;
 use super::scheduler::BoundedScheduler;
 use crate::Command;
 #[cfg(feature = "async")]
@@ -539,10 +540,41 @@ pub(in crate::execution) fn managed_failure(message: String) -> CommandError {
 /// * `runner`: Supplies the runner value used by this operation.
 /// * `command`: Supplies the command value used by this operation.
 /// * `options`: Supplies the options value used by this operation.
+#[cfg(test)]
 pub(in crate::execution) fn make_request(
     runner: CommandRunner,
     command: Command,
     options: RequestOptions,
+) -> Result<Request, Box<(CommandRunner, Command, RequestOptions, String)>> {
+    make_request_with_base(runner, command, options, None)
+}
+
+/// Captures a parent-directory basis for a submission that may wait and retry.
+///
+/// # Returns
+/// A reusable directory result for request building during retries.
+pub(in crate::execution) fn capture_io_path_base() -> IoPathBase {
+    IoPathBase::capture()
+}
+
+/// Builds a request from its original input and an optional captured
+/// parent-directory basis.
+///
+/// # Parameters
+/// * `runner`: Runner configuration retained by the request.
+/// * `command`: Command with its original relative I/O paths.
+/// * `options`: Standard or resource-backed stream options.
+/// * `base`: Optional parent-directory result captured before a wait/retry
+///   loop.
+///
+/// # Errors
+/// Returns the original request inputs and a diagnostic when required path
+/// resolution fails.
+pub(in crate::execution) fn make_request_with_base(
+    runner: CommandRunner,
+    command: Command,
+    options: RequestOptions,
+    base: Option<&IoPathBase>,
 ) -> Result<Request, Box<(CommandRunner, Command, RequestOptions, String)>> {
     let stdin = command.stdin_file_path().map(ToOwned::to_owned);
     let (stdout, stderr) = match &options {
@@ -559,7 +591,11 @@ pub(in crate::execution) fn make_request(
         .into_iter()
         .flatten()
         .any(needs_parent_directory);
-    let wd = match std::env::current_dir() {
+    let current_dir = match base {
+        Some(base) => base.result(),
+        None => std::env::current_dir().map_err(|error| error.to_string()),
+    };
+    let wd = match current_dir {
         Ok(path) => path,
         Err(error) if needs_base => {
             return Err(Box::new((
@@ -799,7 +835,9 @@ mod executor_decision_tests {
                     let failure = match waiting_executor.submit_wait_blocking_in(
                         &scope,
                         CommandRunner::without_timeout().working_directory("retained-directory"),
-                        Command::new("must-not-start").arg("original-arg"),
+                        Command::new("must-not-start")
+                            .arg("original-arg")
+                            .stdin_file("original-input.txt"),
                         CommandRunOptions::new().tee_stdout_to_file("original-output.log"),
                     ) {
                         Err(failure) => failure,
@@ -831,6 +869,7 @@ mod executor_decision_tests {
             failure.command.arguments().collect::<Vec<_>>(),
             vec![std::ffi::OsStr::new("original-arg")]
         );
+        assert_eq!(failure.command.stdin_file_path(), Some(Path::new("original-input.txt")));
         assert_eq!(
             failure.runner.configured_working_directory(),
             Some(Path::new("retained-directory"))
@@ -873,6 +912,29 @@ mod executor_decision_tests {
         assert_eq!(request.command.stdin_file_path(), Some(Path::new("input.txt")));
         assert_eq!(request.command.working_directory_override(), Some(command_directory));
         assert_eq!(request.runner.configured_working_directory(), Some(runner_directory));
+    }
+
+    #[test]
+    fn test_make_request_uses_the_parent_io_base_captured_before_retry() {
+        let first_parent = Path::new("first-parent");
+        let request = super::make_request_with_base(
+            CommandRunner::without_timeout(),
+            Command::new("worker").stdin_file("input.txt"),
+            super::RequestOptions::Standard(CommandRunOptions::new().tee_stdout_to_file("output.log")),
+            Some(&super::IoPathBase::from_result(Ok(first_parent.to_path_buf()))),
+        )
+        .expect("request should use the captured path base");
+
+        assert_eq!(request.snapshot.working_directory.as_path(), first_parent);
+        assert_eq!(
+            request.io_paths.stdin.as_deref(),
+            Some(first_parent.join("input.txt").as_path())
+        );
+        assert_eq!(
+            request.io_paths.stdout.as_deref(),
+            Some(first_parent.join("output.log").as_path())
+        );
+        assert_eq!(request.command.stdin_file_path(), Some(Path::new("input.txt")));
     }
 
     struct FixedClock(ClockDomainId);
