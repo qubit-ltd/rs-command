@@ -1325,6 +1325,52 @@ mod tests {
     }
 
     #[test]
+    fn test_try_next_dispatches_multiple_queued_jobs_in_reservation_order() {
+        use std::sync::Mutex;
+
+        let scheduler = BoundedScheduler::new(config(2, 0)).unwrap();
+        let active = scheduler.try_reserve(0).unwrap();
+        let first_queued = scheduler.try_reserve(0).unwrap();
+        let second_queued = scheduler.try_reserve(0).unwrap();
+        let dispatched = Arc::new(Mutex::new(Vec::new()));
+
+        let second_order = Arc::clone(&dispatched);
+        scheduler
+            .enqueue(
+                ScheduledJob {
+                    run: Box::new(move |permit| {
+                        second_order.lock().unwrap().push("second");
+                        drop(permit);
+                    }),
+                    stop: Arc::new(NoopStop),
+                },
+                second_queued,
+            )
+            .unwrap();
+        let first_order = Arc::clone(&dispatched);
+        scheduler
+            .enqueue(
+                ScheduledJob {
+                    run: Box::new(move |permit| {
+                        first_order.lock().unwrap().push("first");
+                        drop(permit);
+                    }),
+                    stop: Arc::new(NoopStop),
+                },
+                first_queued,
+            )
+            .unwrap();
+
+        drop(active);
+        for expected in ["first", "second"] {
+            let (job, permit) = scheduler.try_next().expect("queued job should be dispatched");
+            (job.run)(permit);
+            assert_eq!(dispatched.lock().unwrap().last(), Some(&expected));
+        }
+        assert_eq!((scheduler.snapshot().active, scheduler.snapshot().queued), (0, 0));
+    }
+
+    #[test]
     fn test_scheduler_trait_dispatches_queued_work_and_drains_after_close() {
         let scheduler = BoundedScheduler::new(config(1, 0)).unwrap();
         let executed = Arc::new(AtomicUsize::new(0));

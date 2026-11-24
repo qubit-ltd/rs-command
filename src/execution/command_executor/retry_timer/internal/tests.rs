@@ -315,6 +315,18 @@ fn test_retry_timer_recovers_poisoned_waker_slots() {
         accepted: true,
     });
     assert_eq!(state.poll(&Waker::noop().clone()), RetryTimerResult::Ready);
+
+    let state = Arc::new(RetryTimerState::new());
+    let poison = Arc::clone(&state);
+    let join = std::thread::spawn(move || {
+        let _guard = poison.inner.lock().unwrap();
+        panic!("simulate a timer worker panic while inspecting cancellation state");
+    })
+    .join();
+    assert!(join.is_err());
+    assert!(!state.is_cancelled());
+    state.cancel();
+    assert!(state.is_cancelled());
 }
 
 #[test]
