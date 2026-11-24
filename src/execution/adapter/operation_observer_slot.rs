@@ -21,6 +21,11 @@ pub(crate) struct OperationObserverSlot {
     available: Condvar,
 }
 impl OperationObserverSlot {
+    /// Returns the observer once it has been published without waiting.
+    pub(crate) fn try_get(&self) -> Option<OperationObserver> {
+        self.observer.lock().unwrap_or_else(|error| error.into_inner()).clone()
+    }
+
     /// Stores the set value used by this execution component.
     ///
     /// # Parameters
@@ -31,6 +36,7 @@ impl OperationObserverSlot {
     }
 
     /// Stores the wait value used by this execution component.
+    #[cfg(test)]
     pub(crate) fn wait(&self) -> OperationObserver {
         self.wait_inner(|| {})
     }
@@ -39,6 +45,7 @@ impl OperationObserverSlot {
     ///
     /// # Parameters
     /// * `before_wait`: Callback invoked immediately before waiting.
+    #[cfg(test)]
     fn wait_inner(&self, mut before_wait: impl FnMut()) -> OperationObserver {
         let mut observer = self.observer.lock().unwrap_or_else(|error| error.into_inner());
         while observer.is_none() {

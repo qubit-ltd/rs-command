@@ -7,6 +7,8 @@
 // =============================================================================
 //! Single bounded worker retains unresolved cleanup owners through handoff.
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::sync_channel;
 
@@ -14,6 +16,7 @@ use qubit_operation::OperationId;
 use qubit_operation::SettlementReport;
 use qubit_operation::SettlementStatus;
 
+use super::PendingRecovery;
 use super::RecoveryItem;
 use super::RecoverySender;
 use crate::execution::contracts::RecoveryEffectEvidence;
@@ -26,46 +29,95 @@ const MAX_RECOVERY_EFFECTS: usize = 64;
 /// # Parameters
 /// * `capacity`: Supplies the capacity value used by this operation.
 pub(crate) fn start_recovery_worker(capacity: usize) -> Result<RecoverySender, std::io::Error> {
-    let (tx, rx) = sync_channel::<RecoveryItem>(capacity.max(1));
+    let capacity = capacity.max(1);
+    let (tx, rx) = sync_channel::<RecoveryItem>(capacity);
+    let recovery = RecoverySender::new(tx, capacity);
+    let outstanding = recovery.outstanding();
     std::thread::Builder::new()
         .name("qubit-command-recovery".to_owned())
-        .spawn(move || recovery_loop(rx))?;
-    Ok(tx)
+        .spawn(move || recovery_loop(rx, outstanding))?;
+    Ok(recovery)
 }
-/// Stores the recovery loop value used by this execution component.
+/// Advances every accepted owner without blocking on another owner's cleanup
+/// or upstream settlement.
 ///
 /// # Parameters
-/// * `rx`: Supplies the rx value used by this operation.
-fn recovery_loop(rx: Receiver<RecoveryItem>) {
-    while let Ok(item) = rx.recv() {
-        let summary = item.owner.summary();
-        let effect_evidence = item.owner.effect_evidence(item.id);
-        let mut backoff = std::time::Duration::from_millis(25);
-        loop {
-            match item.owner.retry_cleanup() {
-                Ok(()) if item.owner.is_complete() => break,
-                Err(RecoveryRetryError::OwnerAlreadyConsumed) if item.owner.is_complete() => break,
-                _ => {
-                    std::thread::sleep(backoff);
-                    backoff = (backoff * 2).min(std::time::Duration::from_secs(2));
+/// * `rx`: Channel receiver for newly accepted owners.
+/// * `outstanding`: Shared count covering queued and pending owners.
+fn recovery_loop(rx: Receiver<RecoveryItem>, outstanding: Arc<AtomicUsize>) {
+    let mut pending: Vec<PendingRecovery> = Vec::new();
+    loop {
+        while let Ok(item) = rx.try_recv() {
+            let effect_evidence = item.owner.effect_evidence(item.id);
+            pending.push(PendingRecovery::new(item, effect_evidence));
+        }
+        if pending.is_empty() {
+            match rx.recv() {
+                Ok(item) => {
+                    let effect_evidence = item.owner.effect_evidence(item.id);
+                    pending.push(PendingRecovery::new(item, effect_evidence));
                 }
+                Err(_) => break,
             }
         }
-        log::debug!("recovery owner handed responsibility upstream: {summary}");
-        let _ = item.control.release();
-        let _ = item
-            .control
-            .settlement(Arc::new(recovery_settlement(item.id, effect_evidence)));
-        let observer = item.observer.wait();
-        loop {
-            match observer.wait_settlement() {
-                Ok(_) => break,
-                Err(error) => {
-                    log::error!("recovery worker could not observe upstream settlement: {error:?}");
-                    std::thread::sleep(backoff);
-                    backoff = (backoff * 2).min(std::time::Duration::from_secs(2));
+        let now = std::time::Instant::now();
+        let mut index = 0;
+        while index < pending.len() {
+            let task = &mut pending[index];
+            if task.next_attempt > now {
+                index += 1;
+                continue;
+            }
+            if !task.handed_off {
+                match task.item.owner.retry_cleanup() {
+                    Ok(()) if task.item.owner.is_complete() => task.handed_off = true,
+                    Err(RecoveryRetryError::OwnerAlreadyConsumed) if task.item.owner.is_complete() => {
+                        task.handed_off = true
+                    }
+                    _ => {
+                        task.next_attempt = now + task.backoff;
+                        task.backoff = (task.backoff * 2).min(std::time::Duration::from_secs(2));
+                        index += 1;
+                        continue;
+                    }
+                }
+                log::debug!(
+                    "recovery owner handed responsibility upstream: {}",
+                    task.item.owner.summary()
+                );
+                let _ = task.item.control.release();
+                let _ = task.item.control.settlement(Arc::new(recovery_settlement(
+                    task.item.id,
+                    task.effect_evidence.clone(),
+                )));
+            }
+            if let Some(observer) = task.item.observer.try_get() {
+                match observer.wait_settlement_for(std::time::Duration::ZERO) {
+                    Ok(qubit_operation::SettlementWait::Ready(_)) => {
+                        pending.swap_remove(index);
+                        outstanding.fetch_sub(1, Ordering::AcqRel);
+                        continue;
+                    }
+                    Ok(qubit_operation::SettlementWait::Pending(_)) => {}
+                    Err(error) => log::error!("recovery worker could not observe upstream settlement: {error:?}"),
                 }
             }
+            task.next_attempt = now + task.backoff;
+            task.backoff = (task.backoff * 2).min(std::time::Duration::from_secs(2));
+            index += 1;
+        }
+        let timeout = pending
+            .iter()
+            .map(|task| task.next_attempt.saturating_duration_since(std::time::Instant::now()))
+            .min()
+            .unwrap_or(std::time::Duration::from_secs(2));
+        match rx.recv_timeout(timeout) {
+            Ok(item) => {
+                let effect_evidence = item.owner.effect_evidence(item.id);
+                pending.push(PendingRecovery::new(item, effect_evidence));
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) if !pending.is_empty() => std::thread::sleep(timeout),
+            Err(_) => {}
         }
     }
 }
@@ -124,6 +176,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Condvar;
     use std::sync::Mutex;
+    use std::sync::atomic::Ordering;
     use std::sync::mpsc;
     use std::time::Duration;
     use std::time::Instant;
@@ -164,6 +217,31 @@ mod tests {
     struct CompleteOwner {
         _lease: Mutex<Option<ReservationLease>>,
         evidence: RecoveryEffectEvidence,
+    }
+
+    struct BlockingRecoveryOwner {
+        entered: mpsc::SyncSender<()>,
+        gate: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl RecoveryOwner for BlockingRecoveryOwner {
+        fn summary(&self) -> String {
+            "blocking capacity test owner".to_owned()
+        }
+
+        fn retry_cleanup(&self) -> Result<(), RecoveryRetryError> {
+            self.entered.send(()).unwrap();
+            let (released, changed) = &*self.gate;
+            let mut released = released.lock().unwrap();
+            while !*released {
+                released = changed.wait(released).unwrap();
+            }
+            Ok(())
+        }
+
+        fn is_complete(&self) -> bool {
+            true
+        }
     }
     impl RecoveryOwner for CompleteOwner {
         fn summary(&self) -> String {
@@ -276,6 +354,158 @@ mod tests {
         lease_dropped_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("recovery owner lease drops only after manager settlement");
+    }
+
+    #[test]
+    fn test_recovery_worker_advances_independent_owner_while_prior_settlement_is_pending() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let (drop_started_tx, drop_started_rx) = mpsc::sync_channel(1);
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let cleanup_gate = Arc::clone(&gate);
+        let mut pending_operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let resource = scope
+                    .manage(BlockingDrop {
+                        started: drop_started_tx,
+                        gate: cleanup_gate,
+                    })
+                    .unwrap();
+                drop(resource);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        assert!(matches!(
+            pending_operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        drop_started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("first upstream settlement should remain pending");
+        let pending_id = pending_operation.id();
+
+        let mut completed_operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        assert!(matches!(
+            completed_operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        completed_operation.wait_settlement().unwrap();
+        let completed_id = completed_operation.id();
+
+        let pending_control = Arc::new(CommandControl::default());
+        let completed_control = Arc::new(CommandControl::default());
+        assert!(pending_control.bind(pending_id));
+        assert!(completed_control.bind(completed_id));
+        let pending_observer = Arc::new(OperationObserverSlot::default());
+        pending_observer.set(pending_operation.observer());
+        let completed_observer = Arc::new(OperationObserverSlot::default());
+        completed_observer.set(completed_operation.observer());
+        let recovery = start_recovery_worker(2).unwrap();
+
+        for (id, control, observer) in [
+            (pending_id, Arc::clone(&pending_control), pending_observer),
+            (completed_id, Arc::clone(&completed_control), completed_observer),
+        ] {
+            recovery
+                .send(RecoveryItem {
+                    owner: Box::new(CompleteOwner {
+                        _lease: Mutex::new(None),
+                        evidence: RecoveryEffectEvidence::default(),
+                    }),
+                    control,
+                    id,
+                    observer,
+                })
+                .unwrap();
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while OperationControl::snapshot(&*completed_control).settlement.is_none() && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(
+            OperationControl::snapshot(&*completed_control).settlement.is_some(),
+            "independent owner should settle before the first upstream owner"
+        );
+        assert!(matches!(
+            pending_operation.wait_settlement_for(Duration::ZERO).unwrap(),
+            qubit_operation::SettlementWait::Pending(_)
+        ));
+
+        let (released, changed) = &*gate;
+        *released.lock().unwrap() = true;
+        changed.notify_all();
+        pending_operation.wait_settlement().unwrap();
+    }
+
+    #[test]
+    fn test_recovery_capacity_includes_one_active_owner_plus_channel_capacity() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let recovery = start_recovery_worker(1).unwrap();
+        let make_item = || {
+            let mut operation = manager
+                .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+                .unwrap();
+            assert!(matches!(
+                operation.wait_outcome().unwrap(),
+                OperationOutcome::Succeeded(())
+            ));
+            let id = operation.id();
+            operation.wait_settlement().unwrap();
+            let control = Arc::new(CommandControl::default());
+            assert!(control.bind(id));
+            let observer = Arc::new(OperationObserverSlot::default());
+            observer.set(operation.observer());
+            (
+                RecoveryItem {
+                    owner: Box::new(CompleteOwner {
+                        _lease: Mutex::new(None),
+                        evidence: RecoveryEffectEvidence::default(),
+                    }),
+                    control: Arc::clone(&control),
+                    id,
+                    observer,
+                },
+                control,
+            )
+        };
+
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let (mut active, active_control) = make_item();
+        active.owner = Box::new(BlockingRecoveryOwner {
+            entered: entered_tx,
+            gate: Arc::clone(&gate),
+        });
+        recovery.try_send(active).unwrap();
+        entered_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("worker should hold the first item as active");
+
+        let (queued, queued_control) = make_item();
+        recovery
+            .try_send(queued)
+            .expect("channel capacity should accept one item beside the active owner");
+        let (overflow, _) = make_item();
+        assert!(matches!(
+            recovery.try_send(overflow),
+            Err(std::sync::mpsc::TrySendError::Full(_))
+        ));
+        assert_eq!(recovery.outstanding().load(Ordering::Acquire), 2);
+
+        let (released, changed) = &*gate;
+        *released.lock().unwrap() = true;
+        changed.notify_all();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while (OperationControl::snapshot(&*active_control).settlement.is_none()
+            || OperationControl::snapshot(&*queued_control).settlement.is_none())
+            && Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        assert!(OperationControl::snapshot(&*active_control).settlement.is_some());
+        assert!(OperationControl::snapshot(&*queued_control).settlement.is_some());
     }
 
     #[test]

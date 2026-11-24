@@ -8,6 +8,7 @@
 
 use std::io;
 use std::sync::OnceLock;
+use std::sync::mpsc::Receiver;
 use std::sync::mpsc::SyncSender;
 use std::sync::mpsc::TrySendError;
 use std::sync::mpsc::sync_channel;
@@ -19,8 +20,6 @@ use super::internal::ReaperOwner;
 pub(crate) struct Reaper {
     /// Stores the sender value used by this execution component.
     sender: SyncSender<ReaperOwner>,
-    /// Stores the overflow sender value used by this execution component.
-    overflow_sender: SyncSender<ReaperOwner>,
 }
 
 static REAPER: OnceLock<Result<Reaper, String>> = OnceLock::new();
@@ -29,33 +28,16 @@ impl Reaper {
     /// Stores the initialize value used by this execution component.
     fn initialize() -> io::Result<Self> {
         const WORKERS: usize = 4;
-        const CAPACITY: usize = 32;
+        const CAPACITY: usize = 64;
         let (sender, receiver) = sync_channel::<ReaperOwner>(CAPACITY);
-        let (overflow_sender, overflow_receiver) = sync_channel::<ReaperOwner>(CAPACITY);
         let receiver = std::sync::Arc::new(std::sync::Mutex::new(receiver));
-        let overflow_receiver = std::sync::Arc::new(std::sync::Mutex::new(overflow_receiver));
         for index in 0..WORKERS {
-            let (receiver, name) = if index < WORKERS / 2 {
-                (std::sync::Arc::clone(&receiver), "primary")
-            } else {
-                (std::sync::Arc::clone(&overflow_receiver), "overflow")
-            };
+            let receiver = std::sync::Arc::clone(&receiver);
             thread::Builder::new()
-                .name(format!("qubit-command-reaper-{name}-{index}"))
-                .spawn(move || {
-                    loop {
-                        let task = receiver.lock().unwrap_or_else(|error| error.into_inner()).recv();
-                        match task {
-                            Ok(task) => task.reap(),
-                            Err(_) => break,
-                        }
-                    }
-                })?;
+                .name(format!("qubit-command-reaper-{index}"))
+                .spawn(move || worker_loop(receiver))?;
         }
-        Ok(Self {
-            sender,
-            overflow_sender,
-        })
+        Ok(Self { sender })
     }
 
     /// Stores the global value used by this execution component.
@@ -71,14 +53,23 @@ impl Reaper {
     /// # Parameters
     /// * `owner`: Supplies the owner value used by this operation.
     pub(crate) fn handoff(&self, owner: ReaperOwner) -> Result<(), ReaperOwner> {
-        match self.sender.try_send(owner) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(owner) | TrySendError::Disconnected(owner)) => {
-                match self.overflow_sender.try_send(owner) {
-                    Ok(()) => Ok(()),
-                    Err(TrySendError::Full(owner) | TrySendError::Disconnected(owner)) => Err(owner),
-                }
-            }
+        self.sender.try_send(owner).map_err(|error| match error {
+            TrySendError::Full(owner) | TrySendError::Disconnected(owner) => owner,
+        })
+    }
+}
+
+/// Receives one cleanup owner at a time and reaps it without holding the queue
+/// lock.
+///
+/// # Parameters
+/// * `receiver`: Shared receiver used by the reaper worker pool.
+fn worker_loop(receiver: std::sync::Arc<std::sync::Mutex<Receiver<ReaperOwner>>>) {
+    loop {
+        let task = receiver.lock().unwrap_or_else(|error| error.into_inner()).recv();
+        match task {
+            Ok(task) => task.reap(),
+            Err(_) => break,
         }
     }
 }
@@ -289,40 +280,9 @@ mod tests {
     }
 
     #[test]
-    fn test_full_primary_queue_returns_owner_to_bounded_overflow_queue_without_blocking() {
+    fn test_full_reaper_queue_returns_owner_for_retry_after_capacity_drains() {
         let (sender, primary) = sync_channel(1);
-        let (overflow_sender, overflow) = sync_channel(1);
-        let reaper = Reaper {
-            sender,
-            overflow_sender,
-        };
-        reaper
-            .handoff(ReaperOwner::new(|| {}))
-            .expect("primary queue should accept first owner");
-        let completed = Arc::new(AtomicUsize::new(0));
-        let observed = Arc::clone(&completed);
-        reaper
-            .handoff(ReaperOwner::new(move || {
-                observed.fetch_add(1, Ordering::SeqCst);
-            }))
-            .expect("overflow queue should accept owner when primary is full");
-        overflow
-            .try_recv()
-            .expect("owner should be retained by overflow queue")
-            .run_inline();
-        assert_eq!(completed.load(Ordering::SeqCst), 1);
-        drop(primary);
-    }
-
-    #[test]
-    fn test_both_full_queues_return_owner_for_retry_after_capacity_drains() {
-        let (sender, primary) = sync_channel(1);
-        let (overflow_sender, _overflow) = sync_channel(1);
-        let reaper = Reaper {
-            sender,
-            overflow_sender,
-        };
-        reaper.handoff(ReaperOwner::new(|| {})).unwrap();
+        let reaper = Reaper { sender };
         reaper.handoff(ReaperOwner::new(|| {})).unwrap();
 
         let completed = Arc::new(AtomicUsize::new(0));
@@ -331,33 +291,28 @@ mod tests {
             .handoff(ReaperOwner::new(move || {
                 observed.fetch_add(1, Ordering::SeqCst);
             }))
-            .expect_err("full bounded queues must return the still-owned task");
+            .expect_err("full bounded queue must return the still-owned task");
         assert_eq!(completed.load(Ordering::SeqCst), 0);
 
         primary
             .try_recv()
-            .expect("the test should be able to release primary capacity")
+            .expect("the test should be able to release queue capacity")
             .run_inline();
         reaper
             .handoff(owner)
             .expect("returned owner should transfer after capacity drains");
         primary
             .try_recv()
-            .expect("retried owner should be retained in a bounded queue")
+            .expect("retried owner should be retained in the bounded queue")
             .run_inline();
         assert_eq!(completed.load(Ordering::SeqCst), 1);
     }
 
     #[test]
-    fn test_disconnected_reaper_queues_return_cleanup_owner() {
+    fn test_disconnected_reaper_queue_returns_cleanup_owner() {
         let (sender, primary) = sync_channel(1);
-        let (overflow_sender, overflow) = sync_channel(1);
         drop(primary);
-        drop(overflow);
-        let reaper = Reaper {
-            sender,
-            overflow_sender,
-        };
+        let reaper = Reaper { sender };
         let completed = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&completed);
 
@@ -365,73 +320,57 @@ mod tests {
             .handoff(ReaperOwner::new(move || {
                 observed.fetch_add(1, Ordering::SeqCst);
             }))
-            .expect_err("both disconnected queues must return cleanup ownership");
+            .expect_err("disconnected queue must return cleanup ownership");
         assert_eq!(completed.load(Ordering::SeqCst), 0);
         owner.run_inline();
         assert_eq!(completed.load(Ordering::SeqCst), 1);
     }
 
     #[test]
-    fn test_disconnected_primary_queue_falls_back_to_overflow_queue() {
-        let (sender, primary) = sync_channel(1);
-        let (overflow_sender, overflow) = sync_channel(1);
-        drop(primary);
-        let reaper = Reaper {
-            sender,
-            overflow_sender,
-        };
-        let completed = Arc::new(AtomicUsize::new(0));
-        let observed = Arc::clone(&completed);
+    fn test_idle_worker_can_take_task_while_two_workers_are_busy() {
+        use std::sync::Condvar;
+        use std::sync::Mutex;
 
-        reaper
-            .handoff(ReaperOwner::new(move || {
-                observed.fetch_add(1, Ordering::SeqCst);
-            }))
-            .expect("a disconnected primary queue should fall back to overflow capacity");
-        overflow
-            .try_recv()
-            .expect("fallback should retain the cleanup owner in overflow")
-            .run_inline();
-
-        assert_eq!(completed.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn test_full_primary_and_disconnected_overflow_return_cleanup_owner() {
-        let (sender, primary) = sync_channel(1);
-        let (overflow_sender, overflow) = sync_channel(1);
+        let (sender, receiver) = sync_channel(64);
+        let receiver = Arc::new(Mutex::new(receiver));
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let (busy_tx, busy_rx) = std::sync::mpsc::channel();
+        let (third_tx, third_rx) = std::sync::mpsc::channel();
+        for _ in 0..3 {
+            let receiver = Arc::clone(&receiver);
+            std::thread::spawn(move || super::worker_loop(receiver));
+        }
+        for _ in 0..2 {
+            let gate = Arc::clone(&gate);
+            let busy_tx = busy_tx.clone();
+            sender
+                .try_send(ReaperOwner::new(move || {
+                    busy_tx.send(()).unwrap();
+                    let (released, changed) = &*gate;
+                    let mut released = released.lock().unwrap();
+                    while !*released {
+                        released = changed.wait(released).unwrap();
+                    }
+                }))
+                .unwrap();
+        }
+        busy_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        busy_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         sender
-            .try_send(ReaperOwner::new(|| {}))
-            .expect("test primary queue should accept its blocker");
-        drop(overflow);
-        let reaper = Reaper {
-            sender,
-            overflow_sender,
-        };
-        let completed = Arc::new(AtomicUsize::new(0));
-        let observed = Arc::clone(&completed);
-
-        let owner = reaper
-            .handoff(ReaperOwner::new(move || {
-                observed.fetch_add(1, Ordering::SeqCst);
-            }))
-            .expect_err("when fallback is disconnected, caller must retain ownership");
-        assert_eq!(completed.load(Ordering::SeqCst), 0);
-        owner.run_inline();
-
-        assert_eq!(completed.load(Ordering::SeqCst), 1);
-        drop(primary);
+            .try_send(ReaperOwner::new(move || third_tx.send(()).unwrap()))
+            .unwrap();
+        third_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("third idle worker should receive queued work");
+        let (released, changed) = &*gate;
+        *released.lock().unwrap() = true;
+        changed.notify_all();
     }
 
     #[test]
     fn test_rejected_handoff_retains_cleanup_owner_until_single_completion() {
         let (sender, primary) = sync_channel(1);
-        let (overflow_sender, overflow) = sync_channel(1);
-        let reaper = Reaper {
-            sender,
-            overflow_sender,
-        };
-        reaper.handoff(ReaperOwner::new(|| {})).unwrap();
+        let reaper = Reaper { sender };
         reaper.handoff(ReaperOwner::new(|| {})).unwrap();
 
         let (observer, completed) = ReaperObserver::pair();
@@ -444,7 +383,7 @@ mod tests {
                 cleanups_by_owner.fetch_add(1, Ordering::SeqCst);
                 cleanup_observer.complete();
             }))
-            .expect_err("full queues must retain cleanup ownership with the caller");
+            .expect_err("full queue must retain cleanup ownership with the caller");
 
         assert_eq!(cleanups.load(Ordering::SeqCst), 0);
         assert!(completed.try_recv().is_err());
@@ -458,6 +397,5 @@ mod tests {
         assert_eq!(cleanups.load(Ordering::SeqCst), 1);
         assert!(completed.try_recv().is_err());
         drop(primary);
-        drop(overflow);
     }
 }

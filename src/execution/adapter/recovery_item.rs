@@ -7,7 +7,6 @@
 // =============================================================================
 
 use std::sync::Arc;
-use std::sync::mpsc::SyncSender;
 
 use qubit_operation::OperationId;
 
@@ -27,7 +26,3 @@ pub(crate) struct RecoveryItem {
     /// Stores the observer value used by this execution component.
     pub observer: Arc<OperationObserverSlot>,
 }
-
-/// Represents the recovery sender state or contract used by managed command
-/// execution.
-pub(crate) type RecoverySender = SyncSender<RecoveryItem>;
