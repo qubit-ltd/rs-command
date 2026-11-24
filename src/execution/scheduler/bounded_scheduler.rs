@@ -17,8 +17,11 @@ use std::task::Waker;
 use qubit_operation::OperationContext;
 use qubit_operation::StopReason;
 
+use super::SchedulerSnapshot;
+use super::WaitOutcome;
 use super::internal::Record;
 use super::internal::Shared;
+use super::internal::State;
 use super::kind::Kind;
 use super::waiters::Waiters;
 use super::worker::Queued;
@@ -30,29 +33,18 @@ use crate::execution::contracts::Reservation;
 use crate::execution::contracts::ReservationLease;
 use crate::execution::contracts::ScheduledJob;
 use crate::execution::contracts::Scheduler;
+
 static NEXT_SCHEDULER_ID: AtomicU64 = AtomicU64::new(1);
 const CLOCK_RECHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
-use super::SchedulerSnapshot;
-use super::internal::State;
-
-/// Terminal state observed while waiting for scheduler admission.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::execution) enum WaitOutcome {
-    /// The caller should retry admission.
-    Retry,
-    /// The executor stopped accepting submissions.
-    Closed,
-    /// The operation scope requested cancellation.
-    Stopped,
-    /// The operation scope deadline elapsed.
-    DeadlineExpired,
-}
-
-/// Reports whether a scope's deadline or stop request has terminated a wait.
+/// Returns an observed terminal state for a wait.
+///
+/// Scope deadline and stop state take precedence over executor closure.
 ///
 /// # Parameters
-/// * `context`: Supplies the optional scope context to check.
+/// * `closed`: Whether the scheduler has stopped accepting submissions.
+/// * `context`: Optional scope context whose deadline or stop state is
+///   observed.
 fn wait_outcome(closed: bool, context: Option<&OperationContext>) -> Option<WaitOutcome> {
     if context.is_some_and(OperationContext::is_expired) {
         Some(WaitOutcome::DeadlineExpired)
@@ -65,18 +57,16 @@ fn wait_outcome(closed: bool, context: Option<&OperationContext>) -> Option<Wait
     }
 }
 
-/// Thread-safe bounded scheduler. Its internal queue and dispatch threads are
-/// bounded by the configured active and queued permits; worker threads are
-/// owned and started by the executor.
-/// Represents the bounded scheduler state or contract used by managed command
-/// execution.
+/// Thread-safe bounded scheduler for managed command admission and dispatch.
+/// Its queue and active work are limited by configured permits, and its worker
+/// threads are owned by the executor.
 #[derive(Clone)]
 pub struct BoundedScheduler(#[doc = "Shared queue and permit state owned by this scheduler."] Arc<Shared>);
 impl BoundedScheduler {
-    /// Performs the new step in the managed command execution lifecycle.
+    /// Creates a scheduler with validated local capacity limits.
     ///
     /// # Parameters
-    /// * `config`: Supplies the config value used by this operation.
+    /// * `config`: Limits active work, queued work, waiters, and queued input.
     pub fn new(config: CommandExecutionConfig) -> Result<Self, crate::execution::CommandExecutorCreateError> {
         config.validate()?;
         let id = NEXT_SCHEDULER_ID.fetch_add(1, Ordering::Relaxed);
@@ -97,7 +87,7 @@ impl BoundedScheduler {
             config,
         })))
     }
-    /// Performs the snapshot step in the managed command execution lifecycle.
+    /// Returns the current scheduler usage and queue counts.
     pub fn snapshot(&self) -> SchedulerSnapshot {
         let s = self.0.state.lock().unwrap();
         SchedulerSnapshot {
@@ -236,6 +226,19 @@ impl BoundedScheduler {
             .map(|outcome| outcome == WaitOutcome::Retry)
     }
 
+    /// Waits for capacity and returns the terminal state that ended the wait.
+    ///
+    /// Deadline and stop state take precedence over closure; capacity changes
+    /// return [`WaitOutcome::Retry`]. The waiter registration is removed before
+    /// this method returns.
+    ///
+    /// # Parameters
+    /// * `input_bytes`: Estimated input size used by the capacity predicate.
+    /// * `context`: Optional scope context used to observe stop and deadline.
+    ///
+    /// # Errors
+    /// Returns [`CommandSubmitWaitFailure::WaiterLimit`](crate::execution::CommandSubmitWaitFailure::WaiterLimit)
+    /// when the waiter quota is exhausted.
     pub(in crate::execution) fn wait_for_capacity_registered_outcome(
         &self,
         input_bytes: usize,

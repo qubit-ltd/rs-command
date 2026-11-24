@@ -26,6 +26,9 @@ pub(super) mod submission;
 // Owns the executor's retry-wait implementation and waiter lifecycle.
 #[path = "command_executor/wait.rs"]
 pub(super) mod wait;
+// Owns the terminal results shared by retry-wait paths.
+#[path = "command_executor/wait_result.rs"]
+mod wait_result;
 
 #[cfg(feature = "async")]
 // Owns the asynchronous retry timer used by executor admission.

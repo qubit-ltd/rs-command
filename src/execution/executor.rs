@@ -361,6 +361,18 @@ async fn wait_busy_async(
 ///
 /// Keeping the tick future injectable lets the waiter cleanup path be tested
 /// against timer disconnection without controlling the process-wide worker.
+///
+/// # Type Parameters
+/// * `T`: Future that completes when the retry interval elapses.
+///
+/// # Parameters
+/// * `scheduler`: Scheduler that owns the waiter registration.
+/// * `context`: Optional operation scope used to observe stop and deadline.
+/// * `tick`: Retry timer future whose disconnection is reported as a wait
+///   error.
+///
+/// # Errors
+/// Returns a waiter quota error or the retry timer's disconnection failure.
 #[cfg(feature = "async")]
 async fn wait_busy_async_with_tick<T>(
     scheduler: BoundedScheduler,

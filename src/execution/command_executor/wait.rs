@@ -9,6 +9,7 @@
 
 use qubit_operation::OperationContext;
 
+pub(in crate::execution) use super::wait_result::WaitResult;
 use crate::Command;
 use crate::CommandResourceRunOptions;
 use crate::CommandRunOptions;
@@ -25,22 +26,10 @@ use crate::execution::executor;
 use crate::execution::scheduler::BoundedScheduler;
 use crate::execution::scheduler::WaitOutcome as SchedulerWaitOutcome;
 
-/// Result observed at the wait termination point.
-pub(in crate::execution) enum WaitResult {
-    /// Admission may be retried.
-    Retry,
-    /// The executor has closed.
-    Closed,
-    /// The operation was stopped.
-    Stopped,
-    /// The operation deadline elapsed.
-    DeadlineExpired,
-    /// Waiting failed before admission could be retried.
-    Failed(crate::execution::CommandSubmitWaitFailure),
-    /// The submission reason does not support waiting.
-    NotRetryable,
-}
-
+/// Converts a scheduler wait outcome into the shared executor result.
+///
+/// # Parameters
+/// * `outcome`: Terminal state returned by the scheduler.
 fn map_wait_outcome(outcome: SchedulerWaitOutcome) -> WaitResult {
     match outcome {
         SchedulerWaitOutcome::Retry => WaitResult::Retry,
@@ -535,6 +524,15 @@ pub(in crate::execution) fn retry_wait(
     }
 }
 
+/// Converts a terminal wait result into the submission failure to return.
+///
+/// Closure, stop, deadline, and waiter failures take their corresponding
+/// submission classifications. Retryable and non-retryable results preserve
+/// the original reason.
+///
+/// # Parameters
+/// * `reason`: Original submission failure that initiated the wait.
+/// * `result`: Terminal state observed while waiting.
 fn wait_result_reason(reason: CommandSubmitFailureReason, result: WaitResult) -> CommandSubmitFailureReason {
     match result {
         WaitResult::Closed => CommandSubmitFailureReason::Capacity(CapacityFailure::Closed),

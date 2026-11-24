@@ -10,12 +10,13 @@ mod bounded_scheduler;
 mod internal;
 mod kind;
 mod scheduler_snapshot;
+mod wait_outcome;
 mod waiters;
 mod worker;
 
 pub use bounded_scheduler::BoundedScheduler;
-pub(in crate::execution) use bounded_scheduler::WaitOutcome;
 pub use scheduler_snapshot::SchedulerSnapshot;
+pub(in crate::execution) use wait_outcome::WaitOutcome;
 
 #[cfg(test)]
 mod tests {
