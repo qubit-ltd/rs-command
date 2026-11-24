@@ -11,25 +11,47 @@ use std::path::Path;
 
 use same_file::Handle;
 
+/// Failure from validating a single configured stream, retaining its owner.
+pub(super) struct IdentityFailure {
+    pub(super) direction: crate::FilePreparationDirection,
+    pub(super) source: io::Error,
+}
+
 /// Checks ordinary-file status and identity using the opened handles
 /// themselves.
 ///
 /// # Parameters
-pub(super) fn validate_files(files: &[(&'static str, &File)]) -> io::Result<()> {
+pub(super) fn validate_files(files: &[(&'static str, &File)]) -> Result<(), IdentityFailure> {
     let mut identities = Vec::with_capacity(files.len());
     for (name, file) in files {
-        if !file.metadata()?.file_type().is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("{name} must refer to a regular file"),
-            ));
+        let direction = file_direction(name);
+        if !file
+            .metadata()
+            .map_err(|source| IdentityFailure { direction, source })?
+            .file_type()
+            .is_file()
+        {
+            return Err(IdentityFailure {
+                direction,
+                source: io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{name} must refer to a regular file"),
+                ),
+            });
         }
-        let identity = Handle::from_file(file.try_clone()?)?;
+        let identity = Handle::from_file(
+            file.try_clone()
+                .map_err(|source| IdentityFailure { direction, source })?,
+        )
+        .map_err(|source| IdentityFailure { direction, source })?;
         if identities.iter().any(|(_, previous)| previous == &identity) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("{name} conflicts with another configured file"),
-            ));
+            return Err(IdentityFailure {
+                direction,
+                source: io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{name} conflicts with another configured file"),
+                ),
+            });
         }
         identities.push((*name, identity));
     }
@@ -44,35 +66,59 @@ pub(super) fn validate_files(files: &[(&'static str, &File)]) -> io::Result<()> 
 pub(super) fn validate_tee_paths(
     files: &[(&'static str, &File)],
     tee_paths: &[(&'static str, &Path)],
-) -> io::Result<()> {
+) -> Result<(), IdentityFailure> {
     let owned = files
         .iter()
         .map(|(name, file)| {
-            let identity = Handle::from_file(file.try_clone()?)?;
+            let direction = file_direction(name);
+            let identity = Handle::from_file(
+                file.try_clone()
+                    .map_err(|source| IdentityFailure { direction, source })?,
+            )
+            .map_err(|source| IdentityFailure { direction, source })?;
             Ok((*name, identity))
         })
-        .collect::<io::Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, IdentityFailure>>()?;
     for (tee_name, path) in tee_paths {
+        let direction = file_direction(tee_name);
         match std::fs::metadata(path) {
             Ok(metadata) if !metadata.file_type().is_file() => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("{tee_name} tee must refer to a regular file"),
-                ));
+                return Err(IdentityFailure {
+                    direction,
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("{tee_name} tee must refer to a regular file"),
+                    ),
+                });
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error),
+            Err(source) => return Err(IdentityFailure { direction, source }),
             _ => {}
         }
-        let tee_identity = Handle::from_file(open_tee_identity(path)?)?;
+        let tee_identity = Handle::from_file(
+            open_tee_identity(path).map_err(|source| IdentityFailure { direction, source })?,
+        )
+        .map_err(|source| IdentityFailure { direction, source })?;
         if owned.iter().any(|(_, identity)| identity == &tee_identity) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("{tee_name} tee conflicts with an owned file"),
-            ));
+            return Err(IdentityFailure {
+                direction,
+                source: io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{tee_name} tee conflicts with an owned file"),
+                ),
+            });
         }
     }
     Ok(())
+}
+
+fn file_direction(name: &str) -> crate::FilePreparationDirection {
+    match name {
+        "stdin" => crate::FilePreparationDirection::Stdin,
+        "stdout" => crate::FilePreparationDirection::Stdout,
+        "stderr" => crate::FilePreparationDirection::Stderr,
+        _ => unreachable!("file validation only uses standard stream names"),
+    }
 }
 
 /// Stores the open tee identity value used by this execution component.
@@ -137,7 +183,10 @@ mod tests {
     #[test]
     fn test_drive_relative_path_keeps_windows_drive_semantics() {
         let path = Path::new(r"C:folder\input.txt");
-        assert_eq!(resolve_io_path(Path::new(r"D:\parent"), path).as_path(), path);
+        assert_eq!(
+            resolve_io_path(Path::new(r"D:\parent"), path).as_path(),
+            path
+        );
     }
 
     #[test]
@@ -146,7 +195,7 @@ mod tests {
         let alias = file.try_clone().expect("file handle should be cloned");
         let error = validate_files(&[("stdin", &file), ("stdout", &alias)])
             .expect_err("the same file identity must be rejected");
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(error.source.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]
@@ -164,7 +213,8 @@ mod tests {
                 .open(std::env::temp_dir())
                 .expect("temp directory should open")
         };
-        let error = validate_files(&[("stdin", &directory)]).expect_err("directories are not valid file streams");
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        let error = validate_files(&[("stdin", &directory)])
+            .expect_err("directories are not valid file streams");
+        assert_eq!(error.source.kind(), std::io::ErrorKind::InvalidInput);
     }
 }

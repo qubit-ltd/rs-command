@@ -117,7 +117,10 @@ fn test_managed_truncation_failure_is_typed_and_releases_registered_sink() {
     let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
         panic!("read-only managed sink truncation must fail");
     };
-    assert_eq!(error.kind(), qubit_command::CommandErrorKind::FilePreparationFailed);
+    assert_eq!(
+        error.kind(),
+        qubit_command::CommandErrorKind::FilePreparationFailed
+    );
     assert!(matches!(
         error.reason(),
         qubit_command::CommandErrorReason::FilePreparationFailed {
@@ -140,7 +143,10 @@ fn test_managed_truncation_failure_is_typed_and_releases_registered_sink() {
     assert!(!external.recoveries_truncated);
     assert_eq!(settlement.resource_reports_total, 1);
     assert_eq!(settlement.effects_total, 1);
-    assert_eq!(settlement.effects[0].fact, qubit_operation::EffectFact::Unknown);
+    assert_eq!(
+        settlement.effects[0].fact,
+        qubit_operation::EffectFact::Unknown
+    );
     assert!(settlement.effects[0].resource_id.is_some());
 }
 
@@ -170,7 +176,10 @@ fn test_owned_file_preparation_failure_retains_recovery_settlement() {
     let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
         panic!("a directory cannot be prepared as owned stdin");
     };
-    assert_eq!(error.kind(), qubit_command::CommandErrorKind::FilePreparationFailed);
+    assert_eq!(
+        error.kind(),
+        qubit_command::CommandErrorKind::FilePreparationFailed
+    );
     assert!(matches!(
         error.reason(),
         qubit_command::CommandErrorReason::FilePreparationFailed {
@@ -205,7 +214,11 @@ fn test_conflicting_owned_sink_and_path_tee_do_not_truncate_before_rejection() {
         let tee = directory.path().join("tee");
         let started = directory.path().join("started");
         std::fs::write(&owned, b"preserve me").unwrap();
-        let file = std::fs::OpenOptions::new().read(true).write(true).open(&owned).unwrap();
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&owned)
+            .unwrap();
         let options = CommandRunOptions::new();
         let options = if tee_stream == 0 {
             options.tee_stdout_to_file(&tee)
@@ -233,10 +246,161 @@ fn test_conflicting_owned_sink_and_path_tee_do_not_truncate_before_rejection() {
             )
             .unwrap();
 
-        assert!(matches!(operation.wait_outcome().unwrap(), OperationOutcome::Failed(_)));
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Failed(_)
+        ));
         assert_eq!(std::fs::read(&owned).unwrap(), b"preserve me");
         assert!(!started.exists(), "the rejected command must not start");
         assert!(!tee.exists(), "the path tee must not be opened");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_path_stdin_and_owned_truncate_sink_alias_is_rejected_before_spawn() {
+    for sink_stream in [0, 1] {
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let shared = directory.path().join("shared-input-output");
+        let started = directory.path().join("started");
+        std::fs::write(&shared, b"preserve me").unwrap();
+        let sink = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&shared)
+            .unwrap();
+        let resources = if sink_stream == 0 {
+            CommandResourceRunOptions::new().stdout_sink(sink, FileSinkPolicy::Truncate)
+        } else {
+            CommandResourceRunOptions::new().stderr_sink(sink, FileSinkPolicy::Truncate)
+        };
+        let mut operation = executor
+            .submit_resources(
+                CommandRunner::without_timeout(),
+                Command::new("sh")
+                    .arg("-c")
+                    .arg("touch \"$1\"")
+                    .arg("managed-path-input-alias")
+                    .arg(started.to_str().unwrap())
+                    .stdin_file(&shared),
+                resources,
+            )
+            .unwrap();
+
+        let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
+            panic!("path stdin cannot alias an owned truncate sink");
+        };
+        assert_eq!(
+            error.kind(),
+            qubit_command::CommandErrorKind::FilePreparationFailed
+        );
+        assert!(matches!(
+            error.reason(),
+            qubit_command::CommandErrorReason::FilePreparationFailed {
+                stage: qubit_command::FilePreparationStage::Validation,
+                direction: Some(direction),
+                source,
+            } if *direction == if sink_stream == 0 {
+                qubit_command::FilePreparationDirection::Stdout
+            } else {
+                qubit_command::FilePreparationDirection::Stderr
+            } && source.kind() == std::io::ErrorKind::InvalidInput
+        ));
+        assert_eq!(std::fs::read(&shared).unwrap(), b"preserve me");
+        assert!(!started.exists());
+        let settlement = operation.wait_settlement().unwrap();
+        assert!(settlement.all_released());
+        assert_eq!(settlement.effects_total, 0);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_path_stdin_and_distinct_owned_sink_are_allowed() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let input_path = directory.path().join("input");
+    let output_path = directory.path().join("output");
+    std::fs::write(&input_path, b"path payload").unwrap();
+    std::fs::write(&output_path, b"old output").unwrap();
+    let sink = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&output_path)
+        .unwrap();
+    let mut operation = executor
+        .submit_resources(
+            CommandRunner::without_timeout(),
+            Command::new("sh")
+                .arg("-c")
+                .arg("cat")
+                .stdin_file(&input_path),
+            CommandResourceRunOptions::new().stdout_sink(sink, FileSinkPolicy::Truncate),
+        )
+        .unwrap();
+
+    let OperationOutcome::Succeeded(output) = operation.wait_outcome().unwrap() else {
+        panic!("distinct path input and owned output should run");
+    };
+    assert_eq!(output.stdout(), b"path payload");
+    assert_eq!(std::fs::read(output_path).unwrap(), b"path payload");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_owned_stdin_conflicts_with_command_file_or_bytes_before_start() {
+    for command_stdin in [0, 1] {
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let owned_input = directory.path().join("owned-input");
+        let command_input = directory.path().join("command-input");
+        let started = directory.path().join("started");
+        std::fs::write(&owned_input, b"owned input").unwrap();
+        std::fs::write(&command_input, b"command input").unwrap();
+        let owned = std::fs::File::open(&owned_input).unwrap();
+        let command = Command::new("sh")
+            .arg("-c")
+            .arg("touch \"$1\"")
+            .arg("managed-stdin-conflict")
+            .arg(started.to_str().unwrap());
+        let command = if command_stdin == 0 {
+            command.stdin_file(&command_input)
+        } else {
+            command.stdin_bytes(b"command bytes")
+        };
+        let mut operation = executor
+            .submit_resources(
+                CommandRunner::without_timeout(),
+                command,
+                CommandResourceRunOptions::new().stdin_file(owned),
+            )
+            .unwrap();
+
+        let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
+            panic!("owned stdin cannot be combined with command stdin");
+        };
+        assert_eq!(
+            error.kind(),
+            qubit_command::CommandErrorKind::FilePreparationFailed
+        );
+        assert!(matches!(
+            error.reason(),
+            qubit_command::CommandErrorReason::FilePreparationFailed {
+                stage: qubit_command::FilePreparationStage::Validation,
+                direction: Some(qubit_command::FilePreparationDirection::Stdin),
+                source,
+            } if source.kind() == std::io::ErrorKind::InvalidInput
+        ));
+        assert_eq!(std::fs::read(&owned_input).unwrap(), b"owned input");
+        assert_eq!(std::fs::read(&command_input).unwrap(), b"command input");
+        assert!(!started.exists());
+        let settlement = operation.wait_settlement().unwrap();
+        assert_eq!(settlement.status, SettlementStatus::RecoveryRequired);
+        assert_eq!(settlement.effects_total, 0);
     }
 }
 
@@ -250,13 +414,17 @@ fn test_managed_file_preparation_errors_report_stage_and_stream() {
         .submit_resources(
             CommandRunner::without_timeout(),
             Command::new("sh").arg("-c").arg("exit 0"),
-            CommandResourceRunOptions::new().stdin_file(std::fs::File::open(directory.path()).unwrap()),
+            CommandResourceRunOptions::new()
+                .stdin_file(std::fs::File::open(directory.path()).unwrap()),
         )
         .unwrap();
     let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
         panic!("a directory cannot be used as managed stdin");
     };
-    assert_eq!(error.kind(), qubit_command::CommandErrorKind::FilePreparationFailed);
+    assert_eq!(
+        error.kind(),
+        qubit_command::CommandErrorKind::FilePreparationFailed
+    );
     assert!(matches!(
         error.reason(),
         qubit_command::CommandErrorReason::FilePreparationFailed {
@@ -287,7 +455,10 @@ fn test_managed_stderr_truncation_failure_is_typed_and_stream_specific() {
     let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
         panic!("a read-only stderr sink cannot be truncated");
     };
-    assert_eq!(error.kind(), qubit_command::CommandErrorKind::FilePreparationFailed);
+    assert_eq!(
+        error.kind(),
+        qubit_command::CommandErrorKind::FilePreparationFailed
+    );
     assert!(matches!(
         error.reason(),
         qubit_command::CommandErrorReason::FilePreparationFailed {
@@ -345,7 +516,10 @@ fn test_managed_commit_truncates_each_sink_once_and_keeps_stdin_cursor() {
     assert_eq!(std::fs::read(stderr_path).unwrap(), b"error");
     let settlement = operation.wait_settlement().unwrap();
     assert!(settlement.all_released());
-    assert_eq!(settlement.effects_total, 2, "each output sink should truncate once");
+    assert_eq!(
+        settlement.effects_total, 2,
+        "each output sink should truncate once"
+    );
     assert!(
         settlement
             .effects
@@ -499,7 +673,10 @@ fn test_async_wait_future_is_lazy_and_cancelled_waiter_is_removed() {
             (outcome, settlement)
         }
     });
-    assert!(matches!(second_outcome.unwrap(), OperationOutcome::Succeeded(_)));
+    assert!(matches!(
+        second_outcome.unwrap(),
+        OperationOutcome::Succeeded(_)
+    ));
     assert!(second_settlement.all_released());
 }
 
@@ -562,7 +739,10 @@ fn test_async_submission_entry_points_complete_and_settle() {
         &executor,
         CommandRunner::without_timeout(),
         Command::new("sh").arg("-c").arg("printf trait-resource"),
-        CommandResourceRunOptions::new().stdout_sink(sync_output_file.try_clone().unwrap(), FileSinkPolicy::Truncate),
+        CommandResourceRunOptions::new().stdout_sink(
+            sync_output_file.try_clone().unwrap(),
+            FileSinkPolicy::Truncate,
+        ),
     )
     .unwrap();
     assert!(matches!(
@@ -595,7 +775,8 @@ fn test_async_submission_entry_points_complete_and_settle() {
         &executor,
         CommandRunner::without_timeout(),
         Command::new("sh").arg("-c").arg("printf resource-output"),
-        CommandResourceRunOptions::new().stdout_sink(output_file.try_clone().unwrap(), FileSinkPolicy::Truncate),
+        CommandResourceRunOptions::new()
+            .stdout_sink(output_file.try_clone().unwrap(), FileSinkPolicy::Truncate),
     )
     .unwrap();
     let outcome = block_on(async move {
