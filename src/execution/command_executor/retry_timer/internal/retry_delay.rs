@@ -9,15 +9,13 @@
 use super::retry_timer::retry_timer;
 use super::retry_timer_failure::RetryTimerFailure;
 use super::retry_timer_message::RetryTimerMessage;
+use super::retry_timer_message::RetryTimerResult;
+use super::retry_timer_message::RetryTimerState;
 
 /// Waits for one scheduled retry delay and tracks its latest task waker.
 pub struct RetryDelay {
-    /// Whether the timer worker has completed this delay.
-    pub(super) ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// Whether this retry future has been dropped.
-    pub(super) cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// The waker registered by the most recent poll.
-    pub(super) waker: std::sync::Arc<std::sync::Mutex<Option<std::task::Waker>>>,
+    /// Timer result and latest waker shared with the worker message.
+    pub(super) state: std::sync::Arc<RetryTimerState>,
     /// Whether a timer message has been queued.
     pub(super) scheduled: bool,
 }
@@ -26,9 +24,7 @@ impl RetryDelay {
     /// Creates a new retry delay future.
     pub fn new() -> Self {
         Self {
-            ready: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            cancelled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            waker: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            state: std::sync::Arc::new(RetryTimerState::new()),
             scheduled: false,
         }
     }
@@ -43,30 +39,22 @@ impl RetryDelay {
         cx: &mut std::task::Context<'_>,
         schedule: impl FnOnce(RetryTimerMessage) -> Result<(), RetryTimerFailure>,
     ) -> std::task::Poll<Result<(), RetryTimerFailure>> {
-        if self.ready.load(std::sync::atomic::Ordering::Acquire) {
-            return std::task::Poll::Ready(Ok(()));
-        }
-        {
-            let mut waker = self.waker.lock().unwrap_or_else(|e| e.into_inner());
-            if !waker
-                .as_ref()
-                .is_some_and(|registered| registered.will_wake(cx.waker()))
-            {
-                *waker = Some(cx.waker().clone());
+        match self.state.poll(cx.waker()) {
+            RetryTimerResult::Ready => return std::task::Poll::Ready(Ok(())),
+            RetryTimerResult::Disconnected => {
+                return std::task::Poll::Ready(Err(RetryTimerFailure::Disconnected));
             }
-        }
-        if self.ready.load(std::sync::atomic::Ordering::Acquire) {
-            return std::task::Poll::Ready(Ok(()));
+            RetryTimerResult::Cancelled => return std::task::Poll::Ready(Ok(())),
+            RetryTimerResult::Pending => {}
         }
         if self.scheduled {
             return std::task::Poll::Pending;
         }
         let item = RetryTimerMessage {
             due: std::time::Instant::now() + std::time::Duration::from_millis(10),
-            waker: std::sync::Arc::clone(&self.waker),
-            ready: std::sync::Arc::clone(&self.ready),
-            cancelled: std::sync::Arc::clone(&self.cancelled),
+            state: std::sync::Arc::clone(&self.state),
             permit: None,
+            accepted: false,
         };
         match schedule(item) {
             Ok(()) => {
@@ -88,7 +76,10 @@ impl std::future::Future for RetryDelay {
     /// # Parameters
     /// * `self`: Future state retaining the latest waker and timer status.
     /// * `cx`: Task context used to register the latest waker.
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
         self.as_mut()
             .get_mut()
             .poll_with_schedule(cx, |item| retry_timer()?.schedule(item))
@@ -98,7 +89,6 @@ impl std::future::Future for RetryDelay {
 impl Drop for RetryDelay {
     /// Marks the timer message cancelled and removes the retained waker.
     fn drop(&mut self) {
-        self.cancelled.store(true, std::sync::atomic::Ordering::Release);
-        self.waker.lock().unwrap_or_else(|error| error.into_inner()).take();
+        self.state.cancel();
     }
 }
