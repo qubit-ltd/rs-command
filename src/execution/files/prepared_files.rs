@@ -23,7 +23,7 @@ use crate::execution::contracts::PreparedSink;
 use crate::resource_run_options::FileSinkPolicy;
 
 #[cfg(test)]
-type RegistrationGate = (qubit_operation::OperationId, Arc<(Barrier, Barrier)>);
+pub(crate) type RegistrationGate = (qubit_operation::OperationId, Arc<(Barrier, Barrier)>);
 #[cfg(test)]
 type RegistrationGateSlot = OnceLock<Mutex<Option<RegistrationGate>>>;
 #[cfg(test)]
@@ -49,7 +49,7 @@ impl std::fmt::Display for RegistrationCategory {
 impl std::error::Error for RegistrationCategory {}
 
 #[cfg(test)]
-pub(super) fn gate_after_first_registration(gate: Option<RegistrationGate>) {
+pub(crate) fn gate_after_first_registration(gate: Option<RegistrationGate>) {
     *AFTER_FIRST_REGISTRATION
         .get_or_init(|| Mutex::new(None))
         .lock()
