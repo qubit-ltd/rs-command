@@ -10,17 +10,17 @@ thread_local! {
     static ALLOW_INLINE_REAPER_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Restores a worker's prior permission to perform inline reaper cleanup.
+/// Restores the worker's prior inline reaper fallback setting.
 pub(crate) struct InlineFallbackReset(#[doc = "Whether inline fallback was enabled before entering this scope."] bool);
 
 impl Drop for InlineFallbackReset {
-    /// Restores the thread-local mode even when cleanup unwinds.
+    /// Restores the prior thread-local setting when the scope ends.
     fn drop(&mut self) {
         ALLOW_INLINE_REAPER_FALLBACK.with(|enabled| enabled.set(self.0));
     }
 }
 
-/// Runs recovery cleanup with inline fallback enabled for the current thread.
+/// Runs a recovery attempt with inline fallback enabled on the current thread.
 ///
 /// The prior thread-local setting is restored during normal return or unwind.
 ///

@@ -11,24 +11,24 @@ use std::thread::JoinHandle;
 
 use super::ReaperOwner;
 
-/// Owns the bounded reaper queue and the workers that drain it.
+/// Owns the bounded cleanup queue and its worker threads.
 pub(crate) struct ReaperPool {
-    /// Sends cleanup owners to a worker while the pool is active.
+    /// Accepts cleanup owners while the pool is active.
     pub(crate) sender: Option<SyncSender<ReaperOwner>>,
-    /// Joins every worker after closing the queue sender.
+    /// Handles joined after the queue sender is closed.
     pub(crate) workers: Vec<JoinHandle<()>>,
 }
 
 impl ReaperPool {
-    /// Closes the queue and joins all workers before returning.
+    /// Closes the queue and waits for every worker to finish.
     pub(crate) fn shutdown(self) {
         drop(self);
     }
 }
 
-/// Closes the queue and joins each worker when the pool is released.
+/// Defines worker shutdown when the pool is released.
 impl Drop for ReaperPool {
-    /// Closes the queue and joins each worker before releasing the pool.
+    /// Closes the queue and joins each worker before releasing its handle.
     fn drop(&mut self) {
         drop(self.sender.take());
         for worker in self.workers.drain(..) {

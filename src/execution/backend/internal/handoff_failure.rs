@@ -11,19 +11,21 @@ use std::io;
 use super::HandoffFailureKind;
 use super::ReaperOwner;
 
-/// Returns ownership and a sanitized cause when a reaper handoff fails.
+/// Describes a failed reaper handoff and returns cleanup ownership to its
+/// caller.
 pub(crate) struct HandoffFailure {
     /// Classifies whether the queue was full or unavailable.
     pub(crate) kind: HandoffFailureKind,
     /// Cleanup responsibility returned to the caller for fallback handling.
     pub(crate) owner: ReaperOwner,
-    /// Optional startup cause; debug output exposes only its OS error number.
+    /// Optional cause from pool startup. Debug output reports its OS error
+    /// code.
     pub(crate) source: Option<io::Error>,
 }
 
-/// Formats failure details without exposing the original I/O message.
+/// Provides diagnostic formatting for a reaper handoff failure.
 impl std::fmt::Debug for HandoffFailure {
-    /// Formats the failure kind and OS code without exposing an I/O message.
+    /// Writes the failure kind and optional startup OS error code.
     ///
     /// # Parameters
     /// * `formatter`: Destination for the formatted debug representation.
@@ -37,8 +39,8 @@ impl std::fmt::Debug for HandoffFailure {
 }
 
 impl HandoffFailure {
-    /// Logs an unavailable service without exposing its potentially sensitive
-    /// message.
+    /// Logs the failure kind and optional OS error code for the cleanup
+    /// context.
     ///
     /// # Parameters
     /// * `context`: Identifies the cleanup path that encountered the failure.

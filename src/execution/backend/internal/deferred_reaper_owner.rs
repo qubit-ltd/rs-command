@@ -14,9 +14,8 @@ use crate::execution::backend::Reaper;
 use crate::execution::contracts::RecoveryEffectEvidence;
 use crate::execution::contracts::RecoveryOwner;
 
-/// Invokes recovery cleanup from an existing bounded backend/recovery worker.
-/// The thread-local mode is private; direct calls through the public recovery
-/// owner contract remain nonblocking when the reaper service is unavailable.
+/// Runs a recovery attempt with inline fallback on an existing bounded worker.
+/// The thread-local mode resets when the attempt returns or unwinds.
 ///
 /// # Parameters
 /// * `owner`: Recovery owner whose cleanup may use the worker's inline

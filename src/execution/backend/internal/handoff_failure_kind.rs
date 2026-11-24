@@ -6,13 +6,13 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 
-/// Identifies why a cleanup owner could not enter the reaper queue.
+/// Identifies why a cleanup owner was rejected by the reaper queue.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HandoffFailureKind {
-    /// The bounded queue has no available slot; retrying may succeed.
+    /// The bounded queue has no available slot. A later submission may succeed.
     Full,
-    /// The queue's worker pool has stopped and cannot accept owners.
+    /// The worker pool has stopped and the queue has no receiver.
     Disconnected,
-    /// A new worker pool could not be started.
+    /// Startup failed before a replacement worker pool became available.
     StartFailed,
 }
