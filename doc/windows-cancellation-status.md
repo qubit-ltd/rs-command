@@ -28,6 +28,14 @@ The separate EOF/flush and readiness probes had zero valid hits. The readiness p
 
 **Decision:** RC-006 remains **unresolved**. This native run passed its selected tests and identity gate, but it did not produce the required same-helper sequence of successful cancellation, original I/O return, subsequent blocked production I/O, cleanup join waiting on that I/O, independent watchdog release, and recovery. The earlier Linux source audit at `36579c2` remains historical evidence only.
 
+## Bounded source audit at SHA `dec767dff01f9fb6c97c923628d472f9a81f33cd` (2026-11-24)
+
+This audit ran on Linux x86_64 (`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`) with Rust `1.94.0` and Cargo `1.94.0`. A targeted `git diff --exit-code c871a25024adb72c1f4bdac7f9e226fb03463cb8 --` over the production cancellation/helper, Windows probe, workflow, and identity-gate paths exited 0. `command -v pwsh` and `command -v powershell` each exited 1. No Windows runtime test, PowerShell identity gate, or new Windows trace was run for this SHA.
+
+The inspected production path still sends successful Windows cancellation to helper join without the confirmation deadline. The production probe reports `production_join_pending_witness=false`, `original_io_return_is_subsequent_io=false`, `source_writer_manually_released=true`, and `watchdog_released=false`; the pipe probes do not establish the production-file or production-stdin causal chain. The existing `windows-2022` workflow remains the viable runtime entry point: it pins Rust `1.94.0`, runs the Windows and command-I/O test filters, and applies the PowerShell identity gate. It was not dispatched for this audit.
+
+**Decision:** RC-006 remains **unresolved**. This source comparison confirms only that the inspected paths match the recorded `c871a250` run; it neither confirms nor excludes the suspected production hang and does not establish Windows safety. No production code or probe was changed, and no artifact was generated.
+
 ## Bounded source follow-up (source SHA `5fa0cae06001e07b5053171216b1b9f7da6acb15`, 2026-11-18)
 
 The implementation-stage source check ran on Linux x86_64 with Rust `1.94.0`. The retry-timer test change in `src/execution/executor.rs` does not alter Windows cancellation, helper I/O, or join paths; the stop-diagnostic change is documentation-only. A targeted `git diff --exit-code fcdccb7 --` over the production cancellation/helper, Windows probe, workflow, and identity-gate paths exited 0. `pwsh` and `powershell` were unavailable, so no Windows runtime test, PowerShell gate, or new Windows trace was run.
