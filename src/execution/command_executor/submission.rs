@@ -21,6 +21,7 @@ use super::super::SnapshotFailure;
 use super::super::adapter::AdapterState;
 #[cfg(feature = "async")]
 use super::super::command_executor::internal::async_submission_context::AsyncSubmissionContext;
+use super::super::command_executor::internal::resource_submit_context::ResourceSubmitContext;
 use super::super::contracts::Request;
 use super::super::contracts::RequestOptions;
 use super::super::executor::make_request_with_base;
@@ -107,7 +108,17 @@ impl CommandExecutor {
         options: CommandResourceRunOptions,
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
         let bytes = resource_bytes(&options);
-        self.submit_resources_manager(&self.manager, runner, command, options, bytes, None, None)
+        self.submit_resources_manager(
+            &self.manager,
+            runner,
+            command,
+            options,
+            bytes,
+            ResourceSubmitContext {
+                deadline: None,
+                base: None,
+            },
+        )
     }
     /// Attempts local admission and returns an asynchronous view of the
     /// submitted operation without waiting for executor capacity. Use the
@@ -416,7 +427,17 @@ impl CommandExecutor {
                 });
             }
         };
-        self.submit_resources_manager(&manager, runner, command, options, bytes, Some(scope.context()), None)
+        self.submit_resources_manager(
+            &manager,
+            runner,
+            command,
+            options,
+            bytes,
+            ResourceSubmitContext {
+                deadline: Some(scope.context()),
+                base: None,
+            },
+        )
     }
     /// Performs the submit in manager step in the managed command execution
     /// lifecycle.
@@ -517,9 +538,9 @@ impl CommandExecutor {
         command: Command,
         options: CommandResourceRunOptions,
         bytes: usize,
-        deadline: Option<OperationContext>,
-        base: Option<&IoPathBase>,
+        context: ResourceSubmitContext<'_>,
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
+        let ResourceSubmitContext { deadline, base } = context;
         let request =
             make_request_with_base(runner, command, RequestOptions::Resources(options), base).map_err(|error| {
                 let (runner, command, options, message) = *error;

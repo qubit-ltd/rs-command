@@ -16,3 +16,6 @@ pub(in crate::execution) mod capacity_wait;
 // Owns a waiter registration for one async busy retry phase.
 #[path = "scheduler_waiter_guard.rs"]
 pub(in crate::execution) mod scheduler_waiter_guard;
+// Carries the deadline and path snapshot used by a resource submission.
+#[path = "resource_submit_context.rs"]
+pub(in crate::execution) mod resource_submit_context;

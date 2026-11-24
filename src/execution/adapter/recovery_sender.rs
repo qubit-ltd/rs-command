@@ -70,9 +70,8 @@ impl RecoverySender {
                 Err(actual) => count = actual,
             }
         }
-        self.sender.try_send(item).map_err(|error| {
+        self.sender.try_send(item).inspect_err(|_error| {
             self.outstanding.fetch_sub(1, Ordering::AcqRel);
-            error
         })
     }
 
@@ -84,9 +83,8 @@ impl RecoverySender {
     #[cfg(test)]
     pub(crate) fn send(&self, item: RecoveryItem) -> Result<(), std::sync::mpsc::SendError<RecoveryItem>> {
         self.outstanding.fetch_add(1, Ordering::AcqRel);
-        self.sender.send(item).map_err(|error| {
+        self.sender.send(item).inspect_err(|_error| {
             self.outstanding.fetch_sub(1, Ordering::AcqRel);
-            error
         })
     }
 }

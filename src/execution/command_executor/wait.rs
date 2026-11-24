@@ -20,6 +20,7 @@ use crate::execution::CommandSubmitFailure;
 use crate::execution::CommandSubmitFailureReason;
 #[cfg(feature = "async")]
 use crate::execution::command_executor::internal::async_submission_context::AsyncSubmissionContext;
+use crate::execution::command_executor::internal::resource_submit_context::ResourceSubmitContext;
 use crate::execution::contracts::CapacityFailure;
 use crate::execution::executor;
 use crate::execution::executor::capture_io_path_base;
@@ -162,8 +163,10 @@ impl CommandExecutor {
                 command,
                 options,
                 bytes,
-                None,
-                Some(&base),
+                ResourceSubmitContext {
+                    deadline: None,
+                    base: Some(&base),
+                },
             ) {
                 Ok(operation) => return Ok(operation),
                 Err(failure) => {
@@ -229,8 +232,10 @@ impl CommandExecutor {
                 command,
                 options,
                 bytes,
-                Some(deadline.clone()),
-                Some(&base),
+                ResourceSubmitContext {
+                    deadline: Some(deadline.clone()),
+                    base: Some(&base),
+                },
             ) {
                 Ok(operation) => return Ok(operation),
                 Err(failure) => {
