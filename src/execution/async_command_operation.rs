@@ -132,6 +132,34 @@ mod tests {
     }
 
     #[test]
+    fn test_async_take_stop_diagnostic_recovers_poisoned_slot() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let diagnostic = CommandError::from_reason("poisoned async diagnostic", CommandErrorReason::Cancelled, None);
+        let slot = Arc::new(Mutex::new(Some(diagnostic)));
+        let poison_slot = Arc::clone(&slot);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = poison_slot.lock().unwrap();
+            panic!("poison the async diagnostic slot while it retains the diagnostic");
+        }));
+        assert!(slot.is_poisoned());
+
+        let mut operation = AsyncCommandOperation::new(failed_handle(&manager).into_async(), Arc::clone(&slot));
+        assert_eq!(
+            operation.take_stop_diagnostic().unwrap().command(),
+            "poisoned async diagnostic"
+        );
+        assert!(operation.take_stop_diagnostic().is_none());
+        assert!(slot.lock().unwrap_err().into_inner().is_none());
+
+        let mut synchronous = operation.into_sync();
+        let OperationOutcome::Failed(failure) = synchronous.wait_outcome().unwrap() else {
+            panic!("operation should preserve its failed outcome");
+        };
+        assert_eq!(failure.command(), "async operation command");
+        synchronous.wait_settlement().unwrap();
+    }
+
+    #[test]
     fn test_async_into_inner_preserves_operation_result_and_settlement() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let operation = AsyncCommandOperation::new(failed_handle(&manager).into_async(), Arc::new(Mutex::new(None)));

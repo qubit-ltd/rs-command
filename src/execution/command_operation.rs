@@ -134,6 +134,33 @@ mod tests {
     }
 
     #[test]
+    fn test_sync_take_stop_diagnostic_recovers_poisoned_slot() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let diagnostic = CommandError::from_reason("poisoned retained diagnostic", CommandErrorReason::Cancelled, None);
+        let slot = Arc::new(Mutex::new(Some(diagnostic)));
+        let poison_slot = Arc::clone(&slot);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = poison_slot.lock().unwrap();
+            panic!("poison the diagnostic slot while it retains the diagnostic");
+        }));
+        assert!(slot.is_poisoned());
+
+        let mut operation = CommandOperation::new(failed_handle(&manager), Arc::clone(&slot));
+        assert_eq!(
+            operation.take_stop_diagnostic().unwrap().command(),
+            "poisoned retained diagnostic"
+        );
+        assert!(operation.take_stop_diagnostic().is_none());
+        assert!(slot.lock().unwrap_err().into_inner().is_none());
+
+        let OperationOutcome::Failed(failure) = operation.wait_outcome().unwrap() else {
+            panic!("operation should preserve its failed outcome");
+        };
+        assert_eq!(failure.command(), "operation command");
+        operation.wait_settlement().unwrap();
+    }
+
+    #[test]
     fn test_into_inner_preserves_the_operation_result() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let slot = Arc::new(Mutex::new(Some(CommandError::from_reason(
