@@ -43,7 +43,7 @@ use super::command_executor::wait::deadline_failure;
 use super::command_executor::wait::retry_wait;
 #[cfg(all(test, feature = "async"))]
 use super::command_executor::wait::retryable_async;
-#[cfg(any(feature = "async", test))]
+#[cfg(any(feature = "async", all(test, unix)))]
 use super::contracts::CapacityFailure;
 use super::contracts::ExecutionSnapshot;
 use super::contracts::IoPathSnapshot;
