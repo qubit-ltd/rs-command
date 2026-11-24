@@ -11,6 +11,8 @@ use std::ffi::OsStr;
 #[cfg(unix)]
 use std::ffi::OsString;
 #[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 
 use qubit_command::Command;
@@ -51,7 +53,26 @@ fn test_command_os_args_appends_in_order() {
 
 #[cfg(unix)]
 #[test]
-fn test_command_os_program_argument_and_environment_preserve_non_utf8_bytes() {
+fn test_command_os_builder_preserves_non_utf8_values() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut program_name = b"command-".to_vec();
+    program_name.push(0xff);
+    let program = directory.path().join(OsString::from_vec(program_name));
+    let argument = OsString::from_vec(b"argument-\xfe".to_vec());
+    let environment_key = OsString::from_vec(b"QUBIT_COMMAND_RAW_KEY-\xfc".to_vec());
+    let environment_value = OsString::from_vec(b"environment-\xfd".to_vec());
+    let command = Command::new_os(&program)
+        .arg_os(&argument)
+        .env_os(&environment_key, &environment_value);
+
+    assert_eq!(command.program().as_bytes(), program.as_os_str().as_bytes());
+    assert_eq!(command.arguments().collect::<Vec<_>>(), [argument.as_os_str()]);
+    assert_eq!(command.environment(), [(environment_key, environment_value)]);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_command_os_program_argument_and_environment_reach_child_with_non_utf8_bytes() {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
@@ -77,6 +98,40 @@ fn test_command_os_program_argument_and_environment_preserve_non_utf8_bytes() {
                 .env_os("QUBIT_COMMAND_RAW_VALUE", &environment),
         )
         .expect("non-UTF-8 program, argument, and environment values should pass through");
+
+    let mut expected = argument.into_vec();
+    expected.push(b':');
+    expected.extend_from_slice(environment.as_encoded_bytes());
+    assert_eq!(output.stdout(), expected);
+    assert!(output.stderr().is_empty());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn test_command_os_argument_and_environment_reach_child_with_non_utf8_bytes() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("command");
+    fs::write(
+        &program,
+        b"#!/bin/sh\nprintf '%s:%s' \"$1\" \"$QUBIT_COMMAND_RAW_VALUE\"\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&program).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&program, permissions).unwrap();
+
+    let argument = OsString::from_vec(b"argument-\xfe".to_vec());
+    let environment = OsString::from_vec(b"environment-\xfd".to_vec());
+    let output = CommandRunner::without_timeout()
+        .run(
+            Command::new_os(&program)
+                .arg_os(&argument)
+                .env_os("QUBIT_COMMAND_RAW_VALUE", &environment),
+        )
+        .expect("non-UTF-8 argument and environment values should pass through");
 
     let mut expected = argument.into_vec();
     expected.push(b':');
