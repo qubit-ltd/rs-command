@@ -1418,6 +1418,7 @@ mod activation_failure_tests {
         let permit = scheduler.try_reserve(0).unwrap();
         let (recovery, receiver) = std::sync::mpsc::sync_channel::<super::super::RecoveryItem>(1);
         drop(receiver);
+        let recovery = super::super::RecoverySender::new(recovery, 1);
         let backend = Arc::new(ProcessBackend::new());
         let state = AdapterState::new(request(), permit, scheduler, backend.clone(), backend, recovery, None);
         let manager = OperationManager::new(Default::default()).unwrap();
@@ -1451,6 +1452,7 @@ mod activation_failure_tests {
         let scheduler = scheduler();
         let permit = scheduler.try_reserve(0).unwrap();
         let (recovery, _receiver) = std::sync::mpsc::sync_channel::<super::super::RecoveryItem>(0);
+        let recovery = super::super::RecoverySender::new(recovery, 1);
         let backend = Arc::new(ProcessBackend::new());
         let state = AdapterState::new(request(), permit, scheduler, backend.clone(), backend, recovery, None);
         let manager = OperationManager::new(Default::default()).unwrap();
@@ -1490,6 +1492,7 @@ mod activation_failure_tests {
         let scheduler = scheduler();
         let permit = scheduler.try_reserve(0).unwrap();
         let (recovery, receiver) = std::sync::mpsc::sync_channel::<super::super::RecoveryItem>(1);
+        let recovery = super::super::RecoverySender::new(recovery, 1);
         let backend = Arc::new(ProcessBackend::new());
         let state = AdapterState::new(request(), permit, scheduler, backend.clone(), backend, recovery, None);
         let manager = OperationManager::new(Default::default()).unwrap();

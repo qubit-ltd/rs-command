@@ -7,8 +7,11 @@
 // =============================================================================
 //! Single bounded worker retains unresolved cleanup owners through handoff.
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::sync_channel;
+use std::time::Instant;
 
 use qubit_operation::OperationId;
 use qubit_operation::SettlementReport;
@@ -26,46 +29,125 @@ const MAX_RECOVERY_EFFECTS: usize = 64;
 /// # Parameters
 /// * `capacity`: Supplies the capacity value used by this operation.
 pub(crate) fn start_recovery_worker(capacity: usize) -> Result<RecoverySender, std::io::Error> {
-    let (tx, rx) = sync_channel::<RecoveryItem>(capacity.max(1));
+    let capacity = capacity.max(1);
+    let (tx, rx) = sync_channel::<RecoveryItem>(capacity);
+    let recovery = RecoverySender::new(tx, capacity);
+    let outstanding = recovery.outstanding();
     std::thread::Builder::new()
         .name("qubit-command-recovery".to_owned())
-        .spawn(move || recovery_loop(rx))?;
-    Ok(tx)
+        .spawn(move || recovery_loop(rx, outstanding))?;
+    Ok(recovery)
 }
 /// Stores the recovery loop value used by this execution component.
 ///
 /// # Parameters
 /// * `rx`: Supplies the rx value used by this operation.
-fn recovery_loop(rx: Receiver<RecoveryItem>) {
-    while let Ok(item) = rx.recv() {
-        let summary = item.owner.summary();
-        let effect_evidence = item.owner.effect_evidence(item.id);
-        let mut backoff = std::time::Duration::from_millis(25);
-        loop {
-            match item.owner.retry_cleanup() {
-                Ok(()) if item.owner.is_complete() => break,
-                Err(RecoveryRetryError::OwnerAlreadyConsumed) if item.owner.is_complete() => break,
-                _ => {
-                    std::thread::sleep(backoff);
-                    backoff = (backoff * 2).min(std::time::Duration::from_secs(2));
+struct PendingRecovery {
+    item: RecoveryItem,
+    effect_evidence: RecoveryEffectEvidence,
+    next_attempt: Instant,
+    backoff: std::time::Duration,
+    handed_off: bool,
+}
+
+fn recovery_loop(rx: Receiver<RecoveryItem>, outstanding: Arc<AtomicUsize>) {
+    let mut pending: Vec<PendingRecovery> = Vec::new();
+    loop {
+        while let Ok(item) = rx.try_recv() {
+            let effect_evidence = item.owner.effect_evidence(item.id);
+            pending.push(PendingRecovery {
+                item,
+                effect_evidence,
+                next_attempt: Instant::now(),
+                backoff: std::time::Duration::from_millis(25),
+                handed_off: false,
+            });
+        }
+        if pending.is_empty() {
+            match rx.recv() {
+                Ok(item) => {
+                    let effect_evidence = item.owner.effect_evidence(item.id);
+                    pending.push(PendingRecovery {
+                        item,
+                        effect_evidence,
+                        next_attempt: Instant::now(),
+                        backoff: std::time::Duration::from_millis(25),
+                        handed_off: false,
+                    });
                 }
+                Err(_) => break,
             }
         }
-        log::debug!("recovery owner handed responsibility upstream: {summary}");
-        let _ = item.control.release();
-        let _ = item
-            .control
-            .settlement(Arc::new(recovery_settlement(item.id, effect_evidence)));
-        let observer = item.observer.wait();
-        loop {
-            match observer.wait_settlement() {
-                Ok(_) => break,
-                Err(error) => {
-                    log::error!("recovery worker could not observe upstream settlement: {error:?}");
-                    std::thread::sleep(backoff);
-                    backoff = (backoff * 2).min(std::time::Duration::from_secs(2));
+        let now = Instant::now();
+        let mut index = 0;
+        while index < pending.len() {
+            let task = &mut pending[index];
+            if task.next_attempt > now {
+                index += 1;
+                continue;
+            }
+            if !task.handed_off {
+                match task.item.owner.retry_cleanup() {
+                    Ok(()) if task.item.owner.is_complete() => task.handed_off = true,
+                    Err(RecoveryRetryError::OwnerAlreadyConsumed)
+                        if task.item.owner.is_complete() =>
+                    {
+                        task.handed_off = true
+                    }
+                    _ => {
+                        task.next_attempt = now + task.backoff;
+                        task.backoff = (task.backoff * 2).min(std::time::Duration::from_secs(2));
+                        index += 1;
+                        continue;
+                    }
+                }
+                log::debug!(
+                    "recovery owner handed responsibility upstream: {}",
+                    task.item.owner.summary()
+                );
+                let _ = task.item.control.release();
+                let _ = task.item.control.settlement(Arc::new(recovery_settlement(
+                    task.item.id,
+                    task.effect_evidence.clone(),
+                )));
+            }
+            if let Some(observer) = task.item.observer.try_get() {
+                match observer.wait_settlement_for(std::time::Duration::ZERO) {
+                    Ok(qubit_operation::SettlementWait::Ready(_)) => {
+                        pending.swap_remove(index);
+                        outstanding.fetch_sub(1, Ordering::AcqRel);
+                        continue;
+                    }
+                    Ok(qubit_operation::SettlementWait::Pending(_)) => {}
+                    Err(error) => log::error!(
+                        "recovery worker could not observe upstream settlement: {error:?}"
+                    ),
                 }
             }
+            task.next_attempt = now + task.backoff;
+            task.backoff = (task.backoff * 2).min(std::time::Duration::from_secs(2));
+            index += 1;
+        }
+        let timeout = pending
+            .iter()
+            .map(|task| task.next_attempt.saturating_duration_since(Instant::now()))
+            .min()
+            .unwrap_or(std::time::Duration::from_secs(2));
+        match rx.recv_timeout(timeout) {
+            Ok(item) => {
+                let effect_evidence = item.owner.effect_evidence(item.id);
+                pending.push(PendingRecovery {
+                    item,
+                    effect_evidence,
+                    next_attempt: Instant::now(),
+                    backoff: std::time::Duration::from_millis(25),
+                    handed_off: false,
+                });
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) if !pending.is_empty() => {
+                std::thread::sleep(timeout)
+            }
+            Err(_) => {}
         }
     }
 }
@@ -76,7 +158,10 @@ fn recovery_loop(rx: Receiver<RecoveryItem>) {
 /// * `id`: Supplies the id value used by this operation.
 /// * `effect_evidence`: Supplies the effect evidence value used by this
 ///   operation.
-fn recovery_settlement(id: OperationId, mut effect_evidence: RecoveryEffectEvidence) -> SettlementReport {
+fn recovery_settlement(
+    id: OperationId,
+    mut effect_evidence: RecoveryEffectEvidence,
+) -> SettlementReport {
     for effect in &mut effect_evidence.effects {
         effect.operation_id = id;
     }
@@ -86,7 +171,11 @@ fn recovery_settlement(id: OperationId, mut effect_evidence: RecoveryEffectEvide
             .len()
             .saturating_add(effect_evidence.effect_overflow),
     );
-    let retained_effects: Vec<_> = effect_evidence.effects.into_iter().take(MAX_RECOVERY_EFFECTS).collect();
+    let retained_effects: Vec<_> = effect_evidence
+        .effects
+        .into_iter()
+        .take(MAX_RECOVERY_EFFECTS)
+        .collect();
     let effects_total = observed_total.max(retained_effects.len());
     // The normalized total covers all producer-reported and adapter-omitted
     // records, so overflow is exactly the portion not retained here.
@@ -169,7 +258,10 @@ mod tests {
         fn summary(&self) -> String {
             "test owner".to_owned()
         }
-        fn effect_evidence(&self, _operation_id: qubit_operation::OperationId) -> RecoveryEffectEvidence {
+        fn effect_evidence(
+            &self,
+            _operation_id: qubit_operation::OperationId,
+        ) -> RecoveryEffectEvidence {
             self.evidence.clone()
         }
         fn retry_cleanup(&self) -> Result<(), RecoveryRetryError> {
@@ -237,7 +329,9 @@ mod tests {
             .unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(5);
-        while OperationControl::snapshot(&*control).settlement.is_none() && Instant::now() < deadline {
+        while OperationControl::snapshot(&*control).settlement.is_none()
+            && Instant::now() < deadline
+        {
             std::thread::yield_now();
         }
         assert!(OperationControl::snapshot(&*control).input_released);
@@ -266,7 +360,10 @@ mod tests {
         let (released, changed) = &*gate;
         *released.lock().unwrap() = true;
         changed.notify_all();
-        let report = match operation.wait_settlement_for(Duration::from_secs(5)).unwrap() {
+        let report = match operation
+            .wait_settlement_for(Duration::from_secs(5))
+            .unwrap()
+        {
             qubit_operation::SettlementWait::Ready(report) => report,
             qubit_operation::SettlementWait::Pending(_) => {
                 panic!("scope must settle after gate release")
@@ -276,6 +373,101 @@ mod tests {
         lease_dropped_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("recovery owner lease drops only after manager settlement");
+    }
+
+    #[test]
+    fn test_recovery_worker_advances_independent_owner_while_prior_settlement_is_pending() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let (drop_started_tx, drop_started_rx) = mpsc::sync_channel(1);
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let cleanup_gate = Arc::clone(&gate);
+        let mut pending_operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let resource = scope
+                    .manage(BlockingDrop {
+                        started: drop_started_tx,
+                        gate: cleanup_gate,
+                    })
+                    .unwrap();
+                drop(resource);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        assert!(matches!(
+            pending_operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        drop_started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("first upstream settlement should remain pending");
+        let pending_id = pending_operation.id();
+
+        let mut completed_operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        assert!(matches!(
+            completed_operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        completed_operation.wait_settlement().unwrap();
+        let completed_id = completed_operation.id();
+
+        let pending_control = Arc::new(CommandControl::default());
+        let completed_control = Arc::new(CommandControl::default());
+        assert!(pending_control.bind(pending_id));
+        assert!(completed_control.bind(completed_id));
+        let pending_observer = Arc::new(OperationObserverSlot::default());
+        pending_observer.set(pending_operation.observer());
+        let completed_observer = Arc::new(OperationObserverSlot::default());
+        completed_observer.set(completed_operation.observer());
+        let recovery = start_recovery_worker(2).unwrap();
+
+        for (id, control, observer) in [
+            (pending_id, Arc::clone(&pending_control), pending_observer),
+            (
+                completed_id,
+                Arc::clone(&completed_control),
+                completed_observer,
+            ),
+        ] {
+            recovery
+                .send(RecoveryItem {
+                    owner: Box::new(CompleteOwner {
+                        _lease: Mutex::new(None),
+                        evidence: RecoveryEffectEvidence::default(),
+                    }),
+                    control,
+                    id,
+                    observer,
+                })
+                .unwrap();
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while OperationControl::snapshot(&*completed_control)
+            .settlement
+            .is_none()
+            && Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        assert!(
+            OperationControl::snapshot(&*completed_control)
+                .settlement
+                .is_some(),
+            "independent owner should settle before the first upstream owner"
+        );
+        assert!(matches!(
+            pending_operation
+                .wait_settlement_for(Duration::ZERO)
+                .unwrap(),
+            qubit_operation::SettlementWait::Pending(_)
+        ));
+
+        let (released, changed) = &*gate;
+        *released.lock().unwrap() = true;
+        changed.notify_all();
+        pending_operation.wait_settlement().unwrap();
     }
 
     #[test]
@@ -328,7 +520,10 @@ mod tests {
             if let Some(report) = OperationControl::snapshot(&*control).settlement {
                 break report;
             }
-            assert!(Instant::now() < deadline, "recovery report should be published");
+            assert!(
+                Instant::now() < deadline,
+                "recovery report should be published"
+            );
             std::thread::yield_now();
         };
 
@@ -336,7 +531,12 @@ mod tests {
         assert_eq!(report.effects_total, 71);
         assert_eq!(report.effect_overflow, 7);
         assert_eq!(report.recovery_count, 1);
-        assert!(report.effects.iter().all(|effect| effect.operation_id == id));
+        assert!(
+            report
+                .effects
+                .iter()
+                .all(|effect| effect.operation_id == id)
+        );
     }
 
     #[test]
