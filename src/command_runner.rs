@@ -2094,11 +2094,15 @@ impl CommandRunner {
     /// and cancellation are disabled; the timer must progress independently
     /// while synchronous `run` blocks. The budget is a byte limit, not a hard
     /// wall-clock deadline, and does not bound preparation, spawning, or
-    /// arbitrary filesystem operations. Exceeding the limit requests
-    /// termination of the managed process tree,
-    /// including when no timeout or cancellation is configured. Termination
-    /// follows the runner's existing best-effort cleanup contract and does not
-    /// impose a hard wall-clock deadline. The resulting
+    /// arbitrary filesystem operations. In managed execution, exceeding the
+    /// limit requests termination according to the selected
+    /// [`ProcessTreePolicy`]: the default `Managed` policy manages the process
+    /// tree, while explicit `DirectChild` manages only the direct child. In
+    /// legacy execution, a timeout, cancellation token, or total output budget
+    /// causes the runner to attempt process-tree management; without those
+    /// conditions it stops only the direct child. Termination follows the
+    /// runner's existing best-effort cleanup contract and does not impose a
+    /// hard wall-clock deadline. The resulting
     /// [`CommandErrorReason::OutputLimitExceeded`] includes the limit and
     /// observed byte count. [`CommandError::output`] returns `None`, while
     /// [`CommandError::captured_output`] may return incomplete raw bytes.
