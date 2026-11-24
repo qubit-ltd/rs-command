@@ -16,6 +16,8 @@ use qubit_operation::OperationContext;
 /// admission.
 #[cfg(feature = "async")]
 pub(in crate::execution) struct AsyncSubmissionContext {
+    /// Parent-directory basis reused when a capacity waiter retries submission.
+    pub(in crate::execution) io_path_base: Option<crate::execution::io_path_base::IoPathBase>,
     /// Session bridge connected to the operation, when this is a session.
     pub(in crate::execution) bridge: Option<Arc<dyn crate::session::contracts::SessionBridge>>,
     /// Session channel owners retained for the operation lifetime.
@@ -32,9 +34,19 @@ impl AsyncSubmissionContext {
     /// * `deadline`: Optional operation scope context applied during admission.
     pub(in crate::execution) fn plain(deadline: Option<OperationContext>) -> Self {
         Self {
+            io_path_base: None,
             bridge: None,
             keepalive: None,
             deadline,
         }
+    }
+
+    /// Uses a path basis captured when a waiting submission first ran.
+    ///
+    /// # Parameters
+    /// * `base`: Parent-directory result shared across retries.
+    pub(in crate::execution) fn with_io_path_base(mut self, base: crate::execution::io_path_base::IoPathBase) -> Self {
+        self.io_path_base = Some(base);
+        self
     }
 }

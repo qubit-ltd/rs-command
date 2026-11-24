@@ -19,6 +19,8 @@ use qubit_command::CommandExecutorApi;
 #[cfg(unix)]
 use qubit_command::CommandResourceRunOptions;
 #[cfg(unix)]
+use qubit_command::CommandRunOptions;
+#[cfg(unix)]
 use qubit_command::CommandRunner;
 #[cfg(unix)]
 use qubit_operation::ManagerOptions;
@@ -28,6 +30,36 @@ use qubit_operation::OperationManager;
 use qubit_operation::OperationOptions;
 #[cfg(unix)]
 use qubit_operation::OperationOutcome;
+
+mod support;
+
+#[cfg(all(feature = "async", unix))]
+fn block_on_wait<F: std::future::Future>(future: F) -> F::Output {
+    use std::sync::Arc;
+    use std::task::Context;
+    use std::task::Wake;
+    use std::task::Waker;
+
+    struct ThreadWake(std::thread::Thread);
+    impl Wake for ThreadWake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+    let mut context = Context::from_waker(&waker);
+    let mut future = Box::pin(future);
+    loop {
+        if let std::task::Poll::Ready(value) = future.as_mut().poll(&mut context) {
+            return value;
+        }
+        std::thread::park_timeout(Duration::from_secs(2));
+    }
+}
 
 #[cfg(unix)]
 fn new_executor() -> CommandExecutor {
@@ -132,6 +164,220 @@ fn test_blocking_wait_submission_runs_after_active_slot_is_released() {
     match second.wait_outcome().unwrap() {
         OperationOutcome::Succeeded(output) => assert_eq!(output.stdout(), b"second"),
         other => panic!("waiting submission failed: {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_blocking_wait_submission_keeps_the_first_io_path_base_after_cwd_change() {
+    const TEST_NAME: &str = "test_blocking_wait_submission_keeps_the_first_io_path_base_after_cwd_change";
+    if std::env::var_os("QUBIT_COMMAND_MANAGED_TEST_CHILD").is_none() {
+        support::managed_test_process::run_for(TEST_NAME, None, Duration::from_secs(20), || {})
+            .expect("isolated path snapshot test should pass");
+        return;
+    }
+
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    std::fs::write(first.path().join("input.txt"), b"first-directory-input").unwrap();
+    std::fs::write(second.path().join("input.txt"), b"second-directory-input").unwrap();
+    std::env::set_current_dir(first.path()).unwrap();
+
+    let executor = new_executor();
+    let mut active = executor
+        .submit(
+            CommandRunner::without_timeout(),
+            Command::new("sh").arg("-c").arg("sleep 0.5"),
+            Default::default(),
+        )
+        .unwrap();
+    let waiting_executor = executor.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        let result = waiting_executor.submit_wait_blocking(
+            CommandRunner::without_timeout(),
+            Command::new("sh")
+                .arg("-c")
+                .arg("cat; printf stderr-marker >&2")
+                .stdin_file("input.txt"),
+            CommandRunOptions::new()
+                .tee_stdout_to_file("stdout.log")
+                .tee_stderr_to_file("stderr.log"),
+        );
+        tx.send(result).unwrap();
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while executor.scheduler_snapshot().waiters == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "waiter should register before cwd changes"
+        );
+        std::thread::yield_now();
+    }
+    std::env::set_current_dir(second.path()).unwrap();
+    let _ = active.wait_outcome().unwrap();
+    let mut operation = rx.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
+    waiter.join().unwrap();
+    match operation.wait_outcome().unwrap() {
+        OperationOutcome::Succeeded(output) => {
+            assert_eq!(output.stdout(), b"first-directory-input")
+        }
+        other => panic!("waiting command should succeed: {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read(first.path().join("stdout.log")).unwrap(),
+        b"first-directory-input"
+    );
+    assert_eq!(
+        std::fs::read(first.path().join("stderr.log")).unwrap(),
+        b"stderr-marker"
+    );
+    assert!(!second.path().join("stdout.log").exists());
+    assert!(!second.path().join("stderr.log").exists());
+}
+
+#[cfg(all(feature = "async", unix))]
+#[test]
+fn test_async_wait_submission_captures_io_base_on_first_poll() {
+    const TEST_NAME: &str = "test_async_wait_submission_captures_io_base_on_first_poll";
+    if std::env::var_os("QUBIT_COMMAND_MANAGED_TEST_CHILD").is_none() {
+        support::managed_test_process::run_for(TEST_NAME, None, Duration::from_secs(20), || {})
+            .expect("isolated async path snapshot test should pass");
+        return;
+    }
+
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    std::fs::write(first.path().join("input.txt"), b"first-poll-input").unwrap();
+    std::fs::write(second.path().join("input.txt"), b"second-poll-input").unwrap();
+    std::env::set_current_dir(first.path()).unwrap();
+    let executor = new_executor();
+    let mut active = executor
+        .submit(
+            CommandRunner::without_timeout(),
+            Command::new("sh").arg("-c").arg("sleep 0.5"),
+            Default::default(),
+        )
+        .unwrap();
+
+    let waiting = executor.submit_wait(
+        CommandRunner::without_timeout(),
+        Command::new("sh").arg("-c").arg("cat").stdin_file("input.txt"),
+        CommandRunOptions::new().tee_stdout_to_file("stdout.log"),
+    );
+    std::env::set_current_dir(second.path()).unwrap();
+    let active_waiter = std::thread::spawn(move || active.wait_outcome().unwrap());
+    let mut operation = block_on_wait(waiting).unwrap();
+    let _ = active_waiter.join().unwrap();
+    match block_on_wait(operation.wait_outcome()).unwrap() {
+        OperationOutcome::Succeeded(output) => assert_eq!(output.stdout(), b"second-poll-input"),
+        other => panic!("async waiting command should succeed: {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read(second.path().join("stdout.log")).unwrap(),
+        b"second-poll-input"
+    );
+    assert!(!first.path().join("stdout.log").exists());
+}
+
+#[cfg(all(feature = "async", unix))]
+#[test]
+fn test_resource_wait_paths_keep_the_first_base_for_root_entries() {
+    const TEST_NAME: &str = "test_resource_wait_paths_keep_the_first_base_for_root_entries";
+    if std::env::var_os("QUBIT_COMMAND_MANAGED_TEST_CHILD").is_none() {
+        support::managed_test_process::run_for(TEST_NAME, None, Duration::from_secs(30), || {})
+            .expect("isolated resource path snapshot test should pass");
+        return;
+    }
+
+    fn collect_sync(mut operation: qubit_command::CommandOperation) -> Vec<u8> {
+        match operation.wait_outcome().unwrap() {
+            OperationOutcome::Succeeded(output) => output.stdout().to_vec(),
+            other => panic!("resource waiting command should succeed: {other:?}"),
+        }
+    }
+
+    fn collect_async(mut operation: qubit_command::AsyncCommandOperation) -> Vec<u8> {
+        match block_on_wait(operation.wait_outcome()).unwrap() {
+            OperationOutcome::Succeeded(output) => output.stdout().to_vec(),
+            other => panic!("async resource waiting command should succeed: {other:?}"),
+        }
+    }
+
+    fn run_case(asynchronous: bool) {
+        let original_directory = std::env::current_dir().unwrap();
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        std::fs::write(first.path().join("input.txt"), b"first-resource-path").unwrap();
+        std::fs::write(second.path().join("input.txt"), b"second-resource-path").unwrap();
+        std::env::set_current_dir(first.path()).unwrap();
+
+        let executor = new_executor();
+        let mut active = executor
+            .submit(
+                CommandRunner::without_timeout(),
+                Command::new("sh").arg("-c").arg("sleep 2"),
+                Default::default(),
+            )
+            .unwrap();
+        let waiting_executor = executor.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let submitter = std::thread::spawn(move || {
+            let submit_and_collect = move || {
+                let command = Command::new("sh")
+                    .arg("-c")
+                    .arg("cat; printf resource-stderr >&2")
+                    .stdin_file("input.txt");
+                let options = CommandRunOptions::new()
+                    .tee_stdout_to_file("stdout.log")
+                    .tee_stderr_to_file("stderr.log");
+                let resources = CommandResourceRunOptions::new().options(options);
+                match asynchronous {
+                    false => collect_sync(
+                        waiting_executor
+                            .submit_wait_resources_blocking(CommandRunner::without_timeout(), command, resources)
+                            .unwrap(),
+                    ),
+                    true => collect_async(
+                        block_on_wait(waiting_executor.submit_wait_resources(
+                            CommandRunner::without_timeout(),
+                            command,
+                            resources,
+                        ))
+                        .unwrap(),
+                    ),
+                }
+            };
+            tx.send(submit_and_collect()).unwrap();
+        });
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while executor.scheduler_snapshot().waiters == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "resource waiter should register: async={asynchronous}"
+            );
+            std::thread::yield_now();
+        }
+        std::env::set_current_dir(second.path()).unwrap();
+        let _ = active.wait_outcome().unwrap();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), b"first-resource-path");
+        submitter.join().unwrap();
+        assert_eq!(
+            std::fs::read(first.path().join("stdout.log")).unwrap(),
+            b"first-resource-path"
+        );
+        assert_eq!(
+            std::fs::read(first.path().join("stderr.log")).unwrap(),
+            b"resource-stderr"
+        );
+        assert!(!second.path().join("stdout.log").exists());
+        assert!(!second.path().join("stderr.log").exists());
+        std::env::set_current_dir(original_directory).unwrap();
+    }
+
+    for asynchronous in [false, true] {
+        run_case(asynchronous);
     }
 }
 
@@ -273,8 +519,8 @@ fn test_blocking_standard_wait_returns_closed_after_shutdown() {
     let submitter = std::thread::spawn(move || {
         tx.send(waiting_executor.submit_wait_blocking(
             CommandRunner::without_timeout(),
-            Command::new("sh").arg("-c").arg("printf should-not-run"),
-            Default::default(),
+            Command::new("sh").arg("-c").arg("cat").stdin_file("relative-input.txt"),
+            CommandRunOptions::new().tee_stdout_to_file("relative-output.log"),
         ))
         .unwrap();
     });
@@ -297,6 +543,10 @@ fn test_blocking_standard_wait_returns_closed_after_shutdown() {
         failure.reason,
         qubit_command::CommandSubmitFailureReason::Capacity(qubit_command::execution::CapacityFailure::Closed)
     ));
+    assert_eq!(
+        failure.options.configured_stdout_file(),
+        Some(std::path::Path::new("relative-output.log"))
+    );
     let _ = active.wait_outcome();
 }
 
