@@ -6,6 +6,18 @@
 
 ## Latest evidence summary / 最新证据摘要 (2026-11-24)
 
+### RC-006 integrated source audit at SHA `66e901499fb6fde370ce02bf6cf50e458addfefb` (2026-11-24)
+
+This source-only audit compared integrated production source SHA `66e901499fb6fde370ce02bf6cf50e458addfefb` with native Windows source SHA `c871a25024adb72c1f4bdac7f9e226fb03463cb8`. On Linux x86_64 with Rust/Cargo `1.94.0`, the managed `RunningCommand`/`StartGate` cancellation observation, T2 cleanup/reaper ownership and recovery worker, and T4 managed-file preparation/commit paths differ from the historical source. The native helper implementation in `command_io.rs` and `CommandIo::cancel_and_join` are unchanged: successful native cancellation still proceeds directly to helper join, while the shared 100 ms confirmation deadline applies after cancellation failure. The Windows probe, workflow, and both PowerShell identity-gate scripts are unchanged (`git diff --exit-code` returned 0). Neither `pwsh` nor `powershell` is available; there was no current-SHA Windows run, gate, or trace.
+
+RC-006 remains **unresolved**. No same-run trace at `66e901499fb6fde370ce02bf6cf50e458addfefb` establishes the required six stages on one production helper: successful native cancellation; return from original I/O; a subsequent production I/O remaining blocked; cleanup join observed waiting on it; release by an independent watchdog; and observed helper/process/resource cleanup completion. The run at `c871a250` is historical evidence only and does not cover the integrated entry, recovery, or managed-file paths. No production cancellation code or probe was changed.
+
+### RC-006 集成源码核查（源码 SHA `66e901499fb6fde370ce02bf6cf50e458addfefb`，2026-11-24）
+
+本次仅做源码核查，将集成生产源码 SHA `66e901499fb6fde370ce02bf6cf50e458addfefb` 与原生 Windows 源码 SHA `c871a25024adb72c1f4bdac7f9e226fb03463cb8` 对照。核查运行于 Linux x86_64、Rust/Cargo `1.94.0`。受管 `RunningCommand`/`StartGate` 取消观察、T2 cleanup/reaper 所有权与 recovery worker、T4 managed 文件 preparation/commit 路径均相对历史源码有变化。`command_io.rs` 中的原生 helper 实现和 `CommandIo::cancel_and_join` 未变：原生取消成功后仍直接 join helper；共享 100 ms 确认期限仍用于取消失败路径。Windows 探针、workflow 和两份 PowerShell identity gate 脚本均未变化（定向 `git diff --exit-code` 退出码为 0）。本机没有 `pwsh` 或 `powershell`，没有当前 SHA 的 Windows run、门禁或 trace。
+
+RC-006 仍为 **unresolved（未解决）**。`66e901499fb6fde370ce02bf6cf50e458addfefb` 没有同一次运行 trace 在同一生产 helper 上证明六阶段：原生取消成功；原始 I/O 返回；后续生产 I/O 持续阻塞；观察到 cleanup join 等待该 I/O；独立 watchdog 释放；以及观察到 helper/process/resource cleanup 完成。`c871a250` 的 run 仅为历史证据，未覆盖集成后的入口、recovery 或 managed 文件路径。未修改生产取消代码或探针。
+
 ### RC-006 post-integration bounded source audit at SHA `a8fab3aed3a0999b6049dcf344d2e075d63e0ea5` (2026-11-24)
 
 This audit ran on Linux x86_64 (`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`) with Rust `1.94.0` and Cargo `1.94.0`. The targeted `git diff --exit-code c871a25024adb72c1f4bdac7f9e226fb03463cb8 --` over the production helper cancellation/join, Windows probe, workflow, and PowerShell identity-gate paths exited 0. `command -v pwsh` and `command -v powershell` each exited 1; no Windows runtime test, PowerShell identity gate, or new trace was run.
