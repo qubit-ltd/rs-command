@@ -81,7 +81,7 @@ let resources = CommandResourceRunOptions::new()
 
 提交前会先检查互斥配置；最终 commit 阶段再检查实际打开句柄的文件身份，并在截断或启动前拒绝身份冲突。owned stdin 不能与命令文件或字节 stdin 并用，需选择一种输入来源。session stdin 使用管道，不能与文件 stdin 并用，但仍可使用受支持的字节前缀。tee 路径可能在后续 commit 错误前已创建；若较早的 sink 已截断，后续失败不会回滚它。文件准备错误可通过 `CommandErrorKind::FilePreparationFailed` 及 `CommandErrorReason::FilePreparationFailed` 查看实际阶段、方向和 source。
 
-容量等待期间的 scope stop 对应 `AdmissionError::Stopped`，deadline 到期对应 `CapacityFailure::DeadlineExpired`。已注册 waiter 遇到 executor 关闭时以 `Capacity(Closed)` 结束。`max_waiters` 同时统计本地容量等待和 manager `Busy` 等待；在同一个等待判断中，deadline 优先于 scope stop，scope stop 优先于关闭。新增的 `CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)` 区分共享等待者额度耗尽 `WaiterLimit` 与计时器失败 `Timer(RetryTimerFailure)`；timer failure 包括启动失败、队列满和断连。穷举匹配 `CommandSubmitFailureReason` 的调用方需补充 `Wait` 分支。
+容量等待期间的 scope stop 对应 `AdmissionError::Stopped`，deadline 到期对应 `CapacityFailure::DeadlineExpired`。已注册 waiter 遇到 executor 关闭时以 `Capacity(Closed)` 结束。`max_waiters` 同时统计本地容量等待和 manager `Busy` 等待；在同一个等待判断中，deadline 优先于 scope stop，scope stop 优先于关闭。新增的 `CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)` 区分共享等待者额度耗尽 `WaiterLimit` 与计时器失败 `Timer(RetryTimerFailure)`。计时器启动或队列满会在请求接纳前失败；请求成功入队后，worker 退出也可能导致 `Disconnected`。这种 submit failure 会保留原 runner、command 和 options，包括 owned 文件输入。穷举匹配 `CommandSubmitFailureReason` 的调用方需补充 `Wait` 分支。
 
 ## 阶段报告与错误处理
 
@@ -90,7 +90,7 @@ managed operation 有两个需要分别观察的阶段：
 1. `wait_outcome()` 取出唯一的业务 outcome：成功、命令错误、停止或 operation 执行失败。
 2. `wait_settlement()` 返回资源结算报告：资源已释放、已转交，或需要恢复。
 
-命令成功不等于 helper、端点或 owned 文件已经释放。若 settlement 为 `RecoveryRequired`，先检查 manager 总报告的 status、effects、计数及溢出/截断信息，再检查存在时的 `external_settlement`，从 adapter 报告中查看其状态、effects、计数和实际 recovery handles。adapter 可能已经执行恢复逻辑，因此外部报告的 `recovery_count` 大于零时，manager 的 `recoveries` 仍可能为空；只对实际存在的 handle 重试或转交。根据 effect 与释放证据决定何时清理暂存文件，不要只因 manager `recoveries` 为空就删除。流式 session 还应在 settlement 前关闭 stdin、并发 drain stdout/stderr，取 outcome 后释放端点。
+命令成功不等于 helper、端点或 owned 文件已经释放。若 settlement 为 `RecoveryRequired`，先检查 manager 总报告的 status、effects、计数及溢出/截断信息，再查看存在时 `external_settlement` 中对应的信息。看完两份报告后，再单独检查 manager 总报告的 `recoveries`，只处理本 managed command 流程实际提供的 handle。adapter 可能已经执行恢复逻辑，因此外部报告的 `recovery_count` 大于零时，外部和 manager 总报告的 `recoveries` 数组仍可能都为空，应用没有可重试的 handle。根据两份报告中的 effect 与释放证据决定何时清理暂存文件；不能只因 recovery handle 数组为空就删除。流式 session 还应在 settlement 前关闭 stdin、并发 drain stdout/stderr，取 outcome 后释放端点。
 
 直接使用 handle 时，operation outcome 中的 `Failed(CommandError)` 保留领域错误；`Stopped` 不带 `CommandOutput`，不能自行补造退出码。operation observer 错误和 settlement 错误表示观察过程未完成，应作为生命周期问题处理。便捷入口 `run_managed` 将成功 outcome 映射成 `CommandOutput`，命令失败映射为 `CommandError`；提交拒绝或 operation 桥接失败也会被转换为 `ManagedOperationFailed` 诊断。若调用方需要区分“提交被拒绝”和“命令本身失败”，使用 `submit` 并检查 `CommandSubmitFailureReason`，不要使用收集型便捷入口。
 
