@@ -1,6 +1,10 @@
 > Current summary: [English Windows cancellation status](windows-cancellation-status.md) | [中文 Windows 取消状态](windows-cancellation-status.zh_CN.md).
 >
 > This page preserves historical audits. Each result applies only to its recorded source revision and environment; it is not evidence for later revisions.
+>
+> RC-002 and CMD-003 are historical tracking IDs for the same Windows cancellation, subsequent-I/O, and helper-wait concern. The legacy history identifies CMD-003 as the current-plan item called RC-002 in the report; the IDs come from different stages, and every run/audit remains attributable only to its recorded SHA and environment.
+>
+> RC-002 与 CMD-003 是同一 Windows 取消后续 I/O 与 helper 等待问题在不同阶段使用的历史跟踪编号。历史报告明确将当前计划的 CMD-003 称为 RC-002；编号不合并各次证据，每次运行或核查仍只归属于所记录的 SHA 与环境。
 
 <a id="current-summary"></a>
 

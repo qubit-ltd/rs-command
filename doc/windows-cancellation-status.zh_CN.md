@@ -4,6 +4,8 @@
 
 `qubit-command` 0.12 的受管 API 增加了进程树管理和独立 settlement 报告，但没有改变 helper join 的证据，也没有建立 Windows 上的硬返回期限。`Managed` 进程树策略不代表每个 helper join 都有界；受管命令同样受此限制。应用应检查 settlement 和清理报告；确实需要硬期限时，应通过独立进程边界监督 runner。
 
+RC-002 和 CMD-003 是不同评审阶段沿用的历史跟踪编号，指向同一个 Windows 取消后续 I/O 与 helper 等待问题。每次运行和源码核查仍只归属于各自记录的 SHA 与环境。
+
 ## 集成源码核查（源码 SHA `c4dfbd7593f1807d2c5758305990452d5301f44b`，2026-11-24）
 
 本次是在 Linux 上对 commit `c4dfbd7593f1807d2c5758305990452d5301f44b` 做源码核查；通过 `git show` 检查对象，没有切换已分配的 worktree。在 managed startup-abort 和 runtime uncertain-handoff 路径中，reaper 服务不可用时会将 cleanup owner 保留在 `ReaperObserver`；有界队列满载仍走 deferred recovery。runner 返回后，`ProcessBackend` 保留并发布 runner 已选定的 outcome，再由有界 backend worker 执行本地保留的 cleanup owner；完成前不会释放 session bridge、operation scope 或发布 release/settlement。该顺序使 cleanup 完成先于 release facts，并保留 runner 选定的主错误。T3 的 resource conflict 分类也已包含：input/output 冲突按冲突输出方向、output/output 冲突按 stderr，均映射为 validation 阶段、`InvalidInput` 的准备失败。
