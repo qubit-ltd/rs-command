@@ -24,6 +24,8 @@ use std::time::Duration;
 #[cfg(all(feature = "async", unix))]
 use qubit_command::AsyncCommandOperation;
 use qubit_command::Command;
+#[cfg(unix)]
+use qubit_command::CommandCancellation;
 use qubit_command::CommandExecutionConfig;
 use qubit_command::CommandExecutor;
 #[cfg(all(feature = "async", unix))]
@@ -54,6 +56,101 @@ fn test_managed_submit_runs_through_operation_manager() {
             assert!(String::from_utf8_lossy(output.stdout()).contains("managed"))
         }
         other => panic!("unexpected managed outcome: {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_stopping_managed_operation_does_not_cancel_shared_token_or_sibling() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let first_ready = directory.path().join("first-ready");
+    let second_ready = directory.path().join("second-ready");
+    let release = directory.path().join("release");
+    let shared = CommandCancellation::new();
+    let options = CommandRunOptions::new().cancellation(shared.clone());
+    let script = "touch \"$1\"; while [ ! -f \"$2\" ]; do sleep 0.01; done";
+    let command = |ready: &std::path::Path| {
+        Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .arg("managed")
+            .arg(ready.to_str().unwrap())
+            .arg(release.to_str().unwrap())
+    };
+    let mut first = executor
+        .submit(CommandRunner::without_timeout(), command(&first_ready), options.clone())
+        .unwrap();
+    let mut second = executor
+        .submit(CommandRunner::without_timeout(), command(&second_ready), options)
+        .unwrap();
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while (!first_ready.exists() || !second_ready.exists()) && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(first_ready.exists(), "first managed command should start");
+    assert!(second_ready.exists(), "second managed command should start");
+
+    assert_eq!(
+        first.request_stop(qubit_operation::StopReason::UserCancelled),
+        qubit_operation::StopRequestStatus::Accepted
+    );
+    assert!(
+        !shared.is_cancelled(),
+        "operation stop must not mutate the caller token"
+    );
+    std::fs::write(&release, b"release").unwrap();
+
+    assert!(matches!(
+        first.wait_outcome().unwrap(),
+        OperationOutcome::Stopped(report) if report.reason == qubit_operation::StopReason::UserCancelled
+    ));
+    assert!(matches!(second.wait_outcome().unwrap(), OperationOutcome::Succeeded(_)));
+    assert!(first.wait_settlement().unwrap().all_released());
+    assert!(second.wait_settlement().unwrap().all_released());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_explicit_shared_token_cancellation_stops_each_managed_operation() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let first_ready = directory.path().join("broadcast-first-ready");
+    let second_ready = directory.path().join("broadcast-second-ready");
+    let cancellation = CommandCancellation::new();
+    let options = CommandRunOptions::new().cancellation(cancellation.clone());
+    let command = |ready: &std::path::Path| {
+        Command::new("sh")
+            .arg("-c")
+            .arg("touch \"$1\"; exec sleep 30")
+            .arg("managed")
+            .arg(ready.to_str().unwrap())
+    };
+    let mut first = executor
+        .submit(CommandRunner::without_timeout(), command(&first_ready), options.clone())
+        .unwrap();
+    let mut second = executor
+        .submit(CommandRunner::without_timeout(), command(&second_ready), options)
+        .unwrap();
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while (!first_ready.exists() || !second_ready.exists()) && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(first_ready.exists(), "first managed command should start");
+    assert!(second_ready.exists(), "second managed command should start");
+
+    cancellation.cancel();
+
+    for operation in [&mut first, &mut second] {
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Stopped(report) if report.reason == qubit_operation::StopReason::UserCancelled
+        ));
+        assert!(operation.wait_settlement().unwrap().all_released());
     }
 }
 
