@@ -4,6 +4,20 @@
 
 `qubit-command` 0.12 的受管 API 增加了进程树管理和独立 settlement 报告，但没有改变 helper join 的证据，也没有建立 Windows 上的硬返回期限。`Managed` 进程树策略不代表每个 helper join 都有界；受管命令同样受此限制。应用应检查 settlement 和清理报告；确实需要硬期限时，应通过独立进程边界监督 runner。
 
+## 集成源码核查（源码 SHA `66e901499fb6fde370ce02bf6cf50e458addfefb`，2026-11-24）
+
+本次仅做源码核查：将集成生产源码 `66e901499fb6fde370ce02bf6cf50e458addfefb` 与历史原生 Windows 源码 SHA `c871a25024adb72c1f4bdac7f9e226fb03463cb8` 对照。核查运行于 Linux x86_64（`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`）、Rust `1.94.0` 和 Cargo `1.94.0`。本机没有 `pwsh` 或 `powershell`，因此该 SHA 没有原生 Windows 重跑、PowerShell 门禁运行或新 trace。
+
+**取消与 helper：** 集成后的 `RunningCommand`/启动路径有变化。`RunningCommand` 现在通过 `StartGate` 观察受管外部取消，携带 operation cancellation 状态，并把 timeout stop 传播给 gate，使受管 operation 的停止决定进入 runtime loop。`command_io.rs` 中的 helper 实现，包括 `CommandIo::cancel_and_join` 和 Windows 原生取消路径，相对 `c871a250` 未变。因此取消成功后仍会无期限 join helper；共享 100 ms helper 确认期限仍用于取消失败路径。源码比较没有证明 join 正在等待，也没有证明生产挂起。
+
+**清理与 reaper：** T2 改变了 startup-abort/runtime cleanup handoff、reaper 服务初始化与替换，以及 managed recovery。handoff 现在区分有界队列满载与服务断连/启动失败；服务断连时会替换 reaper pool 并重试。队列满载时保留 cleanup owner 供 recovery 重试。直接的 startup/runtime handoff 在服务无法启动或仍断连时 inline cleanup；若 managed deferred owner 已保留 cleanup，则重试失败时继续保留所有权；其指定 recovery-worker fallback 可在服务不可用时 inline cleanup，而队列满载仍可继续重试。managed recovery worker 将排队和待处理 owner 都计入容量预算，使用有界退避，并可推进独立 owner 而不等待某个 owner 的 settlement；只有 cleanup 完成后才发布 release/settlement。这些是集成 cleanup 的实质变化，但没有改变 helper 的原生取消，也没有证明待查的 Windows I/O 顺序。
+
+**Managed 文件准备：** T4 改变了 managed stdin/tee preparation 与 commit 路径，包括 direction/stage 分类、对照 managed handles 的身份校验以及截断错误分类。这改变了集成 managed operation 到达和清理 file-backed I/O 的路径；历史原生 run 未覆盖这些变化。
+
+**探针、workflow 与身份门禁：** 对 `windows_probe_tests.rs`、`windows-cancellation-interleaving.yml` 和两份 `assert-windows-probe-results` PowerShell 脚本执行定向 `git diff --exit-code c871a25024adb72c1f4bdac7f9e226fb03463cb8 HEAD --`，退出码为 0；这些文件与原生 SHA 相同。现有 workflow 仍使用 `windows-2022`、固定 Rust `1.94.0`，运行 Windows 与 command-I/O 筛选，记录选择数和 `GITHUB_SHA`，执行身份门禁 fixtures，并对 12 项必需测试应用精确名称结果门禁。现有探针仍未证明后续生产 I/O 阻塞，也未证明 cleanup join 因该 I/O 而等待。
+
+**结论：** 集成源码 SHA `66e901499fb6fde370ce02bf6cf50e458addfefb` 的 RC-006 仍为 **unresolved（未解决）**。计划要求的同次运行、同一生产 helper 因果链尚未证明：(1) 原生取消成功；(2) 原始 I/O 返回；(3) 后续生产 I/O 进入并持续阻塞；(4) 观察到 cleanup join 正等待该 I/O；(5) 独立 watchdog 释放它；(6) 随后观察到 helper/process/resource cleanup 完成。`c871a250` 的原生 run 仅是历史证据。本 SHA 没有 Windows run、PowerShell identity gate 或 trace；未修改生产取消代码或探针。
+
 ## 集成后源码核查（源码 SHA `a8fab3aed3a0999b6049dcf344d2e075d63e0ea5`，2026-11-24）
 
 本次有界核查运行于 Linux x86_64（`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`）、Rust `1.94.0` 和 Cargo `1.94.0`。针对生产 helper 取消/join、Windows 探针、workflow 和 PowerShell 身份门禁路径执行定向 `git diff --exit-code c871a25024adb72c1f4bdac7f9e226fb03463cb8 --`，退出码为 0。`command -v pwsh` 和 `command -v powershell` 均退出码为 1。本 SHA 未运行 Windows runtime 测试、PowerShell 身份门禁或新 trace。
