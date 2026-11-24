@@ -183,6 +183,12 @@ pub(crate) struct ProcessBackend {
     /// Observer slots retained until the scheduled execution captures its
     /// upstream handle.
     observers: Arc<Mutex<HashMap<OperationId, Arc<crate::execution::adapter::OperationObserverSlot>>>>,
+    #[cfg(test)]
+    test_handoff_failure: Option<crate::execution::backend::HandoffFailureKind>,
+    #[cfg(test)]
+    test_startup_abort: bool,
+    #[cfg(test)]
+    test_runtime_uncertain: bool,
 }
 
 impl ProcessBackend {
@@ -192,6 +198,26 @@ impl ProcessBackend {
         Self {
             gates: Arc::new(Mutex::new(HashMap::new())),
             observers: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(test)]
+            test_handoff_failure: None,
+            #[cfg(test)]
+            test_startup_abort: false,
+            #[cfg(test)]
+            test_runtime_uncertain: false,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_test_failures(
+        handoff_failure: crate::execution::backend::HandoffFailureKind,
+        startup_abort: bool,
+        runtime_uncertain: bool,
+    ) -> Self {
+        Self {
+            test_handoff_failure: Some(handoff_failure),
+            test_startup_abort: startup_abort,
+            test_runtime_uncertain: runtime_uncertain,
+            ..Self::new()
         }
     }
 
@@ -366,7 +392,18 @@ impl Backend for ProcessBackend {
         };
         let options = normalize_tee_paths(options, &request.io_paths);
         let capacity_lease = reservation.retain();
-        let (reaper_observer, reaper_completion) = ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink));
+        let (reaper_observer, reaper_completion) = {
+            #[cfg(test)]
+            if let Some(kind) = self.test_handoff_failure {
+                ReaperObserver::pair_with_recovery_sink_and_handoff_failure(Arc::clone(&sink), kind)
+            } else {
+                ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink))
+            }
+            #[cfg(not(test))]
+            {
+                ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink))
+            }
+        };
         let output = match prepared_files {
             Ok(files) => request.runner.run_with_tree_policy(
                 normalize_stdin_path(request.command, &request.io_paths),
@@ -380,6 +417,18 @@ impl Backend for ProcessBackend {
                     reaper_observer: Some(reaper_observer.clone()),
                     session_bridge: session_bridge.clone(),
                     operation_context: request.deadline.clone(),
+                    #[cfg(test)]
+                    test_startup_abort: self.test_startup_abort.then(|| {
+                        CommandError::from_reason(
+                            "injected startup abort",
+                            crate::CommandErrorReason::ManagedOperationFailed {
+                                diagnostic: "injected startup abort".into(),
+                            },
+                            None,
+                        )
+                    }),
+                    #[cfg(test)]
+                    test_runtime_uncertain: self.test_runtime_uncertain,
                 },
             ),
             Err(error) => Err(error),
@@ -2691,71 +2740,96 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_local_reaper_cleanup_runs_after_outcome_and_before_release_settlement() {
+    fn test_managed_startup_abort_publishes_typed_outcome_before_unavailable_reaper_cleanup() {
+        use crate::execution::backend::HandoffFailureKind;
+
+        for kind in [HandoffFailureKind::StartFailed, HandoffFailureKind::Disconnected] {
+            run_managed_reaper_failure_case(kind, true);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_managed_runtime_uncertainty_publishes_typed_outcome_before_unavailable_reaper_cleanup() {
+        use crate::execution::backend::HandoffFailureKind;
+
+        for kind in [HandoffFailureKind::StartFailed, HandoffFailureKind::Disconnected] {
+            run_managed_reaper_failure_case(kind, false);
+        }
+    }
+
+    #[cfg(unix)]
+    fn run_managed_reaper_failure_case(kind: crate::execution::backend::HandoffFailureKind, startup_abort: bool) {
         let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::with_test_failures(kind, startup_abort, !startup_abort));
         let sink = Arc::new(RecordingSink::default());
         let sink_for_operation = Arc::clone(&sink);
-        let observer_slot = Arc::new(crate::execution::adapter::OperationObserverSlot::default());
-        let operation_observer_slot = Arc::clone(&observer_slot);
-        let cleanup_count = Arc::new(AtomicUsize::new(0));
-        let cleanup_count_for_operation = Arc::clone(&cleanup_count);
+        let backend_for_operation = Arc::clone(&backend);
         let capacity_released = Arc::new(AtomicBool::new(false));
         let capacity_released_for_operation = Arc::clone(&capacity_released);
+        let reservation_released = Arc::new(AtomicBool::new(false));
+        let reservation_released_for_operation = Arc::clone(&reservation_released);
+        let cleanup_count = Arc::new(AtomicUsize::new(0));
+        let cleanup_count_for_operation = Arc::clone(&cleanup_count);
         let (cleanup_started_tx, cleanup_started_rx) = mpsc::channel();
         let (cleanup_gate_tx, cleanup_gate_rx) = mpsc::channel();
         let cleanup_gate = CleanupGate(cleanup_gate_tx);
-
+        let cleanup_gate_rx = Arc::new(Mutex::new(cleanup_gate_rx));
         let mut operation = manager
             .try_submit(OperationOptions::default(), move |scope| {
-                let capacity_probe = Arc::clone(&capacity_released_for_operation);
+                let reservation_released = Arc::clone(&reservation_released_for_operation);
+                let capacity_released = Arc::clone(&capacity_released_for_operation);
+                let cleanup_count = Arc::clone(&cleanup_count_for_operation);
+                let cleanup_started = cleanup_started_tx.clone();
+                let cleanup_gate = Arc::clone(&cleanup_gate_rx);
                 let reservation = Reservation::new(
                     1,
                     1,
-                    |_| {},
+                    move |_| reservation_released.store(true, Ordering::SeqCst),
                     move |_| {
-                        let capacity_probe = Arc::clone(&capacity_probe);
-                        ReservationLease::new(move || capacity_probe.store(true, Ordering::SeqCst))
+                        let capacity_released = Arc::clone(&capacity_released);
+                        let cleanup_count = Arc::clone(&cleanup_count);
+                        let cleanup_started = cleanup_started.clone();
+                        let cleanup_gate = Arc::clone(&cleanup_gate);
+                        ReservationLease::new(move || {
+                            cleanup_count.fetch_add(1, Ordering::SeqCst);
+                            cleanup_started.send(()).unwrap();
+                            cleanup_gate.lock().unwrap().recv().unwrap();
+                            capacity_released.store(true, Ordering::SeqCst);
+                        })
                     },
                 );
-                let lease = reservation.retain();
-                let sink_port: Arc<dyn FactSink> = sink_for_operation.clone();
-                let (observer, completion) = ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink_port));
-                observer.mark_pending();
-                let cleanup_observer = observer.clone();
-                observer.retain_local_cleanup_owner(ReaperOwner::new(move || {
-                    cleanup_count_for_operation.fetch_add(1, Ordering::SeqCst);
-                    cleanup_started_tx.send(()).unwrap();
-                    cleanup_gate_rx.recv().unwrap();
-                    drop(lease);
-                    cleanup_observer.complete();
-                }));
-                let selected = CommandError::from_reason(
-                    "backend test",
-                    CommandErrorReason::ManagedOperationFailed {
-                        diagnostic: "injected command result".into(),
+                let operation_id = scope.id();
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout(),
+                    command: Command::new("sh").arg("-c").arg("sleep 30"),
+                    options: RequestOptions::Standard(CommandRunOptions::new()),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
                     },
-                    None,
-                );
-                sink_for_operation
-                    .publish_outcome(OperationOutcome::Failed(selected))
-                    .unwrap();
-                let local_owner = observer.take_local_cleanup_owner();
-
-                finish_backend_tail(
-                    sink_port,
-                    (observer, completion),
-                    operation_observer_slot,
-                    (false, None, local_owner),
-                    None,
-                    scope,
-                    reservation,
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: None,
+                };
+                backend_for_operation.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: sink_for_operation.clone(),
+                        session_bridge: None,
+                    },
+                    sink_for_operation,
                 );
                 Ok::<_, ()>(())
             })
             .unwrap();
-        observer_slot.set(operation.observer());
 
-        cleanup_started_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        cleanup_started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("backend cleanup should reach the gated capacity lease");
         assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
         assert!(matches!(
             sink.outcome.lock().unwrap().as_ref(),
@@ -2764,7 +2838,9 @@ mod tests {
         ));
         assert!(!sink.released.load(Ordering::SeqCst));
         assert!(sink.settlement.lock().unwrap().is_none());
+        assert!(!reservation_released.load(Ordering::SeqCst));
         assert!(!capacity_released.load(Ordering::SeqCst));
+
         drop(cleanup_gate);
         assert!(matches!(
             operation.wait_outcome().unwrap(),
@@ -2773,6 +2849,7 @@ mod tests {
         operation.wait_settlement().unwrap();
         assert!(sink.released.load(Ordering::SeqCst));
         assert!(sink.settlement.lock().unwrap().is_some());
+        assert!(reservation_released.load(Ordering::SeqCst));
         assert!(capacity_released.load(Ordering::SeqCst));
         assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
     }

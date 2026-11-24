@@ -15,6 +15,8 @@ use crate::execution::backend::StartGate;
 use crate::execution::contracts::PreparedFiles;
 use crate::execution::contracts::ReservationLease;
 use crate::session::contracts::SessionBridge;
+#[cfg(test)]
+use crate::CommandError;
 
 /// Carries managed execution resources into a command run.
 ///
@@ -39,4 +41,10 @@ pub(crate) struct RunTreePolicy<'a> {
     pub(crate) session_bridge: Option<Arc<dyn SessionBridge>>,
     /// Context used to propagate operation lifecycle information.
     pub(crate) operation_context: Option<OperationContext>,
+    /// Forces a post-spawn startup failure in managed runner integration tests.
+    #[cfg(test)]
+    pub(crate) test_startup_abort: Option<CommandError>,
+    /// Forces uncertain runtime termination in managed runner integration tests.
+    #[cfg(test)]
+    pub(crate) test_runtime_uncertain: bool,
 }

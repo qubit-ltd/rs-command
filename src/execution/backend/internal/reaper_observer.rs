@@ -12,6 +12,10 @@ use std::sync::mpsc::SyncSender;
 use std::sync::mpsc::sync_channel;
 
 use super::DeferredReaperOwner;
+use super::HandoffFailure;
+#[cfg(test)]
+use super::HandoffFailureKind;
+use crate::execution::backend::Reaper;
 use super::ReaperOwner;
 use super::RetainedOwner;
 use crate::execution::contracts::FactSink;
@@ -33,6 +37,9 @@ pub(crate) struct ReaperObserver {
     recovery_sink: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<dyn FactSink>>>>,
     /// Stores the sole owner awaiting deferred or local backend handoff.
     retained_owner: std::sync::Arc<std::sync::Mutex<Option<RetainedOwner>>>,
+    /// Replaces global reaper handoff only in isolated unit tests.
+    #[cfg(test)]
+    test_handoff_failure: Option<HandoffFailureKind>,
 }
 
 impl ReaperObserver {
@@ -47,6 +54,8 @@ impl ReaperObserver {
                 completion_sender: std::sync::Arc::new(std::sync::Mutex::new(Some(sender))),
                 recovery_sink: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 retained_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                #[cfg(test)]
+                test_handoff_failure: None,
             },
             receiver,
         )
@@ -61,6 +70,30 @@ impl ReaperObserver {
         let (observer, receiver) = Self::pair();
         *observer.recovery_sink.lock().unwrap_or_else(|error| error.into_inner()) = Some(sink);
         (observer, receiver)
+    }
+
+    /// Creates an observer whose next reaper handoffs fail deterministically.
+    #[cfg(test)]
+    pub(crate) fn pair_with_recovery_sink_and_handoff_failure(
+        sink: std::sync::Arc<dyn FactSink>,
+        kind: HandoffFailureKind,
+    ) -> (Self, std::sync::mpsc::Receiver<()>) {
+        let (mut observer, receiver) = Self::pair_with_recovery_sink(sink);
+        observer.test_handoff_failure = Some(kind);
+        (observer, receiver)
+    }
+
+    /// Submits cleanup through the selected reaper handoff seam.
+    pub(crate) fn handoff_owner(&self, owner: ReaperOwner) -> Result<(), HandoffFailure> {
+        #[cfg(test)]
+        if let Some(kind) = self.test_handoff_failure {
+            return Err(HandoffFailure {
+                kind,
+                owner,
+                source: None,
+            });
+        }
+        Reaper::global().handoff(owner)
     }
 
     /// Stores the recovery sink value used by this execution component.

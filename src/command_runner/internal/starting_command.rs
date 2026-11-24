@@ -22,7 +22,6 @@ use super::process_terminator::ProcessTerminator;
 use super::stdin_writer::OptionalStdinWriter;
 use crate::CommandCleanupFailure;
 use crate::CommandError;
-use crate::execution::backend::Reaper;
 use crate::execution::backend::ReaperObserver;
 use crate::execution::backend::ReaperOwner;
 use crate::execution::contracts::ReservationLease;
@@ -290,7 +289,7 @@ impl<'a> StartingCommand<'a> {
             drop(capacity_lease);
             cleanup_observer.complete();
         });
-        handoff_startup_owner(&observer, Reaper::global().handoff(owner));
+        handoff_startup_owner(&observer, observer.handoff_owner(owner));
         primary
     }
 
