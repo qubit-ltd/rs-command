@@ -150,13 +150,9 @@ mod tests {
     use qubit_operation::StopReason;
 
     use super::StartGate;
-    #[cfg(unix)]
     use crate::Command;
-    #[cfg(unix)]
     use crate::CommandErrorKind;
-    #[cfg(unix)]
     use crate::CommandRunOptions;
-    #[cfg(unix)]
     use crate::CommandRunner;
     use crate::execution::contracts::StopPort;
     use crate::session::contracts::SessionBridge;
@@ -393,7 +389,7 @@ mod tests {
 
         let error = CommandRunner::without_timeout()
             .run_with_tree_policy(
-                Command::new("sh").arg("-c").arg("exit 0"),
+                Command::new("__qubit_preflight_must_not_start__"),
                 CommandRunOptions::new().cancellation(external),
                 crate::command_runner::RunTreePolicy {
                     start_gate: Some(Arc::clone(&gate)),

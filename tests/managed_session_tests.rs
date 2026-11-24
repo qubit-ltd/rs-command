@@ -7,7 +7,9 @@
 // =============================================================================
 #![cfg(feature = "async")]
 
+#[cfg(unix)]
 use std::future::poll_fn;
+#[cfg(unix)]
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
@@ -18,19 +20,25 @@ use std::thread;
 use std::time::Duration;
 
 use qubit_command::Command;
+#[cfg(unix)]
 use qubit_command::CommandErrorReason;
 use qubit_command::CommandExecutionConfig;
 use qubit_command::CommandExecutor;
 use qubit_command::CommandResourceRunOptions;
+#[cfg(unix)]
 use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
 use qubit_command::ManagedCommandRunnerApi;
 use qubit_command::session::CommandSessionApi;
+#[cfg(unix)]
 use qubit_io::AsyncClose;
+#[cfg(unix)]
 use qubit_io::AsyncInput;
+#[cfg(unix)]
 use qubit_io::AsyncOutput;
 use qubit_operation::ManagerOptions;
 use qubit_operation::OperationManager;
+#[cfg(unix)]
 use qubit_operation::OperationOptions;
 use qubit_operation::OperationOutcome;
 
@@ -55,6 +63,7 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
     }
 }
 
+#[cfg(unix)]
 async fn read_all(reader: &mut (impl AsyncInput<Item = u8> + Unpin)) -> std::io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     let mut chunk = [0_u8; 128];
@@ -568,6 +577,7 @@ fn test_dropping_session_requests_stop_and_preserves_observable_settlement() {
     ));
 }
 
+#[cfg(unix)]
 async fn futures_join<A: std::future::Future, B: std::future::Future>(a: A, b: B) -> (A::Output, B::Output) {
     let mut a = Box::pin(a);
     let mut b = Box::pin(b);
