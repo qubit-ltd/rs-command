@@ -1206,9 +1206,7 @@ mod tests {
             Ok(())
         }
 
-        fn wait_next(
-            &self,
-        ) -> Option<(crate::execution::contracts::ScheduledJob, Reservation)> {
+        fn wait_next(&self) -> Option<(crate::execution::contracts::ScheduledJob, Reservation)> {
             None
         }
 
@@ -2892,7 +2890,10 @@ mod tests {
             if let Some(outcome) = operation.try_take_outcome().unwrap() {
                 break outcome;
             }
-            assert!(std::time::Instant::now() < deadline, "managed outcome should be published");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "managed outcome should be published"
+            );
             std::thread::yield_now();
         };
         assert!(matches!(
