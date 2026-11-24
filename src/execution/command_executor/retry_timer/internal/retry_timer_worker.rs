@@ -7,7 +7,7 @@
 // =============================================================================
 //! Worker loop and completion helpers for retry timer messages.
 use super::retry_timer_message::RetryTimerMessage;
-use super::retry_timer_message::RetryTimerResult;
+use super::retry_timer_result::RetryTimerResult;
 
 const RETRY_TIMER_DRAIN_BATCH: usize = 64;
 
@@ -55,6 +55,11 @@ pub(super) fn run_retry_timer(rx: std::sync::mpsc::Receiver<RetryTimerMessage>) 
 ///
 /// This keeps shutdown behavior deterministic in tests while the production
 /// worker supplies a no-op hook.
+///
+/// # Parameters
+/// * `rx`: Receiver supplying scheduled timer messages.
+/// * `before_wait`: Callback invoked after processing pending timers and before
+///   the worker waits for another message.
 pub(super) fn run_retry_timer_with_before_wait(
     rx: std::sync::mpsc::Receiver<RetryTimerMessage>,
     mut before_wait: impl FnMut(),
