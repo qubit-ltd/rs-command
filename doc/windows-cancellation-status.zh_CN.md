@@ -4,6 +4,14 @@
 
 `qubit-command` 0.12 的受管 API 增加了进程树管理和独立 settlement 报告，但没有改变 helper join 的证据，也没有建立 Windows 上的硬返回期限。`Managed` 进程树策略不代表每个 helper join 都有界；受管命令同样受此限制。应用应检查 settlement 和清理报告；确实需要硬期限时，应通过独立进程边界监督 runner。
 
+## 原生 Windows 复验（源码 SHA `6349c376a17f7db526409659546e135f171d5ab5`，2026-11-24）
+
+[Windows Cancellation Interleaving run 45397656910](https://github.com/qubit-ltd/rs-command/actions/runs/45397656910) 在 `main` 分支、准确源码 SHA `6349c376a17f7db526409659546e135f171d5ab5`、`windows-2022` 上成功完成。`windows-interleaving` job 于 12:52:00 至 12:53:48 UTC 运行。identity-gate fixtures 和 probe/result gate 均通过。运行共选中 14 项测试：12 项 `windows_`、2 项 `command_io`，全部通过；结果门禁记录的 12 项必需测试均为 `discovered=true`、`passed=true`。[Trace artifact 14922171984](https://github.com/qubit-ltd/rs-command/actions/runs/45397656910/artifacts/14922171984)（SHA-256 `d7fad479b5e39eb6ed3803b9187e72c9c773d19216617ba2f0327e502ce9cda7`）包含测试列表、门禁结果和 trace。
+
+同一次运行的 `production_command_io_blocked_read` trace 记录 `cancel_success=true`，原始 read 以原始 OS 错误 `995` 返回。相对时间为：read-entry observation 7.4978 ms、cleanup 开始 17.9642 ms、取消结果 18.4142 ms、read 返回 18.4213 ms、cleanup join 18.8251 ms。trace 记录 `original_io_return_is_subsequent_io=false`、`tee_write_entries=0`、`production_join_pending_witness=false`、`source_writer_manually_released=true`、`watchdog_released=false`。helper 已 join 且进程已回收，但 trace 没有证明 join 是因后继生产 I/O 而等待，也没有证明由独立 watchdog 释放。
+
+**结论：** 源码 SHA `6349c376a17f7db526409659546e135f171d5ab5` 的 RC-006 仍为 **unresolved（未解决）**。本次运行证实原生取消成功和原始 I/O 返回，但没有证实后继生产 I/O 持续阻塞、cleanup join 等待该 I/O 或独立 watchdog 释放。同一 helper 的因果链仍不完整。本证据仅适用于该准确源码 SHA。未修改生产代码或探针。
+
 ## 原生 Windows 复验（源码 SHA `ce3cab6f30686f75c2896c1ec7378ace8f30443d`，2026-11-24）
 
 [Windows Cancellation Interleaving run 45390083216](https://github.com/qubit-ltd/rs-command/actions/runs/45390083216) 在 `dev` 分支、准确源码 SHA `ce3cab6f30686f75c2896c1ec7378ace8f30443d` 上成功完成。`windows-interleaving` job 运行于 `windows-2022`，时间为 2026-11-24 12:04:58 至 12:06:50 UTC（1 分 52 秒）。workflow 于 12:04:55 至 12:06:50 UTC 运行（1 分 55 秒）。[windows-cancellation-interleaving-trace artifact 14918980500](https://github.com/qubit-ltd/rs-command/actions/runs/45390083216/artifacts/14918980500) 保存了测试列表、具名门禁结果和 trace。
