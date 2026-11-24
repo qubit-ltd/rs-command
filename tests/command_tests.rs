@@ -70,16 +70,19 @@ fn test_command_os_builder_preserves_non_utf8_values() {
     assert_eq!(command.environment(), [(environment_key, environment_value)]);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
-fn test_command_os_program_argument_and_environment_reach_child_with_non_utf8_bytes() {
+fn test_command_os_program_argument_and_environment_reach_child_with_supported_paths() {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
     let directory = tempfile::tempdir().unwrap();
-    let mut program_name = b"command-".to_vec();
-    program_name.push(0xff);
-    let program = directory.path().join(OsString::from_vec(program_name));
+    let program_name = if cfg!(target_os = "macos") {
+        OsString::from("command")
+    } else {
+        OsString::from_vec(b"command-\xff".to_vec())
+    };
+    let program = directory.path().join(program_name);
     fs::write(
         &program,
         b"#!/bin/sh\nprintf '%s:%s' \"$1\" \"$QUBIT_COMMAND_RAW_VALUE\"\n",
@@ -97,41 +100,7 @@ fn test_command_os_program_argument_and_environment_reach_child_with_non_utf8_by
                 .arg_os(&argument)
                 .env_os("QUBIT_COMMAND_RAW_VALUE", &environment),
         )
-        .expect("non-UTF-8 program, argument, and environment values should pass through");
-
-    let mut expected = argument.into_vec();
-    expected.push(b':');
-    expected.extend_from_slice(environment.as_encoded_bytes());
-    assert_eq!(output.stdout(), expected);
-    assert!(output.stderr().is_empty());
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn test_command_os_argument_and_environment_reach_child_with_non_utf8_bytes() {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-
-    let directory = tempfile::tempdir().unwrap();
-    let program = directory.path().join("command");
-    fs::write(
-        &program,
-        b"#!/bin/sh\nprintf '%s:%s' \"$1\" \"$QUBIT_COMMAND_RAW_VALUE\"\n",
-    )
-    .unwrap();
-    let mut permissions = fs::metadata(&program).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&program, permissions).unwrap();
-
-    let argument = OsString::from_vec(b"argument-\xfe".to_vec());
-    let environment = OsString::from_vec(b"environment-\xfd".to_vec());
-    let output = CommandRunner::without_timeout()
-        .run(
-            Command::new_os(&program)
-                .arg_os(&argument)
-                .env_os("QUBIT_COMMAND_RAW_VALUE", &environment),
-        )
-        .expect("non-UTF-8 argument and environment values should pass through");
+        .expect("supported program paths and non-UTF-8 arguments/env should pass through");
 
     let mut expected = argument.into_vec();
     expected.push(b':');
