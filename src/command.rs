@@ -850,10 +850,14 @@ mod data_api_tests {
             Command::new("worker").stdin_inherit().stdin,
             super::CommandStdin::Inherit
         ));
+        #[cfg(windows)]
+        let shell_switch = OsStr::new("/C");
+        #[cfg(not(windows))]
+        let shell_switch = OsStr::new("-c");
         assert_eq!(Command::shell("echo safe").arguments().len(), 2);
         assert_eq!(
             Command::shell("echo safe").arguments().collect::<Vec<_>>(),
-            [OsStr::new("-c"), OsStr::new("echo safe")]
+            [shell_switch, OsStr::new("echo safe")]
         );
     }
 
