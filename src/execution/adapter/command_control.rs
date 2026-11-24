@@ -86,7 +86,7 @@ impl CommandControl {
             let Some(id) = s.id else {
                 return false;
             };
-            if s.outcome.is_some() {
+            if s.summary.is_some() {
                 return false;
             }
             let (kind, diagnostic): (ChildOutcomeKind, String) = match &outcome {
@@ -108,9 +108,7 @@ impl CommandControl {
             s.phase = ExecutionPhase::Finished;
             std::mem::take(&mut s.outcome_wakers)
         };
-        for w in wakers {
-            w.wake();
-        }
+        wake_all(wakers);
         true
     }
     /// Performs the release step in the managed command execution lifecycle.
@@ -127,9 +125,7 @@ impl CommandControl {
             });
             std::mem::take(&mut s.release_wakers)
         };
-        for w in wakes {
-            w.wake();
-        }
+        wake_all(wakes);
         true
     }
     /// Stores the settlement value used by this execution component.
@@ -145,9 +141,7 @@ impl CommandControl {
             s.settlement = Some(report);
             std::mem::take(&mut s.settlement_wakers)
         };
-        for w in wakes {
-            w.wake();
-        }
+        wake_all(wakes);
         true
     }
     /// Performs the take step in the managed command execution lifecycle.
@@ -165,6 +159,15 @@ impl CommandControl {
         Poll::Pending
     }
 }
+
+/// Wakes published-fact waiters independently so one faulty callback cannot
+/// prevent other waiters from observing the committed state.
+fn wake_all(wakers: Vec<std::task::Waker>) {
+    for waker in wakers {
+        crate::internal::wake_waker(waker);
+    }
+}
+
 impl OperationControl for CommandControl {
     /// Stores the request stop value used by this execution component.
     ///
@@ -273,6 +276,75 @@ mod tests {
         fn wake_by_ref(self: &Arc<Self>) {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
+    }
+
+    struct PanicWake;
+    impl Wake for PanicWake {
+        fn wake(self: Arc<Self>) {
+            panic!("controlled waiter panic");
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            panic!("controlled waiter panic");
+        }
+    }
+
+    #[test]
+    fn test_control_isolates_panicking_waiters_for_each_published_fact() {
+        let report = settlement_report();
+        let id = report.operation_id;
+        let control = CommandControl::default();
+        assert!(control.bind(id));
+
+        let panic_waker = Waker::from(Arc::new(PanicWake));
+        let count = Arc::new(CountWake(AtomicUsize::new(0)));
+        let normal_waker = Waker::from(count.clone());
+        let mut panic_cx = Context::from_waker(&panic_waker);
+        let mut normal_cx = Context::from_waker(&normal_waker);
+
+        for _ in 0..3 {
+            assert!(matches!(
+                OperationControl::poll_outcome(&control, &mut panic_cx),
+                Poll::Pending
+            ));
+            assert!(matches!(
+                OperationControl::poll_outcome(&control, &mut normal_cx),
+                Poll::Pending
+            ));
+        }
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            control.publish_outcome(OperationOutcome::Stopped(StopReport {
+                reason: StopReason::UserCancelled,
+                accepted_at: None,
+            }))
+        }))
+        .unwrap());
+        assert!(OperationControl::poll_outcome(&control, &mut normal_cx).is_ready());
+        assert!(count.0.load(Ordering::SeqCst) >= 1);
+
+        assert!(matches!(
+            OperationControl::poll_release(&control, &mut panic_cx),
+            Poll::Pending
+        ));
+        assert!(matches!(
+            OperationControl::poll_release(&control, &mut normal_cx),
+            Poll::Pending
+        ));
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| control.release())).unwrap());
+        assert!(OperationControl::poll_release(&control, &mut normal_cx).is_ready());
+
+        let mut panic_settlement_cx = Context::from_waker(&panic_waker);
+        let mut normal_settlement_cx = Context::from_waker(&normal_waker);
+        assert!(matches!(
+            OperationControl::poll_settlement(&control, &mut panic_settlement_cx),
+            Poll::Pending
+        ));
+        assert!(matches!(
+            OperationControl::poll_settlement(&control, &mut normal_settlement_cx),
+            Poll::Pending
+        ));
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| control.settlement(report))).unwrap());
+        assert!(OperationControl::poll_settlement(&control, &mut normal_settlement_cx).is_ready());
+        assert!(count.0.load(Ordering::SeqCst) >= 3);
     }
 
     fn settlement_report() -> Arc<qubit_operation::SettlementReport> {

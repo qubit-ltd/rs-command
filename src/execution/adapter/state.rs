@@ -1263,6 +1263,39 @@ mod activation_failure_tests {
             Ok(())
         );
         assert_eq!(
+            crate::execution::contracts::FactSink::publish_outcome(
+                &*state,
+                OperationOutcome::Stopped(qubit_operation::StopReport {
+                    reason: qubit_operation::StopReason::Timeout,
+                    accepted_at: None,
+                }),
+            ),
+            Err(crate::execution::contracts::FactPublishError::DuplicateOutcome)
+        );
+        let summary_before_take = OperationControl::snapshot(&*state.control).outcome;
+        assert_eq!(
+            summary_before_take.as_ref().unwrap().kind,
+            qubit_operation::ChildOutcomeKind::Stopped
+        );
+        assert!(matches!(
+            state.control.take(&mut std::task::Context::from_waker(std::task::Waker::noop())),
+            std::task::Poll::Ready(OperationOutcome::Stopped(_))
+        ));
+        assert_eq!(
+            crate::execution::contracts::FactSink::publish_outcome(
+                &*state,
+                OperationOutcome::Stopped(qubit_operation::StopReport {
+                    reason: qubit_operation::StopReason::Timeout,
+                    accepted_at: None,
+                }),
+            ),
+            Err(crate::execution::contracts::FactPublishError::DuplicateOutcome)
+        );
+        assert_eq!(
+            OperationControl::snapshot(&*state.control).outcome,
+            summary_before_take
+        );
+        assert_eq!(
             crate::execution::contracts::FactSink::publish_outcome(&*state, stopped()),
             Err(crate::execution::contracts::FactPublishError::DuplicateOutcome)
         );

@@ -468,7 +468,7 @@ fn register(slot: &mut Option<Waker>, w: &Waker) {
 /// * `w` - Optional task waker removed from a channel state slot.
 fn wake(w: Option<Waker>) {
     if let Some(w) = w {
-        w.wake();
+        crate::internal::wake_waker(w);
     }
 }
 
@@ -496,6 +496,117 @@ mod tests {
         fn wake_by_ref(self: &Arc<Self>) {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
+    }
+
+    struct PanicWake;
+    impl std::task::Wake for PanicWake {
+        fn wake(self: Arc<Self>) {
+            panic!("controlled session waker panic");
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            panic!("controlled session waker panic");
+        }
+    }
+
+    #[test]
+    fn test_channel_notifications_isolate_panicking_wakers() {
+        let panic_waker = std::task::Waker::from(Arc::new(PanicWake));
+        let mut panic_context = std::task::Context::from_waker(&panic_waker);
+
+        let read_channel = ByteChannel::new();
+        assert!(matches!(
+            read_channel.poll_read(&mut panic_context, &mut [0; 1]),
+            std::task::Poll::Pending
+        ));
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read_channel.close_writer())).is_ok());
+        assert!(matches!(
+            read_channel.poll_read(&mut panic_context, &mut [0; 1]),
+            std::task::Poll::Ready(Ok(0))
+        ));
+
+        let write_channel = ByteChannel::new();
+        let block = vec![0x7a; MAX_BLOCK];
+        for _ in 0..CHANNEL_CAPACITY / MAX_BLOCK {
+            assert!(matches!(
+                write_channel.poll_write(
+                    &mut std::task::Context::from_waker(std::task::Waker::noop()),
+                    &block
+                ),
+                std::task::Poll::Ready(Ok(MAX_BLOCK))
+            ));
+        }
+        assert!(matches!(
+            write_channel.poll_write(&mut panic_context, b"blocked"),
+            std::task::Poll::Pending
+        ));
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| write_channel.drop_reader())).is_ok());
+
+        let bridge_channels = super::super::SessionChannels::new();
+        let bridge = Arc::clone(&bridge_channels.bridge);
+        let reader_wakes = Arc::new(CountWake(AtomicUsize::new(0)));
+        let reader_waker = std::task::Waker::from(reader_wakes.clone());
+        let mut reader_context = std::task::Context::from_waker(&reader_waker);
+        assert!(matches!(
+            bridge.output.poll_read(&mut reader_context, &mut [0; 1]),
+            std::task::Poll::Pending
+        ));
+        assert!(matches!(
+            bridge.error.poll_read(&mut reader_context, &mut [0; 1]),
+            std::task::Poll::Pending
+        ));
+        let mut stdout_context = std::task::Context::from_waker(&panic_waker);
+        for _ in 0..CHANNEL_CAPACITY / MAX_BLOCK {
+            assert!(matches!(
+                bridge.output.poll_write(&mut stdout_context, &block),
+                std::task::Poll::Ready(Ok(MAX_BLOCK))
+            ));
+        }
+        assert!(matches!(
+            bridge.output.poll_write(&mut stdout_context, b"blocked"),
+            std::task::Poll::Pending
+        ));
+        assert!(matches!(
+            bridge.input.poll_read(&mut stdout_context, &mut [0; 1]),
+            std::task::Poll::Pending
+        ));
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| bridge.request_output_stop())).is_ok());
+        assert!(bridge.output.incomplete());
+        assert!(bridge.error.incomplete());
+        assert_eq!(reader_wakes.0.load(Ordering::SeqCst), 2);
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| bridge.close_stdin())).is_ok());
+        assert!(matches!(
+            bridge.input.poll_read(&mut stdout_context, &mut [0; 1]),
+            std::task::Poll::Ready(Ok(0))
+        ));
+
+        let reader_channel = Arc::new(ByteChannel::new());
+        assert!(matches!(
+            reader_channel.poll_read(&mut panic_context, &mut [0; 1]),
+            std::task::Poll::Pending
+        ));
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            drop(super::super::ChannelWriter(reader_channel))
+        }))
+        .is_ok());
+
+        let writer_channel = Arc::new(ByteChannel::new());
+        for _ in 0..CHANNEL_CAPACITY / MAX_BLOCK {
+            assert!(matches!(
+                writer_channel.poll_write(
+                    &mut std::task::Context::from_waker(std::task::Waker::noop()),
+                    &block
+                ),
+                std::task::Poll::Ready(Ok(MAX_BLOCK))
+            ));
+        }
+        assert!(matches!(
+            writer_channel.poll_write(&mut panic_context, b"blocked"),
+            std::task::Poll::Pending
+        ));
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            drop(super::super::ChannelReader(writer_channel))
+        }))
+        .is_ok());
     }
     #[test]
     fn test_capacity_blocking_and_writer_wake() {
