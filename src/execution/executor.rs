@@ -386,8 +386,24 @@ async fn wait_busy_async(
     scheduler: BoundedScheduler,
     context: Option<OperationContext>,
 ) -> Result<super::command_executor::wait::WaitResult, super::CommandSubmitWaitFailure> {
+    wait_busy_async_with_tick(scheduler, context.clone(), wait_retry_tick(context)).await
+}
+
+/// Waits for a supplied retry tick while holding a waiter registration.
+///
+/// Keeping the tick future injectable lets the waiter cleanup path be tested
+/// against timer disconnection without controlling the process-wide worker.
+#[cfg(feature = "async")]
+async fn wait_busy_async_with_tick<T>(
+    scheduler: BoundedScheduler,
+    context: Option<OperationContext>,
+    tick: T,
+) -> Result<super::command_executor::wait::WaitResult, super::CommandSubmitWaitFailure>
+where
+    T: Future<Output = Result<super::command_executor::wait::WaitResult, RetryTimerFailure>>,
+{
     let mut waiter: Option<SchedulerWaiterGuard> = None;
-    let mut timer = Box::pin(wait_retry_tick(context.clone()));
+    let mut timer = Box::pin(tick);
     std::future::poll_fn(|cx| {
         if context.as_ref().is_some_and(OperationContext::is_expired) {
             return std::task::Poll::Ready(Ok(
@@ -439,6 +455,37 @@ async fn wait_busy_async(
         }
     })
     .await
+}
+
+#[cfg(all(test, feature = "async"))]
+mod retry_timer_waiter_tests {
+    use super::futures_lite_block_on;
+    use super::wait_busy_async_with_tick;
+    use crate::execution::CommandExecutionConfig;
+    use crate::execution::CommandSubmitWaitFailure;
+    use crate::execution::RetryTimerFailure;
+    use crate::execution::scheduler::BoundedScheduler;
+
+    #[test]
+    fn test_disconnected_busy_retry_releases_registered_scheduler_waiter() {
+        let scheduler = BoundedScheduler::new(CommandExecutionConfig {
+            max_waiters: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let result =
+            futures_lite_block_on(wait_busy_async_with_tick(scheduler.clone(), None, async {
+                Err(RetryTimerFailure::Disconnected)
+            }));
+
+        assert!(matches!(
+            result,
+            Err(CommandSubmitWaitFailure::Timer(
+                RetryTimerFailure::Disconnected
+            ))
+        ));
+        assert_eq!(scheduler.snapshot().waiters, 0);
+    }
 }
 
 /// Performs the wait retryable async step in the managed command execution
