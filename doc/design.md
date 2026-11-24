@@ -232,7 +232,7 @@ termination fails, its process-control error remains primary and reader errors
 remain cleanup details. A tee write
 failure that happened earlier on the same stream remains primary under the existing
 collector ordering. Budget, child-wait, cancellation, timeout, and clock decisions
-retain their existing priority when already selected. Managed execution uses the selected `ProcessTreePolicy`: the default `Managed` policy manages the process tree, while explicit `DirectChild` stops only the direct child. Legacy `run`/`run_with` attempt process-tree management when timeout, cancellation, or a total output budget is configured; otherwise they stop only the direct child. A reader failure alone does not enable process-tree management for legacy calls. A
+retain their existing priority when already selected. Managed execution uses the selected `ProcessTreePolicy`: the default `Managed` policy manages the process tree, while explicit `DirectChild` stops only the direct child. Legacy `run`/`run_with` attempt process-tree management when timeout, cancellation, or a total output budget is configured. Otherwise they stop only the direct child. A reader failure alone does not enable process-tree management for legacy calls. A
 failure observed before the deadline can therefore change a previous `TimedOut`
 result into `ReadOutputFailed`. Process termination and ordinary-file I/O are not
 hard-deadline operations. Callers using partial output should inspect the primary
@@ -377,7 +377,7 @@ settled. `CommandOperation` callers observe settlement separately; a
 | Owned stdin/stdout/stderr files | Resource input to `PreparedFiles`, then runner I/O state | Normal finalization closes them; preparation failure retains them for recovery; file commit may already have changed output contents |
 | Reservation owner and lease | Reservation owner retains a lease for runner/recovery cleanup | Accounting is released only when the scheduler record is removed after the final lease; releasing the operation owner alone may leave a lease active |
 | Session endpoints | Submission context keeps endpoints alive while `SessionBridge` connects channels to process workers | Caller closes the stdin writer to signal EOF; stdout/stderr are drained concurrently; endpoints settle when execution and retained owners release the bridge and keepalive |
-| Reaper and recovery handle | Runner transfers uncertain child/helper cleanup to reaper; a rejected handoff keeps the owner with its current bounded execution worker | Successful reaper handoff transfers cleanup responsibility; if the service remains unavailable after one recovery attempt, the current bounded worker performs local cleanup. Release and settlement follow actual cleanup and upstream settlement; a failed handoff alone never reports release |
+| Reaper and recovery handle | Runner transfers uncertain child/helper cleanup to reaper. A rejected handoff keeps the owner with its current bounded execution worker | Successful reaper handoff transfers cleanup responsibility. If the service remains unavailable after one recovery attempt, the current bounded worker performs local cleanup. The worker publishes release after cleanup completes. The lease remains held until upstream settlement completes |
 
 Each session stdout/stderr queue remains bounded to 64 KiB. Before the aggregate
 session budget is exceeded, producers wait for queue capacity and advance only
@@ -393,7 +393,7 @@ callers that need completion evidence continue using shutdown and settlement.
 The legacy `CommandRunner::run` and `run_with` entry points remain synchronous
 and do not provide executor admission, operation settlement, or managed
 recovery observation. Managed execution uses the same runner with a
-`ProcessTreePolicy`; the default `CommandRunOptions` selects managed process-tree
+`ProcessTreePolicy`. The default `CommandRunOptions` selects managed process-tree
 handling. For sessions, closing the caller's stdin endpoint lets the
 child observe EOF while stdout and stderr readers continue draining. Output
 limits still follow the runner's configured capture policy; the managed
@@ -419,12 +419,12 @@ capacity and manager-Busy retries reuse that snapshot. Use absolute paths or a
 new submission when the application needs a different parent cwd as the base.
 
 Resource-backed path stdin open and non-regular-file failures use the public
-`FilePreparationFailed` kind and reason at `Validation`/`Stdin`; tee validation
-failures use `Validation` with `Stdout` or `Stderr`, and an actual `set_len`
-failure uses `Truncation` with the affected direction. The original I/O source
+`FilePreparationFailed` kind and reason at `Validation`/`Stdin`. Tee validation
+failures use `Validation` with `Stdout` or `Stderr`. An actual `set_len` failure
+uses `Truncation` with the affected direction. The original I/O source
 is preserved when present. Callers that previously matched `OpenInputFailed` or
 `OpenOutputFailed` for these resource-backed failures must switch to the public
-classification and inspect stage, direction, and source; ordinary path-based
+classification and inspect stage, direction, and source. Ordinary path-based
 legacy errors retain their existing mapping.
 
 Scoped capacity waits recheck stop and deadline while waiting. A scope stop maps to `AdmissionError::Stopped`; an expired deadline maps to `CapacityFailure::DeadlineExpired`. Waiter quota exhaustion and retry timer failures are represented by `CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)`: the latter distinguishes `WaiterLimit` from `Timer(RetryTimerFailure)`. Timer startup and queue-full failures can occur before a request is accepted; `Disconnected` can also occur after successful queueing if the worker exits. In each case the submit failure retains the original runner, command, and options, including owned resource inputs.
@@ -438,13 +438,13 @@ Read recovery evidence in this order: inspect the manager's overall `SettlementR
 The process reaper has four workers and a bounded shared queue. In normal
 operation it accepts cleanup owners and releases them after cleanup completes. A
 full queue uses backoff before retrying handoff. If the service is disconnected or cannot
-start, the runner makes one attempt to obtain a healthy pool; if it is still
-unavailable, the existing bounded execution worker performs local cleanup.
+start, the runner makes one attempt to obtain a healthy pool. The existing bounded
+execution worker performs local cleanup if the service remains unavailable.
 Owners already accepted by executor recovery use that same bounded worker for
 service recovery and local fallback. Cleanup can therefore keep that worker
-busy while the operating system finishes real cleanup. Handoff acceptance is
-not release evidence: cleanup must complete before release is published, and
-the retained lease stays alive until upstream settlement completes. Executor
+busy while the operating system finishes real cleanup. The worker publishes
+release after cleanup completes. The retained lease stays alive until upstream
+settlement completes. Executor
 recovery advances accepted owners in bounded round-robin steps during normal
 service operation, so one pending owner does not prevent other ready owners
 from progressing.
