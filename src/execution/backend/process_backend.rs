@@ -1139,6 +1139,83 @@ mod tests {
     }
 
     #[cfg(unix)]
+    struct GatedScheduler {
+        reservation_released: Arc<AtomicBool>,
+        capacity_released: Arc<AtomicBool>,
+        cleanup_count: Arc<AtomicUsize>,
+        cleanup_started: mpsc::Sender<()>,
+        cleanup_gate: Arc<Mutex<mpsc::Receiver<()>>>,
+        workers: Mutex<Vec<std::thread::JoinHandle<()>>>,
+    }
+
+    #[cfg(unix)]
+    impl GatedScheduler {
+        fn join_workers(&self) {
+            for worker in self.workers.lock().unwrap().drain(..) {
+                worker.join().unwrap();
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for GatedScheduler {
+        fn drop(&mut self) {
+            for worker in self.workers.get_mut().unwrap().drain(..) {
+                let _ = worker.join();
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl crate::execution::Scheduler for GatedScheduler {
+        fn try_reserve(
+            &self,
+            _input_bytes: usize,
+        ) -> Result<Reservation, crate::execution::contracts::CapacityFailure> {
+            let reservation_released = Arc::clone(&self.reservation_released);
+            let capacity_released = Arc::clone(&self.capacity_released);
+            let cleanup_count = Arc::clone(&self.cleanup_count);
+            let cleanup_started = self.cleanup_started.clone();
+            let cleanup_gate = Arc::clone(&self.cleanup_gate);
+            Ok(Reservation::new(
+                1,
+                1,
+                move |_| reservation_released.store(true, Ordering::SeqCst),
+                move |_| {
+                    let capacity_released = Arc::clone(&capacity_released);
+                    let cleanup_count = Arc::clone(&cleanup_count);
+                    let cleanup_started = cleanup_started.clone();
+                    let cleanup_gate = Arc::clone(&cleanup_gate);
+                    ReservationLease::new(move || {
+                        cleanup_count.fetch_add(1, Ordering::SeqCst);
+                        cleanup_started.send(()).unwrap();
+                        cleanup_gate.lock().unwrap().recv().unwrap();
+                        capacity_released.store(true, Ordering::SeqCst);
+                    })
+                },
+            ))
+        }
+
+        fn enqueue(
+            &self,
+            job: crate::execution::contracts::ScheduledJob,
+            permit: Reservation,
+        ) -> Result<(), crate::execution::contracts::EnqueueFailure> {
+            let worker = std::thread::spawn(move || (job.run)(permit));
+            self.workers.lock().unwrap().push(worker);
+            Ok(())
+        }
+
+        fn wait_next(
+            &self,
+        ) -> Option<(crate::execution::contracts::ScheduledJob, Reservation)> {
+            None
+        }
+
+        fn close_admission(&self) {}
+    }
+
+    #[cfg(unix)]
     impl FactSink for RecordingSink {
         fn publish_stop_diagnostic(&self, error: CommandError) -> Result<(), CommandError> {
             *self.stop_diagnostic.lock().unwrap() = Some(error);
@@ -2762,96 +2839,82 @@ mod tests {
     fn run_managed_reaper_failure_case(kind: crate::execution::backend::HandoffFailureKind, startup_abort: bool) {
         let manager = OperationManager::new(Default::default()).unwrap();
         let backend = Arc::new(ProcessBackend::with_test_failures(kind, startup_abort, !startup_abort));
-        let sink = Arc::new(RecordingSink::default());
-        let sink_for_operation = Arc::clone(&sink);
-        let backend_for_operation = Arc::clone(&backend);
         let capacity_released = Arc::new(AtomicBool::new(false));
-        let capacity_released_for_operation = Arc::clone(&capacity_released);
         let reservation_released = Arc::new(AtomicBool::new(false));
-        let reservation_released_for_operation = Arc::clone(&reservation_released);
         let cleanup_count = Arc::new(AtomicUsize::new(0));
-        let cleanup_count_for_operation = Arc::clone(&cleanup_count);
         let (cleanup_started_tx, cleanup_started_rx) = mpsc::channel();
         let (cleanup_gate_tx, cleanup_gate_rx) = mpsc::channel();
         let cleanup_gate = CleanupGate(cleanup_gate_tx);
         let cleanup_gate_rx = Arc::new(Mutex::new(cleanup_gate_rx));
-        let mut operation = manager
-            .try_submit(OperationOptions::default(), move |scope| {
-                let reservation_released = Arc::clone(&reservation_released_for_operation);
-                let capacity_released = Arc::clone(&capacity_released_for_operation);
-                let cleanup_count = Arc::clone(&cleanup_count_for_operation);
-                let cleanup_started = cleanup_started_tx.clone();
-                let cleanup_gate = Arc::clone(&cleanup_gate_rx);
-                let reservation = Reservation::new(
-                    1,
-                    1,
-                    move |_| reservation_released.store(true, Ordering::SeqCst),
-                    move |_| {
-                        let capacity_released = Arc::clone(&capacity_released);
-                        let cleanup_count = Arc::clone(&cleanup_count);
-                        let cleanup_started = cleanup_started.clone();
-                        let cleanup_gate = Arc::clone(&cleanup_gate);
-                        ReservationLease::new(move || {
-                            cleanup_count.fetch_add(1, Ordering::SeqCst);
-                            cleanup_started.send(()).unwrap();
-                            cleanup_gate.lock().unwrap().recv().unwrap();
-                            capacity_released.store(true, Ordering::SeqCst);
-                        })
-                    },
-                );
-                let operation_id = scope.id();
-                let request = Request {
-                    operation_id: None,
-                    runner: CommandRunner::without_timeout(),
-                    command: Command::new("sh").arg("-c").arg("sleep 30"),
-                    options: RequestOptions::Standard(CommandRunOptions::new()),
-                    snapshot: ExecutionSnapshot {
-                        working_directory: std::env::current_dir().unwrap(),
-                        environment: Vec::new(),
-                    },
-                    io_paths: IoPathSnapshot::default(),
-                    deadline: None,
-                };
-                backend_for_operation.run(
-                    ActivatedRequest {
-                        operation_id,
-                        scope,
-                        request,
-                        reservation,
-                        facts: sink_for_operation.clone(),
-                        session_bridge: None,
-                    },
-                    sink_for_operation,
-                );
-                Ok::<_, ()>(())
-            })
+        let scheduler = Arc::new(GatedScheduler {
+            reservation_released: Arc::clone(&reservation_released),
+            capacity_released: Arc::clone(&capacity_released),
+            cleanup_count: Arc::clone(&cleanup_count),
+            cleanup_started: cleanup_started_tx,
+            cleanup_gate: cleanup_gate_rx,
+            workers: Mutex::new(Vec::new()),
+        });
+        let reservation = crate::execution::Scheduler::try_reserve(&*scheduler, 0).unwrap();
+        let request = Request {
+            operation_id: None,
+            runner: CommandRunner::without_timeout(),
+            command: Command::new("sh").arg("-c").arg("sleep 30"),
+            options: RequestOptions::Standard(CommandRunOptions::new()),
+            snapshot: ExecutionSnapshot {
+                working_directory: std::env::current_dir().unwrap(),
+                environment: Vec::new(),
+            },
+            io_paths: IoPathSnapshot::default(),
+            deadline: None,
+        };
+        let backend_port: Arc<dyn Backend> = backend.clone();
+        let adapter_state = Arc::new(crate::execution::adapter::AdapterState::new(
+            request,
+            reservation,
+            scheduler.clone(),
+            Arc::clone(&backend_port),
+            backend,
+            crate::execution::adapter::cleanup::start_recovery_worker(1).unwrap(),
+            None,
+        ));
+        let handle = manager
+            .try_submit_external(OperationOptions::default(), Arc::clone(&adapter_state))
             .unwrap();
+        adapter_state.set_operation_observer(handle.observer());
+        let mut operation = crate::CommandOperation::new(handle, adapter_state.stop_diagnostic_slot());
 
         cleanup_started_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("backend cleanup should reach the gated capacity lease");
         assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let outcome = loop {
+            if let Some(outcome) = operation.try_take_outcome().unwrap() {
+                break outcome;
+            }
+            assert!(std::time::Instant::now() < deadline, "managed outcome should be published");
+            std::thread::yield_now();
+        };
         assert!(matches!(
-            sink.outcome.lock().unwrap().as_ref(),
-            Some(OperationOutcome::Failed(error))
+            outcome,
+            OperationOutcome::Failed(error)
                 if matches!(error.kind(), crate::CommandErrorKind::ManagedOperationFailed)
         ));
-        assert!(!sink.released.load(Ordering::SeqCst));
-        assert!(sink.settlement.lock().unwrap().is_none());
+        let snapshot = qubit_operation::OperationControl::snapshot(&*adapter_state);
+        assert!(!snapshot.input_released);
+        assert!(snapshot.settlement.is_none());
         assert!(!reservation_released.load(Ordering::SeqCst));
         assert!(!capacity_released.load(Ordering::SeqCst));
 
         drop(cleanup_gate);
-        assert!(matches!(
-            operation.wait_outcome().unwrap(),
-            OperationOutcome::Succeeded(())
-        ));
         operation.wait_settlement().unwrap();
-        assert!(sink.released.load(Ordering::SeqCst));
-        assert!(sink.settlement.lock().unwrap().is_some());
+        let snapshot = qubit_operation::OperationControl::snapshot(&*adapter_state);
+        assert!(snapshot.input_released);
+        assert!(snapshot.settlement.is_some());
         assert!(reservation_released.load(Ordering::SeqCst));
         assert!(capacity_released.load(Ordering::SeqCst));
         assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+        scheduler.join_workers();
     }
 
     #[cfg(unix)]
