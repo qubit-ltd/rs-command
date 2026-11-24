@@ -710,7 +710,7 @@ mod tests {
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
         let _teardown = FallbackGateTeardown(Arc::clone(&gate));
         let cleanup_gate = Arc::clone(&gate);
-        let operation = manager
+        let mut operation = manager
             .try_submit(OperationOptions::default(), move |scope| {
                 let resource = scope
                     .manage(FallbackBlockingDrop {
