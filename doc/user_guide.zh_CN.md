@@ -39,7 +39,7 @@ println!("{}", output.stdout_lossy_text());
 
 调用方需要区分命令结果与资源清理时，使用 `CommandExecutor::submit` 或 `submit_in`。`wait_outcome` 取出一次性的命令结果，`wait_settlement` 则等待稳定的清理报告。命令成功不代表 helper 和 owned 文件都已经释放。[collect 示例](../examples/managed_collect.rs)在父 `OperationScope` 中提交操作，把 handle 转到 async 视图，先等 outcome，再单独查看 settlement。不要让有限的同步 worker 阻塞等待依赖同一 worker pool 才能执行的工作。
 
-同步与异步 handle 共用同一个 outcome 接收端；取结果前可通过 `into_async` 或 `into_sync` 转换。涉及资源的操作应保留 handle 或只读 observer，直到确认 settlement。`SettlementStatus::RecoveryRequired` 表示仍有待恢复资源：保留报告中的 recovery handle，并按应用自身的恢复策略处理，不能把它视为清理完成。
+同步与异步 handle 共用同一个 outcome 接收端；取结果前可通过 `into_async` 或 `into_sync` 转换。涉及资源的操作应保留 handle 或只读 observer，直到确认 settlement。`SettlementStatus::RecoveryRequired` 表示存在恢复相关证据，但不保证当前报告直接包含 manager recovery handle。先检查 manager 总报告中的 `status`、`effects`、`effect_overflow`、`recovery_count`、`recoveries_total` 和 `recoveries_truncated`；再检查存在时的 `external_settlement`，读取 adapter 原始报告中的状态、effects、计数、溢出信息及 recovery handles。只处理实际存在的 handle。比如 adapter 已经执行恢复逻辑，`external_settlement` 中的 `recovery_count` 仍大于零，而 manager 报告的 `recoveries` 为空；此时没有可由应用重试的 manager handle。根据报告中的 effect 和释放证据判断何时可以删除暂存文件；不能仅凭 `recoveries` 为空就删除。
 
 受管命令停止时，应保留具体的 `CommandOperation` 或 `AsyncCommandOperation`，直到完成两阶段观察。`Stopped` outcome 只有停止报告，不含 `CommandOutput`；不要自行补造退出状态。先等待 settlement，再调用 `take_stop_diagnostic`，因为后台清理会在结算过程中发布可选诊断。该方法返回 `Option<CommandError>`，内容只能取出一次；返回 `None` 不会撤销或否定已经观察到的停止。检查诊断中的停止原因、`cleanup_failures()` 和 `captured_output()` 元数据。捕获的字节可能不完整，应分别查看每个流是否截断、是否观察到 EOF；EOF 只说明采集状态，不代表命令成功。原始字节可能含敏感信息，应用应按自身策略保留或披露，不要默认写入日志。只读 operation observer 没有取回此命令诊断的接口；`into_async` 与 `into_sync` 会保留访问能力，`into_inner` 则会放弃它。保留 settlement 报告；若状态为 `RecoveryRequired`，按应用的恢复流程处理。
 
@@ -102,9 +102,9 @@ fn observe_stopped_command(
 
 managed stdin 和 tee 的相对路径以提交时捕获的父进程目录为基准；子进程工作目录单独选择，command override 优先于 runner 默认值。Windows drive-relative 路径保留平台语义。请求快照中的兼容字段 `environment` 为空；子进程仍在启动时继承环境，并应用显式清空、删除和覆盖设置。
 
-资源提交会在登记前检查文件与 session I/O 冲突。session stdin 不能与文件 stdin 同时使用；请选择 session 管道，或使用受支持的字节前缀。文件准备错误归类为 `CommandErrorKind::FilePreparationFailed`，并在 `CommandErrorReason::FilePreparationFailed` 中携带阶段、方向和 source。部分 commit 可能已经改动较早处理的 sink。
+资源提交先在登记前检查互斥配置，再于最终 commit 阶段检查实际打开句柄的文件身份，确认无冲突后才截断或启动进程。owned stdin 不能和命令的文件或字节 stdin 并用；请选择一种输入来源。session stdin 不能和文件 stdin 并用，但仍支持相应的字节前缀。tee 路径可能在后续 commit 错误前已创建；若某个 sink 截断后才失败，较早处理的 sink 可能已改变。文件准备错误归类为 `CommandErrorKind::FilePreparationFailed`，并在 `CommandErrorReason::FilePreparationFailed` 中携带实际阶段、方向和 source。
 
-带 scope 的容量等待观察到 scope stop 时返回 `AdmissionError::Stopped`，deadline 到期时返回 `CapacityFailure::DeadlineExpired`。`CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)` 区分 `WaiterLimit` 与 `Timer(RetryTimerFailure)`；timer failure 会指出计时器启动失败、队列已满或连接断开。穷举匹配提交失败原因时，需处理新增分支。
+进程启动前已接受的停止会通过 operation handle 返回 `OperationOutcome::Stopped`；等待 settlement 后，可在具体 command handle 上调用 `take_stop_diagnostic()` 取得可选诊断。收集型 `run_managed*` 入口仍按既有映射返回 `CommandError`。带 scope 的容量等待观察到 scope stop 时返回 `AdmissionError::Stopped`，deadline 到期时返回 `CapacityFailure::DeadlineExpired`。waiter 注册后若 executor 关闭，该等待以 `Capacity(Closed)` 结束；同一次等待判断按 deadline、scope stop、关闭的顺序处理同时可见的状态。`CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)` 区分 `WaiterLimit` 与 `Timer(RetryTimerFailure)`；timer failure 包括计时器启动失败、队列已满或连接断开。`max_waiters` 同时覆盖本地容量等待和 manager `Busy` 等待。穷举匹配提交失败原因时，需处理该分支。
 
 ### 关闭 executor 时继续观察
 

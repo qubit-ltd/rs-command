@@ -287,3 +287,11 @@ reaper owner 或恢复效果已经完成。Windows 成功取消同步 I/O 后仍
 带 scope 的容量等待会持续检查 stop 和 deadline。scope stop 映射为 `AdmissionError::Stopped`，deadline 到期映射为 `CapacityFailure::DeadlineExpired`。等待者额度耗尽和重试计时器失败统一通过 `CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)` 表示；其中 `WaiterLimit` 区分等待额度不足，`Timer(RetryTimerFailure)` 则区分计时器启动、队列满和断连。
 
 收集型 managed 方法会等待结算，但只返回命令结果或停止诊断。需要查看结算副作用、恢复证据或资源释放状态时，必须使用 submit handle。`ProcessTreePolicy::DirectChild` 是 managed API 中显式选择的例外；旧 `run` 与 `run_with` 生命周期保持原契约。
+
+### 结算观察与恢复
+
+按顺序读取恢复证据：先检查 manager 的总 `SettlementReport`，包括 `status`、`effects`、`effect_overflow`、恢复计数和截断标记；再检查存在时的 `external_settlement`，了解 adapter 原始报告的状态、effects、计数、溢出信息和实际 recovery handles。manager 可能因为外部 adapter 报告了恢复工作而给出 `RecoveryRequired`，即使 manager 自己的 `recoveries` 数组为空。例如 adapter 已运行恢复逻辑，`external_settlement.recovery_count` 大于零，但 manager 已没有可供重试的 handle。不能根据 handle 数组为空推断资源已清理；应结合两份报告中的释放与 effect 证据，决定何时删除暂存文件。
+
+受管文件处理分两阶段校验：先在资源登记前拒绝互斥配置，再在 commit 阶段比较最终打开句柄的实际身份。身份冲突会在截断和启动进程前拒绝。owned stdin 与命令文件或字节 stdin 互斥，调用方需选定一种来源；session stdin 仍与文件 stdin 互斥，但保留字节前缀输入。tee 最终路径可能在后续错误前已经创建；若较早 sink 已截断，后续失败不会回滚。
+
+进程启动前已接受的 stop 会映射为 operation `Stopped`，并为具体 command handle 保留可选 runner 诊断；等待 settlement 后可取一次。收集型调用保留既有错误映射。executor 关闭时，已注册的容量等待或 manager Busy 等待以 `Capacity(Closed)` 结束。`max_waiters` 同时覆盖这两类等待；等待判断顺序为 deadline、scope stop、关闭、重试。计时器 worker 断连会沿现有 timer wait failure 路径返回。`max_diagnostics` 仅为兼容配置字段，不限制诊断存储。
