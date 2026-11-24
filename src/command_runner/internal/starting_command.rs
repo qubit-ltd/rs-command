@@ -329,7 +329,7 @@ fn handoff_startup_owner(observer: &ReaperObserver, result: Result<(), crate::ex
         }
         Err(failure) => {
             failure.log_unavailable("startup abort cleanup");
-            failure.owner.run_inline();
+            observer.retain_local_cleanup_owner(failure.owner);
         }
     }
 }
@@ -366,8 +366,16 @@ mod tests {
     use crate::CommandErrorReason;
     use crate::OutputStream;
 
+    struct CleanupGate(mpsc::Sender<()>);
+
+    impl Drop for CleanupGate {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+
     #[test]
-    fn test_startup_abort_uses_inline_cleanup_when_reaper_start_fails() {
+    fn test_startup_abort_retains_cleanup_when_reaper_start_fails() {
         use std::sync::atomic::AtomicUsize;
         use std::sync::atomic::Ordering;
 
@@ -381,8 +389,13 @@ mod tests {
         let cleanup_count = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&cleanup_count);
         let cleanup_observer = observer.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (gate_tx, gate_rx) = mpsc::channel();
+        let gate_guard = CleanupGate(gate_tx);
         let owner = ReaperOwner::new(move || {
             observed.fetch_add(1, Ordering::SeqCst);
+            started_tx.send(()).unwrap();
+            gate_rx.recv().unwrap();
             cleanup_observer.complete();
         });
 
@@ -395,6 +408,15 @@ mod tests {
             }),
         );
 
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 0);
+        let owner = observer
+            .take_local_cleanup_owner()
+            .expect("failed handoff owner should be retained locally");
+        let cleanup = std::thread::spawn(move || owner.run_inline());
+        started_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        assert!(!observer.is_complete());
+        drop(gate_guard);
+        cleanup.join().unwrap();
         assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
         assert!(observer.is_complete());
         completed.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
