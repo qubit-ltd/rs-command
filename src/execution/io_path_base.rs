@@ -28,6 +28,7 @@ impl IoPathBase {
     ///
     /// # Parameters
     /// * `result`: Captured directory or the error produced while reading it.
+    #[cfg(test)]
     pub(in crate::execution) fn from_result(result: Result<std::path::PathBuf, String>) -> Self {
         Self { result }
     }
