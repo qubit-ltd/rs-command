@@ -1278,7 +1278,9 @@ mod activation_failure_tests {
             qubit_operation::ChildOutcomeKind::Stopped
         );
         assert!(matches!(
-            state.control.take(&mut std::task::Context::from_waker(std::task::Waker::noop())),
+            state
+                .control
+                .take(&mut std::task::Context::from_waker(std::task::Waker::noop())),
             std::task::Poll::Ready(OperationOutcome::Stopped(_))
         ));
         assert_eq!(
@@ -1291,10 +1293,7 @@ mod activation_failure_tests {
             ),
             Err(crate::execution::contracts::FactPublishError::DuplicateOutcome)
         );
-        assert_eq!(
-            OperationControl::snapshot(&*state.control).outcome,
-            summary_before_take
-        );
+        assert_eq!(OperationControl::snapshot(&*state.control).outcome, summary_before_take);
         assert_eq!(
             crate::execution::contracts::FactSink::publish_outcome(&*state, stopped()),
             Err(crate::execution::contracts::FactPublishError::DuplicateOutcome)

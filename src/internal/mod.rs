@@ -18,9 +18,11 @@ pub(crate) mod diagnostic_source;
 /// The callback runs after callers release their state locks. A panic payload
 /// is dropped under a second unwind boundary because user supplied payloads
 /// may panic from `Drop` as well.
+///
+/// # Parameters
+/// * `waker`: The task notification callback to invoke.
 pub(crate) fn wake_waker(waker: std::task::Waker) {
-    let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake()))
-    else {
+    let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake())) else {
         return;
     };
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload))) {

@@ -528,10 +528,7 @@ mod tests {
         let block = vec![0x7a; MAX_BLOCK];
         for _ in 0..CHANNEL_CAPACITY / MAX_BLOCK {
             assert!(matches!(
-                write_channel.poll_write(
-                    &mut std::task::Context::from_waker(std::task::Waker::noop()),
-                    &block
-                ),
+                write_channel.poll_write(&mut std::task::Context::from_waker(std::task::Waker::noop()), &block),
                 std::task::Poll::Ready(Ok(MAX_BLOCK))
             ));
         }
@@ -584,18 +581,17 @@ mod tests {
             reader_channel.poll_read(&mut panic_context, &mut [0; 1]),
             std::task::Poll::Pending
         ));
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            drop(super::super::ChannelWriter(reader_channel))
-        }))
-        .is_ok());
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                drop(super::super::ChannelWriter(reader_channel))
+            }))
+            .is_ok()
+        );
 
         let writer_channel = Arc::new(ByteChannel::new());
         for _ in 0..CHANNEL_CAPACITY / MAX_BLOCK {
             assert!(matches!(
-                writer_channel.poll_write(
-                    &mut std::task::Context::from_waker(std::task::Waker::noop()),
-                    &block
-                ),
+                writer_channel.poll_write(&mut std::task::Context::from_waker(std::task::Waker::noop()), &block),
                 std::task::Poll::Ready(Ok(MAX_BLOCK))
             ));
         }
@@ -603,10 +599,12 @@ mod tests {
             writer_channel.poll_write(&mut panic_context, b"blocked"),
             std::task::Poll::Pending
         ));
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            drop(super::super::ChannelReader(writer_channel))
-        }))
-        .is_ok());
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                drop(super::super::ChannelReader(writer_channel))
+            }))
+            .is_ok()
+        );
     }
     #[test]
     fn test_capacity_blocking_and_writer_wake() {

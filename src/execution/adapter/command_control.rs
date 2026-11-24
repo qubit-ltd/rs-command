@@ -162,6 +162,10 @@ impl CommandControl {
 
 /// Wakes published-fact waiters independently so one faulty callback cannot
 /// prevent other waiters from observing the committed state.
+///
+/// # Parameters
+/// * `wakers`: Contains the async waiters to notify after releasing the state
+///   lock.
 fn wake_all(wakers: Vec<std::task::Waker>) {
     for waker in wakers {
         crate::internal::wake_waker(waker);
@@ -311,13 +315,15 @@ mod tests {
                 Poll::Pending
             ));
         }
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            control.publish_outcome(OperationOutcome::Stopped(StopReport {
-                reason: StopReason::UserCancelled,
-                accepted_at: None,
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                control.publish_outcome(OperationOutcome::Stopped(StopReport {
+                    reason: StopReason::UserCancelled,
+                    accepted_at: None,
+                }))
             }))
-        }))
-        .unwrap());
+            .unwrap()
+        );
         assert!(OperationControl::poll_outcome(&control, &mut normal_cx).is_ready());
         assert!(count.0.load(Ordering::SeqCst) >= 1);
 

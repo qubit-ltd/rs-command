@@ -2719,8 +2719,7 @@ mod tests {
                 );
                 let lease = reservation.retain();
                 let sink_port: Arc<dyn FactSink> = sink_for_operation.clone();
-                let (observer, completion) =
-                    ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink_port));
+                let (observer, completion) = ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink_port));
                 observer.mark_pending();
                 let cleanup_observer = observer.clone();
                 observer.retain_local_cleanup_owner(ReaperOwner::new(move || {
@@ -2756,9 +2755,7 @@ mod tests {
             .unwrap();
         observer_slot.set(operation.observer());
 
-        cleanup_started_rx
-            .recv_timeout(Duration::from_secs(3))
-            .unwrap();
+        cleanup_started_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
         assert!(matches!(
             sink.outcome.lock().unwrap().as_ref(),

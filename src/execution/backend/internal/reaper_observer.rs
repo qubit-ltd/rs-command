@@ -13,13 +13,9 @@ use std::sync::mpsc::sync_channel;
 
 use super::DeferredReaperOwner;
 use super::ReaperOwner;
+use super::RetainedOwner;
 use crate::execution::contracts::FactSink;
 use crate::execution::contracts::RecoveryOwner;
-
-enum RetainedOwner {
-    Deferred(Box<dyn RecoveryOwner>),
-    Local(ReaperOwner),
-}
 
 /// Represents the reaper observer state or contract used by managed command
 /// execution.
@@ -80,39 +76,27 @@ impl ReaperObserver {
     /// # Parameters
     /// * `owner`: Supplies the owner value used by this operation.
     pub(crate) fn defer_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) {
-        let mut retained = self
-            .retained_owner
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        assert!(
-            retained.is_none(),
-            "managed cleanup owner was already retained"
-        );
-        *retained = Some(RetainedOwner::Deferred(owner));
+        let mut retained = self.retained_owner.lock().unwrap_or_else(|error| error.into_inner());
+        assert!(retained.is_none(), "managed cleanup owner was already retained");
+        *retained = Some(RetainedOwner::Deferred { owner });
     }
 
     /// Retains cleanup that the backend must run after publishing the outcome.
+    ///
+    /// # Parameters
+    /// * `owner`: Owns the command resources that require local cleanup.
     pub(crate) fn retain_local_cleanup_owner(&self, owner: ReaperOwner) {
-        let mut retained = self
-            .retained_owner
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        assert!(
-            retained.is_none(),
-            "managed cleanup owner was already retained"
-        );
-        *retained = Some(RetainedOwner::Local(owner));
+        let mut retained = self.retained_owner.lock().unwrap_or_else(|error| error.into_inner());
+        assert!(retained.is_none(), "managed cleanup owner was already retained");
+        *retained = Some(RetainedOwner::Local { owner });
     }
 
     /// Takes cleanup selected for local execution by the backend.
     pub(crate) fn take_local_cleanup_owner(&self) -> Option<ReaperOwner> {
-        let mut retained = self
-            .retained_owner
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut retained = self.retained_owner.lock().unwrap_or_else(|error| error.into_inner());
         match retained.take() {
-            Some(RetainedOwner::Local(owner)) => Some(owner),
-            Some(deferred @ RetainedOwner::Deferred(_)) => {
+            Some(RetainedOwner::Local { owner }) => Some(owner),
+            Some(deferred @ RetainedOwner::Deferred { .. }) => {
                 *retained = Some(deferred);
                 None
             }
@@ -140,13 +124,10 @@ impl ReaperObserver {
     /// Performs the take deferred recovery owner step in the managed command
     /// execution lifecycle.
     pub(crate) fn take_deferred_recovery_owner(&self) -> Option<Box<dyn RecoveryOwner>> {
-        let mut retained = self
-            .retained_owner
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut retained = self.retained_owner.lock().unwrap_or_else(|error| error.into_inner());
         match retained.take() {
-            Some(RetainedOwner::Deferred(owner)) => Some(owner),
-            Some(local @ RetainedOwner::Local(_)) => {
+            Some(RetainedOwner::Deferred { owner }) => Some(owner),
+            Some(local @ RetainedOwner::Local { .. }) => {
                 *retained = Some(local);
                 None
             }
