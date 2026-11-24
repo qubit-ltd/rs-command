@@ -138,6 +138,7 @@ impl Backend for ProcessBackend {
             session_bridge,
             ..
         } = activated;
+        let command_stdin = request.command.stdin_mode();
         let stop = self
             .gates
             .lock()
@@ -197,7 +198,12 @@ impl Backend for ProcessBackend {
         }
         let prepared_files = match resource_input {
             None => Ok(None),
-            Some(resources) => match resources.prepare_for_managed(&scope, &request.snapshot, session_bridge.is_some())
+            Some(resources) => match resources.prepare_for_managed(
+                &scope,
+                &request.snapshot,
+                command_stdin,
+                session_bridge.is_some(),
+            )
             {
                 Ok(files) => Ok(Some(files)),
                 Err(managed_failure) => {

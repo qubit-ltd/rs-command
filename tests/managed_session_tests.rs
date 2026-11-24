@@ -73,11 +73,15 @@ fn test_managed_session_returns_endpoints_and_streams_both_pipes() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
     let runner = CommandRunner::new(Duration::from_secs(5));
-    let mut session = block_on(runner.start_session(
-        &executor,
-        Command::new("sh").arg("-c").arg("printf out; printf err >&2"),
-        Default::default(),
-    ))
+    let mut session = block_on(
+        runner.start_session(
+            &executor,
+            Command::new("sh")
+                .arg("-c")
+                .arg("printf out; printf err >&2"),
+            Default::default(),
+        ),
+    )
     .unwrap();
     let mut stdin = session.take_stdin().unwrap();
     block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).unwrap();
@@ -130,21 +134,31 @@ fn test_managed_session_returns_endpoints_and_streams_both_pipes() {
 fn test_managed_resource_session_returns_streams_and_operation() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
-    let mut session = block_on(CommandRunner::without_timeout().start_session_resources(
-        &executor,
-        Command::new("sh").arg("-c").arg("cat; printf resource-session >&2"),
-        CommandResourceRunOptions::new(),
-    ))
+    let mut session = block_on(
+        CommandRunner::without_timeout().start_session_resources(
+            &executor,
+            Command::new("sh")
+                .arg("-c")
+                .arg("cat; printf resource-session >&2"),
+            CommandResourceRunOptions::new(),
+        ),
+    )
     .unwrap();
     let mut stdin = session.take_stdin().unwrap();
-    block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_write(cx, b"resource input"))).unwrap();
+    block_on(poll_fn(|cx| {
+        Pin::new(&mut stdin).poll_write(cx, b"resource input")
+    }))
+    .unwrap();
     block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).unwrap();
     drop(stdin);
 
     let mut stdout = session.take_stdout().unwrap();
     let mut stderr = session.take_stderr().unwrap();
     assert_eq!(block_on(read_all(&mut stdout)).unwrap(), b"resource input");
-    assert_eq!(block_on(read_all(&mut stderr)).unwrap(), b"resource-session");
+    assert_eq!(
+        block_on(read_all(&mut stderr)).unwrap(),
+        b"resource-session"
+    );
     let mut operation = session.take_operation().unwrap();
     assert!(matches!(
         operation.wait_outcome().unwrap(),
@@ -183,10 +197,14 @@ fn test_resource_session_owned_stdin_conflict_preserves_sink_before_start() {
     )
     .expect("ordinary session submission should be accepted");
     let mut ordinary_operation = ordinary.take_operation().unwrap();
-    let OperationOutcome::Failed(ordinary_error) = ordinary_operation.wait_outcome().unwrap() else {
+    let OperationOutcome::Failed(ordinary_error) = ordinary_operation.wait_outcome().unwrap()
+    else {
         panic!("ordinary session stdin files must be rejected before startup");
     };
-    assert_eq!(ordinary_error.kind(), qubit_command::CommandErrorKind::WriteInputFailed);
+    assert_eq!(
+        ordinary_error.kind(),
+        qubit_command::CommandErrorKind::WriteInputFailed
+    );
 
     let mut session = block_on(
         CommandRunner::without_timeout().start_session_resources(
@@ -223,6 +241,99 @@ fn test_resource_session_owned_stdin_conflict_preserves_sink_before_start() {
 
 #[cfg(unix)]
 #[test]
+fn test_resource_session_rejects_path_stdin_before_registration_or_start() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let input_path = directory.path().join("input");
+    let output_path = directory.path().join("output");
+    let started_path = directory.path().join("started");
+    std::fs::write(&input_path, b"path input").unwrap();
+    std::fs::write(&output_path, b"preserve sink").unwrap();
+    let output = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&output_path)
+        .unwrap();
+    let mut session = block_on(
+        CommandRunner::without_timeout().start_session_resources(
+            &executor,
+            Command::new("sh")
+                .arg("-c")
+                .arg("touch \"$1\"")
+                .arg("resource-session-path-stdin")
+                .arg(started_path.to_str().unwrap())
+                .stdin_file(&input_path),
+            CommandResourceRunOptions::new()
+                .stdout_sink(output, qubit_command::FileSinkPolicy::Truncate),
+        ),
+    )
+    .unwrap();
+    let mut operation = session.take_operation().unwrap();
+    let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
+        panic!("resource sessions must reject path stdin before startup");
+    };
+    assert!(matches!(
+        error.reason(),
+        qubit_command::CommandErrorReason::FilePreparationFailed {
+            stage: qubit_command::FilePreparationStage::Validation,
+            direction: Some(qubit_command::FilePreparationDirection::Stdin),
+            source,
+        } if source.kind() == std::io::ErrorKind::InvalidInput
+    ));
+    assert_eq!(std::fs::read(&output_path).unwrap(), b"preserve sink");
+    assert!(!started_path.exists());
+    let settlement = operation.wait_settlement().unwrap();
+    assert_eq!(
+        settlement.status,
+        qubit_operation::SettlementStatus::RecoveryRequired
+    );
+    assert_eq!(settlement.effects_total, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_resource_session_allows_command_byte_prefix_and_owned_sink() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let output = tempfile::NamedTempFile::new().unwrap();
+    let output_path = output.path().to_path_buf();
+    std::fs::write(&output_path, b"old sink").unwrap();
+    let sink = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&output_path)
+        .unwrap();
+    let mut session = block_on(
+        CommandRunner::without_timeout().start_session_resources(
+            &executor,
+            Command::new("sh")
+                .arg("-c")
+                .arg("cat")
+                .stdin_bytes(b"prefix-"),
+            CommandResourceRunOptions::new()
+                .stdout_sink(sink, qubit_command::FileSinkPolicy::Truncate),
+        ),
+    )
+    .unwrap();
+    let mut input = session.take_stdin().unwrap();
+    block_on(poll_fn(|cx| {
+        Pin::new(&mut input).poll_write(cx, b"session")
+    }))
+    .unwrap();
+    block_on(poll_fn(|cx| Pin::new(&mut input).poll_close(cx))).unwrap();
+    drop(input);
+    let mut operation = session.take_operation().unwrap();
+    let OperationOutcome::Succeeded(output) = operation.wait_outcome().unwrap() else {
+        panic!("session pipe should accept its command byte prefix");
+    };
+    assert_eq!(output.stdout(), b"prefix-session");
+    assert_eq!(std::fs::read(output_path).unwrap(), b"prefix-session");
+    assert!(operation.wait_settlement().unwrap().all_released());
+}
+
+#[cfg(unix)]
+#[test]
 fn test_scoped_resource_session_owned_stdin_conflict_preserves_sink_before_start() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let child_manager = manager.clone();
@@ -236,7 +347,8 @@ fn test_scoped_resource_session_owned_stdin_conflict_preserves_sink_before_start
     let started_path_for_scope = started_path.clone();
     let _ = manager
         .run(OperationOptions::default(), move |scope| {
-            let executor = CommandExecutor::new(child_manager, CommandExecutionConfig::default()).unwrap();
+            let executor =
+                CommandExecutor::new(child_manager, CommandExecutionConfig::default()).unwrap();
             let input = std::fs::File::open(&input_path).unwrap();
             let output = std::fs::OpenOptions::new()
                 .read(true)
@@ -270,7 +382,10 @@ fn test_scoped_resource_session_owned_stdin_conflict_preserves_sink_before_start
                     ..
                 }
             ));
-            assert_eq!(std::fs::read(&output_path_for_scope).unwrap(), b"preserve scoped sink");
+            assert_eq!(
+                std::fs::read(&output_path_for_scope).unwrap(),
+                b"preserve scoped sink"
+            );
             assert!(!started_path_for_scope.exists());
             Ok::<_, std::convert::Infallible>(())
         })
@@ -284,17 +399,22 @@ fn test_scoped_managed_resource_session_finishes_with_parent_scope() {
     let child_manager = manager.clone();
     let result = manager
         .run(OperationOptions::default(), move |scope| {
-            let executor = CommandExecutor::new(child_manager, CommandExecutionConfig::default()).unwrap();
-            let mut session = block_on(CommandRunner::without_timeout().start_session_resources_in(
-                &scope,
-                &executor,
-                Command::new("sh").arg("-c").arg("cat"),
-                CommandResourceRunOptions::new(),
-            ))?;
+            let executor =
+                CommandExecutor::new(child_manager, CommandExecutionConfig::default()).unwrap();
+            let mut session =
+                block_on(CommandRunner::without_timeout().start_session_resources_in(
+                    &scope,
+                    &executor,
+                    Command::new("sh").arg("-c").arg("cat"),
+                    CommandResourceRunOptions::new(),
+                ))?;
             let mut stdin = session.take_stdin().unwrap();
-            block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_write(cx, b"scoped resource")))
-                .expect("session stdin should accept bytes");
-            block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).expect("session stdin should close");
+            block_on(poll_fn(|cx| {
+                Pin::new(&mut stdin).poll_write(cx, b"scoped resource")
+            }))
+            .expect("session stdin should accept bytes");
+            block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx)))
+                .expect("session stdin should close");
             drop(stdin);
 
             let mut stdout = session.take_stdout().unwrap();
@@ -334,7 +454,10 @@ fn test_managed_session_input_flush_and_buffering_round_trip() {
     let mut stdin = session.take_stdin().unwrap();
     assert!(stdin.is_buffered());
     assert_eq!(
-        block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_write(cx, b"session input"))).unwrap(),
+        block_on(poll_fn(
+            |cx| Pin::new(&mut stdin).poll_write(cx, b"session input")
+        ))
+        .unwrap(),
         13
     );
     block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_flush(cx))).unwrap();
@@ -361,11 +484,15 @@ fn test_managed_session_applies_runner_total_output_budget() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
     let runner = CommandRunner::without_timeout().max_total_output_bytes(8);
-    let mut session = block_on(runner.start_session(
-        &executor,
-        Command::new("sh").arg("-c").arg("printf 12345678901234567890"),
-        CommandRunOptions::new(),
-    ))
+    let mut session = block_on(
+        runner.start_session(
+            &executor,
+            Command::new("sh")
+                .arg("-c")
+                .arg("printf 12345678901234567890"),
+            CommandRunOptions::new(),
+        ),
+    )
     .unwrap();
     let mut stdin = session.take_stdin().unwrap();
     let mut stdout = session.take_stdout().unwrap();
@@ -376,7 +503,10 @@ fn test_managed_session_applies_runner_total_output_budget() {
         let out_reader = scope.spawn(|| block_on(read_all(&mut stdout)));
         let err_reader = scope.spawn(|| block_on(read_all(&mut stderr)));
         block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).unwrap();
-        (out_reader.join().unwrap().unwrap(), err_reader.join().unwrap().unwrap())
+        (
+            out_reader.join().unwrap().unwrap(),
+            err_reader.join().unwrap().unwrap(),
+        )
     });
     assert!(!out.is_empty());
     assert!(err.is_empty());
@@ -396,8 +526,9 @@ fn test_managed_session_preserves_both_slow_streams_within_budget() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
     let payload_size = 128 * 1024;
-    let command =
-        format!("head -c {payload_size} /dev/zero | tr '\\000' x; head -c {payload_size} /dev/zero | tr '\\000' y >&2");
+    let command = format!(
+        "head -c {payload_size} /dev/zero | tr '\\000' x; head -c {payload_size} /dev/zero | tr '\\000' y >&2"
+    );
     let runner = CommandRunner::without_timeout().max_total_output_bytes(1024 * 1024);
     let mut session = block_on(runner.start_session(
         &executor,
@@ -415,7 +546,10 @@ fn test_managed_session_preserves_both_slow_streams_within_budget() {
         let out_reader = scope.spawn(|| block_on(read_all(&mut stdout)));
         let err_reader = scope.spawn(|| block_on(read_all(&mut stderr)));
         block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).unwrap();
-        (out_reader.join().unwrap().unwrap(), err_reader.join().unwrap().unwrap())
+        (
+            out_reader.join().unwrap().unwrap(),
+            err_reader.join().unwrap().unwrap(),
+        )
     });
 
     assert_eq!(out, vec![b'x'; payload_size]);
@@ -449,7 +583,10 @@ fn test_managed_session_zero_budget_accepts_empty_output() {
         let out_reader = scope.spawn(|| block_on(read_all(&mut stdout)));
         let err_reader = scope.spawn(|| block_on(read_all(&mut stderr)));
         block_on(poll_fn(|cx| Pin::new(&mut stdin).poll_close(cx))).unwrap();
-        (out_reader.join().unwrap().unwrap(), err_reader.join().unwrap().unwrap())
+        (
+            out_reader.join().unwrap().unwrap(),
+            err_reader.join().unwrap().unwrap(),
+        )
     });
 
     assert!(out.is_empty());
@@ -486,19 +623,27 @@ fn test_dropping_session_requests_stop_and_preserves_observable_settlement() {
         if let Some(stop) = observer.snapshot().stop {
             break stop;
         }
-        assert!(std::time::Instant::now() < deadline, "session drop must request stop");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "session drop must request stop"
+        );
         thread::yield_now();
     };
     assert_eq!(stop.reason, StopReason::UserCancelled);
     let shutdown = executor.request_shutdown(ShutdownMode::Drain);
     let _ = shutdown.wait_for(Duration::from_secs(5)).unwrap();
     assert!(matches!(
-        observer.wait_settlement_for(Duration::from_secs(5)).unwrap(),
+        observer
+            .wait_settlement_for(Duration::from_secs(5))
+            .unwrap(),
         SettlementWait::Ready(_)
     ));
 }
 
-async fn futures_join<A: std::future::Future, B: std::future::Future>(a: A, b: B) -> (A::Output, B::Output) {
+async fn futures_join<A: std::future::Future, B: std::future::Future>(
+    a: A,
+    b: B,
+) -> (A::Output, B::Output) {
     let mut a = Box::pin(a);
     let mut b = Box::pin(b);
     let mut ao = None;

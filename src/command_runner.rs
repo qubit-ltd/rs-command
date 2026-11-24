@@ -120,10 +120,14 @@ fn validate_prepared_files(
     if (files.stdout.is_some() || files.stderr.is_some())
         && (prepared.stdout_file_path.is_some() || prepared.stderr_file_path.is_some())
     {
-        return Err(owned_file_error(
+        return Err(file_preparation_error(
             command,
-            OutputStream::Stdout,
-            "<owned sink>",
+            crate::FilePreparationStage::Validation,
+            Some(if files.stdout.is_some() {
+                crate::FilePreparationDirection::Stdout
+            } else {
+                crate::FilePreparationDirection::Stderr
+            }),
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "owned sinks cannot be combined with path tees",
@@ -133,53 +137,108 @@ fn validate_prepared_files(
     let stdin = files
         .stdin
         .as_ref()
-        .map(|resource| resource.lock().unwrap_or_else(|e| e.into_inner()).try_clone())
+        .map(|resource| {
+            resource
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .try_clone()
+        })
         .transpose()
-        .map_err(|source| owned_file_error(command, OutputStream::Stdout, "<owned stdin>", source))?;
+        .map_err(|source| {
+            file_preparation_error(
+                command,
+                crate::FilePreparationStage::Validation,
+                Some(crate::FilePreparationDirection::Stdin),
+                source,
+            )
+        })?;
     let stdout = files
         .stdout
         .as_ref()
-        .map(|sink| sink.file.lock().unwrap_or_else(|e| e.into_inner()).try_clone())
+        .map(|sink| {
+            sink.file
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .try_clone()
+        })
         .transpose()
-        .map_err(|source| owned_file_error(command, OutputStream::Stdout, "<owned stdout>", source))?;
+        .map_err(|source| {
+            file_preparation_error(
+                command,
+                crate::FilePreparationStage::Validation,
+                Some(crate::FilePreparationDirection::Stdout),
+                source,
+            )
+        })?;
     let stderr = files
         .stderr
         .as_ref()
-        .map(|sink| sink.file.lock().unwrap_or_else(|e| e.into_inner()).try_clone())
+        .map(|sink| {
+            sink.file
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .try_clone()
+        })
         .transpose()
-        .map_err(|source| owned_file_error(command, OutputStream::Stderr, "<owned stderr>", source))?;
-    let handle = |file: &std::fs::File| same_file::Handle::from_file(file.try_clone()?);
+        .map_err(|source| {
+            file_preparation_error(
+                command,
+                crate::FilePreparationStage::Validation,
+                Some(crate::FilePreparationDirection::Stderr),
+                source,
+            )
+        })?;
+    let handle = |direction, file: &std::fs::File| {
+        file.try_clone()
+            .and_then(same_file::Handle::from_file)
+            .map_err(|source| {
+                file_preparation_error(
+                    command,
+                    crate::FilePreparationStage::Validation,
+                    Some(direction),
+                    source,
+                )
+            })
+    };
     let stdin_handle = stdin
         .as_ref()
-        .map(handle)
-        .transpose()
-        .map_err(|source| owned_file_error(command, OutputStream::Stdout, "<owned stdin>", source))?;
+        .map(|file| handle(crate::FilePreparationDirection::Stdin, file))
+        .transpose()?;
     let stdout_handle = stdout
         .as_ref()
-        .map(handle)
-        .transpose()
-        .map_err(|source| owned_file_error(command, OutputStream::Stdout, "<owned stdout>", source))?;
+        .map(|file| handle(crate::FilePreparationDirection::Stdout, file))
+        .transpose()?;
     let stderr_handle = stderr
         .as_ref()
-        .map(handle)
-        .transpose()
-        .map_err(|source| owned_file_error(command, OutputStream::Stderr, "<owned stderr>", source))?;
+        .map(|file| handle(crate::FilePreparationDirection::Stderr, file))
+        .transpose()?;
     if stdin_handle
         .as_ref()
         .zip(stdout_handle.as_ref())
         .is_some_and(|(a, b)| a == b)
-        || stdin_handle
-            .as_ref()
-            .zip(stderr_handle.as_ref())
-            .is_some_and(|(a, b)| a == b)
     {
-        return Err(owned_file_error(
+        return Err(file_preparation_error(
             command,
-            OutputStream::Stdout,
-            "<owned sink>",
+            crate::FilePreparationStage::Validation,
+            Some(crate::FilePreparationDirection::Stdout),
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "stdin and output sink refer to the same file",
+            ),
+        ));
+    }
+    if stdin_handle
+        .as_ref()
+        .zip(stderr_handle.as_ref())
+        .is_some_and(|(a, b)| a == b)
+    {
+        return Err(file_preparation_error(
+            command,
+            crate::FilePreparationStage::Validation,
+            Some(crate::FilePreparationDirection::Stderr),
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "stdin and stderr sink refer to the same file",
             ),
         ));
     }
@@ -188,15 +247,50 @@ fn validate_prepared_files(
         .zip(stderr_handle.as_ref())
         .is_some_and(|(a, b)| a == b)
     {
-        return Err(owned_file_error(
+        return Err(file_preparation_error(
             command,
-            OutputStream::Stderr,
-            "<owned stderr>",
+            crate::FilePreparationStage::Validation,
+            Some(crate::FilePreparationDirection::Stderr),
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "stdout and stderr sinks refer to the same file",
             ),
         ));
+    }
+    if let Some(command_stdin) = prepared.stdin_file.as_ref() {
+        let command_identity = command_stdin
+            .try_clone()
+            .and_then(same_file::Handle::from_file)
+            .map_err(|source| {
+                file_preparation_error(
+                    command,
+                    crate::FilePreparationStage::Validation,
+                    Some(crate::FilePreparationDirection::Stdin),
+                    source,
+                )
+            })?;
+        for (direction, identity) in [
+            (
+                crate::FilePreparationDirection::Stdout,
+                stdout_handle.as_ref(),
+            ),
+            (
+                crate::FilePreparationDirection::Stderr,
+                stderr_handle.as_ref(),
+            ),
+        ] {
+            if identity.is_some_and(|identity| identity == &command_identity) {
+                return Err(file_preparation_error(
+                    command,
+                    crate::FilePreparationStage::Validation,
+                    Some(direction),
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "stdin conflicts with an owned output sink",
+                    ),
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -235,12 +329,19 @@ fn apply_prepared_files(
                     source,
                 )
             })?;
-        committed.process_command.stdin(std::process::Stdio::from(file));
+        committed
+            .process_command
+            .stdin(std::process::Stdio::from(file));
     }
     if let Some(sink) = files.stdout.as_ref() {
         if let Some(scope) = scope {
             truncate_sink(sink, OutputStream::Stdout, scope).map_err(|(phase, source)| {
-                file_preparation_error(command, phase, Some(crate::FilePreparationDirection::Stdout), source)
+                file_preparation_error(
+                    command,
+                    phase,
+                    Some(crate::FilePreparationDirection::Stdout),
+                    source,
+                )
             })?;
         }
         committed.stdout_tee = Some(owned_sink(command, OutputStream::Stdout, sink)?);
@@ -248,7 +349,12 @@ fn apply_prepared_files(
     if let Some(sink) = files.stderr.as_ref() {
         if let Some(scope) = scope {
             truncate_sink(sink, OutputStream::Stderr, scope).map_err(|(phase, source)| {
-                file_preparation_error(command, phase, Some(crate::FilePreparationDirection::Stderr), source)
+                file_preparation_error(
+                    command,
+                    phase,
+                    Some(crate::FilePreparationDirection::Stderr),
+                    source,
+                )
             })?;
         }
         committed.stderr_tee = Some(owned_sink(command, OutputStream::Stderr, sink)?);
@@ -307,18 +413,6 @@ fn owned_sink(
 /// # Returns
 ///
 /// A command error classified as a failed output write.
-fn owned_file_error(command: &str, stream: OutputStream, path: &str, source: io::Error) -> CommandError {
-    CommandError::from_reason(
-        command,
-        CommandErrorReason::WriteOutputFailed {
-            stream,
-            path: std::path::PathBuf::from(path),
-            source,
-        },
-        None,
-    )
-}
-
 /// Creates a controlled managed file preparation error.
 ///
 /// # Parameters
@@ -417,7 +511,11 @@ mod tests {
             self.0
         }
 
-        fn register_deadline(&self, _at: MonotonicTime, _waker: std::task::Waker) -> Box<dyn TimerRegistration> {
+        fn register_deadline(
+            &self,
+            _at: MonotonicTime,
+            _waker: std::task::Waker,
+        ) -> Box<dyn TimerRegistration> {
             Box::new(NoopTimerRegistration)
         }
     }
@@ -450,13 +548,19 @@ mod tests {
             .expect_err("an expired operation context should stop before spawning");
 
         assert_eq!(error.kind(), CommandErrorKind::CancelledBeforeStart);
-        assert_eq!(context.stop_reason(), Some(qubit_operation::StopReason::Timeout));
+        assert_eq!(
+            context.stop_reason(),
+            Some(qubit_operation::StopReason::Timeout)
+        );
     }
 
     #[test]
     fn test_runner_policy_builders_and_accessors_round_trip() {
         let timeout_runner = CommandRunner::new(Duration::from_millis(25));
-        assert_eq!(timeout_runner.configured_timeout(), Some(Duration::from_millis(25)));
+        assert_eq!(
+            timeout_runner.configured_timeout(),
+            Some(Duration::from_millis(25))
+        );
         assert_eq!(CommandRunner::without_timeout().configured_timeout(), None);
 
         let working_directory = std::env::temp_dir();
@@ -482,7 +586,10 @@ mod tests {
             .timer(timer)
             .diagnostic_redaction_policy(redaction_policy.clone());
 
-        assert_eq!(runner.configured_working_directory(), Some(working_directory.as_path()));
+        assert_eq!(
+            runner.configured_working_directory(),
+            Some(working_directory.as_path())
+        );
         assert_eq!(runner.configured_success_exit_codes(), &[0, 7]);
         assert!(runner.is_logging_disabled());
         assert!(runner.is_output_truncation_failure_enabled());
@@ -490,7 +597,10 @@ mod tests {
         assert_eq!(runner.configured_max_stderr_bytes(), Some(11));
         assert_eq!(runner.configured_max_total_output_bytes(), Some(17));
         let _ = runner.configured_timer();
-        assert_eq!(runner.configured_diagnostic_redaction_policy(), &redaction_policy);
+        assert_eq!(
+            runner.configured_diagnostic_redaction_policy(),
+            &redaction_policy
+        );
 
         let unbounded = runner.unbounded_output().without_total_output_limit();
         assert_eq!(unbounded.configured_max_stdout_bytes(), None);
@@ -523,9 +633,18 @@ mod tests {
             .disable_logging(true)
             .bounded_output(6);
 
-        assert_eq!(runner.configured_timeout(), Some(Duration::from_millis(125)));
-        assert_eq!(runner.configured_timer().clock().now().domain(), timer_domain);
-        assert_eq!(runner.configured_working_directory(), Some(working_directory.as_path()));
+        assert_eq!(
+            runner.configured_timeout(),
+            Some(Duration::from_millis(125))
+        );
+        assert_eq!(
+            runner.configured_timer().clock().now().domain(),
+            timer_domain
+        );
+        assert_eq!(
+            runner.configured_working_directory(),
+            Some(working_directory.as_path())
+        );
         assert_eq!(runner.configured_success_exit_codes(), &[3, 7]);
         assert!(runner.is_logging_disabled());
         assert!(runner.is_output_truncation_failure_enabled());
@@ -537,12 +656,18 @@ mod tests {
         assert_eq!(without_memory_limits.configured_max_stdout_bytes(), None);
         assert_eq!(without_memory_limits.configured_max_stderr_bytes(), None);
         assert!(!without_memory_limits.is_output_truncation_failure_enabled());
-        assert_eq!(without_memory_limits.configured_max_total_output_bytes(), Some(19));
+        assert_eq!(
+            without_memory_limits.configured_max_total_output_bytes(),
+            Some(19)
+        );
 
         let without_total_budget = runner.without_total_output_limit();
         assert_eq!(without_total_budget.configured_max_stdout_bytes(), Some(6));
         assert_eq!(without_total_budget.configured_max_stderr_bytes(), Some(6));
-        assert_eq!(without_total_budget.configured_max_total_output_bytes(), None);
+        assert_eq!(
+            without_total_budget.configured_max_total_output_bytes(),
+            None
+        );
         assert!(without_total_budget.is_output_truncation_failure_enabled());
     }
 
@@ -567,7 +692,8 @@ mod tests {
             std::hint::black_box(CommandRunner::max_output_bytes);
         let with_total_limit: fn(CommandRunner, u64) -> CommandRunner =
             std::hint::black_box(CommandRunner::max_total_output_bytes);
-        let timeout: fn(&CommandRunner) -> Option<Duration> = std::hint::black_box(CommandRunner::configured_timeout);
+        let timeout: fn(&CommandRunner) -> Option<Duration> =
+            std::hint::black_box(CommandRunner::configured_timeout);
         let directory: for<'a> fn(&'a CommandRunner) -> Option<&'a std::path::Path> =
             std::hint::black_box(CommandRunner::configured_working_directory);
         let success_codes: for<'a> fn(&'a CommandRunner) -> &'a [i32] =
@@ -597,7 +723,8 @@ mod tests {
     #[test]
     fn test_public_runner_builder_and_accessor_items_preserve_values() {
         let new: fn(Duration) -> CommandRunner = std::hint::black_box(CommandRunner::new);
-        let without_timeout: fn() -> CommandRunner = std::hint::black_box(CommandRunner::without_timeout);
+        let without_timeout: fn() -> CommandRunner =
+            std::hint::black_box(CommandRunner::without_timeout);
         let configured_timeout: fn(&CommandRunner) -> Option<Duration> =
             std::hint::black_box(CommandRunner::configured_timeout);
         let configured_timer: for<'a> fn(&'a CommandRunner) -> &'a dyn qubit_clock::Timer =
@@ -610,7 +737,8 @@ mod tests {
             std::hint::black_box(CommandRunner::success_exit_code);
         let set_success_codes: fn(CommandRunner, &[i32]) -> CommandRunner =
             std::hint::black_box(CommandRunner::success_exit_codes);
-        let is_logging_disabled: fn(&CommandRunner) -> bool = std::hint::black_box(CommandRunner::is_logging_disabled);
+        let is_logging_disabled: fn(&CommandRunner) -> bool =
+            std::hint::black_box(CommandRunner::is_logging_disabled);
         let disable_logging: fn(CommandRunner, bool) -> CommandRunner =
             std::hint::black_box(CommandRunner::disable_logging);
         let truncation_fails: fn(&CommandRunner) -> bool =
@@ -631,8 +759,10 @@ mod tests {
             std::hint::black_box(CommandRunner::configured_max_stderr_bytes);
         let set_both_limits: fn(CommandRunner, usize) -> CommandRunner =
             std::hint::black_box(CommandRunner::max_output_bytes);
-        let bounded: fn(CommandRunner, usize) -> CommandRunner = std::hint::black_box(CommandRunner::bounded_output);
-        let unbounded: fn(CommandRunner) -> CommandRunner = std::hint::black_box(CommandRunner::unbounded_output);
+        let bounded: fn(CommandRunner, usize) -> CommandRunner =
+            std::hint::black_box(CommandRunner::bounded_output);
+        let unbounded: fn(CommandRunner) -> CommandRunner =
+            std::hint::black_box(CommandRunner::unbounded_output);
         let set_total_limit: fn(CommandRunner, u64) -> CommandRunner =
             std::hint::black_box(CommandRunner::max_total_output_bytes);
         let total_limit: fn(&CommandRunner) -> Option<u64> =
@@ -667,8 +797,14 @@ mod tests {
         let runner = bounded(runner, 8);
         let runner = set_total_limit(runner, 10);
 
-        assert_eq!(configured_timer(&runner).clock().now().domain(), timer_domain);
-        assert_eq!(runner.configured_working_directory(), Some(directory.as_path()));
+        assert_eq!(
+            configured_timer(&runner).clock().now().domain(),
+            timer_domain
+        );
+        assert_eq!(
+            runner.configured_working_directory(),
+            Some(directory.as_path())
+        );
         assert_eq!(runner.configured_success_exit_codes(), &[3, 7]);
         assert!(is_logging_disabled(&runner));
         assert!(truncation_fails(&runner));
@@ -690,7 +826,10 @@ mod tests {
         assert_eq!(configured_timeout(&untimed), None);
     }
 
-    fn managed_file(scope: &OperationScope, file: File) -> qubit_operation::ResourceRef<Mutex<File>> {
+    fn managed_file(
+        scope: &OperationScope,
+        file: File,
+    ) -> qubit_operation::ResourceRef<Mutex<File>> {
         scope
             .manage(Mutex::new(file))
             .expect("test file should register in the scope")
@@ -699,8 +838,8 @@ mod tests {
     #[test]
     fn test_take_output_pipe_reports_each_missing_stream() {
         for stream in [OutputStream::Stdout, OutputStream::Stderr] {
-            let error =
-                take_output_pipe::<u8>("command", stream, || None).expect_err("missing output pipe should be reported");
+            let error = take_output_pipe::<u8>("command", stream, || None)
+                .expect_err("missing output pipe should be reported");
 
             assert_eq!(error.kind(), CommandErrorKind::ReadOutputFailed);
             assert!(matches!(
@@ -737,7 +876,10 @@ mod tests {
         let default = CommandRunner::new(Duration::from_secs(4));
         assert_eq!(default.configured_timeout(), Some(Duration::from_secs(4)));
         let default_timer_domain = default.configured_timer().clock().now().domain();
-        assert_eq!(default.configured_timer().clock().now().domain(), default_timer_domain);
+        assert_eq!(
+            default.configured_timer().clock().now().domain(),
+            default_timer_domain
+        );
         assert_eq!(default.configured_success_exit_codes(), &[0]);
         assert!(default.configured_working_directory().is_none());
         assert!(!default.is_logging_disabled());
@@ -784,11 +926,17 @@ mod tests {
             configured.configured_working_directory().unwrap(),
             "runner/working-directory"
         );
-        assert_eq!(configured.configured_timer().clock().now().domain(), timer_domain);
+        assert_eq!(
+            configured.configured_timer().clock().now().domain(),
+            timer_domain
+        );
         assert_eq!(configured.configured_success_exit_codes(), &[3, 7]);
         assert!(configured.is_logging_disabled());
         assert!(configured.is_output_truncation_failure_enabled());
-        assert_eq!(configured.configured_diagnostic_redaction_policy(), &redaction_policy);
+        assert_eq!(
+            configured.configured_diagnostic_redaction_policy(),
+            &redaction_policy
+        );
         assert_eq!(configured.configured_max_stdout_bytes(), Some(5));
         assert_eq!(configured.configured_max_stderr_bytes(), Some(5));
         assert_eq!(configured.configured_max_total_output_bytes(), Some(9));
@@ -839,12 +987,21 @@ mod tests {
             .timer(timer);
 
         assert_eq!(configured.configured_timeout(), Some(timeout));
-        assert_eq!(configured.configured_timer().clock().now().domain(), timer_domain);
-        assert_eq!(configured.configured_working_directory(), Some(directory.as_path()));
+        assert_eq!(
+            configured.configured_timer().clock().now().domain(),
+            timer_domain
+        );
+        assert_eq!(
+            configured.configured_working_directory(),
+            Some(directory.as_path())
+        );
         assert_eq!(configured.configured_success_exit_codes(), &[0, 7]);
         assert!(configured.is_logging_disabled());
         assert!(!configured.is_output_truncation_failure_enabled());
-        assert_eq!(configured.configured_diagnostic_redaction_policy(), &redaction);
+        assert_eq!(
+            configured.configured_diagnostic_redaction_policy(),
+            &redaction
+        );
         assert_eq!(configured.configured_max_stdout_bytes(), Some(4));
         assert_eq!(configured.configured_max_stderr_bytes(), Some(4));
         assert_eq!(configured.configured_max_total_output_bytes(), Some(9));
@@ -866,13 +1023,17 @@ mod tests {
         assert_eq!(reset.configured_max_stderr_bytes(), None);
         assert_eq!(reset.configured_max_total_output_bytes(), None);
         assert!(!reset.is_output_truncation_failure_enabled());
-        assert_eq!(CommandRunner::new(timeout).configured_timeout(), Some(timeout));
+        assert_eq!(
+            CommandRunner::new(timeout).configured_timeout(),
+            Some(timeout)
+        );
         assert_eq!(CommandRunner::without_timeout().configured_timeout(), None);
     }
 
     #[test]
     fn test_inline_runner_builders_via_function_items() {
-        let without_timeout: fn() -> CommandRunner = std::hint::black_box(CommandRunner::without_timeout);
+        let without_timeout: fn() -> CommandRunner =
+            std::hint::black_box(CommandRunner::without_timeout);
         let set_working_directory: fn(CommandRunner, PathBuf) -> CommandRunner =
             std::hint::black_box(CommandRunner::working_directory::<PathBuf>);
         let directory = std::env::temp_dir().join("runner-function-item-directory");
@@ -880,12 +1041,17 @@ mod tests {
         let runner = set_working_directory(without_timeout(), directory.clone());
 
         assert_eq!(runner.configured_timeout(), None);
-        assert_eq!(runner.configured_working_directory(), Some(directory.as_path()));
+        assert_eq!(
+            runner.configured_working_directory(),
+            Some(directory.as_path())
+        );
     }
 
     #[cfg(unix)]
     fn successful_test_command() -> crate::Command {
-        crate::Command::new("sh").arg("-c").arg("printf unit-runner")
+        crate::Command::new("sh")
+            .arg("-c")
+            .arg("printf unit-runner")
     }
 
     #[cfg(windows)]
@@ -917,7 +1083,11 @@ mod tests {
         let output = CommandRunner::without_timeout()
             .working_directory(directory.path())
             .success_exit_codes(&[7])
-            .run(crate::Command::new("sh").arg("-c").arg("printf '%s' \"$PWD\"; exit 7"))
+            .run(
+                crate::Command::new("sh")
+                    .arg("-c")
+                    .arg("printf '%s' \"$PWD\"; exit 7"),
+            )
             .expect("configured nonzero exit code should be successful");
 
         assert_eq!(output.exit_code(), Some(7));
@@ -925,7 +1095,10 @@ mod tests {
             .path()
             .canonicalize()
             .expect("working directory should resolve to an absolute path");
-        assert_eq!(output.stdout(), actual_directory.to_string_lossy().as_bytes());
+        assert_eq!(
+            output.stdout(),
+            actual_directory.to_string_lossy().as_bytes()
+        );
     }
 
     #[cfg(unix)]
@@ -937,7 +1110,11 @@ mod tests {
         assert!(strict.configured_success_exit_codes().is_empty());
 
         let error = strict
-            .run(crate::Command::new("sh").arg("-c").arg("printf retained; exit 0"))
+            .run(
+                crate::Command::new("sh")
+                    .arg("-c")
+                    .arg("printf retained; exit 0"),
+            )
             .expect_err("an empty success-code set must reject every exit status");
         assert_eq!(error.kind(), CommandErrorKind::UnexpectedExit);
         assert!(matches!(
@@ -968,7 +1145,9 @@ mod tests {
                 expected,
             } if expected == &[0, 7]
         ));
-        let output = error.output().expect("failed command output should be retained");
+        let output = error
+            .output()
+            .expect("failed command output should be retained");
         assert_eq!(output.stdout(), b"stdout");
         assert_eq!(output.stderr(), b"stderr");
     }
@@ -1015,7 +1194,10 @@ mod tests {
             .expect_err("a stopped start gate should reject the command before spawn");
 
         assert_eq!(error.kind(), CommandErrorKind::CancelledBeforeStart);
-        assert_eq!(gate.stop_reason(), Some(qubit_operation::StopReason::UserCancelled));
+        assert_eq!(
+            gate.stop_reason(),
+            Some(qubit_operation::StopReason::UserCancelled)
+        );
     }
 
     #[cfg(unix)]
@@ -1041,7 +1223,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_runner_truncation_policy_controls_successful_command_result() {
-        let command = || crate::Command::new("sh").arg("-c").arg("printf truncate-me");
+        let command = || {
+            crate::Command::new("sh")
+                .arg("-c")
+                .arg("printf truncate-me")
+        };
         let error = CommandRunner::without_timeout()
             .max_stdout_bytes(3)
             .fail_on_output_truncation(true)
@@ -1061,10 +1247,14 @@ mod tests {
 
     #[test]
     fn test_validate_prepared_files_rejects_owned_file_aliases_and_path_tees() {
-        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let manager =
+            OperationManager::new(ManagerOptions::default()).expect("manager should start");
         let outcome = manager
             .run(qubit_operation::OperationOptions::default(), |scope| {
-                let shared = managed_file(&scope, tempfile::tempfile().expect("fixture file should open"));
+                let shared = managed_file(
+                    &scope,
+                    tempfile::tempfile().expect("fixture file should open"),
+                );
                 let same_stdin_and_stdout = PreparedFiles::new(
                     Some(shared.clone()),
                     Some(PreparedSink {
@@ -1081,10 +1271,11 @@ mod tests {
                 .expect_err("stdin and stdout must not identify one file");
                 assert!(matches!(
                     error.reason(),
-                    CommandErrorReason::WriteOutputFailed {
-                        stream: OutputStream::Stdout,
-                        ..
-                    }
+                    CommandErrorReason::FilePreparationFailed {
+                        stage: crate::FilePreparationStage::Validation,
+                        direction: Some(crate::FilePreparationDirection::Stdout),
+                        source,
+                    } if source.kind() == io::ErrorKind::InvalidInput
                 ));
 
                 let same_outputs = PreparedFiles::new(
@@ -1106,10 +1297,11 @@ mod tests {
                 .expect_err("stdout and stderr must not identify one file");
                 assert!(matches!(
                     error.reason(),
-                    CommandErrorReason::WriteOutputFailed {
-                        stream: OutputStream::Stderr,
-                        ..
-                    }
+                    CommandErrorReason::FilePreparationFailed {
+                        stage: crate::FilePreparationStage::Validation,
+                        direction: Some(crate::FilePreparationDirection::Stderr),
+                        source,
+                    } if source.kind() == io::ErrorKind::InvalidInput
                 ));
 
                 let same_stdin_and_stderr = PreparedFiles::new(
@@ -1128,10 +1320,11 @@ mod tests {
                 .expect_err("stdin and stderr must not identify one file");
                 assert!(matches!(
                     error.reason(),
-                    CommandErrorReason::WriteOutputFailed {
-                        stream: OutputStream::Stdout,
-                        ..
-                    }
+                    CommandErrorReason::FilePreparationFailed {
+                        stage: crate::FilePreparationStage::Validation,
+                        direction: Some(crate::FilePreparationDirection::Stderr),
+                        source,
+                    } if source.kind() == io::ErrorKind::InvalidInput
                 ));
 
                 let path_tee = tempfile::NamedTempFile::new().expect("tee path should be created");
@@ -1151,10 +1344,11 @@ mod tests {
                 .expect_err("owned sinks cannot be combined with path tees");
                 assert!(matches!(
                     error.reason(),
-                    CommandErrorReason::WriteOutputFailed {
-                        stream: OutputStream::Stdout,
-                        ..
-                    }
+                    CommandErrorReason::FilePreparationFailed {
+                        stage: crate::FilePreparationStage::Validation,
+                        direction: Some(crate::FilePreparationDirection::Stdout),
+                        source,
+                    } if source.kind() == io::ErrorKind::InvalidInput
                 ));
 
                 let stderr_with_path = PreparedFiles::new(
@@ -1173,10 +1367,11 @@ mod tests {
                 .expect_err("an owned stderr sink cannot be combined with a path tee");
                 assert!(matches!(
                     error.reason(),
-                    CommandErrorReason::WriteOutputFailed {
-                        stream: OutputStream::Stdout,
-                        ..
-                    }
+                    CommandErrorReason::FilePreparationFailed {
+                        stage: crate::FilePreparationStage::Validation,
+                        direction: Some(crate::FilePreparationDirection::Stderr),
+                        source,
+                    } if source.kind() == io::ErrorKind::InvalidInput
                 ));
                 Ok::<_, std::convert::Infallible>(())
             })
@@ -1186,14 +1381,70 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn test_commit_rejects_managed_file_replaced_with_path_tee_after_preparation() {
+        let manager =
+            OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let outcome = manager
+            .run(qubit_operation::OperationOptions::default(), |scope| {
+                for direction in [OutputStream::Stdout, OutputStream::Stderr] {
+                    let directory = tempfile::tempdir().expect("directory should be created");
+                    let owned_path = directory.path().join("owned");
+                    let tee_path = directory.path().join("tee");
+                    std::fs::write(&owned_path, b"preserve owned bytes")
+                        .expect("owned file should be written");
+                    std::fs::write(&tee_path, b"preflight target")
+                        .expect("tee path should be created");
+                    let owned = File::open(&owned_path).expect("owned input should open");
+                    let prepared = PreparedCommand::prepare(
+                        crate::Command::new("unused-test-program"),
+                        &RedactionPolicy::default(),
+                        None,
+                        (direction == OutputStream::Stdout).then_some(tee_path.as_path()),
+                        (direction == OutputStream::Stderr).then_some(tee_path.as_path()),
+                        false,
+                    )
+                    .expect("tee should pass path preflight");
+                    std::fs::remove_file(&tee_path).expect("preflight tee should be replaceable");
+                    std::fs::hard_link(&owned_path, &tee_path)
+                        .expect("tee should be replaced with an owned-file alias");
+                    let files = PreparedFiles::new(Some(managed_file(&scope, owned)), None, None);
+
+                    let error = match prepared.commit_with_managed_files(Some(&files)) {
+                        Err(error) => error,
+                        Ok(_) => panic!("commit must check the final tee handle identity"),
+                    };
+                    assert!(matches!(
+                        error.reason(),
+                        CommandErrorReason::FilePreparationFailed {
+                            stage: crate::FilePreparationStage::Validation,
+                            direction: Some(actual),
+                            source,
+                        } if *actual == if direction == OutputStream::Stdout {
+                            crate::FilePreparationDirection::Stdout
+                        } else {
+                            crate::FilePreparationDirection::Stderr
+                        } && source.kind() == io::ErrorKind::InvalidInput
+                    ));
+                    assert_eq!(std::fs::read(&owned_path).unwrap(), b"preserve owned bytes");
+                }
+                Ok::<_, std::convert::Infallible>(())
+            })
+            .expect("commit identity test should finish");
+        assert!(matches!(outcome, OperationOutcome::Succeeded(())));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_apply_prepared_files_reports_read_only_sink_truncation_failure() {
-        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let manager =
+            OperationManager::new(ManagerOptions::default()).expect("manager should start");
         let outcome = manager
             .run(qubit_operation::OperationOptions::default(), |scope| {
                 let fixture = tempfile::NamedTempFile::new().expect("sink fixture should open");
                 std::fs::write(fixture.path(), b"preserve this content")
                     .expect("sink fixture content should be written");
-                let read_only_sink = File::open(fixture.path()).expect("read-only sink should open");
+                let read_only_sink =
+                    File::open(fixture.path()).expect("read-only sink should open");
                 let sink = managed_file(&scope, read_only_sink);
                 let files = PreparedFiles::new(
                     None,
@@ -1207,8 +1458,13 @@ mod tests {
                     .commit()
                     .expect("prepared command should commit");
 
-                let error = apply_prepared_files("read-only-sink-test", &files, &mut committed, Some(&scope))
-                    .expect_err("a read-only output sink cannot be truncated");
+                let error = apply_prepared_files(
+                    "read-only-sink-test",
+                    &files,
+                    &mut committed,
+                    Some(&scope),
+                )
+                .expect_err("a read-only output sink cannot be truncated");
                 assert!(matches!(
                     error.reason(),
                     CommandErrorReason::FilePreparationFailed {
@@ -1218,7 +1474,8 @@ mod tests {
                     } if source.raw_os_error().is_some()
                 ));
                 assert_eq!(
-                    std::fs::read(fixture.path()).expect("failed preparation must preserve file bytes"),
+                    std::fs::read(fixture.path())
+                        .expect("failed preparation must preserve file bytes"),
                     b"preserve this content"
                 );
                 Ok::<_, std::convert::Infallible>(())
@@ -1230,19 +1487,26 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_apply_prepared_files_uses_stdin_and_sink_dispositions() {
-        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let manager =
+            OperationManager::new(ManagerOptions::default()).expect("manager should start");
         let outcome = manager
             .run(qubit_operation::OperationOptions::default(), |scope| {
                 let mut stdin = tempfile::tempfile().expect("stdin fixture should open");
-                stdin.write_all(b"owned stdin").expect("stdin bytes should write");
+                stdin
+                    .write_all(b"owned stdin")
+                    .expect("stdin bytes should write");
                 stdin.seek(SeekFrom::Start(0)).expect("stdin should rewind");
                 let stdin = managed_file(&scope, stdin);
 
                 let mut stdout = tempfile::tempfile().expect("stdout fixture should open");
-                stdout.write_all(b"replace me").expect("stdout prefix should write");
+                stdout
+                    .write_all(b"replace me")
+                    .expect("stdout prefix should write");
                 let stdout = managed_file(&scope, stdout);
                 let mut stderr = tempfile::tempfile().expect("stderr fixture should open");
-                stderr.write_all(b"preserve").expect("stderr prefix should write");
+                stderr
+                    .write_all(b"preserve")
+                    .expect("stderr prefix should write");
                 let stderr = managed_file(&scope, stderr);
                 let files = PreparedFiles::new(
                     Some(stdin),
@@ -1270,19 +1534,27 @@ mod tests {
                     .expect("stdin file should be connected to the command");
                 assert_eq!(output.stdout, b"owned stdin");
 
-                let stdout_tee = committed.stdout_tee.as_mut().expect("stdout tee should be installed");
+                let stdout_tee = committed
+                    .stdout_tee
+                    .as_mut()
+                    .expect("stdout tee should be installed");
                 stdout_tee
                     .file()
                     .write_all(b"fresh stdout")
                     .expect("stdout tee should write");
-                let stderr_tee = committed.stderr_tee.as_mut().expect("stderr tee should be installed");
+                let stderr_tee = committed
+                    .stderr_tee
+                    .as_mut()
+                    .expect("stderr tee should be installed");
                 stderr_tee
                     .file()
                     .write_all(b" appended")
                     .expect("stderr tee should write");
 
                 let mut actual_stdout = stdout.lock().expect("stdout fixture should lock");
-                actual_stdout.seek(SeekFrom::Start(0)).expect("stdout should rewind");
+                actual_stdout
+                    .seek(SeekFrom::Start(0))
+                    .expect("stdout should rewind");
                 let mut stdout_bytes = Vec::new();
                 actual_stdout
                     .read_to_end(&mut stdout_bytes)
@@ -1290,7 +1562,9 @@ mod tests {
                 assert_eq!(stdout_bytes, b"fresh stdout");
 
                 let mut actual_stderr = stderr.lock().expect("stderr fixture should lock");
-                actual_stderr.seek(SeekFrom::Start(0)).expect("stderr should rewind");
+                actual_stderr
+                    .seek(SeekFrom::Start(0))
+                    .expect("stderr should rewind");
                 let mut stderr_bytes = Vec::new();
                 actual_stderr
                     .read_to_end(&mut stderr_bytes)
@@ -1399,7 +1673,10 @@ impl fmt::Debug for CommandRunner {
             .field("success_exit_codes", &self.success_exit_codes)
             .field("disable_logging", &self.disable_logging)
             .field("fail_on_output_truncation", &self.fail_on_output_truncation)
-            .field("diagnostic_redaction_policy", &self.diagnostic_redaction_policy)
+            .field(
+                "diagnostic_redaction_policy",
+                &self.diagnostic_redaction_policy,
+            )
             .field("max_stdout_bytes", &self.max_stdout_bytes)
             .field("max_stderr_bytes", &self.max_stderr_bytes)
             .field("max_total_output_bytes", &self.max_total_output_bytes)
@@ -1503,7 +1780,11 @@ impl CommandRunner {
     /// cancellation handle has already been requested before command
     /// preparation, and maps all process, I/O, and timeout failures as
     /// described by [`CommandRunner::run`].
-    pub fn run_with(&self, command: Command, options: CommandRunOptions) -> Result<CommandOutput, CommandError> {
+    pub fn run_with(
+        &self,
+        command: Command,
+        options: CommandRunOptions,
+    ) -> Result<CommandOutput, CommandError> {
         self.run_with_tree_policy(command, options, RunTreePolicy::default())
     }
 
@@ -1565,7 +1846,10 @@ impl CommandRunner {
             stderr_file.as_deref(),
             session_bridge.is_some(),
         )?;
-        if cancellation.as_ref().is_some_and(CommandCancellation::is_cancelled) {
+        if cancellation
+            .as_ref()
+            .is_some_and(CommandCancellation::is_cancelled)
+        {
             return Err(CommandError::from_reason(
                 prepared.command_text,
                 CommandErrorReason::CancelledBeforeStart,
@@ -1573,8 +1857,9 @@ impl CommandRunner {
             ));
         }
         if let Some(files) = prepared_files.as_ref() {
-            validate_prepared_files(&prepared.command_text, files, &prepared)
-                .map_err(|error| error.into_file_preparation_failure(crate::FilePreparationStage::Validation))?;
+            validate_prepared_files(&prepared.command_text, files, &prepared).map_err(|error| {
+                error.into_file_preparation_failure(crate::FilePreparationStage::Validation)
+            })?;
         }
         let _start_permit = match start_gate {
             Some(gate) => match gate.authorize() {
@@ -1600,7 +1885,7 @@ impl CommandRunner {
             ));
         }
         let command_diagnostic = prepared.command_text.clone();
-        let mut committed = prepared.commit()?;
+        let mut committed = prepared.commit_with_managed_files(prepared_files.as_ref())?;
         if let Some(files) = prepared_files.as_ref() {
             apply_prepared_files(&command_diagnostic, files, &mut committed, file_scope)?;
         }
@@ -1618,7 +1903,9 @@ impl CommandRunner {
 
         let manage_process_tree = managed_policy == Some(ProcessTreePolicy::Managed)
             || (managed_policy != Some(ProcessTreePolicy::DirectChild)
-                && (self.timeout.is_some() || cancellation.is_some() || self.max_total_output_bytes.is_some()));
+                && (self.timeout.is_some()
+                    || cancellation.is_some()
+                    || self.max_total_output_bytes.is_some()));
         let child_process = match spawn_child(process_command, manage_process_tree) {
             Ok(child_process) => child_process,
             Err(source) => return Err(spawn_failed(&command_text, source)),
@@ -1632,7 +1919,9 @@ impl CommandRunner {
         );
         let total_budget = self
             .max_total_output_bytes
-            .map(|limit| TotalOutputBudget::new(limit, self.max_stdout_bytes, self.max_stderr_bytes))
+            .map(|limit| {
+                TotalOutputBudget::new(limit, self.max_stdout_bytes, self.max_stderr_bytes)
+            })
             .map(Arc::new);
         let started_at = self.timer.clock().now();
 
@@ -1661,8 +1950,10 @@ impl CommandRunner {
         };
         let stdout_reader = match start_output_reader(&command_text, OutputStream::Stdout, || {
             read_output_stream(stdout, {
-                let mut options =
-                    OutputCaptureOptions::new(self.max_stdout_bytes, stdout_tee.map(FileTee::into_output_tee));
+                let mut options = OutputCaptureOptions::new(
+                    self.max_stdout_bytes,
+                    stdout_tee.map(FileTee::into_output_tee),
+                );
                 if let Some(bridge) = session_bridge.as_ref() {
                     options = options.with_session_bridge(Arc::clone(bridge), OutputStream::Stdout);
                 }
@@ -1679,8 +1970,10 @@ impl CommandRunner {
         starting_command.set_stdout_reader(stdout_reader);
         let stderr_reader = match start_output_reader(&command_text, OutputStream::Stderr, || {
             read_output_stream(stderr, {
-                let mut options =
-                    OutputCaptureOptions::new(self.max_stderr_bytes, stderr_tee.map(FileTee::into_output_tee));
+                let mut options = OutputCaptureOptions::new(
+                    self.max_stderr_bytes,
+                    stderr_tee.map(FileTee::into_output_tee),
+                );
                 if let Some(bridge) = session_bridge.as_ref() {
                     options = options.with_session_bridge(Arc::clone(bridge), OutputStream::Stderr);
                 }
@@ -1696,8 +1989,11 @@ impl CommandRunner {
         };
         starting_command.set_stderr_reader(stderr_reader);
         if let Err(source) = self.timer.clock().now().duration_since(started_at) {
-            let error =
-                CommandError::from_reason(command_text.clone(), CommandErrorReason::TimeFailed { source }, None);
+            let error = CommandError::from_reason(
+                command_text.clone(),
+                CommandErrorReason::TimeFailed { source },
+                None,
+            );
             return Err(starting_command.abort_managed(error));
         }
 
@@ -1722,13 +2018,18 @@ impl CommandRunner {
             },
         )
         .wait_for_completion(self.timeout)?;
-        let FinishedCommand { command_text, output } = finished;
+        let FinishedCommand {
+            command_text,
+            output,
+        } = finished;
 
         if output
             .exit_code()
             .is_some_and(|exit_code| self.success_exit_codes.contains(&exit_code))
         {
-            if self.fail_on_output_truncation && (output.stdout_truncated() || output.stderr_truncated()) {
+            if self.fail_on_output_truncation
+                && (output.stdout_truncated() || output.stderr_truncated())
+            {
                 if !self.disable_logging {
                     log::debug!(
                         "Finished command `{}` with truncated output in {:?}.",
@@ -1743,12 +2044,20 @@ impl CommandRunner {
                 ));
             }
             if !self.disable_logging {
-                log::debug!("Finished command `{}` in {:?}.", command_text, output.elapsed());
+                log::debug!(
+                    "Finished command `{}` in {:?}.",
+                    command_text,
+                    output.elapsed()
+                );
             }
             Ok(output)
         } else {
             if !self.disable_logging {
-                log::debug!("Command `{}` exited with code {:?}.", command_text, output.exit_code());
+                log::debug!(
+                    "Command `{}` exited with code {:?}.",
+                    command_text,
+                    output.exit_code()
+                );
             }
             Err(CommandError::from_reason(
                 command_text,

@@ -73,7 +73,10 @@ impl PreparedCommand {
         process_command.stdout(Stdio::piped());
         process_command.stderr(Stdio::piped());
 
-        if let Some(working_directory) = command.working_directory_override().or(default_working_directory) {
+        if let Some(working_directory) = command
+            .working_directory_override()
+            .or(default_working_directory)
+        {
             process_command.current_dir(working_directory);
         }
 
@@ -119,7 +122,15 @@ impl PreparedCommand {
     }
 
     /// Commits tee file creation and attaches the validated stdin file.
-    pub(in crate::command_runner) fn commit(mut self) -> Result<CommittedCommand, CommandError> {
+    #[cfg(test)]
+    pub(in crate::command_runner) fn commit(self) -> Result<CommittedCommand, CommandError> {
+        self.commit_with_managed_files(None)
+    }
+
+    pub(in crate::command_runner) fn commit_with_managed_files(
+        mut self,
+        managed_files: Option<&crate::execution::contracts::PreparedFiles>,
+    ) -> Result<CommittedCommand, CommandError> {
         let mut io_files = IoFiles {
             stdin_bytes: self.stdin_bytes.take(),
             stdin_path: self.stdin_path.take(),
@@ -127,11 +138,12 @@ impl PreparedCommand {
             stdout_tee: None,
             stderr_tee: None,
         };
-        io_files.commit(
+        io_files.commit_with_managed_files(
             &self.command_text,
             self.stdout_file_path.as_deref(),
             self.stderr_file_path.as_deref(),
             &mut self.process_command,
+            managed_files,
         )?;
         Ok(CommittedCommand {
             command_text: self.command_text,

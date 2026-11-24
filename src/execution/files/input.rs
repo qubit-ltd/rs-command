@@ -31,7 +31,10 @@ impl ResourceInput for CommandResourceRunOptions {
     /// # Parameters
     /// * `self`: Supplies the self value used by this operation.
     /// * `scope`: Supplies the scope value used by this operation.
-    fn prepare_files(self: Box<Self>, scope: &OperationScope) -> Result<PreparedFiles, FilePreparationFailure> {
+    fn prepare_files(
+        self: Box<Self>,
+        scope: &OperationScope,
+    ) -> Result<PreparedFiles, FilePreparationFailure> {
         (*self).prepare_with_directory(scope, None, true)
     }
 
@@ -133,15 +136,17 @@ impl CommandResourceRunOptions {
         .into_iter()
         .flatten()
         .collect();
-        if let Err(error) = validate_files(&files).and_then(|()| {
-            let paths: Vec<_> = tee_paths.iter().map(|(name, path)| (*name, path.as_path())).collect();
+        if let Err(failure) = validate_files(&files).and_then(|()| {
+            let paths: Vec<_> = tee_paths
+                .iter()
+                .map(|(name, path)| (*name, path.as_path()))
+                .collect();
             validate_tee_paths(&files, &paths)
         }) {
-            let direction = preparation_direction(&error);
             return Err(managed_failure(
-                error,
+                failure.source,
                 crate::FilePreparationStage::Validation,
-                direction,
+                Some(failure.direction),
                 None,
                 Some(restore_input(options, input, stdout, stderr)),
             ));
@@ -153,9 +158,8 @@ impl CommandResourceRunOptions {
             match scope.reserve_resource() {
                 Ok(reservation) => reservations.push(reservation),
                 Err(error) => {
-                    let kind = format!("resource capacity reservation failed: {error:?}");
                     return Err(managed_failure(
-                        io::Error::other(kind),
+                        io::Error::other(error),
                         crate::FilePreparationStage::ResourceReservation,
                         None,
                         None,
@@ -171,7 +175,7 @@ impl CommandResourceRunOptions {
         let prepared = match registered {
             Ok(prepared) => prepared,
             Err(error) => {
-                let (error, recovered, mut raw) = *error;
+                let (source, direction, recovered, mut raw) = *error;
                 let raw_input = restore_input(
                     options,
                     raw[0].take(),
@@ -179,9 +183,9 @@ impl CommandResourceRunOptions {
                     raw[2].take().zip(stderr_policy),
                 );
                 return Err(managed_failure(
-                    error,
+                    source,
                     crate::FilePreparationStage::Registration,
-                    None,
+                    Some(direction),
                     recovered,
                     Some(raw_input),
                 ));
@@ -206,6 +210,7 @@ impl CommandResourceRunOptions {
     /// * `scope`: Operation scope that owns prepared file resources.
     /// * `snapshot`: Submission-time path snapshot used for tee identity
     ///   checks.
+    /// * `command_stdin`: Command stdin category checked against owned stdin.
     /// * `session_stdin`: Whether the command uses a session stdin pipe.
     ///
     /// # Returns
@@ -214,12 +219,19 @@ impl CommandResourceRunOptions {
         self,
         scope: &OperationScope,
         snapshot: &ExecutionSnapshot,
+        command_stdin: crate::internal::command_stdin::CommandStdinMode,
         session_stdin: bool,
     ) -> Result<PreparedFiles, ManagedPreparationFailure> {
-        if session_stdin && self.configured_stdin().is_some() {
+        let command_uses_file =
+            command_stdin == crate::internal::command_stdin::CommandStdinMode::File;
+        let command_uses_bytes =
+            command_stdin == crate::internal::command_stdin::CommandStdinMode::Bytes;
+        if (session_stdin && (self.configured_stdin().is_some() || command_uses_file))
+            || (self.configured_stdin().is_some() && (command_uses_file || command_uses_bytes))
+        {
             let source = io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "session stdin cannot be combined with an owned stdin file",
+                "configured stdin sources cannot be combined",
             );
             return Err(managed_failure(
                 source,
@@ -230,7 +242,8 @@ impl CommandResourceRunOptions {
             ));
         }
         let value = self;
-        let has_owned_output = value.configured_stdout().is_some() || value.configured_stderr().is_some();
+        let has_owned_output =
+            value.configured_stdout().is_some() || value.configured_stderr().is_some();
         let has_path_output = value.ordinary_options().configured_stdout_file().is_some()
             || value.ordinary_options().configured_stderr_file().is_some();
         if has_owned_output && has_path_output {
@@ -277,26 +290,6 @@ fn managed_failure(
             input,
             prepared: prepared.map(Box::new),
         },
-    }
-}
-
-/// Infers a stream from a validation error's stable safe prefix.
-///
-/// # Parameters
-/// * `error`: Validation error returned by the file identity checks.
-///
-/// # Returns
-/// The direction named by the validation message, when available.
-fn preparation_direction(error: &io::Error) -> Option<crate::FilePreparationDirection> {
-    let message = error.to_string();
-    if message.starts_with("stdin") {
-        Some(crate::FilePreparationDirection::Stdin)
-    } else if message.starts_with("stdout") {
-        Some(crate::FilePreparationDirection::Stdout)
-    } else if message.starts_with("stderr") {
-        Some(crate::FilePreparationDirection::Stderr)
-    } else {
-        None
     }
 }
 
@@ -364,7 +357,8 @@ mod tests {
 
     #[test]
     fn test_managed_reservation_failure_keeps_typed_stage_and_owner() {
-        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let manager =
+            OperationManager::new(ManagerOptions::default()).expect("manager should start");
         let output = tempfile::NamedTempFile::new().expect("sink should be created");
         std::fs::write(output.path(), b"must survive").expect("sink should be populated");
         let sink_path = output.path().to_path_buf();
@@ -381,29 +375,52 @@ mod tests {
                     .expect("sink should open");
                 let error = match CommandResourceRunOptions::new()
                     .stdout_sink(file, FileSinkPolicy::Truncate)
-                    .prepare_for_managed(&scope, &ExecutionSnapshot::default(), false)
-                {
+                    .prepare_for_managed(
+                        &scope,
+                        &ExecutionSnapshot::default(),
+                        crate::internal::command_stdin::CommandStdinMode::Default,
+                        false,
+                    ) {
                     Ok(_) => panic!("zero resource capacity must reject preparation"),
                     Err(error) => error,
                 };
-                assert_eq!(error.phase, crate::FilePreparationStage::ResourceReservation);
+                assert_eq!(
+                    error.phase,
+                    crate::FilePreparationStage::ResourceReservation
+                );
                 assert_eq!(error.direction, None);
                 assert!(error.failure.input.is_some());
                 assert!(error.failure.prepared.is_none());
                 assert_eq!(error.source.kind(), std::io::ErrorKind::Other);
+                assert_eq!(
+                    error
+                        .source
+                        .get_ref()
+                        .and_then(|source| source
+                            .downcast_ref::<qubit_operation::ResourceCapacityError>()),
+                    Some(&qubit_operation::ResourceCapacityError::CapacityExceeded),
+                );
                 assert_eq!(std::fs::read(&sink_path).unwrap(), b"must survive");
                 drop(reservations);
                 Ok::<_, std::convert::Infallible>(())
             })
             .expect("preparation operation should finish");
-        assert!(matches!(outcome, qubit_operation::OperationOutcome::Succeeded(())));
+        assert!(matches!(
+            outcome,
+            qubit_operation::OperationOutcome::Succeeded(())
+        ));
     }
 
     #[test]
     fn test_helper_resource_reference_delays_scope_settlement_until_dropped() {
-        let _guard = PREPARATION_TEST_LOCK.lock().expect("test lock should be available");
-        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
-        let group = manager.group(GroupOptions { capacity: 2 }).expect("group should start");
+        let _guard = PREPARATION_TEST_LOCK
+            .lock()
+            .expect("test lock should be available");
+        let manager =
+            OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let group = manager
+            .group(GroupOptions { capacity: 2 })
+            .expect("group should start");
         let (send, receive) = mpsc::sync_channel(1);
         let input = tempfile::tempfile().expect("stdin file should be created");
         let mut handle = group
@@ -411,8 +428,14 @@ mod tests {
                 let prepared = Box::new(CommandResourceRunOptions::new().stdin_file(input))
                     .prepare_files(&scope)
                     .expect("stdin should be registered");
-                send.send(prepared.stdin.as_ref().expect("stdin owner should exist").clone())
-                    .expect("test should receive retained helper reference");
+                send.send(
+                    prepared
+                        .stdin
+                        .as_ref()
+                        .expect("stdin owner should exist")
+                        .clone(),
+                )
+                .expect("test should receive retained helper reference");
                 Ok::<_, ()>(())
             })
             .expect("operation should be accepted");
@@ -426,7 +449,10 @@ mod tests {
         let pending = handle
             .wait_settlement_for(Duration::from_millis(20))
             .expect("settlement observation should work");
-        assert!(matches!(pending, qubit_operation::SettlementWait::Pending(_)));
+        assert!(matches!(
+            pending,
+            qubit_operation::SettlementWait::Pending(_)
+        ));
         drop(helper_reference);
         let settled = handle
             .wait_settlement_for(Duration::from_secs(5))
@@ -436,12 +462,17 @@ mod tests {
 
     #[test]
     fn test_commit_failure_retains_registered_and_unregistered_file_owners() {
-        let _guard = PREPARATION_TEST_LOCK.lock().expect("test lock should be available");
+        let _guard = PREPARATION_TEST_LOCK
+            .lock()
+            .expect("test lock should be available");
         use std::sync::Arc;
         use std::sync::Barrier;
 
-        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
-        let group = manager.group(GroupOptions { capacity: 4 }).expect("group should start");
+        let manager =
+            OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let group = manager
+            .group(GroupOptions { capacity: 4 })
+            .expect("group should start");
         let gate = Arc::new((Barrier::new(2), Barrier::new(2)));
         let operation_gate = Arc::clone(&gate);
         let first = tempfile::NamedTempFile::new().expect("first file should be created");
@@ -449,7 +480,10 @@ mod tests {
         let (send, receive) = mpsc::sync_channel(1);
         let mut handle = group
             .submit(OperationOptions::default(), move |scope| {
-                super::super::prepared_files::gate_after_first_registration(Some((scope.id(), operation_gate)));
+                super::super::prepared_files::gate_after_first_registration(Some((
+                    scope.id(),
+                    operation_gate,
+                )));
                 let failure = Box::new(
                     CommandResourceRunOptions::new()
                         .stdout_sink(
@@ -463,7 +497,8 @@ mod tests {
                 )
                 .prepare_files(&scope)
                 .expect_err("stop between commits should reject the second commit");
-                send.send(failure).expect("failure should reach test thread");
+                send.send(failure)
+                    .expect("failure should reach test thread");
                 Ok::<_, ()>(())
             })
             .expect("operation should be accepted");
@@ -478,12 +513,22 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("preparation failure should arrive");
         super::super::prepared_files::gate_after_first_registration(None);
-        assert!(failure.prepared.is_some(), "first committed owner must be retained");
-        assert!(failure.input.is_some(), "second uncommitted owner must be recoverable");
+        assert!(
+            failure.prepared.is_some(),
+            "first committed owner must be retained"
+        );
+        assert!(
+            failure.input.is_some(),
+            "second uncommitted owner must be recoverable"
+        );
         let _ = handle.wait_outcome();
 
-        let recovered_input = failure.input.take().expect("raw second file owner should be returned");
-        let recovery_manager = OperationManager::new(ManagerOptions::default()).expect("recovery manager should start");
+        let recovered_input = failure
+            .input
+            .take()
+            .expect("raw second file owner should be returned");
+        let recovery_manager = OperationManager::new(ManagerOptions::default())
+            .expect("recovery manager should start");
         let recovery_group = recovery_manager
             .group(GroupOptions { capacity: 2 })
             .expect("recovery group should start");
@@ -504,7 +549,9 @@ mod tests {
 
     #[test]
     fn test_snapshot_directory_rejects_relative_stderr_alias_without_truncating_sink() {
-        let _guard = PREPARATION_TEST_LOCK.lock().expect("test lock should be available");
+        let _guard = PREPARATION_TEST_LOCK
+            .lock()
+            .expect("test lock should be available");
         let snapshot_dir = tempfile::tempdir().expect("snapshot directory should be created");
         let output = tempfile::NamedTempFile::new().expect("stderr sink should be created");
         std::fs::write(output.path(), b"must survive").expect("sink should be populated");
@@ -526,8 +573,11 @@ mod tests {
             environment: Vec::new(),
         };
 
-        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
-        let group = manager.group(GroupOptions { capacity: 2 }).expect("group should start");
+        let manager =
+            OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let group = manager
+            .group(GroupOptions { capacity: 2 })
+            .expect("group should start");
         let completion = group
             .run_and_settle(OperationOptions::default(), move |scope| {
                 let failure = Box::new(
@@ -537,8 +587,14 @@ mod tests {
                 )
                 .prepare_files_with_snapshot(&scope, &snapshot)
                 .expect_err("snapshot-relative stderr alias must be rejected");
-                assert!(failure.input.is_some(), "the stderr owner must remain recoverable");
-                assert!(failure.prepared.is_none(), "validation must fail before registration");
+                assert!(
+                    failure.input.is_some(),
+                    "the stderr owner must remain recoverable"
+                );
+                assert!(
+                    failure.prepared.is_none(),
+                    "validation must fail before registration"
+                );
                 assert_eq!(std::fs::read(output_path).unwrap(), b"must survive");
                 Ok::<_, ()>(())
             })

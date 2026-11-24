@@ -27,6 +27,7 @@ use crate::CommandError;
 use crate::CommandErrorReason;
 use crate::OutputStream;
 use crate::command_stdin::CommandStdin;
+use crate::execution::contracts::PreparedFiles;
 
 /// Opened stdin path, file handle, and optional buffered input bytes.
 type PreparedInputParts = (Option<PathBuf>, Option<File>, Option<Vec<u8>>);
@@ -117,7 +118,11 @@ pub(in crate::command_runner) fn open_output_candidate(path: &Path) -> io::Resul
 /// Returns the operating-system error reported while opening `path`.
 #[cfg(not(unix))]
 pub(in crate::command_runner) fn open_output_candidate(path: &Path) -> io::Result<File> {
-    OpenOptions::new().create(true).write(true).truncate(false).open(path)
+    OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
 }
 
 /// Clears the temporary nonblocking flag from a validated Unix file handle.
@@ -257,12 +262,24 @@ impl IoFiles {
     /// not a regular file, conflicts with stdin or the other output file, or
     /// cannot be truncated. A failure can occur after earlier file creation
     /// or truncation side effects.
+    #[cfg(test)]
     pub(in crate::command_runner) fn commit(
         &mut self,
         command: &str,
         stdout_path: Option<&Path>,
         stderr_path: Option<&Path>,
         process_command: &mut ProcessCommand,
+    ) -> Result<(), CommandError> {
+        self.commit_with_managed_files(command, stdout_path, stderr_path, process_command, None)
+    }
+
+    pub(in crate::command_runner) fn commit_with_managed_files(
+        &mut self,
+        command: &str,
+        stdout_path: Option<&Path>,
+        stderr_path: Option<&Path>,
+        process_command: &mut ProcessCommand,
+        managed_files: Option<&PreparedFiles>,
     ) -> Result<(), CommandError> {
         let stdout_tee = open_output(command, OutputStream::Stdout, stdout_path)?;
         let stderr_tee = open_output(command, OutputStream::Stderr, stderr_path)?;
@@ -271,6 +288,13 @@ impl IoFiles {
             self.stdin_path.as_deref().zip(self.stdin_file.as_ref()),
             stdout_tee.as_ref().map(|tee| (tee.path(), tee.file())),
             stderr_tee.as_ref().map(|tee| (tee.path(), tee.file())),
+        )?;
+        validate_managed_file_identities(
+            command,
+            self.stdin_file.as_ref(),
+            stdout_tee.as_ref().map(FileTee::file),
+            stderr_tee.as_ref().map(FileTee::file),
+            managed_files,
         )?;
         truncate_outputs_with(
             command,
@@ -287,6 +311,101 @@ impl IoFiles {
         self.stderr_tee = stderr_tee;
         Ok(())
     }
+}
+
+/// Compares command file handles with the handles retained by managed resources.
+fn validate_managed_file_identities(
+    command: &str,
+    command_stdin: Option<&File>,
+    stdout_tee: Option<&File>,
+    stderr_tee: Option<&File>,
+    managed: Option<&PreparedFiles>,
+) -> Result<(), CommandError> {
+    let Some(managed) = managed else {
+        return Ok(());
+    };
+    let mut opened = Vec::new();
+    if let Some(file) = command_stdin {
+        opened.push((
+            "stdin",
+            file.try_clone()
+                .map_err(|source| managed_identity_error(command, "stdin", source))?,
+        ));
+    }
+    if let Some(resource) = managed.stdin.as_ref() {
+        let file = resource
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .try_clone()
+            .map_err(|source| managed_identity_error(command, "stdin", source))?;
+        opened.push(("stdin", file));
+    }
+    for (direction, sink) in [
+        ("stdout", managed.stdout.as_ref()),
+        ("stderr", managed.stderr.as_ref()),
+    ] {
+        if let Some(sink) = sink {
+            let file = sink
+                .file
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .try_clone()
+                .map_err(|source| managed_identity_error(command, direction, source))?;
+            opened.push((direction, file));
+        }
+    }
+    if let Some(file) = stdout_tee {
+        opened.push((
+            "stdout",
+            file.try_clone()
+                .map_err(|source| managed_identity_error(command, "stdout", source))?,
+        ));
+    }
+    if let Some(file) = stderr_tee {
+        opened.push((
+            "stderr",
+            file.try_clone()
+                .map_err(|source| managed_identity_error(command, "stderr", source))?,
+        ));
+    }
+    let mut identities = Vec::with_capacity(opened.len());
+    for (direction, file) in &opened {
+        let identity = Handle::from_file(
+            file.try_clone()
+                .map_err(|source| managed_identity_error(command, direction, source))?,
+        )
+        .map_err(|source| managed_identity_error(command, direction, source))?;
+        if identities.iter().any(|(_, existing)| existing == &identity) {
+            return Err(managed_identity_error(
+                command,
+                direction,
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "configured file streams identify the same file",
+                ),
+            ));
+        }
+        identities.push((direction, identity));
+    }
+    Ok(())
+}
+
+fn managed_identity_error(command: &str, direction: &str, source: io::Error) -> CommandError {
+    let direction = match direction {
+        "stdin" => crate::FilePreparationDirection::Stdin,
+        "stdout" => crate::FilePreparationDirection::Stdout,
+        "stderr" => crate::FilePreparationDirection::Stderr,
+        _ => unreachable!("all managed file directions are known"),
+    };
+    CommandError::from_reason(
+        command,
+        CommandErrorReason::FilePreparationFailed {
+            stage: crate::FilePreparationStage::Validation,
+            direction: Some(direction),
+            source,
+        },
+        None,
+    )
 }
 
 /// Opens stdin or configures a non-file stdin mode.
@@ -325,7 +444,8 @@ fn open_input(
         }
         CommandStdin::File(path) => {
             ensure_regular_input(command, &path)?;
-            let file = open_input_candidate(&path).map_err(|source| open_input_error(command, &path, source))?;
+            let file = open_input_candidate(&path)
+                .map_err(|source| open_input_error(command, &path, source))?;
             ensure_regular_input_handle(command, &path, &file)?;
             clear_nonblocking(&file).map_err(|source| open_input_error(command, &path, source))?;
             Ok((Some(path), Some(file), None))
@@ -348,12 +468,18 @@ fn open_input(
 /// # Errors
 ///
 /// Returns [CommandError] when the file cannot be opened.
-fn open_output(command: &str, stream: OutputStream, path: Option<&Path>) -> Result<Option<FileTee>, CommandError> {
+fn open_output(
+    command: &str,
+    stream: OutputStream,
+    path: Option<&Path>,
+) -> Result<Option<FileTee>, CommandError> {
     path.map(|path| {
         ensure_regular_output(command, stream, path)?;
-        let file = open_output_candidate(path).map_err(|source| open_output_error(command, stream, path, source))?;
+        let file = open_output_candidate(path)
+            .map_err(|source| open_output_error(command, stream, path, source))?;
         ensure_regular_output_handle(command, stream, path, &file)?;
-        clear_nonblocking(&file).map_err(|source| open_output_error(command, stream, path, source))?;
+        clear_nonblocking(&file)
+            .map_err(|source| open_output_error(command, stream, path, source))?;
         Ok(FileTee::new(file, path.to_path_buf()))
     })
     .transpose()
@@ -466,11 +592,16 @@ fn ensure_regular_input(command: &str, path: &Path) -> Result<(), CommandError> 
 /// Returns [`CommandError`] when an existing path is not
 /// an ordinary file, or [`CommandError`] when metadata
 /// inspection fails for a reason other than absence.
-fn ensure_regular_output(command: &str, stream: OutputStream, path: &Path) -> Result<(), CommandError> {
+fn ensure_regular_output(
+    command: &str,
+    stream: OutputStream,
+    path: &Path,
+) -> Result<(), CommandError> {
     match fs::metadata(path) {
         Ok(metadata) if metadata.file_type().is_file() => Ok(()),
         Ok(_) => Err(non_regular_output_error(command, stream, path)),
-        Err(source) if source.kind() == io::ErrorKind::NotFound => match fs::symlink_metadata(path) {
+        Err(source) if source.kind() == io::ErrorKind::NotFound => match fs::symlink_metadata(path)
+        {
             Ok(_) => Err(non_regular_output_error(command, stream, path)),
             Err(link_source) if link_source.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(link_source) => Err(inspect_error(command, path, link_source)),
@@ -560,7 +691,10 @@ fn validate_normalized_paths(
 ///
 /// Returns [CommandError] when the current directory or
 /// an existing path cannot be resolved.
-fn normalized_path(command: &str, path: Option<&Path>) -> Result<Option<Option<PathBuf>>, CommandError> {
+fn normalized_path(
+    command: &str,
+    path: Option<&Path>,
+) -> Result<Option<Option<PathBuf>>, CommandError> {
     path.map(|path| {
         let absolute = if path.is_absolute() {
             path.to_path_buf()
@@ -669,7 +803,10 @@ fn validate_file_identities(
 ///
 /// Returns [CommandError] when cloning or inspecting
 /// the file fails.
-fn file_handle(command: &str, file: Option<(&Path, &File)>) -> Result<Option<Handle>, CommandError> {
+fn file_handle(
+    command: &str,
+    file: Option<(&Path, &File)>,
+) -> Result<Option<Handle>, CommandError> {
     file.map(|(path, file)| {
         let clone = file
             .try_clone()
@@ -754,7 +891,12 @@ fn truncate_outputs_with(
     stdout_file: Option<&File>,
     stderr_path: Option<&Path>,
     stderr_file: Option<&File>,
-    mut truncate: impl FnMut(&str, OutputStream, Option<&Path>, Option<&File>) -> Result<(), CommandError>,
+    mut truncate: impl FnMut(
+        &str,
+        OutputStream,
+        Option<&Path>,
+        Option<&File>,
+    ) -> Result<(), CommandError>,
 ) -> Result<(), CommandError> {
     truncate(command, OutputStream::Stdout, stdout_path, stdout_file)?;
     truncate(command, OutputStream::Stderr, stderr_path, stderr_file)
@@ -860,7 +1002,12 @@ fn open_input_error(command: &str, path: &Path, source: io::Error) -> CommandErr
 /// * `stream` - Stream attributed to this reader.
 /// * `path` - Filesystem path involved in this operation.
 /// * `source` - Underlying I/O error to inspect or preserve.
-fn open_output_error(command: &str, stream: OutputStream, path: &Path, source: io::Error) -> CommandError {
+fn open_output_error(
+    command: &str,
+    stream: OutputStream,
+    path: &Path,
+    source: io::Error,
+) -> CommandError {
     CommandError::from_reason(
         command,
         CommandErrorReason::OpenOutputFailed {
@@ -950,7 +1097,12 @@ mod tests {
         );
         assert!(files.stdin_file.is_some());
         files
-            .commit("command", Some(stdout.path()), Some(stderr.path()), &mut process)
+            .commit(
+                "command",
+                Some(stdout.path()),
+                Some(stderr.path()),
+                &mut process,
+            )
             .expect("commit should attach stdin and prepare both output tees");
 
         assert_eq!(
@@ -978,7 +1130,10 @@ mod tests {
         )
         .expect("byte stdin should prepare");
 
-        assert_eq!(files.stdin_bytes.as_deref(), Some(b"buffered input".as_slice()));
+        assert_eq!(
+            files.stdin_bytes.as_deref(),
+            Some(b"buffered input".as_slice())
+        );
         assert!(files.stdin_file.is_none());
         assert!(files.stdout_tee.is_none());
         assert!(files.stderr_tee.is_none());
@@ -990,9 +1145,15 @@ mod tests {
         let input = directory.path().join("missing-input");
         let mut process = ProcessCommand::new("unused-test-program");
 
-        let error = IoFiles::prepare("command", CommandStdin::File(input.clone()), None, None, &mut process)
-            .err()
-            .expect("a missing stdin path should be rejected");
+        let error = IoFiles::prepare(
+            "command",
+            CommandStdin::File(input.clone()),
+            None,
+            None,
+            &mut process,
+        )
+        .err()
+        .expect("a missing stdin path should be rejected");
 
         assert_eq!(error.kind(), CommandErrorKind::OpenInputFailed);
         assert!(matches!(
@@ -1033,8 +1194,10 @@ mod tests {
         let directory = tempfile::tempdir().expect("directory fixture should be created");
         let stdout = directory.path().join("stdout");
         let stderr_alias = directory.path().join("stderr-alias");
-        std::fs::write(&stdout, b"preserve until validation").expect("stdout file should be populated");
-        std::fs::hard_link(&stdout, &stderr_alias).expect("hard link should share the output file identity");
+        std::fs::write(&stdout, b"preserve until validation")
+            .expect("stdout file should be populated");
+        std::fs::hard_link(&stdout, &stderr_alias)
+            .expect("hard link should share the output file identity");
         let mut process = ProcessCommand::new("unused-test-program");
         let mut files = IoFiles::prepare(
             "command",
@@ -1070,7 +1233,8 @@ mod tests {
         )
         .expect("an output under a missing parent is deferred until commit");
 
-        let error = match files.commit("command", Some(&missing_parent_output), None, &mut process) {
+        let error = match files.commit("command", Some(&missing_parent_output), None, &mut process)
+        {
             Err(error) => error,
             Ok(_) => panic!("commit cannot create an output whose parent is absent"),
         };
@@ -1166,10 +1330,13 @@ mod tests {
 
     #[test]
     fn test_prepare_rejects_relative_stdin_and_absolute_stdout_alias() {
-        let working_directory = std::env::current_dir().expect("working directory should be available");
-        let directory = tempfile::tempdir_in(&working_directory).expect("relative path fixture should be created");
+        let working_directory =
+            std::env::current_dir().expect("working directory should be available");
+        let directory = tempfile::tempdir_in(&working_directory)
+            .expect("relative path fixture should be created");
         let input = directory.path().join("shared-input-output");
-        std::fs::write(&input, b"preserve relative input").expect("input fixture should be populated");
+        std::fs::write(&input, b"preserve relative input")
+            .expect("input fixture should be populated");
         let relative_input = input
             .strip_prefix(&working_directory)
             .expect("fixture path should be under the current directory")
@@ -1184,7 +1351,9 @@ mod tests {
             &mut process,
         ) {
             Err(error) => error,
-            Ok(_) => panic!("relative stdin and its absolute stdout path must be recognized as one file"),
+            Ok(_) => {
+                panic!("relative stdin and its absolute stdout path must be recognized as one file")
+            }
         };
 
         assert_eq!(error.kind(), CommandErrorKind::InputOutputConflict);
@@ -1207,7 +1376,8 @@ mod tests {
     #[test]
     fn test_truncate_output_maps_injected_set_len_failure() {
         let output = tempfile::NamedTempFile::new().expect("output fixture should be created");
-        std::fs::write(output.path(), b"preserve-on-failure").expect("output fixture should be populated");
+        std::fs::write(output.path(), b"preserve-on-failure")
+            .expect("output fixture should be populated");
         let file = OpenOptions::new()
             .write(true)
             .open(output.path())
@@ -1270,7 +1440,10 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(std::fs::read(stdout.path()).expect("stdout should be readable"), b"",);
+        assert_eq!(
+            std::fs::read(stdout.path()).expect("stdout should be readable"),
+            b"",
+        );
         assert_eq!(
             std::fs::read(stderr.path()).expect("stderr should be readable"),
             b"old stderr",
@@ -1286,9 +1459,15 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).expect("dangling symlink should be created");
         let mut process = ProcessCommand::new("unused-test-program");
 
-        let error = IoFiles::prepare("command", CommandStdin::Null, Some(&link), None, &mut process)
-            .err()
-            .expect("a dangling symlink is an existing non-regular output path");
+        let error = IoFiles::prepare(
+            "command",
+            CommandStdin::Null,
+            Some(&link),
+            None,
+            &mut process,
+        )
+        .err()
+        .expect("a dangling symlink is an existing non-regular output path");
 
         assert_eq!(error.kind(), CommandErrorKind::NonRegularOutputFile);
         assert!(std::fs::symlink_metadata(&link).is_ok());
@@ -1299,14 +1478,16 @@ mod tests {
     #[test]
     fn test_open_handle_checks_reject_directories_even_when_the_path_was_not_checked() {
         let directory = tempfile::tempdir().expect("directory fixture should be created");
-        let file = std::fs::File::open(directory.path()).expect("Unix permits opening a directory handle");
+        let file =
+            std::fs::File::open(directory.path()).expect("Unix permits opening a directory handle");
 
         let input_error = ensure_regular_input_handle("command", directory.path(), &file)
             .expect_err("an opened directory is not a valid stdin file");
         assert_eq!(input_error.kind(), CommandErrorKind::NonRegularInputFile);
 
-        let output_error = ensure_regular_output_handle("command", OutputStream::Stderr, directory.path(), &file)
-            .expect_err("an opened directory is not a valid output file");
+        let output_error =
+            ensure_regular_output_handle("command", OutputStream::Stderr, directory.path(), &file)
+                .expect_err("an opened directory is not a valid output file");
         assert_eq!(output_error.kind(), CommandErrorKind::NonRegularOutputFile);
         assert!(matches!(
             output_error.reason(),
@@ -1322,9 +1503,15 @@ mod tests {
         let invalid_path = std::path::PathBuf::from("\0invalid-output-path");
         let mut process = ProcessCommand::new("unused-test-program");
 
-        let error = IoFiles::prepare("command", CommandStdin::Null, Some(&invalid_path), None, &mut process)
-            .err()
-            .expect("OS rejection while inspecting a path should retain inspection context");
+        let error = IoFiles::prepare(
+            "command",
+            CommandStdin::Null,
+            Some(&invalid_path),
+            None,
+            &mut process,
+        )
+        .err()
+        .expect("OS rejection while inspecting a path should retain inspection context");
 
         assert_eq!(error.kind(), CommandErrorKind::InspectIoFileFailed);
         assert!(matches!(

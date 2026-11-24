@@ -27,6 +27,17 @@ pub(crate) enum CommandStdin {
     ),
 }
 
+/// Command stdin category needed for managed resource compatibility checks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CommandStdinMode {
+    /// Null or inherited stdin, which supplies no explicit file or byte input.
+    Default,
+    /// Buffered bytes supplied as command stdin.
+    Bytes,
+    /// File path supplied as command stdin.
+    File,
+}
+
 impl fmt::Debug for CommandStdin {
     /// Formats the input mode while hiding file paths and byte contents.
     ///
