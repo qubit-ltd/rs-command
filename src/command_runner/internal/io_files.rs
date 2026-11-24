@@ -884,6 +884,12 @@ pub(in crate::command_runner) fn truncate_output(
 
 /// Truncates one managed path tee and classifies failures at the truncate call
 /// as managed truncation failures.
+///
+/// # Parameters
+/// * `command`: Command label used in the returned error.
+/// * `stream`: Output stream whose configured file is truncated.
+/// * `path`: Configured tee path, if this stream uses a file tee.
+/// * `file`: Open tee handle whose contents are reset before process start.
 fn truncate_managed_output(
     command: &str,
     stream: OutputStream,
@@ -893,6 +899,14 @@ fn truncate_managed_output(
     truncate_managed_output_with(command, stream, path, file, |file| file.set_len(0))
 }
 
+/// Runs managed tee truncation through an injected operation for failure tests.
+///
+/// # Parameters
+/// * `command`: Command label used in the returned error.
+/// * `stream`: Output stream whose configured file is truncated.
+/// * `path`: Configured tee path, if this stream uses a file tee.
+/// * `file`: Open tee handle whose contents are reset before process start.
+/// * `truncate`: Performs the file length change and returns its I/O result.
 fn truncate_managed_output_with(
     command: &str,
     stream: OutputStream,
@@ -1439,13 +1453,9 @@ mod tests {
         ] {
             let output = tempfile::NamedTempFile::new().expect("output fixture should be created");
             let file = OpenOptions::new().write(true).open(output.path()).unwrap();
-            let error = truncate_managed_output_with(
-                "command",
-                stream,
-                Some(output.path()),
-                Some(&file),
-                |_| Err(io::Error::other("injected managed truncate failure")),
-            )
+            let error = truncate_managed_output_with("command", stream, Some(output.path()), Some(&file), |_| {
+                Err(io::Error::other("injected managed truncate failure"))
+            })
             .expect_err("injected truncation failure should be mapped");
             assert!(matches!(
                 error.reason(),

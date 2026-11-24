@@ -316,6 +316,11 @@ impl<'a> StartingCommand<'a> {
     }
 }
 
+/// Reclaims a rejected startup cleanup owner or retains it for deferred retry.
+///
+/// # Parameters
+/// * `observer`: Retains ownership when the bounded reaper queue is full.
+/// * `result`: Result of transferring startup cleanup to the reaper.
 fn handoff_startup_owner(observer: &ReaperObserver, result: Result<(), crate::execution::backend::HandoffFailure>) {
     match result {
         Ok(()) => {}

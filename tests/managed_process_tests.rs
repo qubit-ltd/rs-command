@@ -189,8 +189,16 @@ fn test_external_cancel_after_child_exit_waits_for_helpers_and_retains_diagnosti
         assert!(std::time::Instant::now() < deadline, "child helper should start");
         std::thread::sleep(Duration::from_millis(5));
     }
-    let parent_pid: libc::pid_t = std::fs::read_to_string(&parent_pid_path).unwrap().trim().parse().unwrap();
-    let helper_pid: libc::pid_t = std::fs::read_to_string(&helper_pid_path).unwrap().trim().parse().unwrap();
+    let parent_pid: libc::pid_t = std::fs::read_to_string(&parent_pid_path)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let helper_pid: libc::pid_t = std::fs::read_to_string(&helper_pid_path)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
     while unsafe { libc::kill(parent_pid, 0) } == 0 {
         assert!(
             std::time::Instant::now() < deadline,

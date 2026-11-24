@@ -103,20 +103,16 @@ impl CommandError {
             cleanup_failures,
         } = self;
         let reason = match *reason {
-            CommandErrorReason::OpenInputFailed { source, .. } => {
-                CommandErrorReason::FilePreparationFailed {
-                    stage,
-                    direction: Some(crate::FilePreparationDirection::Stdin),
-                    source,
-                }
-            }
-            CommandErrorReason::NonRegularInputFile { .. } => {
-                CommandErrorReason::FilePreparationFailed {
-                    stage,
-                    direction: Some(crate::FilePreparationDirection::Stdin),
-                    source: io::Error::new(io::ErrorKind::InvalidInput, "input is not a regular file"),
-                }
-            }
+            CommandErrorReason::OpenInputFailed { source, .. } => CommandErrorReason::FilePreparationFailed {
+                stage,
+                direction: Some(crate::FilePreparationDirection::Stdin),
+                source,
+            },
+            CommandErrorReason::NonRegularInputFile { .. } => CommandErrorReason::FilePreparationFailed {
+                stage,
+                direction: Some(crate::FilePreparationDirection::Stdin),
+                source: io::Error::new(io::ErrorKind::InvalidInput, "input is not a regular file"),
+            },
             CommandErrorReason::OpenOutputFailed { stream, source, .. } => {
                 let direction = Some(match stream {
                     OutputStream::Stdout => crate::FilePreparationDirection::Stdout,

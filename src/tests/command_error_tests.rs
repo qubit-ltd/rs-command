@@ -433,10 +433,7 @@ fn test_command_error_display_uses_summaries_for_all_io_source_reasons() {
     ];
 
     for reason in reasons {
-        let is_file_preparation = matches!(
-            &reason,
-            CommandErrorReason::FilePreparationFailed { .. }
-        );
+        let is_file_preparation = matches!(&reason, CommandErrorReason::FilePreparationFailed { .. });
         let error = CommandError::from_reason("command", reason, None);
         let display = error.to_string();
         let debug = format!("{error:?}");

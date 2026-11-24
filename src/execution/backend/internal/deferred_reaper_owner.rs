@@ -8,47 +8,39 @@
 
 use super::ReaperObserver;
 use super::ReaperOwner;
+use super::inline_reaper_fallback_allowed;
+use super::with_inline_reaper_fallback;
 use crate::execution::backend::Reaper;
 use crate::execution::contracts::RecoveryEffectEvidence;
 use crate::execution::contracts::RecoveryOwner;
 
-thread_local! {
-    static ALLOW_INLINE_REAPER_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-struct InlineFallbackReset(bool);
-
-impl Drop for InlineFallbackReset {
-    fn drop(&mut self) {
-        ALLOW_INLINE_REAPER_FALLBACK.with(|enabled| enabled.set(self.0));
-    }
-}
-
 /// Invokes recovery cleanup from an existing bounded backend/recovery worker.
 /// The thread-local mode is private; direct calls through the public recovery
 /// owner contract remain nonblocking when the reaper service is unavailable.
+///
+/// # Parameters
+/// * `owner`: Recovery owner whose cleanup may use the worker's inline
+///   fallback.
 pub(crate) fn retry_cleanup_on_worker(
     owner: &dyn RecoveryOwner,
 ) -> Result<(), crate::execution::contracts::RecoveryRetryError> {
-    ALLOW_INLINE_REAPER_FALLBACK.with(|enabled| {
-        let previous = enabled.replace(true);
-        let _reset = InlineFallbackReset(previous);
-        owner.retry_cleanup()
-    })
+    with_inline_reaper_fallback(|| owner.retry_cleanup())
 }
 
 /// Represents the deferred reaper owner state or contract used by managed
 /// command execution.
 pub(crate) struct DeferredReaperOwner {
-    /// Stores the owner value used by this execution component.
+    /// Retains the cleanup owner until a reaper accepts it or local cleanup
+    /// ends.
     owner: std::sync::Mutex<Option<ReaperOwner>>,
-    /// Stores the observer value used by this execution component.
+    /// Tracks the child and helper cleanup associated with this owner.
     observer: ReaperObserver,
+    /// Submits the owner to the bounded reaper service.
     handoff: std::sync::Arc<dyn Fn(ReaperOwner) -> Result<(), crate::execution::backend::HandoffFailure> + Send + Sync>,
 }
 
 impl DeferredReaperOwner {
-    /// Stores the new value used by this execution component.
+    /// Creates an owner that submits cleanup to the process-wide reaper.
     ///
     /// # Parameters
     /// * `owner`: Supplies the owner value used by this operation.
@@ -61,6 +53,14 @@ impl DeferredReaperOwner {
         )
     }
 
+    /// Creates an owner with an injected handoff operation for focused tests.
+    ///
+    /// # Parameters
+    /// * `owner`: Holds the cleanup action whose ownership must be transferred.
+    /// * `observer`: Reports whether the associated process and helpers are
+    ///   fully cleaned up.
+    /// * `handoff`: Attempts to submit the owner and returns it when submission
+    ///   fails.
     fn with_handoff(
         owner: ReaperOwner,
         observer: ReaperObserver,
@@ -127,7 +127,7 @@ impl RecoveryOwner for DeferredReaperOwner {
                 Err(crate::execution::contracts::RecoveryRetryError::CleanupHandoffUnavailable)
             }
             Err(failure) => {
-                let inline_fallback = ALLOW_INLINE_REAPER_FALLBACK.with(std::cell::Cell::get);
+                let inline_fallback = inline_reaper_fallback_allowed();
                 if !inline_fallback {
                     *slot = Some(failure.owner);
                     return Err(crate::execution::contracts::RecoveryRetryError::CleanupHandoffUnavailable);

@@ -64,6 +64,12 @@ fn schedule_recovery_transfer(
     }
 }
 
+/// Retries cleanup on the current bounded worker until the owner confirms
+/// completion.
+///
+/// # Parameters
+/// * `id`: Operation whose effects must remain visible during cleanup.
+/// * `owner`: Recovery owner retained until its real cleanup finishes.
 fn run_recovery_owner_locally(id: OperationId, owner: &dyn RecoveryOwner) -> RecoveryEffectEvidence {
     let evidence = owner.effect_evidence(id);
     let mut backoff = Duration::from_millis(25);
@@ -81,6 +87,12 @@ fn run_recovery_owner_locally(id: OperationId, owner: &dyn RecoveryOwner) -> Rec
     }
 }
 
+/// Publishes release and settlement facts after local cleanup has completed.
+///
+/// # Parameters
+/// * `sink`: Receives the final facts for the recovered operation.
+/// * `id`: Operation associated with the cleanup evidence.
+/// * `evidence`: Effects observed while the recovery owner was pending.
 fn publish_local_recovery(sink: &dyn FactSink, id: OperationId, evidence: RecoveryEffectEvidence) {
     if let Err(error) = sink.confirm_input_release() {
         log::error!("failed to publish command input release after local recovery: {error:?}");
@@ -92,12 +104,26 @@ fn publish_local_recovery(sink: &dyn FactSink, id: OperationId, evidence: Recove
     }
 }
 
+/// Waits until the upstream observer records settlement for a recovered
+/// request.
+///
+/// # Parameters
+/// * `observer_slot`: Shared slot that receives the scheduled operation's
+///   observer.
 fn wait_for_upstream_settlement(observer_slot: &crate::execution::adapter::OperationObserverSlot) {
     if let Err(error) = observer_slot.wait().wait_settlement() {
         log::error!("could not observe upstream settlement after local recovery: {error:?}");
     }
 }
 
+/// Completes cleanup and settlement locally when ownership cannot enter
+/// recovery storage.
+///
+/// # Parameters
+/// * `sink`: Publishes release and settlement for the operation.
+/// * `id`: Operation associated with the retained owner.
+/// * `owner`: Cleanup owner held by the current bounded backend frame.
+/// * `observer_slot`: Upstream settlement observer to await after publishing.
 fn recover_owner_locally(
     sink: &dyn FactSink,
     id: OperationId,
@@ -154,12 +180,14 @@ where
 pub(crate) struct ProcessBackend {
     /// Stores the gates value used by this execution component.
     gates: Arc<Mutex<HashMap<OperationId, Arc<StartGate>>>>,
-    /// Observer slots retained until the scheduled execution captures its upstream handle.
+    /// Observer slots retained until the scheduled execution captures its
+    /// upstream handle.
     observers: Arc<Mutex<HashMap<OperationId, Arc<crate::execution::adapter::OperationObserverSlot>>>>,
 }
 
 impl ProcessBackend {
-    /// Performs the new step in the managed command execution lifecycle.
+    /// Creates empty operation and settlement observer registries for this
+    /// backend.
     pub(crate) fn new() -> Self {
         Self {
             gates: Arc::new(Mutex::new(HashMap::new())),
@@ -167,6 +195,12 @@ impl ProcessBackend {
         }
     }
 
+    /// Retains an observer slot until the scheduled execution attaches its
+    /// observer.
+    ///
+    /// # Parameters
+    /// * `operation_id`: Operation that will publish its upstream observer.
+    /// * `observer`: Slot shared with the scheduled operation.
     pub(crate) fn register_observer_slot(
         &self,
         operation_id: OperationId,
@@ -178,6 +212,11 @@ impl ProcessBackend {
             .insert(operation_id, observer);
     }
 
+    /// Removes the observer slot after the operation has finished attaching it.
+    ///
+    /// # Parameters
+    /// * `operation_id`: Completed operation whose temporary slot can be
+    ///   released.
     pub(crate) fn remove_observer_slot(&self, operation_id: OperationId) {
         self.observers
             .lock()
@@ -356,8 +395,7 @@ impl Backend for ProcessBackend {
         }
         finish_backend_tail(
             sink,
-            reaper_observer,
-            reaper_completion,
+            (reaper_observer, reaper_completion),
             observer_slot,
             (recovery_transferred, deferred_owner),
             session_bridge,
@@ -374,8 +412,7 @@ impl Backend for ProcessBackend {
 ///
 /// # Parameters
 /// * `sink`: Sink receiving cleanup, settlement, and recovery facts.
-/// * `reaper_observer`: Observer tracking child and helper reaper completion.
-/// * `reaper_completion`: Channel signaling completion of pending reaper work.
+/// * `reaper`: Observer and completion channel for child/helper reaper work.
 /// * `recovery`: Whether ownership was transferred and any deferred recovery
 ///   owner.
 /// * `session_bridge`: Session endpoints retained until runner/reaper handoff
@@ -385,14 +422,14 @@ impl Backend for ProcessBackend {
 ///   resolves.
 fn finish_backend_tail(
     sink: Arc<dyn FactSink>,
-    reaper_observer: ReaperObserver,
-    reaper_completion: std::sync::mpsc::Receiver<()>,
+    reaper: (ReaperObserver, std::sync::mpsc::Receiver<()>),
     observer_slot: Arc<crate::execution::adapter::OperationObserverSlot>,
     (mut recovery_transferred, deferred_owner): (bool, Option<Box<dyn RecoveryOwner>>),
     session_bridge: Option<Arc<dyn crate::session::contracts::SessionBridge>>,
     scope: qubit_operation::OperationScope,
     reservation: crate::execution::contracts::Reservation,
 ) {
+    let (reaper_observer, reaper_completion) = reaper;
     let operation_id = scope.id();
     let mut local_recovery = None;
     if let Some(owner) = deferred_owner {
@@ -786,8 +823,7 @@ mod tests {
             let (id, owner) = owner_rx.recv().unwrap();
             let sink_port: Arc<dyn FactSink> = worker_sink.clone();
             let owner = schedule_recovery_transfer(sink_port, owner)
-                .err()
-                .expect("disconnected recovery store should return the preparation owner");
+                .expect_err("disconnected recovery store should return the preparation owner");
             recover_owner_locally(&*worker_sink, id, &*owner, &worker_observer);
             drop(owner);
         });
@@ -2685,8 +2721,7 @@ mod tests {
 
                 finish_backend_tail(
                     sink_port,
-                    observer,
-                    completion,
+                    (observer, completion),
                     operation_observer_slot,
                     (transferred, Some(deferred_owner)),
                     None,
@@ -2813,9 +2848,8 @@ mod tests {
             completed: AtomicBool::new(false),
             _lease: Mutex::new(None),
         });
-        let owner = schedule_recovery_transfer(sink_port, owner)
-            .err()
-            .expect("disconnected store must return owner to backend");
+        let owner =
+            schedule_recovery_transfer(sink_port, owner).expect_err("disconnected store must return owner to backend");
         assert_eq!(
             sink.attempts.load(Ordering::SeqCst),
             1,

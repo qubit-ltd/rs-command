@@ -627,6 +627,12 @@ impl RunningCommand {
     }
 }
 
+/// Reclaims a rejected runtime cleanup owner or retains it for deferred retry.
+///
+/// # Parameters
+/// * `observer`: Optional observer that can retain an owner when the queue is
+///   full.
+/// * `result`: Result of submitting the owner to the reaper service.
 fn handle_uncertain_handoff(
     observer: Option<ReaperObserver>,
     result: Result<(), crate::execution::backend::HandoffFailure>,

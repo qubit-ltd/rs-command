@@ -16,7 +16,10 @@ use std::sync::mpsc::sync_channel;
 use std::thread;
 use std::thread::JoinHandle;
 
+use super::internal::HandoffFailure;
+use super::internal::HandoffFailureKind;
 use super::internal::ReaperOwner;
+use super::internal::ReaperPool;
 
 /// Represents the reaper state or contract used by managed command execution.
 pub(crate) struct Reaper {
@@ -32,59 +35,6 @@ pub(crate) struct Reaper {
 struct TestReaperPool {
     pool: Mutex<Option<ReaperPool>>,
     initialize: std::sync::Arc<dyn Fn() -> io::Result<ReaperPool> + Send + Sync>,
-}
-
-struct ReaperPool {
-    sender: Option<SyncSender<ReaperOwner>>,
-    workers: Vec<JoinHandle<()>>,
-}
-
-impl ReaperPool {
-    fn shutdown(self) {
-        drop(self);
-    }
-}
-
-impl Drop for ReaperPool {
-    fn drop(&mut self) {
-        drop(self.sender.take());
-        for worker in self.workers.drain(..) {
-            let _ = worker.join();
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum HandoffFailureKind {
-    Full,
-    Disconnected,
-    StartFailed,
-}
-
-pub(crate) struct HandoffFailure {
-    pub(crate) kind: HandoffFailureKind,
-    pub(crate) owner: ReaperOwner,
-    pub(crate) source: Option<io::Error>,
-}
-
-impl std::fmt::Debug for HandoffFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("HandoffFailure")
-            .field("kind", &self.kind)
-            .field("raw_os_error", &self.source.as_ref().and_then(io::Error::raw_os_error))
-            .finish_non_exhaustive()
-    }
-}
-
-impl HandoffFailure {
-    pub(crate) fn log_unavailable(&self, context: &str) {
-        let os_error = self.source.as_ref().and_then(io::Error::raw_os_error);
-        log::error!(
-            "{context}: process reaper unavailable ({:?}, os_error={os_error:?})",
-            self.kind
-        );
-    }
 }
 
 static REAPER_POOL: OnceLock<Mutex<Option<ReaperPool>>> = OnceLock::new();
@@ -124,7 +74,7 @@ impl Reaper {
         })
     }
 
-    /// Stores the initialize value used by this execution component.
+    /// Starts the process-wide pool with its fixed worker and queue bounds.
     fn initialize() -> io::Result<ReaperPool> {
         const WORKERS: usize = 4;
         const CAPACITY: usize = 64;
@@ -135,6 +85,12 @@ impl Reaper {
         })
     }
 
+    /// Starts a bounded pool and joins any workers if a later spawn fails.
+    ///
+    /// # Parameters
+    /// * `workers_count`: Number of worker threads to start.
+    /// * `capacity`: Maximum number of cleanup owners waiting in the queue.
+    /// * `spawn_worker`: Starts one worker for the shared queue receiver.
     fn initialize_with(
         workers_count: usize,
         capacity: usize,
@@ -164,7 +120,7 @@ impl Reaper {
         })
     }
 
-    /// Stores the global value used by this execution component.
+    /// Returns the process-wide handle for the replaceable reaper pool.
     pub(crate) fn global() -> &'static Self {
         REAPER.get_or_init(|| Self {
             global: true,
@@ -174,10 +130,11 @@ impl Reaper {
         })
     }
 
-    /// Stores the handoff value used by this execution component.
+    /// Transfers cleanup ownership to the bounded reaper queue.
     ///
     /// # Parameters
-    /// * `owner`: Supplies the owner value used by this operation.
+    /// * `owner`: Cleanup responsibility to enqueue; returned unchanged on
+    ///   failure.
     pub(crate) fn handoff(&self, owner: ReaperOwner) -> Result<(), HandoffFailure> {
         #[cfg(test)]
         if let Some(test_pool) = &self.test_pool {
@@ -193,6 +150,13 @@ impl Reaper {
     }
 }
 
+/// Starts a missing pool, replaces a disconnected generation, and submits an
+/// owner.
+///
+/// # Parameters
+/// * `pool`: Cached pool slot protected against concurrent generation changes.
+/// * `initialize`: Starts a healthy replacement pool when needed.
+/// * `owner`: Cleanup responsibility that must be queued or returned.
 fn handoff_to_pool(
     pool: &mut Option<ReaperPool>,
     mut initialize: impl FnMut() -> io::Result<ReaperPool>,
@@ -234,6 +198,12 @@ fn handoff_to_pool(
     }
 }
 
+/// Attempts one nonblocking queue submission and returns the owner on
+/// rejection.
+///
+/// # Parameters
+/// * `sender`: Queue endpoint for the active worker pool.
+/// * `owner`: Cleanup responsibility to transfer.
 fn send_owner(sender: &SyncSender<ReaperOwner>, owner: ReaperOwner) -> Result<(), HandoffFailure> {
     sender.try_send(owner).map_err(|error| match error {
         TrySendError::Full(owner) => HandoffFailure {
