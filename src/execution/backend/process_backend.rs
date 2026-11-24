@@ -2859,12 +2859,7 @@ mod tests {
 
         let joined = Arc::new(AtomicUsize::new(0));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_managed_reaper_failure_case(
-                HandoffFailureKind::StartFailed,
-                true,
-                true,
-                Arc::clone(&joined),
-            );
+            run_managed_reaper_failure_case(HandoffFailureKind::StartFailed, true, true, Arc::clone(&joined));
         }));
 
         assert!(result.is_err(), "the injected panic should unwind the test helper");

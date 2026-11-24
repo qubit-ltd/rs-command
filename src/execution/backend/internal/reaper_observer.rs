@@ -222,6 +222,8 @@ impl ReaperObserver {
 mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -533,6 +535,34 @@ mod tests {
             .recv_timeout(Duration::from_secs(3))
             .expect("recovered cleanup should signal completion");
         assert!(observer.is_complete());
+    }
+
+    #[test]
+    fn test_local_owner_can_be_stored_and_taken_after_mutex_poisoning() {
+        let (observer, _completed) = ReaperObserver::pair();
+        let cleanup_count = Arc::new(AtomicUsize::new(0));
+        let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = observer.retained_owner.lock().unwrap();
+            panic!("poison local owner mutex for recovery test");
+        }));
+        assert!(poison_result.is_err());
+
+        let cleanup_state = Arc::clone(&cleanup_count);
+        observer.retain_local_cleanup_owner(ReaperOwner::new(move || {
+            cleanup_state.fetch_add(1, Ordering::Relaxed);
+        }));
+
+        assert!(observer.take_deferred_recovery_owner().is_none());
+        assert_eq!(cleanup_count.load(Ordering::Relaxed), 0);
+        let owner = observer
+            .take_local_cleanup_owner()
+            .expect("poisoned owner lock should retain local cleanup");
+        assert!(observer.take_local_cleanup_owner().is_none());
+        assert_eq!(cleanup_count.load(Ordering::Relaxed), 0);
+
+        owner.run_inline();
+
+        assert_eq!(cleanup_count.load(Ordering::Relaxed), 1);
     }
 
     #[test]
