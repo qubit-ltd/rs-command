@@ -119,7 +119,7 @@ impl PreparedCommand {
     }
 
     /// Commits tee file creation and attaches the validated stdin file.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(in crate::command_runner) fn commit(self) -> Result<CommittedCommand, CommandError> {
         self.commit_with_managed_files(None)
     }
