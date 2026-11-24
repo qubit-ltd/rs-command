@@ -165,6 +165,16 @@ pub(crate) fn require_markers(examples: &[Example], expected: &[(&str, &str)], l
     Ok(())
 }
 
+pub(crate) fn validate_document(
+    markdown: &str,
+    expected: &[(&str, &str)],
+    label: &str,
+) -> Result<Vec<Example>, String> {
+    let examples = extract_examples(markdown, label)?;
+    require_markers(&examples, expected, label)?;
+    Ok(examples)
+}
+
 pub(crate) fn check_documents(root: &Path) {
     let documents = [
         (
@@ -242,8 +252,8 @@ pub(crate) fn check_documents(root: &Path) {
     for (relative, expected) in documents {
         let path = root.join(relative);
         let source = fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-        let parsed = extract_examples(&source, relative).unwrap_or_else(|e| panic!("{e}"));
-        require_markers(&parsed, expected, relative).unwrap_or_else(|e| panic!("{e}"));
+        let parsed =
+            validate_document(&source, expected, relative).unwrap_or_else(|e| panic!("{e}"));
         examples.extend(parsed.into_iter().map(|mut e| {
             e.id = format!("{}__{}", relative.replace(['/', '.'], "_"), e.id);
             e
