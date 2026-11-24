@@ -8,6 +8,8 @@
 use std::fmt;
 use std::path::PathBuf;
 
+pub(crate) use super::command_stdin_mode::CommandStdinMode;
+
 /// Standard input configuration for a command.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum CommandStdin {
@@ -25,17 +27,6 @@ pub(crate) enum CommandStdin {
         /// Path to the regular file opened before spawning the child.
         PathBuf,
     ),
-}
-
-/// Command stdin category needed for managed resource compatibility checks.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CommandStdinMode {
-    /// Null or inherited stdin, which supplies no explicit file or byte input.
-    Default,
-    /// Buffered bytes supplied as command stdin.
-    Bytes,
-    /// File path supplied as command stdin.
-    File,
 }
 
 impl fmt::Debug for CommandStdin {

@@ -269,6 +269,23 @@ impl IoFiles {
         self.commit_with_managed_files(command, stdout_path, stderr_path, process_command, None)
     }
 
+    /// Opens configured tee files, checks their identities against managed
+    /// files, and attaches stdin only after validation succeeds.
+    ///
+    /// # Parameters
+    ///
+    /// * `command` - Redacted command text used to construct errors.
+    /// * `stdout_path` - Optional path receiving child stdout.
+    /// * `stderr_path` - Optional path receiving child stderr.
+    /// * `process_command` - Process command that receives the validated stdin.
+    /// * `managed_files` - Registered resource files to compare with command
+    ///   I/O files.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError`] if a tee cannot be opened, a file identity
+    /// conflicts, or output truncation fails. Earlier file creation or
+    /// truncation side effects may remain when a later step fails.
     pub(in crate::command_runner) fn commit_with_managed_files(
         &mut self,
         command: &str,
@@ -311,6 +328,19 @@ impl IoFiles {
 
 /// Compares command file handles with the handles retained by managed
 /// resources.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used to construct errors.
+/// * `command_stdin` - Optional opened command stdin handle.
+/// * `stdout_tee` - Optional opened stdout tee handle.
+/// * `stderr_tee` - Optional opened stderr tee handle.
+/// * `managed` - Registered handles retained by the managed resources.
+///
+/// # Errors
+///
+/// Returns [`CommandError`] when handles cannot be cloned or identify the same
+/// file across configured streams.
 fn validate_managed_file_identities(
     command: &str,
     command_stdin: Option<&File>,
@@ -384,6 +414,14 @@ fn validate_managed_file_identities(
     Ok(())
 }
 
+/// Associates a managed file identity error with its stream and validation
+/// stage while retaining the original I/O error as its source.
+///
+/// # Parameters
+///
+/// * `command` - Redacted command text used in the resulting error.
+/// * `direction` - Standard stream whose identity check failed.
+/// * `source` - Original file identity or handle I/O failure.
 fn managed_identity_error(command: &str, direction: &str, source: io::Error) -> CommandError {
     let direction = match direction {
         "stdin" => crate::FilePreparationDirection::Stdin,

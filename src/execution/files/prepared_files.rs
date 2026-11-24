@@ -18,6 +18,7 @@ use std::sync::OnceLock;
 use qubit_operation::OperationScope;
 use qubit_operation::ResourceRef;
 
+use super::registration_category::RegistrationCategory;
 use crate::execution::contracts::PreparedFiles;
 use crate::execution::contracts::PreparedSink;
 use crate::resource_run_options::FileSinkPolicy;
@@ -36,17 +37,6 @@ type RegistrationFailure = (
     Option<PreparedFiles>,
     [Option<File>; 3],
 );
-
-#[derive(Debug)]
-struct RegistrationCategory(qubit_operation::ResourceManageErrorKind);
-
-impl std::fmt::Display for RegistrationCategory {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "resource registration failed: {:?}", self.0)
-    }
-}
-
-impl std::error::Error for RegistrationCategory {}
 
 #[cfg(test)]
 pub(crate) fn gate_after_first_registration(gate: Option<RegistrationGate>) {
@@ -123,6 +113,12 @@ pub(super) fn register_files(
     Ok(build(refs, policies))
 }
 
+/// Returns the diagnostic direction associated with a stream's registration
+/// slot.
+///
+/// # Parameters
+///
+/// * `index` - Position in the stdin, stdout, stderr registration array.
 fn file_direction(index: usize) -> crate::FilePreparationDirection {
     match index {
         0 => crate::FilePreparationDirection::Stdin,

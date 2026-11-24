@@ -124,6 +124,20 @@ impl PreparedCommand {
         self.commit_with_managed_files(None)
     }
 
+    /// Commits the prepared I/O files after comparing them with managed files.
+    ///
+    /// The method performs the final identity check before truncation and
+    /// transfers the validated stdin handle to the process command.
+    ///
+    /// # Parameters
+    ///
+    /// * `managed_files` - Registered files whose identities must be checked
+    ///   against command stdin and output tees.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError`] if final file validation or I/O commitment
+    /// fails.
     pub(in crate::command_runner) fn commit_with_managed_files(
         mut self,
         managed_files: Option<&crate::execution::contracts::PreparedFiles>,

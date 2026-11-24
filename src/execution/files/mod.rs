@@ -8,7 +8,9 @@
 //! Preparation and ownership for files transferred to managed commands.
 mod cleanup;
 mod identity;
+mod identity_failure;
 pub(crate) mod input;
 mod managed_preparation_failure;
 pub(crate) mod prepared_files;
+mod registration_category;
 pub(crate) use identity::resolve_io_path;
