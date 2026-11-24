@@ -4,6 +4,18 @@
 
 `qubit-command` 0.12 的受管 API 增加了进程树管理和独立 settlement 报告，但没有改变 helper join 的证据，也没有建立 Windows 上的硬返回期限。`Managed` 进程树策略不代表每个 helper join 都有界；受管命令同样受此限制。应用应检查 settlement 和清理报告；确实需要硬期限时，应通过独立进程边界监督 runner。
 
+## 原生 Windows 复验（源码 SHA `ce3cab6f30686f75c2896c1ec7378ace8f30443d`，2026-11-24）
+
+[Windows Cancellation Interleaving run 45390083216](https://github.com/qubit-ltd/rs-command/actions/runs/45390083216) 在 `dev` 分支、准确源码 SHA `ce3cab6f30686f75c2896c1ec7378ace8f30443d` 上成功完成。`windows-interleaving` job 运行于 `windows-2022`，时间为 2026-11-24 12:04:58 至 12:06:50 UTC（1 分 52 秒）。workflow 于 12:04:55 至 12:06:50 UTC 运行（1 分 55 秒）。[windows-cancellation-interleaving-trace artifact 14918980500](https://github.com/qubit-ltd/rs-command/actions/runs/45390083216/artifacts/14918980500) 保存了测试列表、具名门禁结果和 trace。
+
+日志记录相同的 checkout SHA 和 `windows-2022` 平台。workflow 共选中 14 项测试：12 项 `windows_` 和 2 项 `command_io`，全部通过。PowerShell identity-gate fixtures 通过。结果门禁记录的 12 项必需测试均为 `discovered=true`、`passed=true`。每项测试的确切名称和结果保存在 artifact 的 test-list 与 check 日志中。
+
+同一次运行的生产 trace `production_command_io_blocked_read` 记录 `cancel_success=true`，随后原始阻塞 read 以原始 OS 错误 `995` 返回。相对时间为：read-entry observation 8.5567 ms、cleanup 开始 19.0526 ms、取消结果 19.4480 ms、read 返回 19.4592 ms、cleanup 完成 19.8594 ms。trace 记录 `original_io_return_is_subsequent_io=false`、`tee_write_entries=0`、`production_join_pending_witness=false`。它还记录 `source_writer_manually_released=true`、`watchdog_released=false`。helper join 和进程回收发生在人工释放 source writer 之后。
+
+readiness 管道探针有 128 次成功取消，没有确认阻塞写入。stdin check-to-write 探针没有 post-cancel write entry。watchdog 测试回收的是它自己的阻塞 child。生产 trace 在人工释放 source writer 后完成清理。workflow 和测试成功，生产因果 trace 仍不完整。
+
+**结论：** 源码 SHA `ce3cab6f30686f75c2896c1ec7378ace8f30443d` 的 RC-006 仍为 **unresolved（未解决）**。本次运行证实前两阶段：原生取消成功、原始 I/O 返回。它没有证实后续生产 I/O 持续阻塞、cleanup join 等待该 I/O，或独立 watchdog 释放。清理是在人工释放 source writer 后完成，因此同一 helper 的六阶段条件尚不成立。`66e901499fb6fde370ce02bf6cf50e458addfefb` 仍是集成源码审查。`c871a25024adb72c1f4bdac7f9e226fb03463cb8` 仍是只适用于自身 SHA 的历史原生 run。未修改生产代码或探针。
+
 ## 集成源码核查（源码 SHA `66e901499fb6fde370ce02bf6cf50e458addfefb`，2026-11-24）
 
 本次仅做源码核查：将集成生产源码 `66e901499fb6fde370ce02bf6cf50e458addfefb` 与历史原生 Windows 源码 SHA `c871a25024adb72c1f4bdac7f9e226fb03463cb8` 对照。核查运行于 Linux x86_64（`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`）、Rust `1.94.0` 和 Cargo `1.94.0`。本机没有 `pwsh` 或 `powershell`，因此该 SHA 没有原生 Windows 重跑、PowerShell 门禁运行或新 trace。
