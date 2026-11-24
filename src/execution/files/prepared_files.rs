@@ -562,6 +562,70 @@ mod tests {
     }
 
     #[test]
+    fn test_public_command_error_preserves_manager_registration_category() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let (send_reservation, receive_reservation) = std::sync::mpsc::sync_channel(1);
+        let mut reservation_owner = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                send_reservation
+                    .send(scope.reserve_resource().expect("resource slot should be reservable"))
+                    .expect("stale reservation should reach the test");
+                Ok::<_, std::convert::Infallible>(())
+            })
+            .unwrap();
+        let stale_reservation = receive_reservation
+            .recv()
+            .expect("resource reservation should be returned");
+        assert!(matches!(
+            reservation_owner.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let mut reservations = vec![stale_reservation];
+                let failure = register_files(
+                    &scope,
+                    &mut reservations,
+                    Some(tempfile::tempfile().expect("input fixture should be created")),
+                    None,
+                    None,
+                )
+                .expect_err("a reservation from an ended scope must fail manager registration");
+                let (source, direction, prepared, raw_files) = *failure;
+                assert!(prepared.is_none());
+                assert!(raw_files[0].is_some());
+                assert_eq!(direction, crate::FilePreparationDirection::Stdin);
+
+                let error = crate::command_error::managed_file_preparation_error(
+                    crate::FilePreparationStage::Registration,
+                    Some(direction),
+                    source,
+                );
+                assert_eq!(
+                    error.resource_registration_error_kind(),
+                    Some(qubit_operation::ResourceManageErrorKind::ScopeEnded)
+                );
+                assert!(matches!(
+                    error.reason(),
+                    crate::CommandErrorReason::FilePreparationFailed {
+                        stage: crate::FilePreparationStage::Registration,
+                        direction: Some(crate::FilePreparationDirection::Stdin),
+                        source,
+                    } if source.kind() == io::ErrorKind::Other
+                        && source.get_ref().is_some_and(|source| source.downcast_ref::<RegistrationCategory>()
+                            .is_some_and(|category| category.0 == qubit_operation::ResourceManageErrorKind::ScopeEnded))
+                ));
+                Ok::<_, std::convert::Infallible>(())
+            })
+            .unwrap();
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+    }
+
+    #[test]
     fn test_register_files_returns_partial_owner_and_remaining_output_file() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let mut operation = manager

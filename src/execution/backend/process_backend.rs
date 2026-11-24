@@ -20,7 +20,6 @@ use qubit_operation::StopReason;
 use super::internal::OperationStopPort;
 use super::internal::PreparationRecoveryOwner;
 use crate::CommandError;
-use crate::CommandErrorReason;
 use crate::execution::backend::ReaperObserver;
 use crate::execution::backend::StartGate;
 use crate::execution::contracts::ActivatedRequest;
@@ -211,14 +210,10 @@ impl Backend for ProcessBackend {
                 {
                     Ok(files) => Ok(Some(files)),
                     Err(managed_failure) => {
-                        let error = CommandError::from_reason(
-                            "<managed command>",
-                            CommandErrorReason::FilePreparationFailed {
-                                stage: managed_failure.phase,
-                                direction: managed_failure.direction,
-                                source: managed_failure.source,
-                            },
-                            None,
+                        let error = crate::command_error::managed_file_preparation_error(
+                            managed_failure.phase,
+                            managed_failure.direction,
+                            managed_failure.source,
                         );
                         let capacity_lease = reservation.retain();
                         let owner: Box<dyn RecoveryOwner> = Box::new(PreparationRecoveryOwner {
