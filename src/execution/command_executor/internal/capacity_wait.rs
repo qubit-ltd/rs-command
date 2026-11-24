@@ -9,6 +9,8 @@
 #[cfg(feature = "async")]
 use crate::execution::CommandSubmitWaitFailure;
 #[cfg(feature = "async")]
+use crate::execution::command_executor::wait::WaitResult;
+#[cfg(feature = "async")]
 use crate::execution::contracts::CapacityFailure;
 #[cfg(feature = "async")]
 use crate::execution::scheduler::BoundedScheduler;
@@ -27,7 +29,7 @@ pub(in crate::execution) struct CapacityWait {
 #[cfg(feature = "async")]
 impl std::future::Future for CapacityWait {
     /// Result returned when capacity changes or a waiter limit is reached.
-    type Output = Result<bool, CommandSubmitWaitFailure>;
+    type Output = Result<WaitResult, CommandSubmitWaitFailure>;
 
     /// Refreshes the waiter registration and reports the current capacity
     /// state.
@@ -35,14 +37,17 @@ impl std::future::Future for CapacityWait {
     /// # Parameters
     /// * `self`: Future state retaining the scheduler registration.
     /// * `cx`: Task context used to register the latest waker.
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
         match self
             .scheduler
             .refresh_capacity_waiter(self.bytes, self.waiter, cx.waker())
         {
             Ok(None) => {
                 self.waiter = None;
-                std::task::Poll::Ready(Ok(true))
+                std::task::Poll::Ready(Ok(WaitResult::Retry))
             }
             Ok(Some(id)) => {
                 self.waiter = Some(id);
@@ -54,7 +59,7 @@ impl std::future::Future for CapacityWait {
             }
             Err(CapacityFailure::Closed) | Err(_) => {
                 self.waiter = None;
-                std::task::Poll::Ready(Ok(false))
+                std::task::Poll::Ready(Ok(WaitResult::Closed))
             }
         }
     }

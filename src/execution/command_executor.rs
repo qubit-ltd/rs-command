@@ -20,6 +20,9 @@ pub(super) mod internal;
 // Owns the public executor snapshot and shutdown operations.
 #[path = "command_executor/lifecycle.rs"]
 mod lifecycle;
+// Owns the executor's inherent submission API and implementations.
+#[path = "command_executor/submission.rs"]
+pub(super) mod submission;
 // Owns the executor's retry-wait implementation and waiter lifecycle.
 #[path = "command_executor/wait.rs"]
 pub(super) mod wait;
@@ -89,7 +92,10 @@ impl CommandExecutor {
     ///
     /// # Parameters
     /// `manager` owns the operation group used for submissions. `config`
-    /// sets local active, queued, waiter, input-byte, and diagnostic limits.
+    /// sets local active, queued, waiter, and input-byte limits. `max_waiters`
+    /// covers both capacity waiters and callers retrying manager `Busy`.
+    /// `max_diagnostics` is retained as a compatibility field and has no
+    /// effect.
     /// Accepted operations retain their reservations until settlement and
     /// resource recovery release them.
     ///
@@ -101,9 +107,11 @@ impl CommandExecutor {
         config: CommandExecutionConfig,
     ) -> Result<Self, CommandExecutorCreateError> {
         config.validate()?;
-        let (scheduler, backend, group, recovery, manager) = executor::build_executor(manager.clone(), config.clone())?;
+        let (scheduler, backend, group, recovery, manager) =
+            executor::build_executor(manager.clone(), config.clone())?;
         let scheduler = std::sync::Arc::new(scheduler);
-        let lifetime = std::sync::Arc::new(ExecutorLifetime::new(std::sync::Arc::clone(&scheduler)));
+        let lifetime =
+            std::sync::Arc::new(ExecutorLifetime::new(std::sync::Arc::clone(&scheduler)));
         Ok(Self {
             manager,
             config,
@@ -148,8 +156,13 @@ mod tests {
         assert_eq!(executor.config(), &config);
         let outcome = executor
             .manager()
-            .run(OperationOptions::default(), |_| Ok::<_, ()>("manager view works"))
+            .run(OperationOptions::default(), |_| {
+                Ok::<_, ()>("manager view works")
+            })
             .unwrap();
-        assert!(matches!(outcome, OperationOutcome::Succeeded("manager view works")));
+        assert!(matches!(
+            outcome,
+            OperationOutcome::Succeeded("manager view works")
+        ));
     }
 }
