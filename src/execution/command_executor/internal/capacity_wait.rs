@@ -37,10 +37,7 @@ impl std::future::Future for CapacityWait {
     /// # Parameters
     /// * `self`: Future state retaining the scheduler registration.
     /// * `cx`: Task context used to register the latest waker.
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         match self
             .scheduler
             .refresh_capacity_waiter(self.bytes, self.waiter, cx.waker())

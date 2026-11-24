@@ -616,9 +616,7 @@ impl Command {
     /// Returns the stdin category without cloning any configured input data.
     pub(crate) fn stdin_mode(&self) -> crate::internal::command_stdin::CommandStdinMode {
         match &self.stdin {
-            CommandStdin::Null | CommandStdin::Inherit => {
-                crate::internal::command_stdin::CommandStdinMode::Default
-            }
+            CommandStdin::Null | CommandStdin::Inherit => crate::internal::command_stdin::CommandStdinMode::Default,
             CommandStdin::Bytes(_) => crate::internal::command_stdin::CommandStdinMode::Bytes,
             CommandStdin::File(_) => crate::internal::command_stdin::CommandStdinMode::File,
         }

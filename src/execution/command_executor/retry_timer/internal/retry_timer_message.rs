@@ -71,11 +71,7 @@ impl RetryTimerState {
 
     /// Reports whether the future has been dropped.
     pub(super) fn is_cancelled(&self) -> bool {
-        self.inner
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .result
-            == RetryTimerResult::Cancelled
+        self.inner.lock().unwrap_or_else(|error| error.into_inner()).result == RetryTimerResult::Cancelled
     }
 
     /// Moves a pending timer to a terminal state and releases its quota before

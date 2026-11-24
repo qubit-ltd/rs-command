@@ -76,10 +76,7 @@ impl std::future::Future for RetryDelay {
     /// # Parameters
     /// * `self`: Future state retaining the latest waker and timer status.
     /// * `cx`: Task context used to register the latest waker.
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         self.as_mut()
             .get_mut()
             .poll_with_schedule(cx, |item| retry_timer()?.schedule(item))

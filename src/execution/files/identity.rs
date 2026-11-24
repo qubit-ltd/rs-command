@@ -95,10 +95,9 @@ pub(super) fn validate_tee_paths(
             Err(source) => return Err(IdentityFailure { direction, source }),
             _ => {}
         }
-        let tee_identity = Handle::from_file(
-            open_tee_identity(path).map_err(|source| IdentityFailure { direction, source })?,
-        )
-        .map_err(|source| IdentityFailure { direction, source })?;
+        let tee_identity =
+            Handle::from_file(open_tee_identity(path).map_err(|source| IdentityFailure { direction, source })?)
+                .map_err(|source| IdentityFailure { direction, source })?;
         if owned.iter().any(|(_, identity)| identity == &tee_identity) {
             return Err(IdentityFailure {
                 direction,
@@ -183,10 +182,7 @@ mod tests {
     #[test]
     fn test_drive_relative_path_keeps_windows_drive_semantics() {
         let path = Path::new(r"C:folder\input.txt");
-        assert_eq!(
-            resolve_io_path(Path::new(r"D:\parent"), path).as_path(),
-            path
-        );
+        assert_eq!(resolve_io_path(Path::new(r"D:\parent"), path).as_path(), path);
     }
 
     #[test]
@@ -213,8 +209,7 @@ mod tests {
                 .open(std::env::temp_dir())
                 .expect("temp directory should open")
         };
-        let error = validate_files(&[("stdin", &directory)])
-            .expect_err("directories are not valid file streams");
+        let error = validate_files(&[("stdin", &directory)]).expect_err("directories are not valid file streams");
         assert_eq!(error.source.kind(), std::io::ErrorKind::InvalidInput);
     }
 }

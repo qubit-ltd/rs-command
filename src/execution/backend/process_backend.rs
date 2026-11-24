@@ -204,44 +204,41 @@ impl Backend for ProcessBackend {
         }
         let prepared_files = match resource_input {
             None => Ok(None),
-            Some(resources) => match resources.prepare_for_managed(
-                &scope,
-                &request.snapshot,
-                command_stdin,
-                session_bridge.is_some(),
-            )
-            {
-                Ok(files) => Ok(Some(files)),
-                Err(managed_failure) => {
-                    let error = CommandError::from_reason(
-                        "<managed command>",
-                        CommandErrorReason::FilePreparationFailed {
-                            stage: managed_failure.phase,
-                            direction: managed_failure.direction,
-                            source: managed_failure.source,
-                        },
-                        None,
-                    );
-                    let capacity_lease = reservation.retain();
-                    let owner: Box<dyn RecoveryOwner> = Box::new(PreparationRecoveryOwner {
-                        retained: Mutex::new(Some((managed_failure.failure, scope))),
-                        _capacity_lease: Mutex::new(Some(capacity_lease)),
-                    });
-                    if let Err(error) = sink.publish_outcome(OperationOutcome::Failed(error)) {
-                        log::error!("failed to publish preparation failure outcome: {error:?}");
-                    }
-                    if let Err(rejected) = sink.retain_recovery_owner(owner) {
-                        log::warn!(
-                            "recovery store rejected owner ({}); retaining it in the bounded active frame",
-                            rejected.reason as u8
+            Some(resources) => {
+                match resources.prepare_for_managed(&scope, &request.snapshot, command_stdin, session_bridge.is_some())
+                {
+                    Ok(files) => Ok(Some(files)),
+                    Err(managed_failure) => {
+                        let error = CommandError::from_reason(
+                            "<managed command>",
+                            CommandErrorReason::FilePreparationFailed {
+                                stage: managed_failure.phase,
+                                direction: managed_failure.direction,
+                                source: managed_failure.source,
+                            },
+                            None,
                         );
-                        schedule_recovery_transfer(Arc::clone(&sink), rejected.owner);
+                        let capacity_lease = reservation.retain();
+                        let owner: Box<dyn RecoveryOwner> = Box::new(PreparationRecoveryOwner {
+                            retained: Mutex::new(Some((managed_failure.failure, scope))),
+                            _capacity_lease: Mutex::new(Some(capacity_lease)),
+                        });
+                        if let Err(error) = sink.publish_outcome(OperationOutcome::Failed(error)) {
+                            log::error!("failed to publish preparation failure outcome: {error:?}");
+                        }
+                        if let Err(rejected) = sink.retain_recovery_owner(owner) {
+                            log::warn!(
+                                "recovery store rejected owner ({}); retaining it in the bounded active frame",
+                                rejected.reason as u8
+                            );
+                            schedule_recovery_transfer(Arc::clone(&sink), rejected.owner);
+                        }
+                        drop(session_bridge);
+                        drop(reservation);
+                        return;
                     }
-                    drop(session_bridge);
-                    drop(reservation);
-                    return;
                 }
-            },
+            }
         };
         let options = normalize_tee_paths(options, &request.io_paths);
         let capacity_lease = reservation.retain();
@@ -1558,10 +1555,7 @@ mod tests {
         let operation_marker = marker.clone();
         let domain = ClockDomainId::new_unique();
         let clock_calls = Arc::new(AtomicUsize::new(0));
-        let clock: Arc<dyn ClockSource> = Arc::new(DeadlineExpiresAtRunnerCheck(
-            domain,
-            Arc::clone(&clock_calls),
-        ));
+        let clock: Arc<dyn ClockSource> = Arc::new(DeadlineExpiresAtRunnerCheck(domain, Arc::clone(&clock_calls)));
         let deadline = OperationContext::new(ContextOptions {
             clock: Some(clock),
             deadline: Some(Deadline::at(MonotonicTime::new(domain, 1))),
@@ -1618,10 +1612,7 @@ mod tests {
             4,
             "the clock should expire only at the runner's final pre-spawn check"
         );
-        assert!(
-            !marker.exists(),
-            "runner-side deadline expiry must prevent spawn"
-        );
+        assert!(!marker.exists(), "runner-side deadline expiry must prevent spawn");
         assert!(matches!(
             sink.outcome.lock().unwrap().take(),
             Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
@@ -1632,20 +1623,10 @@ mod tests {
             .unwrap()
             .take()
             .expect("runner-side deadline stop should retain its diagnostic");
-        assert_eq!(
-            diagnostic.kind(),
-            crate::CommandErrorKind::CancelledBeforeStart
-        );
+        assert_eq!(diagnostic.kind(), crate::CommandErrorKind::CancelledBeforeStart);
         assert!(sink.stop_diagnostic.lock().unwrap().is_none());
         assert!(sink.released.load(Ordering::SeqCst));
-        assert!(
-            sink.settlement
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .all_released()
-        );
+        assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
     }
 
     #[cfg(unix)]
@@ -1691,8 +1672,7 @@ mod tests {
                         .arg("-c")
                         .arg(&format!("touch {}", operation_marker.display())),
                     options: RequestOptions::Resources(
-                        CommandResourceRunOptions::new()
-                            .stdout_sink(output_file, FileSinkPolicy::Preserve),
+                        CommandResourceRunOptions::new().stdout_sink(output_file, FileSinkPolicy::Preserve),
                     ),
                     snapshot: ExecutionSnapshot {
                         working_directory: std::env::current_dir().unwrap(),
@@ -1746,20 +1726,10 @@ mod tests {
             .unwrap()
             .take()
             .expect("late pre-start stop should retain its runner diagnostic");
-        assert_eq!(
-            diagnostic.kind(),
-            crate::CommandErrorKind::CancelledBeforeStart
-        );
+        assert_eq!(diagnostic.kind(), crate::CommandErrorKind::CancelledBeforeStart);
         assert!(sink.stop_diagnostic.lock().unwrap().is_none());
         assert!(sink.released.load(Ordering::SeqCst));
-        assert!(
-            sink.settlement
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .all_released()
-        );
+        assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
     }
 
     #[cfg(unix)]

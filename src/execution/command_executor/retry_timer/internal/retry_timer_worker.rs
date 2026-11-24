@@ -72,10 +72,7 @@ pub(super) fn run_retry_timer(rx: std::sync::mpsc::Receiver<RetryTimerMessage>) 
         }
         let wait = pending
             .iter()
-            .map(|item| {
-                item.due
-                    .saturating_duration_since(std::time::Instant::now())
-            })
+            .map(|item| item.due.saturating_duration_since(std::time::Instant::now()))
             .min()
             .unwrap_or(std::time::Duration::from_secs(30));
         match rx.recv_timeout(wait) {

@@ -72,10 +72,8 @@ pub(super) fn register_files(
     stdout: Option<(File, FileSinkPolicy)>,
     stderr: Option<(File, FileSinkPolicy)>,
 ) -> Result<PreparedFiles, Box<RegistrationFailure>> {
-    let (stdout_file, stdout_policy) =
-        stdout.map_or((None, None), |(file, policy)| (Some(file), Some(policy)));
-    let (stderr_file, stderr_policy) =
-        stderr.map_or((None, None), |(file, policy)| (Some(file), Some(policy)));
+    let (stdout_file, stdout_policy) = stdout.map_or((None, None), |(file, policy)| (Some(file), Some(policy)));
+    let (stderr_file, stderr_policy) = stderr.map_or((None, None), |(file, policy)| (Some(file), Some(policy)));
     let mut values = [stdin, stdout_file, stderr_file];
     let policies = [None, stdout_policy, stderr_policy];
     let mut refs: [Option<ResourceRef<Mutex<File>>>; 3] = [None, None, None];
@@ -112,11 +110,7 @@ pub(super) fn register_files(
             }
             Err(error) => {
                 let (category, recovered_file, _) = error.into_parts();
-                values[index] = Some(
-                    recovered_file
-                        .into_inner()
-                        .unwrap_or_else(|e| e.into_inner()),
-                );
+                values[index] = Some(recovered_file.into_inner().unwrap_or_else(|e| e.into_inner()));
                 return Err(Box::new((
                     io::Error::other(RegistrationCategory(category)),
                     file_direction(index),
@@ -159,10 +153,7 @@ fn partial(
 /// # Parameters
 /// * `refs`: Resource references for stdin, stdout, and stderr.
 /// * `policies`: Output policies paired with stdout and stderr references.
-fn build(
-    mut refs: [Option<ResourceRef<Mutex<File>>>; 3],
-    policies: [Option<FileSinkPolicy>; 3],
-) -> PreparedFiles {
+fn build(mut refs: [Option<ResourceRef<Mutex<File>>>; 3], policies: [Option<FileSinkPolicy>; 3]) -> PreparedFiles {
     PreparedFiles::new(
         refs[0].take(),
         refs[1].take().map(|file| PreparedSink {
@@ -260,9 +251,7 @@ fn record_effect(
         description: qubit_operation::DiagnosticSummary::new(&description),
     };
     if let Err(error) = scope.record_effect(record) {
-        log::warn!(
-            "file side-effect evidence was not retained ({error:?}); file owner remains registered"
-        );
+        log::warn!("file side-effect evidence was not retained ({error:?}); file owner remains registered");
     }
 }
 
@@ -276,16 +265,14 @@ mod tests {
     use qubit_operation::OperationOptions;
     use qubit_operation::OperationOutcome;
 
+    use super::RegistrationCategory;
     use super::register_files;
     use super::truncate_sinks;
-    use super::RegistrationCategory;
     use crate::resource_run_options::FileSinkPolicy;
 
     #[test]
     fn test_registration_category_is_preserved_in_source_chain() {
-        let error = io::Error::other(RegistrationCategory(
-            qubit_operation::ResourceManageErrorKind::Stopped,
-        ));
+        let error = io::Error::other(RegistrationCategory(qubit_operation::ResourceManageErrorKind::Stopped));
         let category = error
             .get_ref()
             .and_then(|source| source.downcast_ref::<RegistrationCategory>())
@@ -305,11 +292,7 @@ mod tests {
         let manager = OperationManager::new(Default::default()).unwrap();
         let mut operation = manager
             .try_submit(OperationOptions::default(), move |scope| {
-                let output = std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(&path)
-                    .unwrap();
+                let output = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
                 let mut reservations = vec![scope.reserve_resource().unwrap()];
                 let prepared = register_files(
                     &scope,
@@ -346,14 +329,8 @@ mod tests {
         assert!(settlement.all_released());
         assert_eq!(settlement.effects_total, 1);
         assert_eq!(settlement.effects.len(), 1);
-        assert_eq!(
-            settlement.effects[0].fact,
-            qubit_operation::EffectFact::Known
-        );
-        assert_eq!(
-            settlement.effects[0].description.as_str(),
-            "stdout sink truncated"
-        );
+        assert_eq!(settlement.effects[0].fact, qubit_operation::EffectFact::Known);
+        assert_eq!(settlement.effects[0].description.as_str(), "stdout sink truncated");
     }
 
     #[test]
@@ -371,10 +348,7 @@ mod tests {
                     None,
                 )
                 .map_err(|error| error.0.to_string())?;
-                let sink = prepared
-                    .stdout
-                    .as_ref()
-                    .expect("stdout sink should be registered");
+                let sink = prepared.stdout.as_ref().expect("stdout sink should be registered");
 
                 let panic = std::panic::catch_unwind(AssertUnwindSafe(|| {
                     let _guard = sink.file.lock().unwrap();
@@ -417,14 +391,11 @@ mod tests {
                     None,
                 )
                 .expect("sink owner should register before truncation");
-                let sink = prepared
-                    .stdout
-                    .as_ref()
-                    .expect("stdout owner should be retained");
+                let sink = prepared.stdout.as_ref().expect("stdout owner should be retained");
                 let resource_id = sink.file.id();
 
-                let error = truncate_sinks(&prepared, &scope)
-                    .expect_err("a directory cannot be truncated as an output file");
+                let error =
+                    truncate_sinks(&prepared, &scope).expect_err("a directory cannot be truncated as an output file");
                 assert_eq!(error.kind(), ErrorKind::InvalidInput);
                 assert_eq!(prepared.stdout.as_ref().unwrap().file.id(), resource_id);
                 assert!(
@@ -438,18 +409,13 @@ mod tests {
 
         let resource_id = match operation.wait_outcome().unwrap() {
             OperationOutcome::Succeeded(resource_id) => resource_id,
-            other => panic!(
-                "directory sink truncation should be handled as a recorded effect: {other:?}"
-            ),
+            other => panic!("directory sink truncation should be handled as a recorded effect: {other:?}"),
         };
         let settlement = operation.wait_settlement().unwrap();
         assert!(settlement.all_released());
         assert_eq!(settlement.effects_total, 1);
         assert_eq!(settlement.effects[0].resource_id, Some(resource_id));
-        assert_eq!(
-            settlement.effects[0].fact,
-            qubit_operation::EffectFact::Unknown
-        );
+        assert_eq!(settlement.effects[0].fact, qubit_operation::EffectFact::Unknown);
         assert_eq!(
             settlement.effects[0].description.as_str(),
             "stdout sink truncation could not be confirmed"
@@ -469,17 +435,13 @@ mod tests {
         let manager = OperationManager::new(Default::default()).unwrap();
         let mut operation = manager
             .try_submit(OperationOptions::default(), move |scope| {
-                let stdout = std::fs::File::open(&directory_path)
-                    .expect("directory can be opened as a file");
+                let stdout = std::fs::File::open(&directory_path).expect("directory can be opened as a file");
                 let stderr = std::fs::OpenOptions::new()
                     .read(true)
                     .write(true)
                     .open(&operation_stderr_path)
                     .unwrap();
-                let mut reservations = vec![
-                    scope.reserve_resource().unwrap(),
-                    scope.reserve_resource().unwrap(),
-                ];
+                let mut reservations = vec![scope.reserve_resource().unwrap(), scope.reserve_resource().unwrap()];
                 let prepared = register_files(
                     &scope,
                     &mut reservations,
@@ -506,10 +468,7 @@ mod tests {
         let settlement = operation.wait_settlement().unwrap();
         assert!(settlement.all_released());
         assert_eq!(settlement.effects_total, 1);
-        assert_eq!(
-            settlement.effects[0].fact,
-            qubit_operation::EffectFact::Unknown
-        );
+        assert_eq!(settlement.effects[0].fact, qubit_operation::EffectFact::Unknown);
         assert_eq!(
             std::fs::read(&stderr_path).unwrap(),
             b"preserve after stdout failure",
@@ -531,11 +490,7 @@ mod tests {
         options.limits.effect_records = 1;
         let mut operation = manager
             .try_submit(options, move |scope| {
-                let output = std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(&path)
-                    .unwrap();
+                let output = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
                 let mut reservations = vec![scope.reserve_resource().unwrap()];
                 let prepared = register_files(
                     &scope,
@@ -550,9 +505,7 @@ mod tests {
                         operation_id: scope.id(),
                         resource_id: None,
                         fact: qubit_operation::EffectFact::Known,
-                        description: qubit_operation::DiagnosticSummary::new(
-                            "fill effect capacity",
-                        ),
+                        description: qubit_operation::DiagnosticSummary::new("fill effect capacity"),
                     })
                     .unwrap();
 
@@ -664,10 +617,7 @@ mod tests {
                 let stdin = tempfile::tempfile().unwrap();
                 let stdout = tempfile::tempfile().unwrap();
                 let stderr = tempfile::tempfile().unwrap();
-                let mut reservations = vec![
-                    scope.reserve_resource().unwrap(),
-                    scope.reserve_resource().unwrap(),
-                ];
+                let mut reservations = vec![scope.reserve_resource().unwrap(), scope.reserve_resource().unwrap()];
 
                 let failure = register_files(
                     &scope,
@@ -676,29 +626,21 @@ mod tests {
                     Some((stdout, FileSinkPolicy::Truncate)),
                     Some((stderr, FileSinkPolicy::Preserve)),
                 )
-                .expect_err(
-                    "stderr registration should fail after stdin and stdout consume both slots",
-                );
+                .expect_err("stderr registration should fail after stdin and stdout consume both slots");
                 let (error, direction, prepared, mut raw_files) = *failure;
-                let partial =
-                    prepared.expect("registered stdin and stdout owners should be returned");
+                let partial = prepared.expect("registered stdin and stdout owners should be returned");
 
                 assert!(error.to_string().contains("missing reserved resource slot"));
                 assert_eq!(direction, crate::FilePreparationDirection::Stderr);
                 assert!(reservations.is_empty());
                 assert!(partial.stdin.is_some());
-                let stdout = partial
-                    .stdout
-                    .as_ref()
-                    .expect("stdout owner should remain registered");
+                let stdout = partial.stdout.as_ref().expect("stdout owner should remain registered");
                 assert_eq!(stdout.policy, FileSinkPolicy::Truncate);
                 assert!(partial.stderr.is_none());
                 assert!(raw_files[0].is_none());
                 assert!(raw_files[1].is_none());
 
-                let mut recovered_stderr = raw_files[2]
-                    .take()
-                    .expect("unregistered stderr owner should return");
+                let mut recovered_stderr = raw_files[2].take().expect("unregistered stderr owner should return");
                 recovered_stderr.write_all(b"recovered stderr").unwrap();
                 recovered_stderr.seek(SeekFrom::Start(0)).unwrap();
                 let mut contents = Vec::new();
@@ -723,9 +665,7 @@ mod tests {
         let manager = OperationManager::new(Default::default()).unwrap();
         let mut operation = manager
             .try_submit(OperationOptions::default(), move |scope| {
-                let mut reservations = (0..3)
-                    .map(|_| scope.reserve_resource().unwrap())
-                    .collect::<Vec<_>>();
+                let mut reservations = (0..3).map(|_| scope.reserve_resource().unwrap()).collect::<Vec<_>>();
                 let prepared = register_files(
                     &scope,
                     &mut reservations,
@@ -737,14 +677,8 @@ mod tests {
 
                 assert!(reservations.is_empty());
                 assert!(prepared.stdin.is_some());
-                assert_eq!(
-                    prepared.stdout.as_ref().unwrap().policy,
-                    FileSinkPolicy::Preserve
-                );
-                assert_eq!(
-                    prepared.stderr.as_ref().unwrap().policy,
-                    FileSinkPolicy::Truncate
-                );
+                assert_eq!(prepared.stdout.as_ref().unwrap().policy, FileSinkPolicy::Preserve);
+                assert_eq!(prepared.stderr.as_ref().unwrap().policy, FileSinkPolicy::Truncate);
                 truncate_sinks(&prepared, &scope).map_err(|error| error.to_string())?;
                 Ok::<_, String>(())
             })
@@ -757,9 +691,6 @@ mod tests {
         let settlement = operation.wait_settlement().unwrap();
         assert!(settlement.all_released());
         assert_eq!(settlement.effects_total, 1);
-        assert_eq!(
-            settlement.effects[0].description.as_str(),
-            "stderr sink truncated"
-        );
+        assert_eq!(settlement.effects[0].description.as_str(), "stderr sink truncated");
     }
 }

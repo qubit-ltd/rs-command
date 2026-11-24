@@ -210,11 +210,8 @@ mod resource_byte_tests {
     #[test]
     fn test_manager_admission_rejection_restores_standard_and_resource_requests() {
         let manager = OperationManager::new(ManagerOptions::default()).unwrap();
-        let executor =
-            CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).unwrap();
-        let _shutdown = executor
-            .group
-            .request_shutdown(qubit_operation::ShutdownMode::Cancel);
+        let executor = CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).unwrap();
+        let _shutdown = executor.group.request_shutdown(qubit_operation::ShutdownMode::Cancel);
 
         let standard = match executor.submit(
             CommandRunner::without_timeout(),
@@ -224,19 +221,11 @@ mod resource_byte_tests {
             Ok(_) => panic!("manager shutdown should reject external operation admission"),
             Err(failure) => failure,
         };
-        assert!(matches!(
-            standard.reason,
-            CommandSubmitFailureReason::Admission(_)
-        ));
-        assert_eq!(
-            standard.command.program(),
-            "preserved-after-manager-rejection"
-        );
+        assert!(matches!(standard.reason, CommandSubmitFailureReason::Admission(_)));
+        assert_eq!(standard.command.program(), "preserved-after-manager-rejection");
 
         let mut input = tempfile::tempfile().unwrap();
-        input
-            .write_all(b"restored after manager rejection")
-            .unwrap();
+        input.write_all(b"restored after manager rejection").unwrap();
         let resource = match executor.submit_resources(
             CommandRunner::without_timeout(),
             Command::new("preserved-resource-after-manager-rejection"),
@@ -245,14 +234,8 @@ mod resource_byte_tests {
             Ok(_) => panic!("manager shutdown should reject resource operation admission"),
             Err(failure) => failure,
         };
-        assert!(matches!(
-            resource.reason,
-            CommandSubmitFailureReason::Admission(_)
-        ));
-        assert_eq!(
-            resource.command.program(),
-            "preserved-resource-after-manager-rejection"
-        );
+        assert!(matches!(resource.reason, CommandSubmitFailureReason::Admission(_)));
+        assert_eq!(resource.command.program(), "preserved-resource-after-manager-rejection");
 
         let mut returned_input = resource
             .options
@@ -271,9 +254,7 @@ mod resource_byte_tests {
     fn test_async_manager_admission_rejection_restores_standard_and_resource_requests() {
         let manager = OperationManager::new(ManagerOptions::default()).unwrap();
         let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
-        let _shutdown = executor
-            .group
-            .request_shutdown(qubit_operation::ShutdownMode::Cancel);
+        let _shutdown = executor.group.request_shutdown(qubit_operation::ShutdownMode::Cancel);
 
         let standard = match executor.submit_async(
             CommandRunner::without_timeout(),
@@ -283,14 +264,8 @@ mod resource_byte_tests {
             Ok(_) => panic!("closed group should reject async external operation admission"),
             Err(failure) => failure,
         };
-        assert!(matches!(
-            standard.reason,
-            CommandSubmitFailureReason::Admission(_)
-        ));
-        assert_eq!(
-            standard.command.program(),
-            "preserved-async-after-manager-rejection"
-        );
+        assert!(matches!(standard.reason, CommandSubmitFailureReason::Admission(_)));
+        assert_eq!(standard.command.program(), "preserved-async-after-manager-rejection");
 
         let mut input = tempfile::tempfile().unwrap();
         input
@@ -304,10 +279,7 @@ mod resource_byte_tests {
             Ok(_) => panic!("closed group should reject async resource admission"),
             Err(failure) => failure,
         };
-        assert!(matches!(
-            resource.reason,
-            CommandSubmitFailureReason::Admission(_)
-        ));
+        assert!(matches!(resource.reason, CommandSubmitFailureReason::Admission(_)));
         assert_eq!(
             resource.command.program(),
             "preserved-async-resource-after-manager-rejection"
@@ -355,14 +327,10 @@ async fn wait_capacity_async(
                 .is_some_and(|signal| signal.as_mut().poll(cx).is_ready());
             let stopped = stop.as_mut().poll(cx).is_ready();
             if deadline_elapsed {
-                return std::task::Poll::Ready(Ok(
-                    super::command_executor::wait::WaitResult::DeadlineExpired,
-                ));
+                return std::task::Poll::Ready(Ok(super::command_executor::wait::WaitResult::DeadlineExpired));
             }
             if stopped {
-                return std::task::Poll::Ready(Ok(
-                    super::command_executor::wait::WaitResult::Stopped,
-                ));
+                return std::task::Poll::Ready(Ok(super::command_executor::wait::WaitResult::Stopped));
             }
             capacity.as_mut().poll(cx)
         })
@@ -406,14 +374,9 @@ where
     let mut timer = Box::pin(tick);
     std::future::poll_fn(|cx| {
         if context.as_ref().is_some_and(OperationContext::is_expired) {
-            return std::task::Poll::Ready(Ok(
-                super::command_executor::wait::WaitResult::DeadlineExpired,
-            ));
+            return std::task::Poll::Ready(Ok(super::command_executor::wait::WaitResult::DeadlineExpired));
         }
-        if context
-            .as_ref()
-            .is_some_and(|context| context.stop_reason().is_some())
-        {
+        if context.as_ref().is_some_and(|context| context.stop_reason().is_some()) {
             return std::task::Poll::Ready(Ok(super::command_executor::wait::WaitResult::Stopped));
         }
         if scheduler.is_closed() {
@@ -430,19 +393,13 @@ where
                     })
                 }
                 Err(CapacityFailure::QueueFull) => {
-                    return std::task::Poll::Ready(Err(
-                        super::CommandSubmitWaitFailure::WaiterLimit,
-                    ));
+                    return std::task::Poll::Ready(Err(super::CommandSubmitWaitFailure::WaiterLimit));
                 }
                 Err(CapacityFailure::Closed) => {
-                    return std::task::Poll::Ready(Ok(
-                        super::command_executor::wait::WaitResult::Closed,
-                    ));
+                    return std::task::Poll::Ready(Ok(super::command_executor::wait::WaitResult::Closed));
                 }
                 Err(_) => {
-                    return std::task::Poll::Ready(Ok(
-                        super::command_executor::wait::WaitResult::NotRetryable,
-                    ));
+                    return std::task::Poll::Ready(Ok(super::command_executor::wait::WaitResult::NotRetryable));
                 }
             }
         }
@@ -473,16 +430,13 @@ mod retry_timer_waiter_tests {
             ..Default::default()
         })
         .unwrap();
-        let result =
-            futures_lite_block_on(wait_busy_async_with_tick(scheduler.clone(), None, async {
-                Err(RetryTimerFailure::Disconnected)
-            }));
+        let result = futures_lite_block_on(wait_busy_async_with_tick(scheduler.clone(), None, async {
+            Err(RetryTimerFailure::Disconnected)
+        }));
 
         assert!(matches!(
             result,
-            Err(CommandSubmitWaitFailure::Timer(
-                RetryTimerFailure::Disconnected
-            ))
+            Err(CommandSubmitWaitFailure::Timer(RetryTimerFailure::Disconnected))
         ));
         assert_eq!(scheduler.snapshot().waiters, 0);
     }
@@ -508,9 +462,7 @@ pub(in crate::execution) async fn wait_retryable_async(
 ) -> Result<super::command_executor::wait::WaitResult, super::CommandSubmitWaitFailure> {
     if matches!(
         reason,
-        CommandSubmitFailureReason::Capacity(
-            CapacityFailure::ActiveFull | CapacityFailure::QueueFull
-        )
+        CommandSubmitFailureReason::Capacity(CapacityFailure::ActiveFull | CapacityFailure::QueueFull)
     ) {
         wait_capacity_async(scheduler, bytes, context).await
     } else if matches!(
@@ -540,21 +492,14 @@ pub(in crate::execution) async fn wait_retry_tick(
                 .as_mut()
                 .is_some_and(|signal| signal.as_mut().poll(cx).is_ready())
             {
-                return std::task::Poll::Ready(Ok(
-                    super::command_executor::wait::WaitResult::DeadlineExpired,
-                ));
+                return std::task::Poll::Ready(Ok(super::command_executor::wait::WaitResult::DeadlineExpired));
             }
             if stop.as_mut().poll(cx).is_ready() {
-                return std::task::Poll::Ready(Ok(
-                    super::command_executor::wait::WaitResult::Stopped,
-                ));
+                return std::task::Poll::Ready(Ok(super::command_executor::wait::WaitResult::Stopped));
             }
-            let delay_result: std::task::Poll<Result<(), RetryTimerFailure>> =
-                delay.as_mut().poll(cx);
+            let delay_result: std::task::Poll<Result<(), RetryTimerFailure>> = delay.as_mut().poll(cx);
             if let std::task::Poll::Ready(value) = delay_result {
-                return std::task::Poll::Ready(
-                    value.map(|()| super::command_executor::wait::WaitResult::Retry),
-                );
+                return std::task::Poll::Ready(value.map(|()| super::command_executor::wait::WaitResult::Retry));
             }
             std::task::Poll::Pending
         })
@@ -572,9 +517,7 @@ pub(in crate::execution) async fn wait_retry_tick(
 pub(in crate::execution) fn managed_failure(message: String) -> CommandError {
     CommandError::from_reason(
         "<managed command>",
-        crate::CommandErrorReason::ManagedOperationFailed {
-            diagnostic: message,
-        },
+        crate::CommandErrorReason::ManagedOperationFailed { diagnostic: message },
         None,
     )
 }
@@ -596,12 +539,8 @@ pub(in crate::execution) fn make_request(
             o.configured_stderr_file().map(ToOwned::to_owned),
         ),
         RequestOptions::Resources(o) => (
-            o.ordinary_options()
-                .configured_stdout_file()
-                .map(ToOwned::to_owned),
-            o.ordinary_options()
-                .configured_stderr_file()
-                .map(ToOwned::to_owned),
+            o.ordinary_options().configured_stdout_file().map(ToOwned::to_owned),
+            o.ordinary_options().configured_stderr_file().map(ToOwned::to_owned),
         ),
     };
     let needs_base = [stdin.as_deref(), stdout.as_deref(), stderr.as_deref()]
@@ -620,9 +559,8 @@ pub(in crate::execution) fn make_request(
         }
         Err(_) => std::path::PathBuf::new(),
     };
-    let resolve = |path: Option<std::path::PathBuf>| {
-        path.map(|path| crate::execution::files::resolve_io_path(&wd, &path))
-    };
+    let resolve =
+        |path: Option<std::path::PathBuf>| path.map(|path| crate::execution::files::resolve_io_path(&wd, &path));
     let paths = IoPathSnapshot {
         stdin: resolve(stdin),
         stdout: resolve(stdout),
@@ -712,14 +650,8 @@ mod executor_decision_tests {
             max_waiters: 1,
             ..Default::default()
         };
-        let first = CommandExecutor::new(
-            OperationManager::new(Default::default()).unwrap(),
-            config.clone(),
-        )
-        .unwrap();
-        let second =
-            CommandExecutor::new(OperationManager::new(Default::default()).unwrap(), config)
-                .unwrap();
+        let first = CommandExecutor::new(OperationManager::new(Default::default()).unwrap(), config.clone()).unwrap();
+        let second = CommandExecutor::new(OperationManager::new(Default::default()).unwrap(), config).unwrap();
         let first_reservation = first.scheduler.try_reserve(0).unwrap();
         let second_reservation = second.scheduler.try_reserve(0).unwrap();
         let first_executor = first.clone();
@@ -759,12 +691,8 @@ mod executor_decision_tests {
         first.scheduler.close_admission();
         second.scheduler.close_admission();
 
-        let first_failure = first_rx
-            .recv_timeout(std::time::Duration::from_secs(1))
-            .unwrap();
-        let second_failure = second_rx
-            .recv_timeout(std::time::Duration::from_secs(1))
-            .unwrap();
+        let first_failure = first_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        let second_failure = second_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
         first_waiter.join().unwrap();
         second_waiter.join().unwrap();
         assert_eq!(
@@ -811,14 +739,9 @@ mod executor_decision_tests {
         };
         assert_eq!(
             failure.reason,
-            CommandSubmitFailureReason::Wait(
-                crate::execution::CommandSubmitWaitFailure::WaiterLimit
-            )
+            CommandSubmitFailureReason::Wait(crate::execution::CommandSubmitWaitFailure::WaiterLimit)
         );
-        assert_eq!(
-            failure.command.program(),
-            std::ffi::OsStr::new("preserved-command")
-        );
+        assert_eq!(failure.command.program(), std::ffi::OsStr::new("preserved-command"));
         assert_eq!(
             failure.command.arguments().collect::<Vec<_>>(),
             vec![std::ffi::OsStr::new("preserved-arg")]
@@ -891,10 +814,7 @@ mod executor_decision_tests {
             failure.reason,
             CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Stopped)
         );
-        assert_eq!(
-            failure.command.program(),
-            std::ffi::OsStr::new("must-not-start")
-        );
+        assert_eq!(failure.command.program(), std::ffi::OsStr::new("must-not-start"));
         assert_eq!(
             failure.command.arguments().collect::<Vec<_>>(),
             vec![std::ffi::OsStr::new("original-arg")]
@@ -924,9 +844,7 @@ mod executor_decision_tests {
         let request = make_request(
             CommandRunner::without_timeout().working_directory(runner_directory),
             command,
-            super::RequestOptions::Standard(
-                CommandRunOptions::new().tee_stdout_to_file("output.log"),
-            ),
+            super::RequestOptions::Standard(CommandRunOptions::new().tee_stdout_to_file("output.log")),
         )
         .expect("request snapshot should succeed");
 
@@ -940,18 +858,9 @@ mod executor_decision_tests {
             request.io_paths.stdout.as_deref(),
             Some(parent.join("output.log").as_path())
         );
-        assert_eq!(
-            request.command.stdin_file_path(),
-            Some(Path::new("input.txt"))
-        );
-        assert_eq!(
-            request.command.working_directory_override(),
-            Some(command_directory)
-        );
-        assert_eq!(
-            request.runner.configured_working_directory(),
-            Some(runner_directory)
-        );
+        assert_eq!(request.command.stdin_file_path(), Some(Path::new("input.txt")));
+        assert_eq!(request.command.working_directory_override(), Some(command_directory));
+        assert_eq!(request.runner.configured_working_directory(), Some(runner_directory));
     }
 
     struct FixedClock(ClockDomainId);
@@ -1122,9 +1031,7 @@ mod executor_decision_tests {
         assert!(!retry_wait(&busy, &scheduler, 0, Some(context.clone())).unwrap());
         assert_eq!(
             deadline_failure(busy, &context),
-            CommandSubmitFailureReason::Capacity(
-                crate::execution::CapacityFailure::DeadlineExpired
-            )
+            CommandSubmitFailureReason::Capacity(crate::execution::CapacityFailure::DeadlineExpired)
         );
     }
 
@@ -1208,12 +1115,7 @@ mod executor_decision_tests {
             failure.reason,
             CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Stopped)
         );
-        let mut returned = failure
-            .options
-            .configured_stdin()
-            .unwrap()
-            .try_clone()
-            .unwrap();
+        let mut returned = failure.options.configured_stdin().unwrap().try_clone().unwrap();
         returned.rewind().unwrap();
         let mut contents = Vec::new();
         returned.read_to_end(&mut contents).unwrap();
@@ -1317,18 +1219,14 @@ mod snapshot_failure_tests {
         input
             .write_all(b"recoverable input bytes")
             .expect("stdin fixture should be written");
-        input
-            .seek(SeekFrom::Start(0))
-            .expect("stdin cursor should be reset");
+        input.seek(SeekFrom::Start(0)).expect("stdin cursor should be reset");
 
         let manager = OperationManager::new(Default::default()).expect("manager should start");
-        let executor = CommandExecutor::new(manager.clone(), CommandExecutionConfig::default())
-            .expect("executor should start");
+        let executor =
+            CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).expect("executor should start");
         let removed_directory = tempfile::tempdir().expect("temporary directory should be created");
-        std::env::set_current_dir(removed_directory.path())
-            .expect("current directory should change");
-        std::fs::remove_dir(removed_directory.path())
-            .expect("current directory should be unlinked");
+        std::env::set_current_dir(removed_directory.path()).expect("current directory should change");
+        std::fs::remove_dir(removed_directory.path()).expect("current directory should be unlinked");
 
         let failure = match executor.submit_resources(
             CommandRunner::without_timeout(),
@@ -1342,11 +1240,7 @@ mod snapshot_failure_tests {
         };
         match &failure.reason {
             CommandSubmitFailureReason::Snapshot(snapshot) => {
-                assert!(
-                    snapshot
-                        .diagnostic
-                        .contains("parent directory snapshot failed")
-                );
+                assert!(snapshot.diagnostic.contains("parent directory snapshot failed"));
             }
             other => panic!("expected snapshot failure, got {other:?}"),
         }
@@ -1525,15 +1419,10 @@ mod snapshot_failure_tests {
                 CommandRunner::without_timeout(),
                 Command::new("must-not-run-after-async-resource-snapshot-failure"),
                 CommandResourceRunOptions::new()
-                    .options(
-                        CommandRunOptions::new()
-                            .tee_stdout_to_file("relative-async-resource-output.log"),
-                    )
+                    .options(CommandRunOptions::new().tee_stdout_to_file("relative-async-resource-output.log"))
                     .stdin_file(input),
             ) {
-                Ok(_) => panic!(
-                    "async resource submission must reject a missing working-directory snapshot"
-                ),
+                Ok(_) => panic!("async resource submission must reject a missing working-directory snapshot"),
                 Err(failure) => failure,
             };
             assert!(matches!(
@@ -1660,9 +1549,7 @@ impl CommandExecutorApi for CommandExecutor {
         command: Command,
         options: CommandRunOptions,
     ) -> Result<CommandOperation, CommandSubmitFailure> {
-        super::command_executor::CommandExecutor::submit_wait_blocking_in_impl(
-            self, scope, runner, command, options,
-        )
+        super::command_executor::CommandExecutor::submit_wait_blocking_in_impl(self, scope, runner, command, options)
     }
     /// Performs the submit wait blocking step in the managed command execution
     /// lifecycle.
@@ -1677,9 +1564,7 @@ impl CommandExecutorApi for CommandExecutor {
         command: Command,
         options: CommandRunOptions,
     ) -> Result<CommandOperation, CommandSubmitFailure> {
-        super::command_executor::CommandExecutor::submit_wait_blocking_impl(
-            self, runner, command, options,
-        )
+        super::command_executor::CommandExecutor::submit_wait_blocking_impl(self, runner, command, options)
     }
     /// Performs the submit wait resources blocking step in the managed command
     /// execution lifecycle.
@@ -1694,9 +1579,7 @@ impl CommandExecutorApi for CommandExecutor {
         command: Command,
         options: CommandResourceRunOptions,
     ) -> Result<CommandOperation, CommandResourceSubmitFailure> {
-        super::command_executor::CommandExecutor::submit_wait_resources_blocking_impl(
-            self, runner, command, options,
-        )
+        super::command_executor::CommandExecutor::submit_wait_resources_blocking_impl(self, runner, command, options)
     }
     /// Performs the submit wait resources blocking in step in the managed
     /// command execution lifecycle.
@@ -1731,8 +1614,7 @@ impl CommandExecutorApi for CommandExecutor {
         command: Command,
         options: CommandRunOptions,
     ) -> Result<super::AsyncCommandOperation, CommandSubmitFailure> {
-        super::command_executor::CommandExecutor::submit_wait_impl(self, runner, command, options)
-            .await
+        super::command_executor::CommandExecutor::submit_wait_impl(self, runner, command, options).await
     }
     /// Performs the submit wait resources step in the managed command execution
     /// lifecycle.
@@ -1748,10 +1630,7 @@ impl CommandExecutorApi for CommandExecutor {
         command: Command,
         options: CommandResourceRunOptions,
     ) -> Result<super::AsyncCommandOperation, CommandResourceSubmitFailure> {
-        super::command_executor::CommandExecutor::submit_wait_resources_impl(
-            self, runner, command, options,
-        )
-        .await
+        super::command_executor::CommandExecutor::submit_wait_resources_impl(self, runner, command, options).await
     }
     /// Performs the submit wait resources in step in the managed command
     /// execution lifecycle.
@@ -1769,10 +1648,8 @@ impl CommandExecutorApi for CommandExecutor {
         command: Command,
         options: CommandResourceRunOptions,
     ) -> Result<super::AsyncCommandOperation, CommandResourceSubmitFailure> {
-        super::command_executor::CommandExecutor::submit_wait_resources_in_impl(
-            self, scope, runner, command, options,
-        )
-        .await
+        super::command_executor::CommandExecutor::submit_wait_resources_in_impl(self, scope, runner, command, options)
+            .await
     }
     /// Performs the submit async step in the managed command execution
     /// lifecycle.
@@ -1858,10 +1735,7 @@ impl CommandExecutorApi for CommandExecutor {
         command: Command,
         options: CommandRunOptions,
     ) -> Result<super::AsyncCommandOperation, CommandSubmitFailure> {
-        super::command_executor::CommandExecutor::submit_wait_in_impl(
-            self, scope, runner, command, options,
-        )
-        .await
+        super::command_executor::CommandExecutor::submit_wait_in_impl(self, scope, runner, command, options).await
     }
 }
 /// Performs the build executor step in the managed command execution lifecycle.
@@ -1893,13 +1767,12 @@ pub(crate) fn build_executor(
         .map_err(CommandExecutorCreateError::GroupBinding)?;
     let scheduler = BoundedScheduler::new(config.clone())?;
     let backend = ProcessBackend::new();
-    let worker_handles =
-        spawn_domain_workers_with(&scheduler, config.max_active, |index, worker| {
-            std::thread::Builder::new()
-                .name(format!("qubit-command-worker-{index}"))
-                .spawn(worker)
-        })
-        .map_err(|_| CommandExecutorCreateError::WorkerStartFailed)?;
+    let worker_handles = spawn_domain_workers_with(&scheduler, config.max_active, |index, worker| {
+        std::thread::Builder::new()
+            .name(format!("qubit-command-worker-{index}"))
+            .spawn(worker)
+    })
+    .map_err(|_| CommandExecutorCreateError::WorkerStartFailed)?;
     let recovery = match super::adapter::cleanup::start_recovery_worker(config.max_active) {
         Ok(recovery) => recovery,
         Err(_) => {
@@ -1924,10 +1797,7 @@ pub(crate) fn build_executor(
 fn spawn_domain_workers_with(
     scheduler: &BoundedScheduler,
     count: usize,
-    mut spawn: impl FnMut(
-        usize,
-        Box<dyn FnOnce() + Send + 'static>,
-    ) -> std::io::Result<std::thread::JoinHandle<()>>,
+    mut spawn: impl FnMut(usize, Box<dyn FnOnce() + Send + 'static>) -> std::io::Result<std::thread::JoinHandle<()>>,
 ) -> std::io::Result<Vec<std::thread::JoinHandle<()>>> {
     let mut workers = Vec::with_capacity(count);
     for index in 0..count {
@@ -2024,9 +1894,7 @@ mod retry_wait_tests {
         assert!(context.request_stop(StopReason::UserCancelled));
         assert!(matches!(
             retry.as_mut().poll(&mut cx),
-            Poll::Ready(Ok(
-                crate::execution::command_executor::wait::WaitResult::Stopped
-            ))
+            Poll::Ready(Ok(crate::execution::command_executor::wait::WaitResult::Stopped))
         ));
     }
 
@@ -2068,9 +1936,8 @@ mod retry_wait_tests {
         .unwrap();
         let reservation = scheduler.try_reserve(0).unwrap();
         let context = OperationContext::new(ContextOptions::default()).unwrap();
-        let reason = crate::execution::CommandSubmitFailureReason::Capacity(
-            crate::execution::CapacityFailure::ActiveFull,
-        );
+        let reason =
+            crate::execution::CommandSubmitFailureReason::Capacity(crate::execution::CapacityFailure::ActiveFull);
         let mut wait = Box::pin(wait_retryable_async(
             scheduler.clone(),
             0,
@@ -2084,9 +1951,7 @@ mod retry_wait_tests {
         assert!(context.request_stop(StopReason::UserCancelled));
         assert!(matches!(
             wait.as_mut().poll(&mut cx),
-            Poll::Ready(Ok(
-                crate::execution::command_executor::wait::WaitResult::Stopped
-            ))
+            Poll::Ready(Ok(crate::execution::command_executor::wait::WaitResult::Stopped))
         ));
         assert_eq!(
             scheduler.snapshot().waiters,
@@ -2140,8 +2005,7 @@ mod retry_wait_tests {
                     context_tx.send(scope.context()).unwrap();
                     let failure = match waiting_executor.submit_wait_resources_blocking_in(
                         &scope,
-                        CommandRunner::without_timeout()
-                            .working_directory("resource-retained-directory"),
+                        CommandRunner::without_timeout().working_directory("resource-retained-directory"),
                         Command::new("must-not-start-resource").arg("resource-original-arg"),
                         CommandResourceRunOptions::new().stdin_file(input),
                     ) {
@@ -2181,12 +2045,7 @@ mod retry_wait_tests {
             failure.runner.configured_working_directory(),
             Some(Path::new("resource-retained-directory"))
         );
-        let mut returned = failure
-            .options
-            .configured_stdin()
-            .unwrap()
-            .try_clone()
-            .unwrap();
+        let mut returned = failure.options.configured_stdin().unwrap().try_clone().unwrap();
         returned.rewind().unwrap();
         let mut contents = Vec::new();
         returned.read_to_end(&mut contents).unwrap();
@@ -2199,9 +2058,7 @@ mod retry_wait_tests {
 
     #[test]
     fn test_async_busy_wait_observes_waiter_limit_and_scheduler_close() {
-        let busy = crate::execution::CommandSubmitFailureReason::Admission(
-            qubit_operation::AdmissionError::Busy,
-        );
+        let busy = crate::execution::CommandSubmitFailureReason::Admission(qubit_operation::AdmissionError::Busy);
         let full = BoundedScheduler::new(CommandExecutionConfig {
             max_waiters: 0,
             ..Default::default()
@@ -2226,9 +2083,7 @@ mod retry_wait_tests {
         scheduler.close_admission();
         assert!(matches!(
             waiting.as_mut().poll(&mut cx),
-            Poll::Ready(Ok(
-                crate::execution::command_executor::wait::WaitResult::Closed
-            ))
+            Poll::Ready(Ok(crate::execution::command_executor::wait::WaitResult::Closed))
         ));
         assert_eq!(scheduler.snapshot().waiters, 0);
     }
@@ -2260,9 +2115,7 @@ mod retry_wait_tests {
         assert_eq!(second.0.load(Ordering::SeqCst), 1);
         assert!(matches!(
             wait.as_mut().poll(&mut second_cx),
-            Poll::Ready(Ok(
-                crate::execution::command_executor::wait::WaitResult::Retry
-            ))
+            Poll::Ready(Ok(crate::execution::command_executor::wait::WaitResult::Retry))
         ));
         assert_eq!(scheduler.snapshot().waiters, 0);
     }
@@ -2286,9 +2139,7 @@ mod retry_wait_tests {
 
         assert!(matches!(
             wait.as_mut().poll(&mut cx),
-            Poll::Ready(Ok(
-                crate::execution::command_executor::wait::WaitResult::Retry
-            ))
+            Poll::Ready(Ok(crate::execution::command_executor::wait::WaitResult::Retry))
         ));
         assert_eq!(scheduler.snapshot().waiters, 0);
         let retried = scheduler
@@ -2320,11 +2171,7 @@ mod retry_wait_tests {
             budget: None,
         })
         .unwrap();
-        let mut wait = Box::pin(wait_capacity_async(
-            scheduler.clone(),
-            0,
-            Some(context.clone()),
-        ));
+        let mut wait = Box::pin(wait_capacity_async(scheduler.clone(), 0, Some(context.clone())));
         let mut cx = Context::from_waker(Waker::noop());
 
         assert!(wait.as_mut().poll(&mut cx).is_pending());
@@ -2333,9 +2180,7 @@ mod retry_wait_tests {
 
         assert!(matches!(
             wait.as_mut().poll(&mut cx),
-            Poll::Ready(Ok(
-                crate::execution::command_executor::wait::WaitResult::Retry
-            ))
+            Poll::Ready(Ok(crate::execution::command_executor::wait::WaitResult::Retry))
         ));
         assert_eq!(scheduler.snapshot().waiters, 0);
         assert_eq!(context.stop_reason(), None);
@@ -2357,11 +2202,7 @@ mod retry_wait_tests {
         .unwrap();
         let reservation = scheduler.try_reserve(0).unwrap();
         let context = OperationContext::new(ContextOptions::default()).unwrap();
-        let mut wait = Box::pin(wait_capacity_async(
-            scheduler.clone(),
-            0,
-            Some(context.clone()),
-        ));
+        let mut wait = Box::pin(wait_capacity_async(scheduler.clone(), 0, Some(context.clone())));
         let mut cx = Context::from_waker(Waker::noop());
 
         assert!(wait.as_mut().poll(&mut cx).is_pending());
@@ -2371,9 +2212,7 @@ mod retry_wait_tests {
 
         assert!(matches!(
             wait.as_mut().poll(&mut cx),
-            Poll::Ready(Ok(
-                crate::execution::command_executor::wait::WaitResult::Stopped
-            ))
+            Poll::Ready(Ok(crate::execution::command_executor::wait::WaitResult::Stopped))
         ));
         assert_eq!(scheduler.snapshot().waiters, 0);
         assert_eq!(scheduler.snapshot().active, 0);
@@ -2397,11 +2236,7 @@ mod retry_wait_tests {
             budget: None,
         })
         .unwrap();
-        let mut wait = Box::pin(wait_capacity_async(
-            scheduler.clone(),
-            0,
-            Some(context.clone()),
-        ));
+        let mut wait = Box::pin(wait_capacity_async(scheduler.clone(), 0, Some(context.clone())));
 
         assert!(wait.as_mut().poll(&mut cx).is_pending());
         assert_eq!(scheduler.snapshot().waiters, 1);
@@ -2435,9 +2270,7 @@ mod retry_wait_tests {
 
         assert!(matches!(
             wait.as_mut().poll(&mut cx),
-            Poll::Ready(Ok(
-                crate::execution::command_executor::wait::WaitResult::Closed
-            ))
+            Poll::Ready(Ok(crate::execution::command_executor::wait::WaitResult::Closed))
         ));
         assert_eq!(scheduler.snapshot().waiters, 0);
         drop(reservation);
@@ -2536,15 +2369,10 @@ mod command_executor_api_tests {
     use crate::CommandRunner;
 
     fn setup() -> (OperationManager, CommandExecutor, CommandRunner) {
-        let manager =
-            OperationManager::new(ManagerOptions::default()).expect("manager should start");
-        let executor = CommandExecutor::new(manager.clone(), CommandExecutionConfig::default())
-            .expect("executor should start");
-        (
-            manager,
-            executor,
-            CommandRunner::new(Duration::from_secs(5)),
-        )
+        let manager = OperationManager::new(ManagerOptions::default()).expect("manager should start");
+        let executor =
+            CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).expect("executor should start");
+        (manager, executor, CommandRunner::new(Duration::from_secs(5)))
     }
 
     #[cfg(feature = "async")]
@@ -2553,8 +2381,7 @@ mod command_executor_api_tests {
         use crate::session::contracts::SessionBridge;
 
         let configured = CommandRunner::without_timeout().max_total_output_bytes(7);
-        let channels =
-            crate::execution::command_executor::submission::session_channels(&configured);
+        let channels = crate::execution::command_executor::submission::session_channels(&configured);
         assert_eq!(channels.bridge.output_budget_limit(), Some(7));
 
         let unbounded = CommandRunner::without_timeout();
@@ -2564,10 +2391,7 @@ mod command_executor_api_tests {
 
     #[cfg(unix)]
     fn output_and_settle(mut operation: crate::CommandOperation) -> Vec<u8> {
-        let output = match operation
-            .wait_outcome()
-            .expect("command outcome should be observable")
-        {
+        let output = match operation.wait_outcome().expect("command outcome should be observable") {
             OperationOutcome::Succeeded(output) => output,
             other => panic!("command did not succeed: {other:?}"),
         };
@@ -2755,9 +2579,7 @@ mod command_executor_api_tests {
                         .submit_resources_in(
                             &scope,
                             scoped_runner.clone(),
-                            Command::new("sh")
-                                .arg("-c")
-                                .arg("printf submit-resources-in"),
+                            Command::new("sh").arg("-c").arg("printf submit-resources-in"),
                             CommandResourceRunOptions::new(),
                         )
                         .map_err(|_| {
@@ -2843,39 +2665,29 @@ mod command_executor_api_tests {
             root_failure.reason,
             CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
         );
-        assert_eq!(
-            root_failure.command.program(),
-            "must-not-run-root-wait-after-shutdown"
-        );
+        assert_eq!(root_failure.command.program(), "must-not-run-root-wait-after-shutdown");
 
         let scoped_executor = executor.clone();
-        let scoped_result =
-            manager
-                .run(qubit_operation::OperationOptions::default(), move |scope| {
-                    let failure =
-                        match <CommandExecutor as CommandExecutorApi>::submit_wait_blocking_in(
-                            &scoped_executor,
-                            &scope,
-                            runner,
-                            Command::new("must-not-run-scoped-wait-after-shutdown"),
-                            Default::default(),
-                        ) {
-                            Err(failure) => failure,
-                            Ok(_) => panic!(
-                                "scoped blocking wait must return after shutdown closes admission"
-                            ),
-                        };
-                    assert_eq!(
-                        failure.reason,
-                        CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
-                    );
-                    assert_eq!(
-                        failure.command.program(),
-                        "must-not-run-scoped-wait-after-shutdown"
-                    );
-                    Ok::<_, crate::CommandError>(())
-                })
-                .unwrap();
+        let scoped_result = manager
+            .run(qubit_operation::OperationOptions::default(), move |scope| {
+                let failure = match <CommandExecutor as CommandExecutorApi>::submit_wait_blocking_in(
+                    &scoped_executor,
+                    &scope,
+                    runner,
+                    Command::new("must-not-run-scoped-wait-after-shutdown"),
+                    Default::default(),
+                ) {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("scoped blocking wait must return after shutdown closes admission"),
+                };
+                assert_eq!(
+                    failure.reason,
+                    CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
+                );
+                assert_eq!(failure.command.program(), "must-not-run-scoped-wait-after-shutdown");
+                Ok::<_, crate::CommandError>(())
+            })
+            .unwrap();
         assert!(matches!(scoped_result, OperationOutcome::Succeeded(())));
         assert_eq!(executor.scheduler_snapshot().waiters, 0);
         let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
@@ -2899,10 +2711,7 @@ mod command_executor_api_tests {
             }
         }
 
-        fn resource_input(
-            failure: crate::execution::CommandResourceSubmitFailure,
-            expected: &[u8],
-        ) {
+        fn resource_input(failure: crate::execution::CommandResourceSubmitFailure, expected: &[u8]) {
             assert_eq!(
                 failure.reason,
                 CommandSubmitFailureReason::Capacity(CapacityFailure::Closed)
@@ -2925,43 +2734,36 @@ mod command_executor_api_tests {
             Command,
             crate::CommandRunOptions,
         ) -> Result<crate::CommandOperation, crate::CommandSubmitFailure>;
-        type SubmitResources =
-            fn(
-                &CommandExecutor,
-                crate::CommandRunner,
-                Command,
-                CommandResourceRunOptions,
-            ) -> Result<crate::CommandOperation, crate::CommandResourceSubmitFailure>;
-        type SubmitIn =
-            for<'scope> fn(
-                &CommandExecutor,
-                &'scope qubit_operation::OperationScope,
-                crate::CommandRunner,
-                Command,
-                crate::CommandRunOptions,
-            )
-                -> Result<crate::CommandOperation, crate::CommandSubmitFailure>;
-        type SubmitResourcesIn =
-            for<'scope> fn(
-                &CommandExecutor,
-                &'scope qubit_operation::OperationScope,
-                crate::CommandRunner,
-                Command,
-                CommandResourceRunOptions,
-            )
-                -> Result<crate::CommandOperation, crate::CommandResourceSubmitFailure>;
+        type SubmitResources = fn(
+            &CommandExecutor,
+            crate::CommandRunner,
+            Command,
+            CommandResourceRunOptions,
+        ) -> Result<crate::CommandOperation, crate::CommandResourceSubmitFailure>;
+        type SubmitIn = for<'scope> fn(
+            &CommandExecutor,
+            &'scope qubit_operation::OperationScope,
+            crate::CommandRunner,
+            Command,
+            crate::CommandRunOptions,
+        ) -> Result<crate::CommandOperation, crate::CommandSubmitFailure>;
+        type SubmitResourcesIn = for<'scope> fn(
+            &CommandExecutor,
+            &'scope qubit_operation::OperationScope,
+            crate::CommandRunner,
+            Command,
+            CommandResourceRunOptions,
+        )
+            -> Result<crate::CommandOperation, crate::CommandResourceSubmitFailure>;
 
         let submit: Submit = <CommandExecutor as CommandExecutorApi>::submit;
-        let submit_resources: SubmitResources =
-            <CommandExecutor as CommandExecutorApi>::submit_resources;
+        let submit_resources: SubmitResources = <CommandExecutor as CommandExecutorApi>::submit_resources;
         let submit_wait: Submit = <CommandExecutor as CommandExecutorApi>::submit_wait_blocking;
         let submit_wait_resources: SubmitResources =
             <CommandExecutor as CommandExecutorApi>::submit_wait_resources_blocking;
         let submit_in: SubmitIn = <CommandExecutor as CommandExecutorApi>::submit_in;
-        let submit_resources_in: SubmitResourcesIn =
-            <CommandExecutor as CommandExecutorApi>::submit_resources_in;
-        let submit_wait_in: SubmitIn =
-            <CommandExecutor as CommandExecutorApi>::submit_wait_blocking_in;
+        let submit_resources_in: SubmitResourcesIn = <CommandExecutor as CommandExecutorApi>::submit_resources_in;
+        let submit_wait_in: SubmitIn = <CommandExecutor as CommandExecutorApi>::submit_wait_blocking_in;
         let submit_wait_resources_in: SubmitResourcesIn =
             <CommandExecutor as CommandExecutorApi>::submit_wait_resources_blocking_in;
 
@@ -3264,9 +3066,7 @@ mod command_executor_api_tests {
                         &scoped_executor,
                         &scope,
                         runner.clone(),
-                        Command::new("sh")
-                            .arg("-c")
-                            .arg("printf trait-resources-in"),
+                        Command::new("sh").arg("-c").arg("printf trait-resources-in"),
                         CommandResourceRunOptions::new(),
                     )
                     .map_err(|_| {
@@ -3302,9 +3102,7 @@ mod command_executor_api_tests {
                         &scoped_executor,
                         &scope,
                         runner,
-                        Command::new("sh")
-                            .arg("-c")
-                            .arg("printf trait-wait-resources-in"),
+                        Command::new("sh").arg("-c").arg("printf trait-wait-resources-in"),
                         CommandResourceRunOptions::new(),
                     )
                     .map_err(|_| {
@@ -3422,9 +3220,7 @@ mod command_executor_api_tests {
                     &scoped_executor,
                     &scope,
                     scoped_runner,
-                    Command::new("sh")
-                        .arg("-c")
-                        .arg("printf trait-scoped-resource-wait"),
+                    Command::new("sh").arg("-c").arg("printf trait-scoped-resource-wait"),
                     CommandResourceRunOptions::new(),
                 )
                 .map_err(|_| {
@@ -3518,9 +3314,7 @@ mod command_executor_api_tests {
             }
         }
 
-        async fn read_all(
-            reader: &mut (impl qubit_io::AsyncInput<Item = u8> + Unpin),
-        ) -> std::io::Result<Vec<u8>> {
+        async fn read_all(reader: &mut (impl qubit_io::AsyncInput<Item = u8> + Unpin)) -> std::io::Result<Vec<u8>> {
             let mut bytes = Vec::new();
             let mut buffer = [0_u8; 128];
             loop {
@@ -3562,8 +3356,7 @@ mod command_executor_api_tests {
                 use crate::ManagedCommandRunnerApi;
 
                 let (_manager, executor, runner) = setup();
-                let foreign_manager =
-                    super::super::OperationManager::new(Default::default()).unwrap();
+                let foreign_manager = super::super::OperationManager::new(Default::default()).unwrap();
                 let marker_directory = tempfile::tempdir().unwrap();
                 let standard_marker = marker_directory.path().join("standard-session-ran");
                 let resource_marker = marker_directory.path().join("resource-session-ran");
@@ -3590,10 +3383,7 @@ mod command_executor_api_tests {
                             Err(error) => error,
                             Ok(_) => panic!("a foreign scope must not start a managed session"),
                         };
-                        assert_eq!(
-                            standard_error.kind(),
-                            CommandErrorKind::ManagedOperationFailed
-                        );
+                        assert_eq!(standard_error.kind(), CommandErrorKind::ManagedOperationFailed);
                         assert!(matches!(
                             standard_error.reason(),
                             crate::CommandErrorReason::ManagedOperationFailed { diagnostic }
@@ -3616,10 +3406,7 @@ mod command_executor_api_tests {
                             Err(error) => error,
                             Ok(_) => panic!("a foreign scope must not start a resource session"),
                         };
-                        assert_eq!(
-                            resource_error.kind(),
-                            CommandErrorKind::ManagedOperationFailed
-                        );
+                        assert_eq!(resource_error.kind(), CommandErrorKind::ManagedOperationFailed);
                         assert!(matches!(
                             resource_error.reason(),
                             crate::CommandErrorReason::ManagedOperationFailed { diagnostic }
@@ -3781,9 +3568,7 @@ mod command_executor_api_tests {
                 use crate::execution::contracts::Scheduler;
 
                 let manager = super::super::OperationManager::new(Default::default()).unwrap();
-                let executor =
-                    CommandExecutor::new(manager.clone(), CommandExecutionConfig::default())
-                        .unwrap();
+                let executor = CommandExecutor::new(manager.clone(), CommandExecutionConfig::default()).unwrap();
                 let runner = crate::CommandRunner::without_timeout();
                 executor.scheduler.close_admission();
 
@@ -3821,9 +3606,7 @@ mod command_executor_api_tests {
                         .await
                         {
                             Err(failure) => failure,
-                            Ok(_) => panic!(
-                                "scoped async wait must return after shutdown closes admission"
-                            ),
+                            Ok(_) => panic!("scoped async wait must return after shutdown closes admission"),
                         };
                         assert_eq!(
                             failure.reason,
@@ -3948,21 +3731,13 @@ mod command_executor_api_tests {
                 };
                 assert_eq!(
                     failure.reason,
-                    CommandSubmitFailureReason::Wait(
-                        crate::execution::CommandSubmitWaitFailure::WaiterLimit
-                    )
+                    CommandSubmitFailureReason::Wait(crate::execution::CommandSubmitWaitFailure::WaiterLimit)
                 );
-                assert_eq!(
-                    failure.command.program(),
-                    "must-not-run-after-waiter-limit-rejection"
-                );
+                assert_eq!(failure.command.program(), "must-not-run-after-waiter-limit-rejection");
                 assert_eq!(executor.scheduler_snapshot().waiters, 0);
 
                 let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
-                assert!(matches!(
-                    active.wait_outcome().unwrap(),
-                    OperationOutcome::Stopped(_)
-                ));
+                assert!(matches!(active.wait_outcome().unwrap(), OperationOutcome::Stopped(_)));
                 assert!(active.wait_settlement().unwrap().all_released());
             });
         }
@@ -3996,9 +3771,7 @@ mod command_executor_api_tests {
                             .start_session_resources_managed_in(
                                 &scope,
                                 scoped_runner,
-                                Command::new("sh")
-                                    .arg("-c")
-                                    .arg("printf scoped-resource-session"),
+                                Command::new("sh").arg("-c").arg("printf scoped-resource-session"),
                                 CommandResourceRunOptions::new(),
                             )
                             .map_err(|error| {
@@ -4010,18 +3783,12 @@ mod command_executor_api_tests {
                                     None,
                                 )
                             })?;
-                        let mut standard_stdin = standard
-                            .take_stdin()
-                            .expect("session stdin should be present");
+                        let mut standard_stdin = standard.take_stdin().expect("session stdin should be present");
                         qubit_io::AsyncClose::close_async(&mut standard_stdin)
                             .await
                             .expect("session stdin should close");
-                        let mut standard_stdout = standard
-                            .take_stdout()
-                            .expect("session stdout should be present");
-                        let mut standard_stderr = standard
-                            .take_stderr()
-                            .expect("session stderr should be present");
+                        let mut standard_stdout = standard.take_stdout().expect("session stdout should be present");
+                        let mut standard_stderr = standard.take_stderr().expect("session stderr should be present");
                         let standard_output = read_all(&mut standard_stdout)
                             .await
                             .expect("session stdout should be readable");
@@ -4071,22 +3838,12 @@ mod command_executor_api_tests {
                         resource_operation
                             .wait_settlement()
                             .expect("resource session should settle");
-                        Ok::<_, crate::CommandError>((
-                            standard_output,
-                            standard_error,
-                            resource_output,
-                            resource_error,
-                        ))
+                        Ok::<_, crate::CommandError>((standard_output, standard_error, resource_output, resource_error))
                     })
                     .await
                     .expect("both scoped sessions should complete");
                 match result {
-                    OperationOutcome::Succeeded((
-                        standard,
-                        standard_error,
-                        resource,
-                        resource_error,
-                    )) => {
+                    OperationOutcome::Succeeded((standard, standard_error, resource, resource_error)) => {
                         assert_eq!(standard, b"scoped-session");
                         assert!(standard_error.is_empty());
                         assert_eq!(resource, b"scoped-resource-session");
@@ -4105,9 +3862,7 @@ mod command_executor_api_tests {
                 <crate::CommandExecutor as CommandExecutorApi>::submit_async(
                     &executor,
                     runner.clone(),
-                    Command::new("sh")
-                        .arg("-c")
-                        .arg("printf trait-async-submit"),
+                    Command::new("sh").arg("-c").arg("printf trait-async-submit"),
                     Default::default(),
                 )
                 .unwrap(),
@@ -4119,9 +3874,7 @@ mod command_executor_api_tests {
                 <crate::CommandExecutor as CommandExecutorApi>::submit_async_resources(
                     &executor,
                     runner.clone(),
-                    Command::new("sh")
-                        .arg("-c")
-                        .arg("printf trait-async-resources"),
+                    Command::new("sh").arg("-c").arg("printf trait-async-resources"),
                     CommandResourceRunOptions::new(),
                 )
                 .unwrap(),
@@ -4146,9 +3899,7 @@ mod command_executor_api_tests {
                 <crate::CommandExecutor as CommandExecutorApi>::submit_wait_resources(
                     &executor,
                     runner.clone(),
-                    Command::new("sh")
-                        .arg("-c")
-                        .arg("printf trait-async-wait-resources"),
+                    Command::new("sh").arg("-c").arg("printf trait-async-wait-resources"),
                     CommandResourceRunOptions::new(),
                 )
                 .await
@@ -4185,9 +3936,7 @@ mod command_executor_api_tests {
                             &scoped_executor,
                             &scope,
                             runner.clone(),
-                            Command::new("sh")
-                                .arg("-c")
-                                .arg("printf trait-async-resources-in"),
+                            Command::new("sh").arg("-c").arg("printf trait-async-resources-in"),
                             CommandResourceRunOptions::new(),
                         )
                         .map_err(|_| {
@@ -4206,9 +3955,7 @@ mod command_executor_api_tests {
                             &scoped_executor,
                             &scope,
                             runner.clone(),
-                            Command::new("sh")
-                                .arg("-c")
-                                .arg("printf trait-async-wait-in"),
+                            Command::new("sh").arg("-c").arg("printf trait-async-wait-in"),
                             Default::default(),
                         )
                         .await
@@ -4228,9 +3975,7 @@ mod command_executor_api_tests {
                             &scoped_executor,
                             &scope,
                             runner,
-                            Command::new("sh")
-                                .arg("-c")
-                                .arg("printf trait-async-wait-resources-in"),
+                            Command::new("sh").arg("-c").arg("printf trait-async-wait-resources-in"),
                             CommandResourceRunOptions::new(),
                         )
                         .await
@@ -4245,22 +3990,12 @@ mod command_executor_api_tests {
                         })?,
                     )
                     .await;
-                    Ok::<_, crate::CommandError>((
-                        direct,
-                        direct_resources,
-                        waited,
-                        waited_resources,
-                    ))
+                    Ok::<_, crate::CommandError>((direct, direct_resources, waited, waited_resources))
                 })
                 .await
                 .expect("scoped trait submissions should complete");
             match result {
-                OperationOutcome::Succeeded((
-                    direct,
-                    direct_resources,
-                    waited,
-                    waited_resources,
-                )) => {
+                OperationOutcome::Succeeded((direct, direct_resources, waited, waited_resources)) => {
                     assert_eq!(direct, b"trait-async-in");
                     assert_eq!(direct_resources, b"trait-async-resources-in");
                     assert_eq!(waited, b"trait-async-wait-in");
@@ -4340,97 +4075,90 @@ mod command_executor_api_tests {
             let scoped_runner = runner.clone();
             let result = manager
                 .as_async()
-                .run(
-                    qubit_operation::OperationOptions::default(),
-                    move |scope| async move {
-                        let direct = output_and_settle(
-                            <CommandExecutor as CommandExecutorApi>::submit_async_in(
-                                &scoped_executor,
-                                &scope,
-                                scoped_runner.clone(),
-                                Command::new("sh").arg("-c").arg("printf async-in"),
-                                Default::default(),
-                            )
-                            .map_err(|_| {
-                                crate::CommandError::from_reason(
-                                    "submit_async_in",
-                                    crate::CommandErrorReason::ManagedOperationFailed {
-                                        diagnostic: "async scoped submission rejected".into(),
-                                    },
-                                    None,
-                                )
-                            })?,
+                .run(qubit_operation::OperationOptions::default(), move |scope| async move {
+                    let direct = output_and_settle(
+                        <CommandExecutor as CommandExecutorApi>::submit_async_in(
+                            &scoped_executor,
+                            &scope,
+                            scoped_runner.clone(),
+                            Command::new("sh").arg("-c").arg("printf async-in"),
+                            Default::default(),
                         )
-                        .await;
-                        let direct_owned = output_and_settle(
-                            <CommandExecutor as CommandExecutorApi>::submit_async_resources_in(
-                                &scoped_executor,
-                                &scope,
-                                scoped_runner.clone(),
-                                Command::new("sh")
-                                    .arg("-c")
-                                    .arg("printf async-resources-in"),
-                                CommandResourceRunOptions::new(),
+                        .map_err(|_| {
+                            crate::CommandError::from_reason(
+                                "submit_async_in",
+                                crate::CommandErrorReason::ManagedOperationFailed {
+                                    diagnostic: "async scoped submission rejected".into(),
+                                },
+                                None,
                             )
-                            .map_err(|_| {
-                                crate::CommandError::from_reason(
-                                    "submit_async_resources_in",
-                                    crate::CommandErrorReason::ManagedOperationFailed {
-                                        diagnostic: "async scoped resource submission rejected"
-                                            .into(),
-                                    },
-                                    None,
-                                )
-                            })?,
+                        })?,
+                    )
+                    .await;
+                    let direct_owned = output_and_settle(
+                        <CommandExecutor as CommandExecutorApi>::submit_async_resources_in(
+                            &scoped_executor,
+                            &scope,
+                            scoped_runner.clone(),
+                            Command::new("sh").arg("-c").arg("printf async-resources-in"),
+                            CommandResourceRunOptions::new(),
                         )
-                        .await;
-                        let waited = output_and_settle(
-                            <CommandExecutor as CommandExecutorApi>::submit_wait_in(
-                                &scoped_executor,
-                                &scope,
-                                scoped_runner.clone(),
-                                Command::new("sh").arg("-c").arg("printf async-wait-in"),
-                                Default::default(),
+                        .map_err(|_| {
+                            crate::CommandError::from_reason(
+                                "submit_async_resources_in",
+                                crate::CommandErrorReason::ManagedOperationFailed {
+                                    diagnostic: "async scoped resource submission rejected".into(),
+                                },
+                                None,
                             )
-                            .await
-                            .map_err(|_| {
-                                crate::CommandError::from_reason(
-                                    "submit_wait_in",
-                                    crate::CommandErrorReason::ManagedOperationFailed {
-                                        diagnostic: "async scoped wait rejected".into(),
-                                    },
-                                    None,
-                                )
-                            })?,
+                        })?,
+                    )
+                    .await;
+                    let waited = output_and_settle(
+                        <CommandExecutor as CommandExecutorApi>::submit_wait_in(
+                            &scoped_executor,
+                            &scope,
+                            scoped_runner.clone(),
+                            Command::new("sh").arg("-c").arg("printf async-wait-in"),
+                            Default::default(),
                         )
-                        .await;
-                        let mut input =
-                            tempfile::tempfile().expect("scoped async input should be created");
-                        input.write_all(b"async-wait-resources-in").unwrap();
-                        input.rewind().unwrap();
-                        let waited_owned = output_and_settle(
-                            <CommandExecutor as CommandExecutorApi>::submit_wait_resources_in(
-                                &scoped_executor,
-                                &scope,
-                                scoped_runner,
-                                Command::new("sh").arg("-c").arg("cat"),
-                                CommandResourceRunOptions::new().stdin_file(input),
+                        .await
+                        .map_err(|_| {
+                            crate::CommandError::from_reason(
+                                "submit_wait_in",
+                                crate::CommandErrorReason::ManagedOperationFailed {
+                                    diagnostic: "async scoped wait rejected".into(),
+                                },
+                                None,
                             )
-                            .await
-                            .map_err(|_| {
-                                crate::CommandError::from_reason(
-                                    "submit_wait_resources_in",
-                                    crate::CommandErrorReason::ManagedOperationFailed {
-                                        diagnostic: "async scoped resource wait rejected".into(),
-                                    },
-                                    None,
-                                )
-                            })?,
+                        })?,
+                    )
+                    .await;
+                    let mut input = tempfile::tempfile().expect("scoped async input should be created");
+                    input.write_all(b"async-wait-resources-in").unwrap();
+                    input.rewind().unwrap();
+                    let waited_owned = output_and_settle(
+                        <CommandExecutor as CommandExecutorApi>::submit_wait_resources_in(
+                            &scoped_executor,
+                            &scope,
+                            scoped_runner,
+                            Command::new("sh").arg("-c").arg("cat"),
+                            CommandResourceRunOptions::new().stdin_file(input),
                         )
-                        .await;
-                        Ok::<_, crate::CommandError>((direct, direct_owned, waited, waited_owned))
-                    },
-                )
+                        .await
+                        .map_err(|_| {
+                            crate::CommandError::from_reason(
+                                "submit_wait_resources_in",
+                                crate::CommandErrorReason::ManagedOperationFailed {
+                                    diagnostic: "async scoped resource wait rejected".into(),
+                                },
+                                None,
+                            )
+                        })?,
+                    )
+                    .await;
+                    Ok::<_, crate::CommandError>((direct, direct_owned, waited, waited_owned))
+                })
                 .await
                 .expect("async parent operation should complete");
             match result {
