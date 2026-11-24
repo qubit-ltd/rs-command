@@ -284,13 +284,13 @@ reaper owner 或恢复效果已经完成。Windows 成功取消同步 I/O 后仍
 
 受管 stdin 和 tee 的相对路径以提交时捕获的父进程目录为基准。子进程工作目录单独选择，command override 优先于 runner 默认值。Windows drive-relative 路径保留 Windows 自身语义，不会当作以捕获目录为根的普通相对路径。请求快照保留兼容字段 `environment`，但其值为空；子进程仍在启动时继承环境，并按既有规则应用 clear、remove 和 override。
 
-带 scope 的容量等待会持续检查 stop 和 deadline。scope stop 映射为 `AdmissionError::Stopped`，deadline 到期映射为 `CapacityFailure::DeadlineExpired`。等待者额度耗尽和重试计时器失败统一通过 `CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)` 表示；其中 `WaiterLimit` 区分等待额度不足，`Timer(RetryTimerFailure)` 则区分计时器启动、队列满和断连。
+带 scope 的容量等待会持续检查 stop 和 deadline。scope stop 映射为 `AdmissionError::Stopped`，deadline 到期映射为 `CapacityFailure::DeadlineExpired`。等待者额度耗尽和重试计时器失败统一通过 `CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)` 表示；其中 `WaiterLimit` 区分等待额度不足。计时器启动或队列满会在请求接纳前失败；即使请求已成功入队，worker 随后退出也可能返回 `Timer(RetryTimerFailure::Disconnected)`。这些 submit failure 都会保留原 runner、command 和 options，包括 owned 文件输入。
 
 收集型 managed 方法会等待结算，但只返回命令结果或停止诊断。需要查看结算副作用、恢复证据或资源释放状态时，必须使用 submit handle。`ProcessTreePolicy::DirectChild` 是 managed API 中显式选择的例外；旧 `run` 与 `run_with` 生命周期保持原契约。
 
 ### 结算观察与恢复
 
-按顺序读取恢复证据：先检查 manager 的总 `SettlementReport`，包括 `status`、`effects`、`effect_overflow`、恢复计数和截断标记；再检查存在时的 `external_settlement`，了解 adapter 原始报告的状态、effects、计数、溢出信息和实际 recovery handles。manager 可能因为外部 adapter 报告了恢复工作而给出 `RecoveryRequired`，即使 manager 自己的 `recoveries` 数组为空。例如 adapter 已运行恢复逻辑，`external_settlement.recovery_count` 大于零，但 manager 已没有可供重试的 handle。不能根据 handle 数组为空推断资源已清理；应结合两份报告中的释放与 effect 证据，决定何时删除暂存文件。
+按顺序读取恢复证据：先检查 manager 总 `SettlementReport` 的 `status`、`effects`、`effect_overflow`、恢复计数和截断标记，再查看存在时 `external_settlement` 中对应的状态、effects、计数、溢出和截断信息。看完两份报告后，再单独检查 manager 总报告的 `recoveries`，只处理本 managed command 流程实际提供的 handle。adapter 可能已经执行恢复逻辑：`external_settlement.recovery_count` 大于零，但外部报告和 manager 总报告的 `recoveries` 数组都为空，因此应用没有可重试的 handle。不能根据 handle 数组为空推断资源已清理；应结合两份报告中的释放与 effect 证据，决定何时删除暂存文件。
 
 受管文件处理分两阶段校验：先在资源登记前拒绝互斥配置，再在 commit 阶段比较最终打开句柄的实际身份。身份冲突会在截断和启动进程前拒绝。owned stdin 与命令文件或字节 stdin 互斥，调用方需选定一种来源；session stdin 仍与文件 stdin 互斥，但保留字节前缀输入。tee 最终路径可能在后续错误前已经创建；若较早 sink 已截断，后续失败不会回滚。
 
