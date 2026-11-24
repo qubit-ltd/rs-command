@@ -150,10 +150,10 @@ The normal event order is:
 
 The timeout starts after spawn, before I/O helper startup. Helper initialization
 time counts toward the timeout; command preparation and spawn time do not.
-Timeout, cancellation, and total-output-budget monitoring use timer-based
-polling. This applies when a total output budget is configured by itself, so
-its timer must continue progressing independently while the synchronous `run`
-call blocks.
+Monitoring with cancellation or a total output budget and no timeout uses a
+fixed 10 ms interval. When timeout is configured, each wait uses the lesser of
+the adaptive 1–10 ms interval and the remaining timeout. These waits use the
+timer backend, which must progress independently while synchronous `run` blocks.
 The byte budget is not a hard wall-clock deadline and does not bound preparation,
 spawning, or arbitrary filesystem operations. A cancellation handle is
 one-shot and idempotent; repeated `cancel()` calls do not create additional
@@ -418,8 +418,11 @@ For a waiting submission, the first execution captures the relative-I/O base;
 capacity and manager-Busy retries reuse that snapshot. Use absolute paths or a
 new submission when the application needs a different parent cwd as the base.
 
-Resource-backed path stdin open and non-regular-file failures use the public
-`FilePreparationFailed` kind and reason at `Validation`/`Stdin`. Tee validation
+Resource-backed path identity conflicts use the public `FilePreparationFailed`
+kind and reason at `Validation` with `InvalidInput`: stdin/stdout maps to
+`Stdout`, while stdin/stderr and stdout/stderr map to `Stderr`. Resource-backed
+path stdin open and non-regular-file failures use the same error at
+`Validation`/`Stdin`. Tee validation
 failures use `Validation` with `Stdout` or `Stderr`. An actual `set_len` failure
 uses `Truncation` with the affected direction. The original I/O source
 is preserved when present. Callers that previously matched `OpenInputFailed` or
@@ -437,8 +440,12 @@ Read recovery evidence in this order: inspect the manager's overall `SettlementR
 
 The process reaper has four workers and a bounded shared queue. In normal
 operation it accepts cleanup owners and releases them after cleanup completes. A
-full queue uses backoff before retrying handoff. If the service is disconnected or cannot
-start, the runner makes one attempt to obtain a healthy pool. The existing bounded
+full queue uses backoff before retrying handoff. If the service cannot start before
+a managed outcome is published, the observer can retain the local cleanup owner
+and the runner returns its selected outcome. The backend publishes that outcome
+before taking the owner for local cleanup on its existing bounded worker; settlement
+can remain pending until cleanup completes. An initial startup failure can select
+this fallback directly, while a disconnected pool gets one replacement attempt. The existing bounded
 execution worker performs local cleanup if the service remains unavailable.
 Owners already accepted by executor recovery use that same bounded worker for
 service recovery and local fallback. Cleanup can therefore keep that worker

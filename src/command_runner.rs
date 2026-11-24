@@ -1280,9 +1280,12 @@ pub const DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM: usize = 1024 * 1024;
 /// Use [`CommandOutput::stdout_text`] and [`CommandOutput::stderr_text`] for
 /// strict UTF-8 text, or [`CommandOutput::stdout_lossy_text`] and
 /// [`CommandOutput::stderr_lossy_text`] when invalid UTF-8 should be replaced.
-/// Timeout, cancellation, and total-output-budget monitoring use timer-based
-/// polling. Even when only a total output budget is configured, the timer
-/// backend must keep progressing independently while this thread is parked.
+/// Cancellation or total-output-budget monitoring without a timeout polls at
+/// a fixed 10 ms interval. With a timeout, each wait is capped by the lesser
+/// of the adaptive 1–10 ms interval and the remaining timeout. These timed
+/// waits use a backend that must progress independently while this thread is
+/// parked. With no timeout, cancellation, or total budget, legacy execution
+/// uses adaptive 1–10 ms polling.
 /// The runner polls completed stdout/stderr readers while waiting for the child
 /// and for inherited output pipes after child exit. If a read failure is
 /// observed before another terminal event, the runner stops the child; after
@@ -1292,7 +1295,8 @@ pub const DEFAULT_MAX_OUTPUT_BYTES_PER_STREAM: usize = 1024 * 1024;
 /// details. An earlier tee write failure on that stream remains primary
 /// under the existing collector ordering. Budget, child-wait, cancellation,
 /// timeout, and clock events keep their existing priority once selected. With
-/// no monitoring policy, the runner uses an adaptive 1–10 ms polling sleep and
+/// no timeout, cancellation, or total budget, the runner uses an adaptive
+/// 1–10 ms polling sleep and
 /// stops only the direct child; a reader failure does not by itself enable
 /// process-tree management. A read failure observed before the deadline can
 /// change a previous `TimedOut` result into `ReadOutputFailed`. Check the

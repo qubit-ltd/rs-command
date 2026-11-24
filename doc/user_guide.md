@@ -496,7 +496,7 @@ text; explicitly formatting a full error chain is the caller's responsibility.
 
 | Category | Examples | Next diagnostic step |
 | --- | --- | --- |
-| Preparation | Path-based legacy errors: `OpenInputFailed`, `NonRegularInputFile`. Resource-backed errors: `FilePreparationFailed` | For resource-backed failures, inspect `reason()` for `Validation`/`Stdin`, `Validation`/`Stdout` or `Stderr`, or `Truncation` and the corresponding direction. Inspect its source when present. Also verify paths, file kinds, and input/output identity. |
+| Preparation | Path-based legacy errors: `OpenInputFailed`, `NonRegularInputFile`. Resource-backed errors: `FilePreparationFailed`; resource-backed path conflicts use `Validation` and `InvalidInput` | Inspect `reason()` for stage, direction, and source. Path conflicts use `Stdout` for stdin/stdout and `Stderr` for stdin/stderr or stdout/stderr. Also verify paths, file kinds, and input/output identity. |
 | Process control | `SpawnFailed`, `WaitFailed` | Check the executable, permissions, platform process-control support, and the source I/O error. |
 | Stream I/O | `ReadOutputFailed`, `WriteInputFailed`, `OpenOutputFailed`, `WriteOutputFailed` | Check the named stream, file access, and retained output attached to the error when present. |
 | Time | `TimeFailed` | Check that the timer and clock share a valid monotonic domain and can progress while the caller is blocked. |
@@ -513,9 +513,11 @@ write failure on the same stream remains primary under the existing collector
 ordering. Budget, child-wait, cancellation, timeout, and clock events keep their
 existing priority once selected. Managed execution follows its selected
 `ProcessTreePolicy`: the default `Managed` policy manages the process tree, and
-explicit `DirectChild` stops only the direct child. Legacy `run`/`run_with` use
-adaptive 1–10 ms polling and attempt process-tree management when timeout,
-cancellation, or a total output budget is configured. Otherwise they stop only
+explicit `DirectChild` stops only the direct child. Legacy `run`/`run_with` use adaptive 1–10 ms polling when timeout, cancellation,
+and total output budget are all absent. Cancellation or a total budget without
+timeout uses a fixed 10 ms interval; with timeout, each wait is capped by the
+lesser of the adaptive interval and remaining timeout. They attempt
+process-tree management when timeout, cancellation, or a total output budget is configured. Otherwise they stop only
 the direct child. A reader failure alone does not enable process-tree
 management for legacy calls. A read failure observed before
 the deadline can change a previous `TimedOut` result into `ReadOutputFailed`, so

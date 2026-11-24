@@ -155,7 +155,7 @@ helper 可能一直存活到管道关闭。
 其他终态被观察到，runner 会停止子进程；成功终止后，携带 collector 的原始读取错误和已保留
 输出返回。若进程终止失败，进程控制错误仍是主错误，reader 错误保留为清理信息。
 同一流中更早发生的 tee 写入失败仍按现有 collector 顺序作为主错误。预算、子进程等待、取消、
-超时和时钟事件保留已选定的优先级。managed 执行按所选 `ProcessTreePolicy` 终止：默认 `Managed` 管理进程树，显式 `DirectChild` 只停止直接子进程。旧 `run`/`run_with` 在配置 timeout、cancellation 或总输出预算时会尝试管理进程树；否则只停止直接子进程。旧入口不会仅因 reader 故障而启用进程树管理。读取错误先于 deadline 被观察到时，
+超时和时钟事件保留已选定的优先级。managed 执行按所选 `ProcessTreePolicy` 终止：默认 `Managed` 管理进程树，显式 `DirectChild` 只停止直接子进程。旧 `run`/`run_with` 在未配置 timeout、cancellation 和总输出预算时使用自适应 1–10 ms 间隔轮询；仅配置 cancellation 或总输出预算时使用固定 10 ms 间隔，有 timeout 时按剩余 timeout 与自适应间隔中的较短者等待。配置 timeout、cancellation 或总输出预算时会尝试管理进程树；否则只停止直接子进程。旧入口不会仅因 reader 故障而启用进程树管理。读取错误先于 deadline 被观察到时，
 结果可能从原先的 `TimedOut` 变为 `ReadOutputFailed`。进程终止和普通文件 I/O 不属于硬截止
 时间保证。使用部分输出时，应同时检查主错误、清理失败和流完整性标志。
 
@@ -290,7 +290,7 @@ reaper owner 或恢复效果已经完成。Windows 成功取消同步 I/O 后仍
 
 等待式提交在首次执行时捕获相对 I/O 基准；容量和 manager Busy 重试沿用该快照。若应用需要以新的父进程 cwd 为基准，应使用绝对路径或创建新的提交。
 
-resource-backed 路径 stdin 的打开失败和非普通文件使用公开的 `FilePreparationFailed` kind/reason，阶段为 `Validation`、方向为 `Stdin`。tee 校验错误使用 `Validation` 和 `Stdout`/`Stderr`。实际 `set_len` 失败使用 `Truncation` 和对应方向。可用的原始 I/O source 会保留。曾按 `OpenInputFailed` 或 `OpenOutputFailed` 匹配这些 resource-backed 错误的调用方，应改查公开分类并读取阶段、方向及 source。普通路径型 legacy 错误保持原映射。
+resource-backed 路径身份冲突统一使用公开的 `FilePreparationFailed` kind/reason，阶段为 `Validation`、source kind 为 `InvalidInput`：stdin/stdout 对应 `Stdout`，stdin/stderr 与 stdout/stderr 对应 `Stderr`。路径 stdin 打开失败和非普通文件也使用该错误，方向为 `Stdin`。tee 校验错误使用 `Validation` 和 `Stdout`/`Stderr`。实际 `set_len` 失败使用 `Truncation` 和对应方向。可用的原始 I/O source 会保留。曾按 `OpenInputFailed` 或 `OpenOutputFailed` 匹配这些 resource-backed 错误的调用方，应改查公开分类并读取阶段、方向及 source。普通路径型 legacy 错误保持原映射。
 
 带 scope 的容量等待会持续检查 stop 和 deadline。scope stop 映射为 `AdmissionError::Stopped`，deadline 到期映射为 `CapacityFailure::DeadlineExpired`。等待者额度耗尽和重试计时器失败统一通过 `CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)` 表示；其中 `WaiterLimit` 区分等待额度不足。计时器启动或队列满会在请求接纳前失败；即使请求已成功入队，worker 随后退出也可能返回 `Timer(RetryTimerFailure::Disconnected)`。这些 submit failure 都会保留原 runner、command 和 options，包括 owned 文件输入。
 
@@ -300,8 +300,8 @@ resource-backed 路径 stdin 的打开失败和非普通文件使用公开的 `F
 
 按顺序读取恢复证据：先检查 manager 总 `SettlementReport` 的 `status`、`effects`、`effect_overflow`、恢复计数和截断标记，再查看存在时 `external_settlement` 中对应的状态、effects、计数、溢出和截断信息。看完两份报告后，再单独检查 manager 总报告的 `recoveries`，只处理本 managed command 流程实际提供的 handle。adapter 可能已经执行恢复逻辑：`external_settlement.recovery_count` 大于零，但外部报告和 manager 总报告的 `recoveries` 数组都为空，因此应用没有可重试的 handle。不能根据 handle 数组为空推断资源已清理；应结合两份报告中的释放与 effect 证据，决定何时删除暂存文件。
 
-进程 reaper 使用四个 worker 和有界共享队列。正常情况下，reaper 接纳 owner 并在实际清理完成后释放。队列满时会退避后重试交接。服务断开或启动失败时，runner 会尝试一次重新取得健康的 reaper。服务仍不可用时，由当前已有的有界执行 worker 本地清理。已经被 executor recovery 接纳的 owner 也由同一个有界 worker 负责服务恢复和本地 fallback。操作系统清理尚未完成时，这个 worker 可能继续等待。真实清理完成后才发布 release。lease 会保留到上游 settlement 完成。服务正常时，executor recovery 仍以有界轮转步骤推进 owner，避免单个 pending owner 阻塞其他可推进任务。
+进程 reaper 使用四个 worker 和有界共享队列。正常情况下，reaper 接纳 owner 并在实际清理完成后释放。队列满时会退避后重试交接。managed outcome 已选定而服务首次启动失败时，observer 可保留本地清理 owner，runner 返回已选定结果；backend 先发布 outcome，再由现有有界 worker 取出 owner 并执行本地清理。因而 outcome 可先于清理完成，settlement 仍可能 pending。首次启动失败可直接选择该降级，运行中断连则会尝试一次替换健康 reaper；服务仍不可用时，由当前已有的有界执行 worker 本地清理。已经被 executor recovery 接纳的 owner 也由同一个有界 worker 负责服务恢复和本地 fallback。操作系统清理尚未完成时，这个 worker 可能继续等待。真实清理完成后才发布 release。lease 会保留到上游 settlement 完成。服务正常时，executor recovery 仍以有界轮转步骤推进 owner，避免单个 pending owner 阻塞其他可推进任务。
 
-受管文件处理分两阶段校验：先在资源登记前拒绝互斥配置，再在 commit 阶段比较最终打开句柄的实际身份。身份冲突会在截断和启动进程前拒绝。owned stdin 与命令文件或字节 stdin 互斥，调用方需选定一种来源；session stdin 仍与文件 stdin 互斥，但保留字节前缀输入。tee 最终路径可能在后续错误前已经创建；若较早 sink 已截断，后续失败不会回滚。
+受管文件处理分两阶段校验：先在资源登记前拒绝互斥配置，再在 commit 阶段比较最终打开句柄的实际身份。身份冲突会在截断和启动进程前拒绝。resource-backed 路径预检与最终句柄冲突统一映射为 `FilePreparationFailed(Validation, direction, InvalidInput)`：stdin/stdout 使用 `Stdout`，stdin/stderr 和 stdout/stderr 使用 `Stderr`。legacy 与普通路径型 managed 保留原专用冲突分类。owned stdin 与命令文件或字节 stdin 互斥，调用方需选定一种来源；session stdin 仍与文件 stdin 互斥，但保留字节前缀输入。tee 最终路径可能在后续错误前已经创建；若较早 sink 已截断，后续失败不会回滚。
 
 进程启动前已接受的 stop 会映射为 operation `Stopped`，并为具体 command handle 保留可选 runner 诊断；等待 settlement 后可取一次。收集型调用保留既有错误映射。executor 关闭时，已注册的容量等待或 manager Busy 等待以 `Capacity(Closed)` 结束。`max_waiters` 同时覆盖这两类等待；等待判断顺序为 deadline、scope stop、关闭、重试。计时器 worker 断连会沿现有 timer wait failure 路径返回。`max_diagnostics` 仅为兼容配置字段，不限制诊断存储。
