@@ -534,8 +534,25 @@ impl RunningCommand {
                 }
             }
         });
-        handle_uncertain_handoff(observer, Reaper::global().handoff(owner));
+        let handoff = match observer.as_ref() {
+            Some(observer) => observer.handoff_owner(owner),
+            None => Reaper::global().handoff(owner),
+        };
+        handle_uncertain_handoff(observer, handoff);
         error
+    }
+
+    /// Enters the uncertain cleanup branch for a managed runner integration test.
+    #[cfg(test)]
+    pub(in crate::command_runner) fn force_uncertain_handoff_for_test(self) -> CommandError {
+        let command_text = self.command_text.clone();
+        self.handoff_uncertain_owner(CommandError::from_reason(
+            command_text,
+            crate::CommandErrorReason::ManagedOperationFailed {
+                diagnostic: "injected runtime uncertainty".into(),
+            },
+            None,
+        ))
     }
 
     /// Completes a known-exited command by joining all I/O helpers.

@@ -1496,6 +1496,10 @@ impl CommandRunner {
             reaper_observer,
             session_bridge,
             operation_context,
+            #[cfg(test)]
+            test_startup_abort,
+            #[cfg(test)]
+            test_runtime_uncertain,
         } = tree_policy;
         #[cfg(not(any(unix, windows)))]
         if managed_policy == Some(ProcessTreePolicy::Managed) {
@@ -1614,6 +1618,10 @@ impl CommandRunner {
             reaper_observer,
             session_bridge.clone(),
         );
+        #[cfg(test)]
+        if let Some(error) = test_startup_abort {
+            return Err(starting_command.abort_managed(error));
+        }
         let total_budget = self
             .max_total_output_bytes
             .map(|limit| TotalOutputBudget::new(limit, self.max_stdout_bytes, self.max_stderr_bytes))
@@ -1706,8 +1714,12 @@ impl CommandRunner {
                 session_bridge: finished_start.session_bridge,
                 operation_context,
             },
-        )
-        .wait_for_completion(self.timeout)?;
+        );
+        #[cfg(test)]
+        if test_runtime_uncertain {
+            return Err(finished.force_uncertain_handoff_for_test());
+        }
+        let finished = finished.wait_for_completion(self.timeout)?;
         let FinishedCommand { command_text, output } = finished;
 
         if output
