@@ -24,6 +24,7 @@ use std::time::Duration;
 #[cfg(all(feature = "async", unix))]
 use qubit_command::AsyncCommandOperation;
 use qubit_command::Command;
+use qubit_command::CommandRunOptions;
 #[cfg(unix)]
 use qubit_command::CommandCancellation;
 use qubit_command::CommandExecutionConfig;
@@ -31,8 +32,6 @@ use qubit_command::CommandExecutor;
 #[cfg(all(feature = "async", unix))]
 use qubit_command::CommandExecutorApi;
 use qubit_command::CommandResourceRunOptions;
-#[cfg(unix)]
-use qubit_command::CommandRunOptions;
 use qubit_command::CommandRunner;
 use qubit_command::FileSinkPolicy;
 use qubit_operation::ManagerOptions;
@@ -110,6 +109,105 @@ fn test_resource_backed_stdin_path_failures_are_validation_stdin() {
             if source.kind() == std::io::ErrorKind::NotFound
     ));
     let _ = operation.wait_settlement().unwrap();
+}
+
+#[test]
+fn test_resource_backed_path_conflicts_are_typed_and_non_destructive() {
+    use qubit_command::CommandErrorReason;
+    use qubit_command::FilePreparationDirection;
+    use qubit_command::FilePreparationStage;
+
+    for (conflict, hard_link) in [
+        (0_u8, false),
+        (0, true),
+        (1, false),
+        (1, true),
+        (2, false),
+        (2, true),
+    ] {
+        let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+        let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        let alias = directory.path().join("alias");
+        std::fs::write(&source, b"preserve this content").unwrap();
+        if hard_link {
+            std::fs::hard_link(&source, &alias).unwrap();
+        }
+        let normalized_alias = directory.path().join(".").join("source");
+        let output_path = if hard_link {
+            alias.as_path()
+        } else {
+            normalized_alias.as_path()
+        };
+        let expected_direction = match conflict {
+            0 => FilePreparationDirection::Stdout,
+            1 | 2 => FilePreparationDirection::Stderr,
+            _ => unreachable!(),
+        };
+        let command = if conflict < 2 {
+            Command::new("unspawnable-resource-conflict-command").stdin_file(&source)
+        } else {
+            Command::new("unspawnable-resource-conflict-command")
+        };
+        let mut options = CommandRunOptions::new();
+        options = match conflict {
+            0 => options.tee_stdout_to_file(output_path),
+            1 => options.tee_stderr_to_file(output_path),
+            2 => options
+                .tee_stdout_to_file(&source)
+                .tee_stderr_to_file(output_path),
+            _ => unreachable!(),
+        };
+        let mut operation = executor
+            .submit_resources(
+                CommandRunner::without_timeout(),
+                command.clone(),
+                CommandResourceRunOptions::new().options(options.clone()),
+            )
+            .unwrap();
+        let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
+            panic!("conflicting resource-backed streams must fail before spawn");
+        };
+        assert!(matches!(
+            error.reason(),
+            CommandErrorReason::FilePreparationFailed {
+                stage: FilePreparationStage::Validation,
+                direction: Some(direction),
+                source,
+            } if *direction == expected_direction
+                && source.kind() == std::io::ErrorKind::InvalidInput
+        ));
+        operation.wait_settlement().unwrap();
+        assert_eq!(std::fs::read(&source).unwrap(), b"preserve this content");
+        if hard_link {
+            assert_eq!(std::fs::read(&alias).unwrap(), b"preserve this content");
+        }
+
+        let expected_legacy_kind = if conflict < 2 {
+            qubit_command::CommandErrorKind::InputOutputConflict
+        } else {
+            qubit_command::CommandErrorKind::OutputFilesConflict
+        };
+        let legacy_error = CommandRunner::without_timeout()
+            .run_with(command.clone(), options.clone())
+            .expect_err("legacy path conflicts keep their dedicated classifications");
+        assert_eq!(legacy_error.kind(), expected_legacy_kind);
+
+        let mut ordinary = executor
+            .submit(
+                CommandRunner::without_timeout(),
+                command,
+                options,
+            )
+            .unwrap();
+        let OperationOutcome::Failed(ordinary_error) = ordinary.wait_outcome().unwrap() else {
+            panic!("ordinary managed path conflicts must fail before spawn");
+        };
+        assert_eq!(ordinary_error.kind(), expected_legacy_kind);
+        ordinary.wait_settlement().unwrap();
+        assert_eq!(std::fs::read(&source).unwrap(), b"preserve this content");
+    }
 }
 
 #[cfg(unix)]

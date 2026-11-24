@@ -146,6 +146,28 @@ impl CommandError {
                     source,
                 }
             }
+            CommandErrorReason::InputOutputConflict { output_stream, .. } => {
+                let direction = Some(match output_stream {
+                    OutputStream::Stdout => crate::FilePreparationDirection::Stdout,
+                    OutputStream::Stderr => crate::FilePreparationDirection::Stderr,
+                });
+                CommandErrorReason::FilePreparationFailed {
+                    stage,
+                    direction,
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "configured input and output streams identify the same file",
+                    ),
+                }
+            }
+            CommandErrorReason::OutputFilesConflict { .. } => CommandErrorReason::FilePreparationFailed {
+                stage,
+                direction: Some(crate::FilePreparationDirection::Stderr),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "configured output streams identify the same file",
+                ),
+            },
             other => other,
         };
         Self {
@@ -875,6 +897,48 @@ mod tests {
                 } if *actual_direction == direction
                     && source.kind() == io::ErrorKind::PermissionDenied
                     && source.to_string() == "fixture write denied"
+            ));
+        }
+    }
+
+    #[test]
+    fn test_resource_file_conflicts_map_to_validation_source_and_direction() {
+        for (reason, expected_direction) in [
+            (
+                CommandErrorReason::InputOutputConflict {
+                    input_path: "input".into(),
+                    output_stream: OutputStream::Stdout,
+                    output_path: "output".into(),
+                },
+                crate::FilePreparationDirection::Stdout,
+            ),
+            (
+                CommandErrorReason::InputOutputConflict {
+                    input_path: "input".into(),
+                    output_stream: OutputStream::Stderr,
+                    output_path: "output".into(),
+                },
+                crate::FilePreparationDirection::Stderr,
+            ),
+            (
+                CommandErrorReason::OutputFilesConflict {
+                    stdout_path: "stdout".into(),
+                    stderr_path: "stderr".into(),
+                },
+                crate::FilePreparationDirection::Stderr,
+            ),
+        ] {
+            let error = CommandError::from_reason("command", reason, None)
+                .into_file_preparation_failure(crate::FilePreparationStage::Validation);
+            assert_eq!(error.kind(), CommandErrorKind::FilePreparationFailed);
+            assert!(matches!(
+                error.reason(),
+                CommandErrorReason::FilePreparationFailed {
+                    stage: crate::FilePreparationStage::Validation,
+                    direction: Some(direction),
+                    source,
+                } if *direction == expected_direction
+                    && source.kind() == io::ErrorKind::InvalidInput
             ));
         }
     }
