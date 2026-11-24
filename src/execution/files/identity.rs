@@ -182,6 +182,7 @@ mod tests {
     #[cfg(windows)]
     use super::resolve_io_path;
     use super::validate_files;
+    #[cfg(unix)]
     use super::validate_tee_paths;
 
     #[cfg(windows)]
