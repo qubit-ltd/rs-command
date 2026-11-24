@@ -937,6 +937,96 @@ mod executor_decision_tests {
         assert_eq!(request.command.stdin_file_path(), Some(Path::new("input.txt")));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_scoped_wait_submission_keeps_path_base_after_capacity_wait() {
+        const CHILD_ENV: &str = "QUBIT_COMMAND_SCOPED_PATH_BASE_CHILD";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "execution::executor::executor_decision_tests::test_scoped_wait_submission_keeps_path_base_after_capacity_wait",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD_ENV, "1")
+                .status()
+                .expect("isolated scoped path snapshot test should start");
+            assert!(status.success(), "isolated scoped path snapshot test failed: {status}");
+            return;
+        }
+
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        std::fs::write(first.path().join("input.txt"), b"scoped-first-directory").unwrap();
+        std::fs::write(second.path().join("input.txt"), b"scoped-second-directory").unwrap();
+        std::env::set_current_dir(first.path()).unwrap();
+
+        use qubit_operation::OperationManager;
+        use qubit_operation::OperationOutcome;
+
+        use crate::CommandExecutor;
+        use crate::execution::CommandExecutorApi;
+        use crate::execution::contracts::Scheduler;
+
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let executor = CommandExecutor::new(
+            manager.clone(),
+            CommandExecutionConfig {
+                max_active: 1,
+                max_queued: 0,
+                max_waiters: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let reservation = executor.scheduler.try_reserve(0).unwrap();
+        let waiting_executor = executor.clone();
+        let waiting_manager = manager.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let submitter = std::thread::spawn(move || {
+            let _ = waiting_manager
+                .run(Default::default(), move |scope| {
+                    let mut operation = waiting_executor
+                        .submit_wait_blocking_in(
+                            &scope,
+                            CommandRunner::without_timeout(),
+                            Command::new("sh").arg("-c").arg("cat").stdin_file("input.txt"),
+                            CommandRunOptions::new().tee_stdout_to_file("stdout.log"),
+                        )
+                        .unwrap();
+                    let output = match operation.wait_outcome().unwrap() {
+                        OperationOutcome::Succeeded(output) => output.stdout().to_vec(),
+                        other => panic!("scoped wait should succeed: {other:?}"),
+                    };
+                    tx.send(output).unwrap();
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while executor.scheduler_snapshot().waiters == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "scoped capacity waiter should register before cwd changes"
+            );
+            std::thread::yield_now();
+        }
+        std::env::set_current_dir(second.path()).unwrap();
+        drop(reservation);
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+            b"scoped-first-directory"
+        );
+        submitter.join().unwrap();
+        assert_eq!(
+            std::fs::read(first.path().join("stdout.log")).unwrap(),
+            b"scoped-first-directory"
+        );
+        assert!(!second.path().join("stdout.log").exists());
+    }
+
     struct FixedClock(ClockDomainId);
 
     impl ClockSource for FixedClock {
