@@ -21,6 +21,7 @@ pub(crate) struct OperationObserverSlot {
     available: Condvar,
 }
 impl OperationObserverSlot {
+    /// Returns the observer once it has been published without waiting.
     pub(crate) fn try_get(&self) -> Option<OperationObserver> {
         self.observer.lock().unwrap_or_else(|error| error.into_inner()).clone()
     }

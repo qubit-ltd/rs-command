@@ -11,13 +11,16 @@ mod command_control;
 mod diagnostics;
 mod internal;
 mod operation_observer_slot;
+mod pending_recovery;
 mod recovery_item;
+mod recovery_sender;
 mod state;
 
 pub(crate) use command_control::CommandControl;
 pub(crate) use operation_observer_slot::OperationObserverSlot;
+pub(crate) use pending_recovery::PendingRecovery;
 pub(crate) use recovery_item::RecoveryItem;
-pub(crate) use recovery_item::RecoverySender;
+pub(crate) use recovery_sender::RecoverySender;
 pub(crate) use state::AdapterState;
 #[cfg(feature = "async")]
 pub(crate) use state::SessionOwners;

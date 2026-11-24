@@ -59,6 +59,11 @@ impl Reaper {
     }
 }
 
+/// Receives one cleanup owner at a time and reaps it without holding the queue
+/// lock.
+///
+/// # Parameters
+/// * `receiver`: Shared receiver used by the reaper worker pool.
 fn worker_loop(receiver: std::sync::Arc<std::sync::Mutex<Receiver<ReaperOwner>>>) {
     loop {
         let task = receiver.lock().unwrap_or_else(|error| error.into_inner()).recv();
@@ -338,17 +343,25 @@ mod tests {
         for _ in 0..2 {
             let gate = Arc::clone(&gate);
             let busy_tx = busy_tx.clone();
-            sender.try_send(ReaperOwner::new(move || {
-                busy_tx.send(()).unwrap();
-                let (released, changed) = &*gate;
-                let mut released = released.lock().unwrap();
-                while !*released { released = changed.wait(released).unwrap(); }
-            })).unwrap();
+            sender
+                .try_send(ReaperOwner::new(move || {
+                    busy_tx.send(()).unwrap();
+                    let (released, changed) = &*gate;
+                    let mut released = released.lock().unwrap();
+                    while !*released {
+                        released = changed.wait(released).unwrap();
+                    }
+                }))
+                .unwrap();
         }
         busy_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         busy_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-        sender.try_send(ReaperOwner::new(move || third_tx.send(()).unwrap())).unwrap();
-        third_rx.recv_timeout(Duration::from_secs(3)).expect("third idle worker should receive queued work");
+        sender
+            .try_send(ReaperOwner::new(move || third_tx.send(()).unwrap()))
+            .unwrap();
+        third_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("third idle worker should receive queued work");
         let (released, changed) = &*gate;
         *released.lock().unwrap() = true;
         changed.notify_all();
