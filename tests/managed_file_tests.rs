@@ -451,7 +451,7 @@ fn test_windows_drive_relative_resource_paths_keep_parent_drive_cwd() {
         assert_child_working_directory(output.stdout(), &child_dir);
         assert!(stdout.contains("parent-drive-input"));
         assert_eq!(
-            std::fs::read(&root.join("drive-relative-stdout.log")).unwrap(),
+            std::fs::read(root.join("drive-relative-stdout.log")).unwrap(),
             output.stdout()
         );
         assert!(
