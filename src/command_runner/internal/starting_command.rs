@@ -290,16 +290,7 @@ impl<'a> StartingCommand<'a> {
             drop(capacity_lease);
             cleanup_observer.complete();
         });
-        match Reaper::global() {
-            Ok(reaper) => match reaper.handoff(owner) {
-                Ok(()) => {}
-                Err(owner) => observer.retain_or_defer_reaper_owner(owner),
-            },
-            Err(error) => {
-                log::error!("failed to start process reaper: {error}");
-                observer.retain_or_defer_reaper_owner(owner);
-            }
-        }
+        handoff_startup_owner(&observer, Reaper::global().handoff(owner));
         primary
     }
 
@@ -322,6 +313,19 @@ impl<'a> StartingCommand<'a> {
             self.stdin_writer.take(),
         ));
         failures
+    }
+}
+
+fn handoff_startup_owner(observer: &ReaperObserver, result: Result<(), crate::execution::backend::HandoffFailure>) {
+    match result {
+        Ok(()) => {}
+        Err(failure) if failure.kind == crate::execution::backend::HandoffFailureKind::Full => {
+            observer.retain_or_defer_reaper_owner(failure.owner);
+        }
+        Err(failure) => {
+            failure.log_unavailable("startup abort cleanup");
+            failure.owner.run_inline();
+        }
     }
 }
 
@@ -350,11 +354,46 @@ mod tests {
     use super::super::scripted_child::ScriptedChild;
     use super::super::scripted_child::raw_child;
     use super::StartingCommand;
+    use super::handoff_startup_owner;
     use crate::CommandCleanupFailure;
     use crate::CommandError;
     use crate::CommandErrorKind;
     use crate::CommandErrorReason;
     use crate::OutputStream;
+
+    #[test]
+    fn test_startup_abort_uses_inline_cleanup_when_reaper_start_fails() {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::atomic::Ordering;
+
+        use crate::execution::backend::HandoffFailure;
+        use crate::execution::backend::HandoffFailureKind;
+        use crate::execution::backend::ReaperObserver;
+        use crate::execution::backend::ReaperOwner;
+
+        let (observer, completed) = ReaperObserver::pair();
+        observer.mark_pending();
+        let cleanup_count = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&cleanup_count);
+        let cleanup_observer = observer.clone();
+        let owner = ReaperOwner::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+            cleanup_observer.complete();
+        });
+
+        handoff_startup_owner(
+            &observer,
+            Err(HandoffFailure {
+                kind: HandoffFailureKind::StartFailed,
+                owner,
+                source: None,
+            }),
+        );
+
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+        assert!(observer.is_complete());
+        completed.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+    }
 
     #[test]
     fn test_managed_startup_abort_retains_child_helpers_and_capacity_until_reaper_cleanup() {

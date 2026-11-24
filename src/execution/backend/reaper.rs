@@ -7,56 +7,192 @@
 // =============================================================================
 
 use std::io;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::SyncSender;
 use std::sync::mpsc::TrySendError;
 use std::sync::mpsc::sync_channel;
 use std::thread;
+use std::thread::JoinHandle;
 
 use super::internal::ReaperOwner;
 
 /// Represents the reaper state or contract used by managed command execution.
 pub(crate) struct Reaper {
-    /// Stores the sender value used by this execution component.
-    sender: SyncSender<ReaperOwner>,
+    /// Marks whether this handle routes through the shared replaceable pool.
+    global: bool,
+    /// Sender used by isolated test pools.
+    sender: Option<SyncSender<ReaperOwner>>,
 }
 
-static REAPER: OnceLock<Result<Reaper, String>> = OnceLock::new();
+struct ReaperPool {
+    sender: Option<SyncSender<ReaperOwner>>,
+    workers: Vec<JoinHandle<()>>,
+}
+
+impl ReaperPool {
+    fn shutdown(mut self) {
+        drop(self.sender.take());
+        for worker in self.workers {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HandoffFailureKind {
+    Full,
+    Disconnected,
+    StartFailed,
+}
+
+pub(crate) struct HandoffFailure {
+    pub(crate) kind: HandoffFailureKind,
+    pub(crate) owner: ReaperOwner,
+    pub(crate) source: Option<io::Error>,
+}
+
+impl std::fmt::Debug for HandoffFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HandoffFailure")
+            .field("kind", &self.kind)
+            .field("raw_os_error", &self.source.as_ref().and_then(io::Error::raw_os_error))
+            .finish_non_exhaustive()
+    }
+}
+
+impl HandoffFailure {
+    pub(crate) fn log_unavailable(&self, context: &str) {
+        let os_error = self.source.as_ref().and_then(io::Error::raw_os_error);
+        log::error!(
+            "{context}: process reaper unavailable ({:?}, os_error={os_error:?})",
+            self.kind
+        );
+    }
+}
+
+static REAPER_POOL: OnceLock<Mutex<Option<ReaperPool>>> = OnceLock::new();
+static REAPER: OnceLock<Reaper> = OnceLock::new();
 
 impl Reaper {
+    #[cfg(test)]
+    fn isolated(sender: SyncSender<ReaperOwner>) -> Self {
+        Self {
+            global: false,
+            sender: Some(sender),
+        }
+    }
+
     /// Stores the initialize value used by this execution component.
-    fn initialize() -> io::Result<Self> {
+    fn initialize() -> io::Result<ReaperPool> {
         const WORKERS: usize = 4;
         const CAPACITY: usize = 64;
-        let (sender, receiver) = sync_channel::<ReaperOwner>(CAPACITY);
-        let receiver = std::sync::Arc::new(std::sync::Mutex::new(receiver));
-        for index in 0..WORKERS {
-            let receiver = std::sync::Arc::clone(&receiver);
+        Self::initialize_with(WORKERS, CAPACITY, |index, receiver| {
             thread::Builder::new()
                 .name(format!("qubit-command-reaper-{index}"))
-                .spawn(move || worker_loop(receiver))?;
+                .spawn(move || worker_loop(receiver))
+        })
+    }
+
+    fn initialize_with(
+        workers_count: usize,
+        capacity: usize,
+        mut spawn_worker: impl FnMut(
+            usize,
+            std::sync::Arc<std::sync::Mutex<Receiver<ReaperOwner>>>,
+        ) -> io::Result<JoinHandle<()>>,
+    ) -> io::Result<ReaperPool> {
+        let (sender, receiver) = sync_channel::<ReaperOwner>(capacity);
+        let receiver = std::sync::Arc::new(std::sync::Mutex::new(receiver));
+        let mut workers = Vec::with_capacity(workers_count);
+        for index in 0..workers_count {
+            match spawn_worker(index, std::sync::Arc::clone(&receiver)) {
+                Ok(worker) => workers.push(worker),
+                Err(error) => {
+                    drop(sender);
+                    for worker in workers {
+                        let _ = worker.join();
+                    }
+                    return Err(error);
+                }
+            }
         }
-        Ok(Self { sender })
+        Ok(ReaperPool {
+            sender: Some(sender),
+            workers,
+        })
     }
 
     /// Stores the global value used by this execution component.
-    pub(crate) fn global() -> io::Result<&'static Self> {
-        match REAPER.get_or_init(|| Self::initialize().map_err(|error| error.to_string())) {
-            Ok(reaper) => Ok(reaper),
-            Err(error) => Err(io::Error::other(error.clone())),
-        }
+    pub(crate) fn global() -> &'static Self {
+        REAPER.get_or_init(|| Self {
+            global: true,
+            sender: None,
+        })
     }
 
     /// Stores the handoff value used by this execution component.
     ///
     /// # Parameters
     /// * `owner`: Supplies the owner value used by this operation.
-    pub(crate) fn handoff(&self, owner: ReaperOwner) -> Result<(), ReaperOwner> {
-        self.sender.try_send(owner).map_err(|error| match error {
-            TrySendError::Full(owner) | TrySendError::Disconnected(owner) => owner,
-        })
+    pub(crate) fn handoff(&self, owner: ReaperOwner) -> Result<(), HandoffFailure> {
+        if !self.global {
+            return send_owner(self.sender.as_ref().expect("isolated reaper sender"), owner);
+        }
+        let state = REAPER_POOL.get_or_init(|| Mutex::new(None));
+        let mut pool = state.lock().unwrap_or_else(|error| error.into_inner());
+        if pool.is_none() {
+            match Self::initialize() {
+                Ok(started) => *pool = Some(started),
+                Err(source) => {
+                    return Err(HandoffFailure {
+                        kind: HandoffFailureKind::StartFailed,
+                        owner,
+                        source: Some(source),
+                    });
+                }
+            }
+        }
+        let current = pool.as_ref().expect("pool was initialized");
+        match send_owner(current.sender.as_ref().expect("pool sender"), owner) {
+            Ok(()) => Ok(()),
+            Err(failure) if failure.kind == HandoffFailureKind::Full => Err(failure),
+            Err(failure) => {
+                if let Some(stale) = pool.take() {
+                    stale.shutdown();
+                }
+                match Self::initialize() {
+                    Ok(replacement) => {
+                        let result = send_owner(replacement.sender.as_ref().expect("pool sender"), failure.owner);
+                        *pool = Some(replacement);
+                        result
+                    }
+                    Err(source) => Err(HandoffFailure {
+                        kind: HandoffFailureKind::StartFailed,
+                        owner: failure.owner,
+                        source: Some(source),
+                    }),
+                }
+            }
+        }
     }
+}
+
+fn send_owner(sender: &SyncSender<ReaperOwner>, owner: ReaperOwner) -> Result<(), HandoffFailure> {
+    sender.try_send(owner).map_err(|error| match error {
+        TrySendError::Full(owner) => HandoffFailure {
+            kind: HandoffFailureKind::Full,
+            owner,
+            source: None,
+        },
+        TrySendError::Disconnected(owner) => HandoffFailure {
+            kind: HandoffFailureKind::Disconnected,
+            owner,
+            source: None,
+        },
+    })
 }
 
 /// Receives one cleanup owner at a time and reaps it without holding the queue
@@ -76,10 +212,12 @@ fn worker_loop(receiver: std::sync::Arc<std::sync::Mutex<Receiver<ReaperOwner>>>
 
 #[cfg(test)]
 mod tests {
+    use std::io;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::sync::mpsc::sync_channel;
+    use std::thread;
     use std::time::Duration;
 
     use qubit_operation::OperationManager;
@@ -138,9 +276,31 @@ mod tests {
     }
 
     #[test]
+    fn test_partial_reaper_startup_closes_started_workers_and_can_retry() {
+        let exited = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&exited);
+        let failed = Reaper::initialize_with(2, 1, move |index, receiver| {
+            if index == 1 {
+                return Err(io::Error::other("injected worker startup failure"));
+            }
+            let observed = Arc::clone(&observed);
+            thread::Builder::new().spawn(move || {
+                let _ = receiver.lock().unwrap_or_else(|error| error.into_inner()).recv();
+                observed.fetch_add(1, Ordering::SeqCst);
+            })
+        });
+
+        assert!(failed.is_err());
+        assert_eq!(exited.load(Ordering::SeqCst), 1, "partial worker must be joined");
+
+        let recovered = Reaper::initialize().expect("later startup attempt should succeed");
+        recovered.shutdown();
+    }
+
+    #[test]
     fn test_global_reaper_initializes_once_and_accepts_cleanup_handoff() {
-        let first = Reaper::global().expect("global reaper should initialize");
-        let second = Reaper::global().expect("global reaper should remain available");
+        let first = Reaper::global();
+        let second = Reaper::global();
         assert!(std::ptr::eq(first, second));
 
         let (done_tx, done_rx) = std::sync::mpsc::channel();
@@ -262,7 +422,7 @@ mod tests {
 
     #[test]
     fn test_bounded_reaper_executes_transferred_owner_before_completion_signal() {
-        let reaper = Reaper::global().expect("reaper workers should start");
+        let reaper = Reaper::global();
         let released = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&released);
         let (observer, completed) = ReaperObserver::pair();
@@ -282,7 +442,7 @@ mod tests {
     #[test]
     fn test_full_reaper_queue_returns_owner_for_retry_after_capacity_drains() {
         let (sender, primary) = sync_channel(1);
-        let reaper = Reaper { sender };
+        let reaper = Reaper::isolated(sender);
         reaper.handoff(ReaperOwner::new(|| {})).unwrap();
 
         let completed = Arc::new(AtomicUsize::new(0));
@@ -292,6 +452,8 @@ mod tests {
                 observed.fetch_add(1, Ordering::SeqCst);
             }))
             .expect_err("full bounded queue must return the still-owned task");
+        assert_eq!(owner.kind, super::HandoffFailureKind::Full);
+        let owner = owner.owner;
         assert_eq!(completed.load(Ordering::SeqCst), 0);
 
         primary
@@ -312,7 +474,7 @@ mod tests {
     fn test_disconnected_reaper_queue_returns_cleanup_owner() {
         let (sender, primary) = sync_channel(1);
         drop(primary);
-        let reaper = Reaper { sender };
+        let reaper = Reaper::isolated(sender);
         let completed = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&completed);
 
@@ -321,6 +483,8 @@ mod tests {
                 observed.fetch_add(1, Ordering::SeqCst);
             }))
             .expect_err("disconnected queue must return cleanup ownership");
+        assert_eq!(owner.kind, super::HandoffFailureKind::Disconnected);
+        let owner = owner.owner;
         assert_eq!(completed.load(Ordering::SeqCst), 0);
         owner.run_inline();
         assert_eq!(completed.load(Ordering::SeqCst), 1);
@@ -370,7 +534,7 @@ mod tests {
     #[test]
     fn test_rejected_handoff_retains_cleanup_owner_until_single_completion() {
         let (sender, primary) = sync_channel(1);
-        let reaper = Reaper { sender };
+        let reaper = Reaper::isolated(sender);
         reaper.handoff(ReaperOwner::new(|| {})).unwrap();
 
         let (observer, completed) = ReaperObserver::pair();
@@ -384,6 +548,8 @@ mod tests {
                 cleanup_observer.complete();
             }))
             .expect_err("full queue must retain cleanup ownership with the caller");
+        assert_eq!(owner.kind, super::HandoffFailureKind::Full);
+        let owner = owner.owner;
 
         assert_eq!(cleanups.load(Ordering::SeqCst), 0);
         assert!(completed.try_recv().is_err());
