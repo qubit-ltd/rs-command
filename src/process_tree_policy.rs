@@ -8,7 +8,12 @@
 //! Process lifetime policy for managed command execution.
 
 /// Controls whether managed execution owns the process tree or only its direct
-/// child.
+/// child. This policy applies to managed execution; legacy
+/// [`CommandRunner::run`](crate::CommandRunner::run) and
+/// [`CommandRunner::run_with`](crate::CommandRunner::run_with) retain their
+/// existing behavior. Those legacy methods attempt process-tree management
+/// when timeout, cancellation, or a total output budget is configured, and
+/// otherwise stop only the direct child.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ProcessTreePolicy {
     /// Manage descendants as part of the command lifetime.

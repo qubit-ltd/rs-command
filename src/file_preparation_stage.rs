@@ -9,13 +9,14 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum FilePreparationStage {
-    /// Configuration or file identity validation.
+    /// Configuration or file identity validation. For resource-backed paths,
+    /// this includes stdin open/type failures and tee validation failures.
     Validation,
     /// Operation-manager resource reservation.
     ResourceReservation,
     /// Registration of an owned file with the operation scope.
     Registration,
-    /// Output sink truncation.
+    /// Truncating an output sink failed after validation succeeded.
     Truncation,
     /// Rewinding a truncated output sink.
     Rewind,
