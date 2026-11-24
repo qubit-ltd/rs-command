@@ -1129,12 +1129,47 @@ mod tests {
     }
 
     #[cfg(unix)]
-    struct CleanupGate(mpsc::Sender<()>);
+    #[cfg(unix)]
+    struct WorkerJoinGuard {
+        cleanup_gate: Option<mpsc::Sender<()>>,
+        workers: mpsc::Receiver<std::thread::JoinHandle<()>>,
+        joined: Arc<AtomicUsize>,
+        worker_joined: bool,
+    }
 
     #[cfg(unix)]
-    impl Drop for CleanupGate {
+    impl WorkerJoinGuard {
+        fn release_gate(&mut self) {
+            if let Some(gate) = self.cleanup_gate.take() {
+                let _ = gate.send(());
+            }
+        }
+
+        fn join_one(&mut self) {
+            let worker = self
+                .workers
+                .recv_timeout(Duration::from_secs(5))
+                .expect("scheduler should transfer its worker handle to the test thread");
+            worker.join().expect("scheduled backend worker should finish");
+            self.joined.fetch_add(1, Ordering::SeqCst);
+            self.worker_joined = true;
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for WorkerJoinGuard {
         fn drop(&mut self) {
-            let _ = self.0.send(());
+            // Open the cleanup gate before any joins, including during unwind.
+            self.release_gate();
+            // Each scenario schedules one job. Bound the teardown even when
+            // submission panics before the scheduler transfers its handle.
+            if !self.worker_joined
+                && let Ok(worker) = self.workers.recv_timeout(Duration::from_secs(5))
+            {
+                let _ = worker.join();
+                self.joined.fetch_add(1, Ordering::SeqCst);
+                self.worker_joined = true;
+            }
         }
     }
 
@@ -1145,25 +1180,7 @@ mod tests {
         cleanup_count: Arc<AtomicUsize>,
         cleanup_started: mpsc::Sender<()>,
         cleanup_gate: Arc<Mutex<mpsc::Receiver<()>>>,
-        workers: Mutex<Vec<std::thread::JoinHandle<()>>>,
-    }
-
-    #[cfg(unix)]
-    impl GatedScheduler {
-        fn join_workers(&self) {
-            for worker in self.workers.lock().unwrap().drain(..) {
-                worker.join().unwrap();
-            }
-        }
-    }
-
-    #[cfg(unix)]
-    impl Drop for GatedScheduler {
-        fn drop(&mut self) {
-            for worker in self.workers.get_mut().unwrap().drain(..) {
-                let _ = worker.join();
-            }
-        }
+        worker_handles: mpsc::Sender<std::thread::JoinHandle<()>>,
     }
 
     #[cfg(unix)]
@@ -1202,7 +1219,9 @@ mod tests {
             permit: Reservation,
         ) -> Result<(), crate::execution::contracts::EnqueueFailure> {
             let worker = std::thread::spawn(move || (job.run)(permit));
-            self.workers.lock().unwrap().push(worker);
+            if let Err(error) = self.worker_handles.send(worker) {
+                error.0.join().expect("untracked scheduler worker should finish");
+            }
             Ok(())
         }
 
@@ -2821,7 +2840,7 @@ mod tests {
         use crate::execution::backend::HandoffFailureKind;
 
         for kind in [HandoffFailureKind::StartFailed, HandoffFailureKind::Disconnected] {
-            run_managed_reaper_failure_case(kind, true);
+            run_managed_reaper_failure_case(kind, true, false, Arc::new(AtomicUsize::new(0)));
         }
     }
 
@@ -2831,20 +2850,52 @@ mod tests {
         use crate::execution::backend::HandoffFailureKind;
 
         for kind in [HandoffFailureKind::StartFailed, HandoffFailureKind::Disconnected] {
-            run_managed_reaper_failure_case(kind, false);
+            run_managed_reaper_failure_case(kind, false, false, Arc::new(AtomicUsize::new(0)));
         }
     }
 
     #[cfg(unix)]
-    fn run_managed_reaper_failure_case(kind: crate::execution::backend::HandoffFailureKind, startup_abort: bool) {
+    #[test]
+    fn test_managed_cleanup_gate_guard_releases_and_joins_during_unwind() {
+        use crate::execution::backend::HandoffFailureKind;
+
+        let joined = Arc::new(AtomicUsize::new(0));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_managed_reaper_failure_case(
+                HandoffFailureKind::StartFailed,
+                true,
+                true,
+                Arc::clone(&joined),
+            );
+        }));
+
+        assert!(result.is_err(), "the injected panic should unwind the test helper");
+        assert_eq!(joined.load(Ordering::SeqCst), 1, "guard should join its worker once");
+    }
+
+    #[cfg(unix)]
+    fn run_managed_reaper_failure_case(
+        kind: crate::execution::backend::HandoffFailureKind,
+        startup_abort: bool,
+        panic_before_gate_release: bool,
+        joined: Arc<AtomicUsize>,
+    ) {
+        let (cleanup_gate_tx, cleanup_gate_rx) = mpsc::channel();
+        let (worker_handle_tx, worker_handle_rx) = mpsc::channel();
+        // Declared before potentially blocking owners so unwind drops it last;
+        // its Drop opens the gate before boundedly collecting the sole worker.
+        let mut worker_guard = WorkerJoinGuard {
+            cleanup_gate: Some(cleanup_gate_tx),
+            workers: worker_handle_rx,
+            joined,
+            worker_joined: false,
+        };
         let manager = OperationManager::new(Default::default()).unwrap();
         let backend = Arc::new(ProcessBackend::with_test_failures(kind, startup_abort, !startup_abort));
         let capacity_released = Arc::new(AtomicBool::new(false));
         let reservation_released = Arc::new(AtomicBool::new(false));
         let cleanup_count = Arc::new(AtomicUsize::new(0));
         let (cleanup_started_tx, cleanup_started_rx) = mpsc::channel();
-        let (cleanup_gate_tx, cleanup_gate_rx) = mpsc::channel();
-        let cleanup_gate = CleanupGate(cleanup_gate_tx);
         let cleanup_gate_rx = Arc::new(Mutex::new(cleanup_gate_rx));
         let scheduler = Arc::new(GatedScheduler {
             reservation_released: Arc::clone(&reservation_released),
@@ -2852,7 +2903,7 @@ mod tests {
             cleanup_count: Arc::clone(&cleanup_count),
             cleanup_started: cleanup_started_tx,
             cleanup_gate: cleanup_gate_rx,
-            workers: Mutex::new(Vec::new()),
+            worker_handles: worker_handle_tx,
         });
         let reservation = crate::execution::Scheduler::try_reserve(&*scheduler, 0).unwrap();
         let request = Request {
@@ -2906,7 +2957,10 @@ mod tests {
         assert!(!reservation_released.load(Ordering::SeqCst));
         assert!(!capacity_released.load(Ordering::SeqCst));
 
-        drop(cleanup_gate);
+        if panic_before_gate_release {
+            panic!("injected panic while cleanup gate is held");
+        }
+        worker_guard.release_gate();
         operation.wait_settlement().unwrap();
         let snapshot = qubit_operation::OperationControl::snapshot(&*adapter_state);
         assert!(snapshot.input_released);
@@ -2914,7 +2968,7 @@ mod tests {
         assert!(reservation_released.load(Ordering::SeqCst));
         assert!(capacity_released.load(Ordering::SeqCst));
         assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
-        scheduler.join_workers();
+        worker_guard.join_one();
     }
 
     #[cfg(unix)]
