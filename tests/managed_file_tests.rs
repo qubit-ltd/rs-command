@@ -236,7 +236,10 @@ fn test_managed_relative_paths_use_parent_directory_and_child_cwd_priority() {
     const WORKER_ENV: &str = "QUBIT_MANAGED_PATH_BASE_WORKER";
     if let Some(root) = std::env::var_os(WORKER_ENV) {
         let root = std::path::PathBuf::from(root);
-        assert_eq!(std::env::current_dir().expect("worker directory should resolve"), root);
+        assert_same_directory(
+            &std::env::current_dir().expect("worker directory should resolve"),
+            &root,
+        );
         let runner_dir = root.join("runner-default");
         let command_dir = root.join("command-override");
         std::fs::create_dir_all(&runner_dir).expect("runner directory should be created");
@@ -262,7 +265,7 @@ fn test_managed_relative_paths_use_parent_directory_and_child_cwd_priority() {
             OperationOutcome::Succeeded(output) => output,
             other => panic!("command override request failed: {other:?}"),
         };
-        assert!(String::from_utf8_lossy(output.stdout()).starts_with(command_dir.to_str().unwrap()));
+        assert_child_working_directory(output.stdout(), &command_dir);
         assert!(String::from_utf8_lossy(output.stdout()).contains("parent-input"));
         assert_eq!(std::fs::read(root.join("command-stdout.log")).unwrap(), output.stdout());
         assert!(std::fs::read(root.join("command-stderr.log")).unwrap().is_empty());
@@ -281,7 +284,7 @@ fn test_managed_relative_paths_use_parent_directory_and_child_cwd_priority() {
             OperationOutcome::Succeeded(output) => output,
             other => panic!("runner default request failed: {other:?}"),
         };
-        assert!(String::from_utf8_lossy(output.stdout()).starts_with(runner_dir.to_str().unwrap()));
+        assert_child_working_directory(output.stdout(), &runner_dir);
         assert!(String::from_utf8_lossy(output.stdout()).contains("parent-input"));
         assert_eq!(std::fs::read(root.join("runner-stdout.log")).unwrap(), output.stdout());
         assert!(!runner_dir.join("runner-stdout.log").exists());
@@ -314,7 +317,7 @@ fn test_managed_relative_paths_use_parent_directory_and_child_cwd_priority() {
             OperationOutcome::Succeeded(output) => output,
             other => panic!("resource request failed: {other:?}"),
         };
-        assert!(String::from_utf8_lossy(output.stdout()).starts_with(command_dir.to_str().unwrap()));
+        assert_child_working_directory(output.stdout(), &command_dir);
         assert!(String::from_utf8_lossy(output.stdout()).contains("parent-input"));
         assert_eq!(
             std::fs::read(root.join("resource-stdout.log")).unwrap(),
@@ -336,12 +339,27 @@ fn test_managed_relative_paths_use_parent_directory_and_child_cwd_priority() {
     }
 
     let directory = tempfile::tempdir().expect("path fixture should be created");
+    #[cfg(unix)]
+    let alias_directory = tempfile::tempdir().expect("symlink parent directory should be created");
+    #[cfg(unix)]
+    let worker_root = {
+        let alias = alias_directory.path().join("root-alias");
+        std::os::unix::fs::symlink(directory.path(), &alias).expect("root alias should be created");
+        assert_ne!(
+            alias,
+            std::fs::canonicalize(&alias).expect("root alias should canonicalize"),
+            "symlink fixture should use a distinct path spelling"
+        );
+        alias
+    };
+    #[cfg(windows)]
+    let worker_root = directory.path().to_path_buf();
     let output = std::process::Command::new(std::env::current_exe().expect("test executable should resolve"))
         .arg("--exact")
         .arg("test_managed_relative_paths_use_parent_directory_and_child_cwd_priority")
         .arg("--nocapture")
-        .env(WORKER_ENV, directory.path())
-        .current_dir(directory.path())
+        .env(WORKER_ENV, &worker_root)
+        .current_dir(&worker_root)
         .output()
         .expect("isolated path worker should start");
     assert!(
@@ -362,6 +380,22 @@ fn path_probe_command() -> Command {
     Command::new("cmd.exe").args(&["/C", "cd & findstr /R ."])
 }
 
+fn assert_same_directory(actual: &std::path::Path, expected: &std::path::Path) {
+    let actual = std::fs::canonicalize(actual).expect("actual directory should canonicalize");
+    let expected = std::fs::canonicalize(expected).expect("expected directory should canonicalize");
+    assert_eq!(actual, expected);
+}
+
+fn assert_child_working_directory(output: &[u8], expected: &std::path::Path) {
+    let stdout = String::from_utf8_lossy(output);
+    let reported = stdout
+        .lines()
+        .next()
+        .expect("shell should print its working directory")
+        .trim();
+    assert_same_directory(std::path::Path::new(reported), expected);
+}
+
 #[cfg(windows)]
 #[test]
 fn test_windows_drive_relative_resource_paths_keep_parent_drive_cwd() {
@@ -370,7 +404,10 @@ fn test_windows_drive_relative_resource_paths_keep_parent_drive_cwd() {
     const WORKER_ENV: &str = "QUBIT_WINDOWS_DRIVE_RELATIVE_WORKER";
     if let Some(root) = std::env::var_os(WORKER_ENV) {
         let root = std::path::PathBuf::from(root);
-        assert_eq!(std::env::current_dir().expect("worker directory should resolve"), root);
+        assert_same_directory(
+            &std::env::current_dir().expect("worker directory should resolve"),
+            &root,
+        );
         let drive_prefix = root
             .components()
             .find_map(|component| match component {
@@ -411,7 +448,7 @@ fn test_windows_drive_relative_resource_paths_keep_parent_drive_cwd() {
             other => panic!("drive-relative request failed: {other:?}"),
         };
         let stdout = String::from_utf8_lossy(output.stdout());
-        assert!(stdout.starts_with(child_dir.to_str().unwrap()));
+        assert_child_working_directory(output.stdout(), &child_dir);
         assert!(stdout.contains("parent-drive-input"));
         assert_eq!(
             std::fs::read(&root.join("drive-relative-stdout.log")).unwrap(),
