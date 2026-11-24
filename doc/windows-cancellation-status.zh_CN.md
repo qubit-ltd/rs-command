@@ -4,6 +4,16 @@
 
 `qubit-command` 0.12 的受管 API 增加了进程树管理和独立 settlement 报告，但没有改变 helper join 的证据，也没有建立 Windows 上的硬返回期限。`Managed` 进程树策略不代表每个 helper join 都有界；受管命令同样受此限制。应用应检查 settlement 和清理报告；确实需要硬期限时，应通过独立进程边界监督 runner。
 
+## 集成源码核查（源码 SHA `c4dfbd7593f1807d2c5758305990452d5301f44b`，2026-11-24）
+
+本次是在 Linux 上对 commit `c4dfbd7593f1807d2c5758305990452d5301f44b` 做源码核查；通过 `git show` 检查对象，没有切换已分配的 worktree。在 managed startup-abort 和 runtime uncertain-handoff 路径中，reaper 服务不可用时会将 cleanup owner 保留在 `ReaperObserver`；有界队列满载仍走 deferred recovery。runner 返回后，`ProcessBackend` 保留并发布 runner 已选定的 outcome，再由有界 backend worker 执行本地保留的 cleanup owner；完成前不会释放 session bridge、operation scope 或发布 release/settlement。该顺序使 cleanup 完成先于 release facts，并保留 runner 选定的主错误。T3 的 resource conflict 分类也已包含：input/output 冲突按冲突输出方向、output/output 冲突按 stderr，均映射为 validation 阶段、`InvalidInput` 的准备失败。
+
+与 `ce3cab6f30686f75c2896c1ec7378ace8f30443d` 和 `6349c376a17f7db526409659546e135f171d5ab5` 对比，原生 helper 路径没有变化。Windows 上 `CancelSynchronousIo` 成功后仍会直接 join helper，没有期限。代码先发出所有取消请求；仅取消失败时使用共享的 100 ms 确认期限，未确认完成的 helper 可以 detach。该期限不限制成功取消后的 join。workflow、Windows probes 和两份 PowerShell identity-gate 脚本相对两个对照 SHA 也没有差异。现有 workflow 目标为 `windows-2022`，运行 `windows_` 与 `command_io` 筛选，并对 12 项具名测试执行门禁。
+
+该 SHA 没有 Windows run、PowerShell gate 结果或同 SHA trace。[SHA `6349c376…` 的成功原生 run 45397656910](https://github.com/qubit-ltd/rs-command/actions/runs/45397656910) 和 [SHA `ce3cab6…` 的成功原生 run 45390083216](https://github.com/qubit-ltd/rs-command/actions/runs/45390083216) 仍仅适用于各自的源码 SHA。本次核查运行于 Linux x86_64（`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`），Rust/Cargo 为 `1.94.0`；系统没有 `pwsh` 或 `powershell`。本次未运行测试或 Windows 门禁。
+
+**结论：** 源码 SHA `c4dfbd7593f1807d2c5758305990452d5301f44b` 的 RC-006 仍为 **unresolved（未解决）**。managed cleanup 顺序的变化没有证明同一 helper 上缺失的因果链：后继生产 I/O 持续阻塞、cleanup join 等待该 I/O、独立 watchdog 释放、随后 cleanup 完成。本次源码核查既未证实也未排除生产挂起，也不证明 Windows 安全。本次核查未修改生产代码或探针。
+
 ## 原生 Windows 复验（源码 SHA `6349c376a17f7db526409659546e135f171d5ab5`，2026-11-24）
 
 [Windows Cancellation Interleaving run 45397656910](https://github.com/qubit-ltd/rs-command/actions/runs/45397656910) 在 `main` 分支、准确源码 SHA `6349c376a17f7db526409659546e135f171d5ab5`、`windows-2022` 上成功完成。`windows-interleaving` job 于 12:52:00 至 12:53:48 UTC 运行。identity-gate fixtures 和 probe/result gate 均通过。运行共选中 14 项测试：12 项 `windows_`、2 项 `command_io`，全部通过；结果门禁记录的 12 项必需测试均为 `discovered=true`、`passed=true`。[Trace artifact 14922171984](https://github.com/qubit-ltd/rs-command/actions/runs/45397656910/artifacts/14922171984)（SHA-256 `d7fad479b5e39eb6ed3803b9187e72c9c773d19216617ba2f0327e502ce9cda7`）包含测试列表、门禁结果和 trace。
