@@ -12,6 +12,7 @@ use qubit_operation::OperationContext;
 use super::total_output_budget::TotalOutputBudget;
 use crate::CommandCancellation;
 use crate::execution::backend::ReaperObserver;
+use crate::execution::backend::StartGate;
 use crate::execution::contracts::ReservationLease;
 use crate::session::contracts::SessionBridge;
 
@@ -19,6 +20,10 @@ use crate::session::contracts::SessionBridge;
 pub(in crate::command_runner) struct RunningCommandResources {
     /// Shared cancellation handle checked while waiting.
     pub(in crate::command_runner) cancellation_token: Option<CommandCancellation>,
+    /// Operation-local stop signal independent of caller-owned cancellation.
+    pub(in crate::command_runner) operation_cancellation_token: Option<CommandCancellation>,
+    /// Managed gate updated when runtime cancellation is observed.
+    pub(in crate::command_runner) start_gate: Option<Arc<StartGate>>,
     /// Shared byte budget charged by stdout and stderr.
     pub(in crate::command_runner) total_budget: Option<Arc<TotalOutputBudget>>,
     /// Managed capacity retained through cleanup.

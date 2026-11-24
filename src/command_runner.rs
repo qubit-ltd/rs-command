@@ -42,6 +42,7 @@ pub(crate) use run_tree_policy::RunTreePolicy;
 use crate::Command;
 use crate::CommandCancellation;
 use crate::CommandError;
+use crate::CommandErrorKind;
 use crate::CommandErrorReason;
 use crate::CommandOutput;
 use crate::CommandRunOptions;
@@ -1058,7 +1059,7 @@ mod tests {
 
     #[test]
     fn test_run_with_tree_policy_rejects_start_gate_stop_before_spawn() {
-        let gate = StartGate::default();
+        let gate = Arc::new(StartGate::default());
         assert!(gate.request_stop(qubit_operation::StopReason::UserCancelled));
 
         let error = CommandRunner::without_timeout()
@@ -1066,7 +1067,7 @@ mod tests {
                 crate::Command::new("__qubit_start_gate_must_not_spawn__"),
                 CommandRunOptions::new(),
                 RunTreePolicy {
-                    start_gate: Some(&gate),
+                    start_gate: Some(Arc::clone(&gate)),
                     ..RunTreePolicy::default()
                 },
             )
@@ -1671,15 +1672,31 @@ impl CommandRunner {
             process_tree_policy: ignored_managed_policy,
         } = options.into_parts();
         let _ = ignored_managed_policy;
+        if let Some(gate) = start_gate.as_ref() {
+            gate.observe_external_cancellation();
+        }
 
-        let prepared = self.prepare_command_for_run(
+        let prepared = match self.prepare_command_for_run(
             command,
             cancellation.as_ref(),
             stdout_file.as_deref(),
             stderr_file.as_deref(),
             session_bridge.is_some(),
-        )?;
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                if error.kind() == CommandErrorKind::CancelledBeforeStart
+                    && let Some(gate) = start_gate.as_ref()
+                {
+                    gate.observe_external_cancellation();
+                }
+                return Err(error);
+            }
+        };
         if cancellation.as_ref().is_some_and(CommandCancellation::is_cancelled) {
+            if let Some(gate) = start_gate.as_ref() {
+                gate.observe_external_cancellation();
+            }
             return Err(CommandError::from_reason(
                 prepared.command_text,
                 CommandErrorReason::CancelledBeforeStart,
@@ -1691,7 +1708,7 @@ impl CommandRunner {
                 .map_err(|error| error.into_file_preparation_failure(crate::FilePreparationStage::Validation))?;
         }
         let _start_permit = match start_gate {
-            Some(gate) => match gate.authorize() {
+            Some(ref gate) => match gate.authorize() {
                 Some(permit) => Some(permit),
                 None => {
                     return Err(CommandError::from_reason(
@@ -1707,6 +1724,10 @@ impl CommandRunner {
             && context.is_expired()
         {
             context.request_stop(qubit_operation::StopReason::Timeout);
+            if let Some(gate) = start_gate.as_ref() {
+                gate.observe_external_cancellation();
+                gate.request_stop(qubit_operation::StopReason::Timeout);
+            }
             return Err(CommandError::from_reason(
                 prepared.command_text,
                 CommandErrorReason::CancelledBeforeStart,
@@ -1828,6 +1849,8 @@ impl CommandRunner {
             Arc::clone(&self.timer),
             RunningCommandResources {
                 cancellation_token: cancellation,
+                operation_cancellation_token: start_gate.as_ref().map(|gate| gate.cancellation()),
+                start_gate: start_gate.clone(),
                 total_budget,
                 capacity_lease: finished_start.capacity_lease,
                 reaper_observer: finished_start.reaper_observer,

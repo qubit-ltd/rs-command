@@ -171,6 +171,7 @@ impl Backend for ProcessBackend {
             .as_ref()
             .is_some_and(qubit_operation::OperationContext::is_expired)
         {
+            stop.observe_external_cancellation();
             stop.request_stop(StopReason::Timeout);
         }
         if stop.authorize().is_none() {
@@ -190,11 +191,12 @@ impl Backend for ProcessBackend {
             .as_ref()
             .is_some_and(qubit_operation::OperationContext::is_expired)
         {
+            stop.observe_external_cancellation();
             stop.request_stop(StopReason::Timeout);
             finish_pre_start_stop(
                 sink,
                 operation_id,
-                StopReason::Timeout,
+                stop.stop_reason().unwrap_or(StopReason::Timeout),
                 resource_input,
                 session_bridge,
                 scope,
@@ -249,7 +251,7 @@ impl Backend for ProcessBackend {
                 options,
                 crate::command_runner::RunTreePolicy {
                     managed_policy: Some(tree_policy),
-                    start_gate: Some(&stop),
+                    start_gate: Some(Arc::clone(&stop)),
                     prepared_files: files,
                     file_scope: Some(&scope),
                     capacity_lease: Some(capacity_lease),
@@ -262,15 +264,7 @@ impl Backend for ProcessBackend {
         };
         let deferred_owner = reaper_observer.take_deferred_recovery_owner();
         let recovery_transferred = reaper_observer.recovery_was_transferred();
-        let late_stop = stop
-            .stop_reason()
-            .or_else(|| {
-                original_cancellation
-                    .as_ref()
-                    .filter(|cancellation| cancellation.is_cancelled())
-                    .map(|_| StopReason::UserCancelled)
-            })
-            .or_else(|| request.deadline.as_ref().and_then(|context| context.stop_reason()));
+        let late_stop = stop.stop_reason();
         // Keep the runner's selected terminal result. A later stop must not
         // replace its error, partial output, or cleanup diagnostics.
         let outcome = runner_result_outcome(output, late_stop, |error| sink.publish_stop_diagnostic(error));

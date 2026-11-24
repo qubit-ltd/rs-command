@@ -26,6 +26,23 @@ pub(crate) struct StartGate {
 }
 
 impl StartGate {
+    /// Accepts an attached external cancellation without propagating local
+    /// stops back into the caller-owned token.
+    pub(crate) fn observe_external_cancellation(&self) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !state
+            .external_cancellation
+            .as_ref()
+            .is_some_and(CommandCancellation::is_cancelled)
+        {
+            return false;
+        }
+        state.stopped = true;
+        state.reason.get_or_insert(StopReason::UserCancelled);
+        self.cancellation.cancel();
+        true
+    }
+
     /// Returns a permit only when no stop request has won the start race.
     pub(crate) fn authorize(&self) -> Option<StartPermit> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -35,7 +52,7 @@ impl StartGate {
             .is_some_and(CommandCancellation::is_cancelled)
         {
             state.stopped = true;
-            state.reason = Some(StopReason::UserCancelled);
+            state.reason.get_or_insert(StopReason::UserCancelled);
             self.cancellation.cancel();
         }
         if state.stopped {
@@ -57,9 +74,6 @@ impl StartGate {
         state.stopped = true;
         state.reason.get_or_insert(reason);
         self.cancellation.cancel();
-        if let Some(cancellation) = &state.external_cancellation {
-            cancellation.cancel();
-        }
         won_before_start
     }
 
@@ -90,21 +104,15 @@ impl StartGate {
     ///   start gate.
     pub(crate) fn attach_external_cancellation(&self, cancellation: Option<CommandCancellation>) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if state.stopped {
-            if let Some(cancellation) = cancellation {
-                cancellation.cancel();
-            }
-        } else {
-            state.external_cancellation = cancellation;
-            if state
-                .external_cancellation
-                .as_ref()
-                .is_some_and(CommandCancellation::is_cancelled)
-            {
-                state.stopped = true;
-                state.reason = Some(StopReason::UserCancelled);
-                self.cancellation.cancel();
-            }
+        state.external_cancellation = cancellation;
+        if state
+            .external_cancellation
+            .as_ref()
+            .is_some_and(CommandCancellation::is_cancelled)
+        {
+            state.stopped = true;
+            state.reason.get_or_insert(StopReason::UserCancelled);
+            self.cancellation.cancel();
         }
     }
 }
@@ -286,20 +294,20 @@ mod tests {
     }
 
     #[test]
-    fn test_attaching_external_cancellation_after_stop_propagates_existing_stop() {
+    fn test_attaching_external_cancellation_after_stop_does_not_cancel_shared_token() {
         let gate = StartGate::default();
         let external = crate::CommandCancellation::new();
 
         gate.request_stop(StopReason::Timeout);
         gate.attach_external_cancellation(Some(external.clone()));
 
-        assert!(external.is_cancelled());
+        assert!(!external.is_cancelled());
         assert_eq!(gate.stop_reason(), Some(StopReason::Timeout));
         assert!(gate.authorize().is_none());
     }
 
     #[test]
-    fn test_stop_after_external_cancellation_attachment_propagates_to_token() {
+    fn test_stop_after_external_cancellation_attachment_is_operation_local() {
         let gate = StartGate::default();
         let gate_cancellation = gate.cancellation();
         let external = crate::CommandCancellation::new();
@@ -308,7 +316,7 @@ mod tests {
         assert!(!external.is_cancelled());
         assert!(gate.request_stop(StopReason::Timeout));
 
-        assert!(external.is_cancelled());
+        assert!(!external.is_cancelled());
         assert!(gate_cancellation.is_cancelled());
         assert_eq!(gate.stop_reason(), Some(StopReason::Timeout));
         assert!(gate.authorize().is_none());
@@ -332,12 +340,69 @@ mod tests {
     }
 
     #[test]
+    fn test_stopping_one_gate_does_not_cancel_a_shared_external_token() {
+        let first = StartGate::default();
+        let second = StartGate::default();
+        let shared = crate::CommandCancellation::new();
+        first.attach_external_cancellation(Some(shared.clone()));
+        second.attach_external_cancellation(Some(shared.clone()));
+
+        first.request_stop(StopReason::UserCancelled);
+
+        assert!(!shared.is_cancelled());
+        assert!(first.authorize().is_none());
+        assert!(second.authorize().is_some());
+    }
+
+    #[test]
+    fn test_external_cancellation_and_timeout_keep_first_accepted_reason() {
+        let gate = StartGate::default();
+        let external = crate::CommandCancellation::new();
+        gate.attach_external_cancellation(Some(external.clone()));
+
+        gate.request_stop(StopReason::Timeout);
+        external.cancel();
+        assert!(gate.observe_external_cancellation());
+        assert_eq!(gate.stop_reason(), Some(StopReason::Timeout));
+
+        let other = StartGate::default();
+        let other_external = crate::CommandCancellation::new();
+        other.attach_external_cancellation(Some(other_external.clone()));
+        other_external.cancel();
+        assert!(other.observe_external_cancellation());
+        other.request_stop(StopReason::Timeout);
+        assert_eq!(other.stop_reason(), Some(StopReason::UserCancelled));
+    }
+
+    #[test]
     fn test_external_cancel_before_authorization_prevents_start() {
         let gate = StartGate::default();
         let cancellation = crate::CommandCancellation::new();
         gate.attach_external_cancellation(Some(cancellation.clone()));
         cancellation.cancel();
         assert!(gate.authorize().is_none());
+        assert_eq!(gate.stop_reason(), Some(StopReason::UserCancelled));
+    }
+
+    #[test]
+    fn test_runner_preflight_external_cancellation_records_gate_reason() {
+        let gate = Arc::new(StartGate::default());
+        let external = crate::CommandCancellation::new();
+        gate.attach_external_cancellation(Some(external.clone()));
+        external.cancel();
+
+        let error = CommandRunner::without_timeout()
+            .run_with_tree_policy(
+                Command::new("sh").arg("-c").arg("exit 0"),
+                CommandRunOptions::new().cancellation(external),
+                crate::command_runner::RunTreePolicy {
+                    start_gate: Some(Arc::clone(&gate)),
+                    ..Default::default()
+                },
+            )
+            .expect_err("cancelled preflight should prevent startup");
+
+        assert_eq!(error.kind(), CommandErrorKind::CancelledBeforeStart);
         assert_eq!(gate.stop_reason(), Some(StopReason::UserCancelled));
     }
 
@@ -403,7 +468,7 @@ mod tests {
 
         let external = crate::CommandCancellation::new();
         gate.attach_external_cancellation(Some(external.clone()));
-        assert!(external.is_cancelled());
+        assert!(!external.is_cancelled());
     }
 
     #[test]
@@ -438,7 +503,7 @@ mod tests {
     #[test]
     fn test_session_bridge_moves_stdin_and_both_output_streams() {
         let bridge = Arc::new(RecordingBridge::new(b"from-session\n", None));
-        let gate = StartGate::default();
+        let gate = Arc::new(StartGate::default());
         let output = CommandRunner::without_timeout()
             .run_with_tree_policy(
                 Command::new("sh")
@@ -447,7 +512,7 @@ mod tests {
                 CommandRunOptions::new().cancellation(gate.cancellation()),
                 crate::command_runner::RunTreePolicy {
                     managed_policy: Some(crate::ProcessTreePolicy::Managed),
-                    start_gate: Some(&gate),
+                    start_gate: Some(Arc::clone(&gate)),
                     session_bridge: Some(Arc::clone(&bridge) as Arc<dyn SessionBridge>),
                     ..Default::default()
                 },
@@ -464,14 +529,14 @@ mod tests {
     #[test]
     fn test_session_output_budget_stops_child_with_configured_and_observed_counts() {
         let bridge = Arc::new(RecordingBridge::new(b"", Some(2)));
-        let gate = StartGate::default();
+        let gate = Arc::new(StartGate::default());
         let error = CommandRunner::without_timeout()
             .run_with_tree_policy(
                 Command::new("sh").arg("-c").arg("printf abc; exec sleep 30"),
                 CommandRunOptions::new().cancellation(gate.cancellation()),
                 crate::command_runner::RunTreePolicy {
                     managed_policy: Some(crate::ProcessTreePolicy::Managed),
-                    start_gate: Some(&gate),
+                    start_gate: Some(Arc::clone(&gate)),
                     session_bridge: Some(Arc::clone(&bridge) as Arc<dyn SessionBridge>),
                     ..Default::default()
                 },
@@ -518,7 +583,7 @@ mod tests {
                 CommandRunOptions::new().cancellation(run_gate.cancellation()),
                 crate::command_runner::RunTreePolicy {
                     managed_policy: Some(crate::ProcessTreePolicy::Managed),
-                    start_gate: Some(&run_gate),
+                    start_gate: Some(Arc::clone(&run_gate)),
                     operation_context: Some(runner_context),
                     ..Default::default()
                 },
@@ -543,7 +608,7 @@ mod tests {
         let tee = directory.path().join("tee");
         let marker_arg = marker.to_string_lossy().into_owned();
         fs::write(&tee, b"keep").unwrap();
-        let gate = StartGate::default();
+        let gate = Arc::new(StartGate::default());
         gate.request_stop(StopReason::UserCancelled);
         let result = CommandRunner::without_timeout().run_with_tree_policy(
             Command::new("sh")
@@ -556,7 +621,7 @@ mod tests {
                 .tee_stdout_to_file(&tee),
             crate::command_runner::RunTreePolicy {
                 managed_policy: Some(crate::ProcessTreePolicy::Managed),
-                start_gate: Some(&gate),
+                start_gate: Some(Arc::clone(&gate)),
                 ..Default::default()
             },
         );
@@ -572,7 +637,10 @@ mod tests {
         let ready = directory.path().join("ready");
         let ready_arg = ready.to_string_lossy().into_owned();
         let gate = Arc::new(StartGate::default());
+        let external = crate::CommandCancellation::new();
+        gate.attach_external_cancellation(Some(external.clone()));
         let run_gate = Arc::clone(&gate);
+        let run_external = external.clone();
         let runner = thread::spawn(move || {
             CommandRunner::without_timeout().run_with_tree_policy(
                 Command::new("sh")
@@ -580,10 +648,10 @@ mod tests {
                     .arg("touch \"$1\"; exec sleep 30")
                     .arg("managed-test")
                     .arg(&ready_arg),
-                CommandRunOptions::new().cancellation(run_gate.cancellation()),
+                CommandRunOptions::new().cancellation(run_external),
                 crate::command_runner::RunTreePolicy {
                     managed_policy: Some(crate::ProcessTreePolicy::Managed),
-                    start_gate: Some(&run_gate),
+                    start_gate: Some(Arc::clone(&run_gate)),
                     ..Default::default()
                 },
             )
@@ -597,5 +665,6 @@ mod tests {
         gate.request_stop(StopReason::UserCancelled);
         let result = runner.join().expect("runner thread should join");
         assert_eq!(result.unwrap_err().kind(), CommandErrorKind::Cancelled);
+        assert!(!external.is_cancelled());
     }
 }

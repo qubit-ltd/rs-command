@@ -30,6 +30,7 @@ use crate::CommandError;
 use crate::execution::backend::Reaper;
 use crate::execution::backend::ReaperObserver;
 use crate::execution::backend::ReaperOwner;
+use crate::execution::backend::StartGate;
 use crate::execution::contracts::ReservationLease;
 use crate::session::contracts::SessionBridge;
 
@@ -51,6 +52,10 @@ pub(in crate::command_runner) struct RunningCommand {
     timer: Arc<dyn Timer>,
     /// Optional shared cancellation handle.
     cancellation_token: Option<CommandCancellation>,
+    /// Operation-local stop signal independent of caller-owned cancellation.
+    operation_cancellation_token: Option<CommandCancellation>,
+    /// Managed gate updated when runtime cancellation is observed.
+    start_gate: Option<Arc<StartGate>>,
     /// Optional byte budget shared by this command's stdout and stderr.
     total_budget: Option<Arc<TotalOutputBudget>>,
     /// Managed capacity reservation held until process and helpers are
@@ -100,6 +105,8 @@ impl RunningCommand {
             timer,
             RunningCommandResources {
                 cancellation_token,
+                operation_cancellation_token: None,
+                start_gate: None,
                 total_budget,
                 capacity_lease: None,
                 reaper_observer: None,
@@ -138,6 +145,8 @@ impl RunningCommand {
             started_at,
             timer,
             cancellation_token: resources.cancellation_token,
+            operation_cancellation_token: resources.operation_cancellation_token,
+            start_gate: resources.start_gate,
             total_budget: resources.total_budget,
             capacity_lease: resources.capacity_lease,
             reaper_observer: resources.reaper_observer,
@@ -279,10 +288,16 @@ impl RunningCommand {
         timeout: Option<Duration>,
         timeout_poll_count: &mut usize,
     ) -> Result<(), RunEvent> {
+        if let Some(gate) = &self.start_gate {
+            gate.observe_external_cancellation();
+        }
         if let Some(context) = &self.operation_context
             && context.is_expired()
         {
             context.request_stop(qubit_operation::StopReason::Timeout);
+            if let Some(gate) = &self.start_gate {
+                gate.request_stop(qubit_operation::StopReason::Timeout);
+            }
             return Err(RunEvent::Cancelled { status });
         }
         if let Some((limit, observed)) = self.session_budget_exceeded() {
@@ -296,6 +311,10 @@ impl RunningCommand {
             .cancellation_token
             .as_ref()
             .is_some_and(CommandCancellation::is_cancelled)
+            || self
+                .operation_cancellation_token
+                .as_ref()
+                .is_some_and(CommandCancellation::is_cancelled)
         {
             return Err(RunEvent::Cancelled { status });
         }
@@ -311,7 +330,10 @@ impl RunningCommand {
                 *timeout_poll_count = timeout_poll_count.saturating_add(1);
                 sleep
             }
-            None if self.cancellation_token.is_none() && self.total_budget.is_none() => {
+            None if self.cancellation_token.is_none()
+                && self.operation_cancellation_token.is_none()
+                && self.total_budget.is_none() =>
+            {
                 let sleep = next_poll_interval(*timeout_poll_count);
                 *timeout_poll_count = timeout_poll_count.saturating_add(1);
                 sleep
@@ -321,7 +343,11 @@ impl RunningCommand {
         if self.io.poll_read_failure() {
             return Err(RunEvent::OutputReadFailed { status });
         }
-        if timeout.is_none() && self.cancellation_token.is_none() && self.total_budget.is_none() {
+        if timeout.is_none()
+            && self.cancellation_token.is_none()
+            && self.operation_cancellation_token.is_none()
+            && self.total_budget.is_none()
+        {
             std::thread::sleep(sleep);
             Ok(())
         } else {
@@ -1460,6 +1486,8 @@ mod tests {
             clock.new_timer(),
             RunningCommandResources {
                 cancellation_token: None,
+                operation_cancellation_token: None,
+                start_gate: None,
                 total_budget: None,
                 capacity_lease: None,
                 reaper_observer: None,
@@ -1496,6 +1524,8 @@ mod tests {
             clock.new_timer(),
             RunningCommandResources {
                 cancellation_token: None,
+                operation_cancellation_token: None,
+                start_gate: None,
                 total_budget: None,
                 capacity_lease: None,
                 reaper_observer: None,
@@ -1539,6 +1569,8 @@ mod tests {
             clock.new_timer(),
             RunningCommandResources {
                 cancellation_token: None,
+                operation_cancellation_token: None,
+                start_gate: None,
                 total_budget: Some(budget),
                 capacity_lease: None,
                 reaper_observer: None,
@@ -1730,6 +1762,8 @@ mod tests {
             timer_clock.new_timer(),
             RunningCommandResources {
                 cancellation_token: None,
+                operation_cancellation_token: None,
+                start_gate: None,
                 total_budget: None,
                 capacity_lease: Some(ReservationLease::new(move || {
                     released.fetch_add(1, Ordering::SeqCst);
@@ -2094,6 +2128,8 @@ mod tests {
             timer.new_timer(),
             RunningCommandResources {
                 cancellation_token: None,
+                operation_cancellation_token: None,
+                start_gate: None,
                 total_budget: None,
                 capacity_lease: Some(lease),
                 reaper_observer: Some(observer.clone()),
@@ -2144,6 +2180,8 @@ mod tests {
             timer.new_timer(),
             RunningCommandResources {
                 cancellation_token: None,
+                operation_cancellation_token: None,
+                start_gate: None,
                 total_budget: Some(budget),
                 capacity_lease: Some(lease),
                 reaper_observer: Some(observer.clone()),
@@ -2215,6 +2253,8 @@ mod tests {
             clock.new_timer(),
             RunningCommandResources {
                 cancellation_token: None,
+                operation_cancellation_token: None,
+                start_gate: None,
                 total_budget: None,
                 capacity_lease: Some(lease),
                 reaper_observer: Some(observer.clone()),

@@ -26,7 +26,7 @@ pub(crate) struct RunTreePolicy<'a> {
     /// Process-tree policy selected by the managed executor.
     pub(crate) managed_policy: Option<ProcessTreePolicy>,
     /// Gate that coordinates startup with the managed operation.
-    pub(crate) start_gate: Option<&'a StartGate>,
+    pub(crate) start_gate: Option<Arc<StartGate>>,
     /// Open file resources prepared for this command.
     pub(crate) prepared_files: Option<PreparedFiles>,
     /// Scope used to record side effects from the owned-file commit.
