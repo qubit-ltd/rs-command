@@ -48,6 +48,17 @@ pub(super) fn process_retry_timers(pending: &mut Vec<RetryTimerMessage>, now: st
 /// # Parameters
 /// * `rx`: Receiver supplying scheduled timer messages.
 pub(super) fn run_retry_timer(rx: std::sync::mpsc::Receiver<RetryTimerMessage>) {
+    run_retry_timer_with_before_wait(rx, || {});
+}
+
+/// Runs the timer worker with a hook immediately before it waits for a message.
+///
+/// This keeps shutdown behavior deterministic in tests while the production
+/// worker supplies a no-op hook.
+pub(super) fn run_retry_timer_with_before_wait(
+    rx: std::sync::mpsc::Receiver<RetryTimerMessage>,
+    mut before_wait: impl FnMut(),
+) {
     let mut pending = Vec::<RetryTimerMessage>::new();
     loop {
         let mut received = 0;
@@ -59,9 +70,8 @@ pub(super) fn run_retry_timer(rx: std::sync::mpsc::Receiver<RetryTimerMessage>) 
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    for item in pending.drain(..) {
-                        complete_retry_timer(item);
-                    }
+                    process_retry_timers(&mut pending, std::time::Instant::now());
+                    drop(pending);
                     return;
                 }
             }
@@ -78,13 +88,13 @@ pub(super) fn run_retry_timer(rx: std::sync::mpsc::Receiver<RetryTimerMessage>) 
             })
             .min()
             .unwrap_or(std::time::Duration::from_secs(30));
+        before_wait();
         match rx.recv_timeout(wait) {
             Ok(item) => pending.push(item),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                for item in pending.drain(..) {
-                    complete_retry_timer(item);
-                }
+                process_retry_timers(&mut pending, std::time::Instant::now());
+                drop(pending);
                 return;
             }
         }

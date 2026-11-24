@@ -40,6 +40,12 @@ impl RetryTimer {
         self.in_flight.load(std::sync::atomic::Ordering::Acquire)
     }
 
+    /// Clones the in-flight counter for shutdown assertions.
+    #[cfg(test)]
+    pub(super) fn in_flight_counter(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+        std::sync::Arc::clone(&self.in_flight)
+    }
+
     /// Reserves a timer slot and queues the supplied message.
     ///
     /// # Parameters
