@@ -159,6 +159,13 @@ spawning, or arbitrary filesystem operations. A cancellation handle is
 one-shot and idempotent; repeated `cancel()` calls do not create additional
 transitions.
 
+In managed execution, an operation's stop request is local to that run. An
+application can broadcast cancellation by supplying clones of one shared
+`CommandCancellation` token to multiple runs and cancelling that token. The
+gate records the first accepted stop reason as primary; later observations may
+record stop state but do not replace that reason. Legacy `run`/`run_with` and
+the broadcast behavior of token clones retain their established contract.
+
 ## Termination
 
 When process-tree management is available, the runner first requests tree
@@ -409,6 +416,16 @@ Managed resource submission validates the complete I/O configuration before it r
 
 Relative managed stdin and tee paths resolve from the parent process directory captured at submission. The child's working directory is selected separately, with the command override taking precedence over the runner default. Windows drive-relative paths retain Windows path semantics and are not treated as ordinary paths rooted at the captured directory. Request snapshots retain the compatibility `environment` field as empty; child environment behavior remains inherited at process start with explicit clear/remove/override operations applied.
 
+For a waiting submission, the first execution captures the relative-I/O base;
+capacity and manager-Busy retries reuse that snapshot. Use absolute paths or a
+new submission when the application needs a different parent cwd as the base.
+
+Resource-backed file preparation failures use the public
+`FilePreparationFailed` kind and reason, including stage, direction, and the
+original I/O source. Callers that previously matched `OpenOutputFailed` for
+this path must switch to the public classification; ordinary path-based legacy
+errors retain their existing mapping.
+
 Scoped capacity waits recheck stop and deadline while waiting. A scope stop maps to `AdmissionError::Stopped`; an expired deadline maps to `CapacityFailure::DeadlineExpired`. Waiter quota exhaustion and retry timer failures are represented by `CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)`: the latter distinguishes `WaiterLimit` from `Timer(RetryTimerFailure)`. Timer startup and queue-full failures can occur before a request is accepted; `Disconnected` can also occur after successful queueing if the worker exits. In each case the submit failure retains the original runner, command, and options, including owned resource inputs.
 
 Collect-style managed methods wait for settlement but expose only the command result or stop diagnostic. Submit handles are required to inspect settlement effects, recovery evidence, and resource release. `ProcessTreePolicy::DirectChild` is an explicit managed-only exception; legacy `run` and `run_with` keep their prior lifecycle.
@@ -416,6 +433,12 @@ Collect-style managed methods wait for settlement but expose only the command re
 ### Settlement observation and recovery
 
 Read recovery evidence in this order: inspect the manager's overall `SettlementReport` (`status`, `effects`, `effect_overflow`, recovery counts, and truncation flags), then inspect the corresponding status, effects, counters, overflow, and truncation evidence in `external_settlement`, when present. After reviewing both reports, inspect the manager report's `recoveries` for handles available to this managed command flow, and act only on handles actually present there. The adapter may already have run its recovery logic: `external_settlement.recovery_count` can be greater than zero while its `recoveries` array and the manager report's `recoveries` are empty, leaving no handle for the application to retry. Do not infer cleanup from an empty handle array. Decide whether staged files can be removed from the release and effect evidence in both reports.
+
+The process reaper has four workers and a bounded shared queue; if admission is
+full or disconnected, the runner retains the cleanup owner for a later handoff.
+Executor recovery advances accepted owners in bounded round-robin steps, so one
+pending owner does not prevent other ready owners from progressing. A pending
+settlement remains pending until cleanup or recovery actually completes.
 
 Managed file handling has two validation points: reject incompatible input configuration before resource registration, then compare the identities of the final opened handles at commit. Identity conflicts are rejected before truncation and process spawn. Owned stdin is exclusive with command file or byte stdin; callers choose one source. Session stdin remains exclusive with file stdin while byte-prefix input remains supported. Final tee paths may have been created before a later error, and truncation of an earlier sink is not rolled back if a later step fails.
 

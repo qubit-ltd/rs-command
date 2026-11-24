@@ -58,7 +58,7 @@ pub(super) use retry_timer::RetryDelay;
 /// and the [Chinese version](https://github.com/qubit-ltd/rs-command/blob/main/doc/user_guide.zh_CN.md)
 /// for ownership details.
 ///
-/// # Example
+/// # Examples
 ///
 /// Construct an executor through the public API:
 ///

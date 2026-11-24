@@ -33,7 +33,7 @@ let executor = CommandExecutor::new(manager, CommandExecutionConfig::default())?
 
 ## 受管路径与工作目录
 
-managed stdin、stdout tee 和 stderr tee 的相对路径以提交时的父进程目录为基准；child 工作目录仍由 command override 优先于 runner 默认值决定。曾依赖 child cwd 定位 tee 的调用点，应传入显式绝对路径。Windows drive-relative 路径（例如 `C:logs\run.txt`）保留平台语义，不等同于 `C:\logs\run.txt`，也不作为普通相对路径拼到父目录。compatibility snapshot 的 `environment` 字段保留但为空；进程仍按启动时继承环境，并应用显式清空、删除和覆盖。
+等待式提交首次执行时会捕获父进程目录；容量等待和 manager Busy 重试沿用同一基准，managed stdin、stdout tee 和 stderr tee 的相对路径均以此解析。child 工作目录仍由 command override 优先于 runner 默认值决定。曾依赖 child cwd 定位 tee 的调用点，应传入显式绝对路径，或在目标 cwd 下创建新提交。Windows drive-relative 路径（例如 `C:logs\run.txt`）保留平台语义，不等同于 `C:\logs\run.txt`，也不作为普通相对路径拼到父目录。compatibility snapshot 的 `environment` 字段保留但为空；进程仍按启动时继承环境，并应用显式清空、删除和覆盖。
 
 ## 进程树策略
 
@@ -51,7 +51,7 @@ let options = CommandRunOptions::new()
 
 ## timeout 与取消
 
-现有 `CommandRunner::new(timeout)` 和 `CommandCancellation` 仍可用于对应执行入口。timeout 仍从子进程启动后开始计时；它不覆盖准备、操作系统 spawn 或所有 OS I/O，也不承诺整个 API 调用有硬墙钟返回期限。timeout 与 cancellation 是停止原因；进程及其 helper 的实际回收仍应通过 outcome 之后的 settlement 判断。
+现有 `CommandRunner::new(timeout)` 和 `CommandCancellation` 仍可用于对应执行入口。timeout 仍从子进程启动后开始计时；它不覆盖准备、操作系统 spawn 或所有 OS I/O，也不承诺整个 API 调用有硬墙钟返回期限。对单个 operation 发出的 stop 只影响该运行；若要广播取消，应把同一个应用拥有的 `CommandCancellation` clone 传给多个运行，再取消共享 token。每个运行首次接受的停止原因保持为主原因，后续信号不会替换它。timeout 与 cancellation 是停止原因；进程及其 helper 的实际回收仍应通过 outcome 之后的 settlement 判断。reaper 接纳能力有界，清理可能暂时保持 pending；应持续观察 settlement，不要按经过时间推断资源已释放。
 
 `CommandExecutor` 的 `submit` 是立即尝试提交，拒绝时返回 `CommandSubmitFailure`，其中保留 runner、command、options 和拒绝原因。资源型提交对应 `CommandResourceSubmitFailure`。若要等待领域容量，可选 `submit_wait_blocking`；启用 `async` 后还可使用 `submit_wait`。等待容量不会延长最初的执行期限。
 
@@ -79,7 +79,7 @@ let resources = CommandResourceRunOptions::new()
 
 ## 准入等待与准备错误
 
-提交前会先检查互斥配置；最终 commit 阶段再检查实际打开句柄的文件身份，并在截断或启动前拒绝身份冲突。owned stdin 不能与命令文件或字节 stdin 并用，需选择一种输入来源。session stdin 使用管道，不能与文件 stdin 并用，但仍可使用受支持的字节前缀。tee 路径可能在后续 commit 错误前已创建；若较早的 sink 已截断，后续失败不会回滚它。文件准备错误可通过 `CommandErrorKind::FilePreparationFailed` 及 `CommandErrorReason::FilePreparationFailed` 查看实际阶段、方向和 source。
+提交前会先检查互斥配置；最终 commit 阶段再检查实际打开句柄的文件身份，并在截断或启动前拒绝身份冲突。owned stdin 不能与命令文件或字节 stdin 并用，需选择一种输入来源。session stdin 使用管道，不能与文件 stdin 并用，但仍可使用受支持的字节前缀。tee 路径可能在后续 commit 错误前已创建；若较早的 sink 已截断，后续失败不会回滚它。文件准备错误可通过 `CommandErrorKind::FilePreparationFailed` 及 `CommandErrorReason::FilePreparationFailed` 查看实际阶段、方向和 source。需读取资源登记时保留的 manager 分类时，调用 `CommandError::resource_registration_error_kind()`；故障阶段、方向和 source 仍从 `FilePreparationFailed` reason 读取。resource-backed 路径上原先按 `OpenOutputFailed` 匹配的调用方应改查公开分类并匹配 `FilePreparationFailed`；普通路径型 legacy 错误保持原分类。
 
 容量等待期间的 scope stop 对应 `AdmissionError::Stopped`，deadline 到期对应 `CapacityFailure::DeadlineExpired`。已注册 waiter 遇到 executor 关闭时以 `Capacity(Closed)` 结束。`max_waiters` 同时统计本地容量等待和 manager `Busy` 等待；在同一个等待判断中，deadline 优先于 scope stop，scope stop 优先于关闭。新增的 `CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)` 区分共享等待者额度耗尽 `WaiterLimit` 与计时器失败 `Timer(RetryTimerFailure)`。计时器启动或队列满会在请求接纳前失败；请求成功入队后，worker 退出也可能导致 `Disconnected`。这种 submit failure 会保留原 runner、command 和 options，包括 owned 文件输入。穷举匹配 `CommandSubmitFailureReason` 的调用方需补充 `Wait` 分支。
 
