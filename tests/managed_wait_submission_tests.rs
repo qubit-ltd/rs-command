@@ -24,7 +24,7 @@ use qubit_command::CommandRunner;
 use qubit_operation::ManagerOptions;
 #[cfg(unix)]
 use qubit_operation::OperationManager;
-#[cfg(unix)]
+#[cfg(all(feature = "async", unix))]
 use qubit_operation::OperationOptions;
 #[cfg(unix)]
 use qubit_operation::OperationOutcome;

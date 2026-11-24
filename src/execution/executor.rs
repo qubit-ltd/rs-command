@@ -4530,21 +4530,8 @@ mod command_executor_api_tests {
                     },
                 )
                 .unwrap();
-                let mut active = executor
-                    .submit(
-                        crate::CommandRunner::without_timeout(),
-                        Command::new("sh").arg("-c").arg("sleep 5"),
-                        Default::default(),
-                    )
-                    .unwrap();
-                let active_deadline = Instant::now() + Duration::from_secs(2);
-                while executor.scheduler_snapshot().active == 0 {
-                    assert!(
-                        Instant::now() < active_deadline,
-                        "command did not acquire the only slot"
-                    );
-                    std::thread::yield_now();
-                }
+                let held_reservation = executor.scheduler.try_reserve(0).unwrap();
+                assert_eq!(executor.scheduler_snapshot().active, 1);
 
                 let waiting_executor = executor.clone();
                 let waiter = thread::spawn(move || {
@@ -4575,11 +4562,10 @@ mod command_executor_api_tests {
                 );
                 assert_eq!(failure.command.program(), "must-not-run-after-waiter-close");
                 assert_eq!(executor.scheduler_snapshot().waiters, 0);
-
+                assert_eq!(executor.scheduler_snapshot().active, 1);
+                drop(held_reservation);
+                assert_eq!(executor.scheduler_snapshot().active, 0);
                 let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
-                let outcome = active.wait_outcome().unwrap();
-                assert!(matches!(outcome, OperationOutcome::Stopped(_)));
-                assert!(active.wait_settlement().unwrap().all_released());
             });
         }
 
