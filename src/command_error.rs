@@ -484,6 +484,28 @@ impl CommandError {
     }
 }
 
+/// Converts a managed file preparation failure into its public error carrier.
+///
+/// # Parameters
+/// * `stage` - File preparation phase that failed.
+/// * `direction` - Affected stream, when known.
+/// * `source` - Original preparation error and optional typed manager cause.
+pub(crate) fn managed_file_preparation_error(
+    stage: crate::FilePreparationStage,
+    direction: Option<crate::FilePreparationDirection>,
+    source: io::Error,
+) -> CommandError {
+    CommandError::from_reason(
+        "<managed command>",
+        CommandErrorReason::FilePreparationFailed {
+            stage,
+            direction,
+            source,
+        },
+        None,
+    )
+}
+
 /// Converts a primary helper failure into cleanup evidence.
 ///
 /// # Parameters
