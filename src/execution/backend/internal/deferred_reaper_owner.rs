@@ -168,7 +168,18 @@ mod tests {
     use super::retry_cleanup_on_worker;
     use crate::execution::backend::HandoffFailure;
     use crate::execution::backend::HandoffFailureKind;
+    use crate::execution::backend::Reaper;
     use crate::execution::contracts::RecoveryOwner;
+
+    struct GateTeardown(Arc<(Mutex<bool>, Condvar)>);
+
+    impl Drop for GateTeardown {
+        fn drop(&mut self) {
+            let (released, changed) = &*self.0;
+            *released.lock().unwrap_or_else(|error| error.into_inner()) = true;
+            changed.notify_all();
+        }
+    }
 
     #[test]
     fn test_public_retry_stays_nonblocking_but_worker_falls_back_inline() {
@@ -219,6 +230,84 @@ mod tests {
         changed.notify_all();
         assert_eq!(worker.join().unwrap(), Ok(()));
         completed.recv_timeout(Duration::from_secs(3)).unwrap();
+    }
+
+    #[test]
+    fn test_private_worker_falls_back_after_actual_reaper_startup_failures() {
+        let reaper = Arc::new(Reaper::with_startup_failures(2));
+        let reaper_for_handoff = Arc::clone(&reaper);
+        let (observer, completed) = ReaperObserver::pair();
+        observer.mark_pending();
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let _teardown = GateTeardown(Arc::clone(&gate));
+        let cleanup_gate = Arc::clone(&gate);
+        let cleanup_observer = observer.clone();
+        let owner = Arc::new(DeferredReaperOwner::with_handoff(
+            ReaperOwner::new(move || {
+                started_tx.send(()).unwrap();
+                let (released, changed) = &*cleanup_gate;
+                let mut released = released.lock().unwrap();
+                while !*released {
+                    released = changed.wait(released).unwrap();
+                }
+                cleanup_observer.complete();
+            }),
+            observer.clone(),
+            Arc::new(move |owner| reaper_for_handoff.handoff(owner)),
+        ));
+
+        assert_eq!(
+            owner.retry_cleanup(),
+            Err(crate::execution::contracts::RecoveryRetryError::CleanupHandoffUnavailable)
+        );
+        assert!(started_rx.try_recv().is_err());
+        let worker_owner = Arc::clone(&owner);
+        let worker = std::thread::spawn(move || retry_cleanup_on_worker(&*worker_owner));
+        started_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(
+            !observer.is_complete(),
+            "inline fallback retains pending until actual cleanup"
+        );
+
+        let (released, changed) = &*gate;
+        *released.lock().unwrap() = true;
+        changed.notify_all();
+        assert_eq!(worker.join().unwrap(), Ok(()));
+        completed.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(owner.is_complete());
+    }
+
+    #[test]
+    fn test_private_worker_retries_after_one_reaper_startup_failure() {
+        let reaper = Arc::new(Reaper::with_startup_failures(1));
+        let reaper_for_handoff = Arc::clone(&reaper);
+        let (observer, completed) = ReaperObserver::pair();
+        observer.mark_pending();
+        let (cleanup_tx, cleanup_rx) = mpsc::sync_channel(1);
+        let cleanup_observer = observer.clone();
+        let owner = Arc::new(DeferredReaperOwner::with_handoff(
+            ReaperOwner::new(move || {
+                cleanup_observer.complete();
+                cleanup_tx.send(()).unwrap();
+            }),
+            observer.clone(),
+            Arc::new(move |owner| reaper_for_handoff.handoff(owner)),
+        ));
+
+        assert_eq!(
+            owner.retry_cleanup(),
+            Err(crate::execution::contracts::RecoveryRetryError::CleanupHandoffUnavailable)
+        );
+        assert!(completed.try_recv().is_err());
+        let worker_owner = Arc::clone(&owner);
+        std::thread::spawn(move || retry_cleanup_on_worker(&*worker_owner))
+            .join()
+            .unwrap()
+            .unwrap();
+        cleanup_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        completed.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(owner.is_complete(), "the healthy pool performs cleanup after retry");
     }
 
     #[test]

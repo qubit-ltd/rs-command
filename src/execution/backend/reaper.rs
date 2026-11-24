@@ -24,6 +24,14 @@ pub(crate) struct Reaper {
     global: bool,
     /// Sender used by isolated test pools.
     sender: Option<SyncSender<ReaperOwner>>,
+    #[cfg(test)]
+    test_pool: Option<std::sync::Arc<TestReaperPool>>,
+}
+
+#[cfg(test)]
+struct TestReaperPool {
+    pool: Mutex<Option<ReaperPool>>,
+    initialize: std::sync::Arc<dyn Fn() -> io::Result<ReaperPool> + Send + Sync>,
 }
 
 struct ReaperPool {
@@ -32,9 +40,15 @@ struct ReaperPool {
 }
 
 impl ReaperPool {
-    fn shutdown(mut self) {
+    fn shutdown(self) {
+        drop(self);
+    }
+}
+
+impl Drop for ReaperPool {
+    fn drop(&mut self) {
         drop(self.sender.take());
-        for worker in self.workers {
+        for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
     }
@@ -82,7 +96,32 @@ impl Reaper {
         Self {
             global: false,
             sender: Some(sender),
+            test_pool: None,
         }
+    }
+
+    #[cfg(test)]
+    fn with_initializer(initialize: impl Fn() -> io::Result<ReaperPool> + Send + Sync + 'static) -> Self {
+        Self {
+            global: false,
+            sender: None,
+            test_pool: Some(std::sync::Arc::new(TestReaperPool {
+                pool: Mutex::new(None),
+                initialize: std::sync::Arc::new(initialize),
+            })),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_startup_failures(failures: usize) -> Self {
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        Self::with_initializer(move || {
+            if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < failures {
+                Err(io::Error::other("injected reaper startup failure"))
+            } else {
+                Self::initialize()
+            }
+        })
     }
 
     /// Stores the initialize value used by this execution component.
@@ -130,6 +169,8 @@ impl Reaper {
         REAPER.get_or_init(|| Self {
             global: true,
             sender: None,
+            #[cfg(test)]
+            test_pool: None,
         })
     }
 
@@ -138,43 +179,56 @@ impl Reaper {
     /// # Parameters
     /// * `owner`: Supplies the owner value used by this operation.
     pub(crate) fn handoff(&self, owner: ReaperOwner) -> Result<(), HandoffFailure> {
+        #[cfg(test)]
+        if let Some(test_pool) = &self.test_pool {
+            let mut pool = test_pool.pool.lock().unwrap_or_else(|error| error.into_inner());
+            return handoff_to_pool(&mut pool, || (test_pool.initialize)(), owner);
+        }
         if !self.global {
             return send_owner(self.sender.as_ref().expect("isolated reaper sender"), owner);
         }
         let state = REAPER_POOL.get_or_init(|| Mutex::new(None));
         let mut pool = state.lock().unwrap_or_else(|error| error.into_inner());
-        if pool.is_none() {
-            match Self::initialize() {
-                Ok(started) => *pool = Some(started),
-                Err(source) => {
-                    return Err(HandoffFailure {
-                        kind: HandoffFailureKind::StartFailed,
-                        owner,
-                        source: Some(source),
-                    });
-                }
+        handoff_to_pool(&mut pool, Self::initialize, owner)
+    }
+}
+
+fn handoff_to_pool(
+    pool: &mut Option<ReaperPool>,
+    mut initialize: impl FnMut() -> io::Result<ReaperPool>,
+    owner: ReaperOwner,
+) -> Result<(), HandoffFailure> {
+    if pool.is_none() {
+        match initialize() {
+            Ok(started) => *pool = Some(started),
+            Err(source) => {
+                return Err(HandoffFailure {
+                    kind: HandoffFailureKind::StartFailed,
+                    owner,
+                    source: Some(source),
+                });
             }
         }
-        let current = pool.as_ref().expect("pool was initialized");
-        match send_owner(current.sender.as_ref().expect("pool sender"), owner) {
-            Ok(()) => Ok(()),
-            Err(failure) if failure.kind == HandoffFailureKind::Full => Err(failure),
-            Err(failure) => {
-                if let Some(stale) = pool.take() {
-                    stale.shutdown();
+    }
+    let current = pool.as_ref().expect("pool was initialized");
+    match send_owner(current.sender.as_ref().expect("pool sender"), owner) {
+        Ok(()) => Ok(()),
+        Err(failure) if failure.kind == HandoffFailureKind::Full => Err(failure),
+        Err(failure) => {
+            if let Some(stale) = pool.take() {
+                stale.shutdown();
+            }
+            match initialize() {
+                Ok(replacement) => {
+                    let result = send_owner(replacement.sender.as_ref().expect("pool sender"), failure.owner);
+                    *pool = Some(replacement);
+                    result
                 }
-                match Self::initialize() {
-                    Ok(replacement) => {
-                        let result = send_owner(replacement.sender.as_ref().expect("pool sender"), failure.owner);
-                        *pool = Some(replacement);
-                        result
-                    }
-                    Err(source) => Err(HandoffFailure {
-                        kind: HandoffFailureKind::StartFailed,
-                        owner: failure.owner,
-                        source: Some(source),
-                    }),
-                }
+                Err(source) => Err(HandoffFailure {
+                    kind: HandoffFailureKind::StartFailed,
+                    owner: failure.owner,
+                    source: Some(source),
+                }),
             }
         }
     }
@@ -295,6 +349,78 @@ mod tests {
 
         let recovered = Reaper::initialize().expect("later startup attempt should succeed");
         recovered.shutdown();
+    }
+
+    #[test]
+    fn test_handoff_returns_same_owner_after_one_start_failure_then_recovers() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let initializer_attempts = Arc::clone(&attempts);
+        let reaper = Reaper::with_initializer(move || {
+            if initializer_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(io::Error::other("injected first startup failure"))
+            } else {
+                Reaper::initialize()
+            }
+        });
+
+        let cleanups = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&cleanups);
+        let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+        let owner = ReaperOwner::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+            done_tx.send(()).unwrap();
+        });
+
+        let returned = reaper
+            .handoff(owner)
+            .expect_err("the injected first startup attempt must fail");
+        assert_eq!(returned.kind, super::HandoffFailureKind::StartFailed);
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            cleanups.load(Ordering::SeqCst),
+            0,
+            "failed handoff must return the live owner"
+        );
+
+        reaper
+            .handoff(returned.owner)
+            .expect("the next startup attempt should accept the exact returned owner");
+        done_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("the retried owner should complete on the healthy reaper worker");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(cleanups.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_repeated_start_failures_return_owner_until_caller_reaps_inline() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let initializer_attempts = Arc::clone(&attempts);
+        let reaper = Reaper::with_initializer(move || {
+            initializer_attempts.fetch_add(1, Ordering::SeqCst);
+            Err(io::Error::other("injected persistent startup failure"))
+        });
+
+        let cleanups = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&cleanups);
+        let owner = ReaperOwner::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+        });
+        let first = reaper.handoff(owner).expect_err("first startup attempt should fail");
+        let second = reaper
+            .handoff(first.owner)
+            .expect_err("persistent startup failure should be retried, not cached");
+
+        assert_eq!(first.kind, super::HandoffFailureKind::StartFailed);
+        assert_eq!(second.kind, super::HandoffFailureKind::StartFailed);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            cleanups.load(Ordering::SeqCst),
+            0,
+            "each failed handoff must preserve owner ownership"
+        );
+        second.owner.run_inline();
+        assert_eq!(cleanups.load(Ordering::SeqCst), 1);
     }
 
     #[test]
