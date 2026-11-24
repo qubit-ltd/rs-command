@@ -405,7 +405,7 @@ if output.stdout_truncated() {
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-`bounded_output(max_bytes)` 会同时设置两个输出流的保留上限，并开启截断失败策略，覆盖此前的截断失败策略设置。`max_stdout_bytes` 和 `max_stderr_bytes` 可以分别配置两个流。这些上限只控制保留在内存中的字节，不会阻止命令继续输出。使用 `max_total_output_bytes(limit)` 可选地设置 stdout 与 stderr 共享的硬上限。超过上限会终止受管进程树，并返回 `CommandErrorKind::OutputLimitExceeded`；通过 `CommandErrorReason::OutputLimitExceeded { limit, observed }` 可读取上限及包含哨兵字节的实际观察量。部分捕获字节可通过 `CommandError::captured_output()` 读取；由于不会伪造自然进程状态，`CommandError::output()` 保持为 `None`。`without_total_output_limit()` 会移除硬上限。`unbounded_output()` 会移除两个流各自的保留上限并关闭截断失败策略，但不会移除已配置的总输出预算。总输出预算限制观察到的字节数，不是墙钟硬期限，也不限制准备、spawn 或任意文件系统操作。
+`bounded_output(max_bytes)` 会同时设置两个输出流的保留上限，并开启截断失败策略，覆盖此前的截断失败策略设置。`max_stdout_bytes` 和 `max_stderr_bytes` 可以分别配置两个流。这些上限只控制保留在内存中的字节，不会阻止命令继续输出。使用 `max_total_output_bytes(limit)` 可选地设置 stdout 与 stderr 共享的硬上限。超限时会按所选 `ProcessTreePolicy` 停止命令；选择 `DirectChild` 时只停止直接子进程。随后返回 `CommandErrorKind::OutputLimitExceeded`；通过 `CommandErrorReason::OutputLimitExceeded { limit, observed }` 可读取上限及包含哨兵字节的实际观察量。部分捕获字节可通过 `CommandError::captured_output()` 读取；由于不会伪造自然进程状态，`CommandError::output()` 保持为 `None`。`without_total_output_limit()` 会移除硬上限。`unbounded_output()` 会移除两个流各自的保留上限并关闭截断失败策略，但不会移除已配置的总输出预算。总输出预算限制观察到的字节数，不是墙钟硬期限，也不限制准备、spawn 或任意文件系统操作。
 
 `bounded_output(max_bytes)` 和 `unbounded_output()` 都会覆盖更早调用的 `fail_on_output_truncation(...)` 设置，因此调用顺序会影响结果。`max_*_bytes` 方法只修改保留上限。例如，`unbounded_output().max_output_bytes(1024)` 仍接受截断；最后追加 `.fail_on_output_truncation(true)` 会改为拒绝截断。反过来，`fail_on_output_truncation(false).bounded_output(1024)` 会重新开启拒绝策略。这些单流设置不会修改 stdout 与 stderr 共享的总输出预算。
 
