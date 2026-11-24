@@ -11,6 +11,8 @@ pub(super) mod retry_timer;
 pub(super) mod retry_timer_failure;
 pub(super) mod retry_timer_message;
 pub(super) mod retry_timer_permit;
+pub(super) mod retry_timer_result;
+pub(super) mod retry_timer_state;
 pub(super) mod retry_timer_worker;
 
 #[cfg(test)]

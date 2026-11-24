@@ -18,9 +18,12 @@ use super::retry_delay::RetryDelay;
 use super::retry_timer::RetryTimer;
 use super::retry_timer_failure::RetryTimerFailure;
 use super::retry_timer_message::RetryTimerMessage;
-use super::retry_timer_message::RetryTimerState;
+use super::retry_timer_result::RetryTimerResult;
+use super::retry_timer_state::RetryTimerState;
 use super::retry_timer_worker::complete_retry_timer;
 use super::retry_timer_worker::process_retry_timers;
+use super::retry_timer_worker::run_retry_timer;
+use super::retry_timer_worker::run_retry_timer_with_before_wait;
 
 fn reject_retry_schedule(_: RetryTimerMessage) -> Result<(), RetryTimerFailure> {
     Err(RetryTimerFailure::Disconnected)
@@ -33,6 +36,19 @@ fn retry_timer_message(due: std::time::Instant) -> RetryTimerMessage {
         permit: None,
         accepted: false,
     }
+}
+
+fn schedule_timer(timer: &RetryTimer, due: std::time::Instant) -> Arc<RetryTimerState> {
+    let state = Arc::new(RetryTimerState::new());
+    timer
+        .schedule(RetryTimerMessage {
+            due,
+            state: Arc::clone(&state),
+            permit: None,
+            accepted: false,
+        })
+        .unwrap();
+    state
 }
 
 struct CountWake(AtomicUsize);
@@ -133,7 +149,7 @@ fn test_retry_delay_schedule_and_completion_boundaries() {
     let state = Arc::clone(&item.state);
     drop(delay);
     assert!(state.is_cancelled());
-    assert!(state.inner.lock().unwrap().waker.is_none());
+    assert!(state.inner.lock().unwrap().0.is_none());
     complete_retry_timer(item);
     assert_eq!(wake_count.0.load(Ordering::SeqCst), 0);
 }
@@ -185,7 +201,7 @@ fn test_retry_timer_releases_quota_before_waking_registered_task() {
         timer,
         result: std::sync::Mutex::new(None),
     });
-    completed.state.inner.lock().unwrap().waker = Some(Waker::from(callback.clone()));
+    completed.state.inner.lock().unwrap().0 = Some(Waker::from(callback.clone()));
 
     complete_retry_timer(completed);
 
@@ -223,7 +239,7 @@ fn test_retry_timer_processes_expired_pending_while_queue_has_messages() {
     let timer = RetryTimer::new(tx, 64);
     let wakes = Arc::new(CountWake(AtomicUsize::new(0)));
     let expired = retry_timer_message(std::time::Instant::now() - std::time::Duration::from_millis(1));
-    expired.state.inner.lock().unwrap().waker = Some(Waker::from(wakes.clone()));
+    expired.state.inner.lock().unwrap().0 = Some(Waker::from(wakes.clone()));
     let mut pending = vec![expired];
     for _ in 0..64 {
         timer
@@ -298,19 +314,16 @@ fn test_retry_timer_recovers_poisoned_waker_slots() {
         permit: None,
         accepted: true,
     });
-    assert_eq!(
-        state.poll(&Waker::noop().clone()),
-        super::retry_timer_message::RetryTimerResult::Ready
-    );
+    assert_eq!(state.poll(&Waker::noop().clone()), RetryTimerResult::Ready);
 }
 
 #[test]
 fn test_retry_timer_isolates_a_panicking_waker_and_completes_later_items() {
     let first = retry_timer_message(std::time::Instant::now());
-    first.state.inner.lock().unwrap().waker = Some(Waker::from(Arc::new(PanicWake)));
+    first.state.inner.lock().unwrap().0 = Some(Waker::from(Arc::new(PanicWake)));
     let (tx, rx) = std::sync::mpsc::channel();
     let second = retry_timer_message(std::time::Instant::now());
-    second.state.inner.lock().unwrap().waker = Some(Waker::from(Arc::new(NotifyWake(tx))));
+    second.state.inner.lock().unwrap().0 = Some(Waker::from(Arc::new(NotifyWake(tx))));
     let second_state = Arc::clone(&second.state);
 
     let worker = std::thread::spawn(move || {
@@ -322,10 +335,7 @@ fn test_retry_timer_isolates_a_panicking_waker_and_completes_later_items() {
         .expect("one panicking waker must not terminate the worker");
     rx.recv_timeout(std::time::Duration::from_secs(1))
         .expect("the later timer waiter must still be woken");
-    assert_eq!(
-        second_state.poll(&Waker::noop().clone()),
-        super::retry_timer_message::RetryTimerResult::Ready
-    );
+    assert_eq!(second_state.poll(&Waker::noop().clone()), RetryTimerResult::Ready);
 }
 
 #[test]
@@ -368,4 +378,42 @@ fn test_retry_timer_worker_panic_disconnects_queued_and_pending_waiters() {
         queued_delay.as_mut().poll(&mut cx),
         Poll::Ready(Err(RetryTimerFailure::Disconnected))
     ));
+}
+
+#[test]
+fn test_retry_timer_shutdown_before_worker_start_disconnects_queued_messages() {
+    let (tx, rx) = std::sync::mpsc::sync_channel(2);
+    let timer = RetryTimer::new(tx, 2);
+    let in_flight = timer.in_flight_counter();
+    let first = schedule_timer(&timer, std::time::Instant::now() - std::time::Duration::from_millis(1));
+    let second = schedule_timer(&timer, std::time::Instant::now() + std::time::Duration::from_secs(60));
+    drop(timer);
+
+    let worker = std::thread::spawn(move || run_retry_timer(rx));
+    worker.join().expect("closed timer worker should exit normally");
+
+    assert_eq!(first.poll(&Waker::noop().clone()), RetryTimerResult::Ready);
+    assert_eq!(second.poll(&Waker::noop().clone()), RetryTimerResult::Disconnected);
+    assert_eq!(in_flight.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn test_retry_timer_shutdown_while_waiting_disconnects_pending_messages() {
+    let (tx, rx) = std::sync::mpsc::sync_channel(2);
+    let timer = RetryTimer::new(tx, 2);
+    let in_flight = timer.in_flight_counter();
+    let first = schedule_timer(&timer, std::time::Instant::now() - std::time::Duration::from_millis(1));
+    let second = schedule_timer(&timer, std::time::Instant::now() + std::time::Duration::from_secs(60));
+    let mut sender = Some(timer);
+
+    let worker = std::thread::spawn(move || {
+        run_retry_timer_with_before_wait(rx, move || drop(sender.take()));
+    });
+    worker
+        .join()
+        .expect("worker should exit after the last sender closes during its wait");
+
+    assert_eq!(first.poll(&Waker::noop().clone()), RetryTimerResult::Ready);
+    assert_eq!(second.poll(&Waker::noop().clone()), RetryTimerResult::Disconnected);
+    assert_eq!(in_flight.load(Ordering::Acquire), 0);
 }

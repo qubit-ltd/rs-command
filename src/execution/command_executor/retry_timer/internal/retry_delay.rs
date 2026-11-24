@@ -9,8 +9,8 @@
 use super::retry_timer::retry_timer;
 use super::retry_timer_failure::RetryTimerFailure;
 use super::retry_timer_message::RetryTimerMessage;
-use super::retry_timer_message::RetryTimerResult;
-use super::retry_timer_message::RetryTimerState;
+use super::retry_timer_result::RetryTimerResult;
+use super::retry_timer_state::RetryTimerState;
 
 /// Waits for one scheduled retry delay and tracks its latest task waker.
 pub struct RetryDelay {
