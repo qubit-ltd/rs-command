@@ -330,7 +330,7 @@ fn _policy_is_exhaustive(policy: FileSinkPolicy) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::fs::File;
     use std::fs::OpenOptions;
     use std::path::Path;
@@ -347,7 +347,7 @@ mod tests {
     use crate::execution::contracts::ExecutionSnapshot;
     use crate::resource_run_options::CommandResourceRunOptions;
     use crate::resource_run_options::FileSinkPolicy;
-    static PREPARATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(crate) static PREPARATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn test_file_sink_policy_exhaustiveness_covers_every_supported_policy() {

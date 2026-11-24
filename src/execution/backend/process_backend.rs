@@ -74,7 +74,13 @@ where
 {
     match result {
         Ok(output) => OperationOutcome::Succeeded(output),
-        Err(error) if stop.is_some() && matches!(error.kind(), crate::CommandErrorKind::Cancelled) => {
+        Err(error)
+            if stop.is_some()
+                && matches!(
+                    error.kind(),
+                    crate::CommandErrorKind::Cancelled | crate::CommandErrorKind::CancelledBeforeStart
+                ) =>
+        {
             let reason = stop.expect("guard checked that the stop cause is present");
             match retain_diagnostic(error) {
                 Ok(()) => OperationOutcome::Stopped(qubit_operation::StopReport {
@@ -658,6 +664,22 @@ mod tests {
         fn now(&self) -> MonotonicTime {
             let call = self.1.fetch_add(1, Ordering::SeqCst);
             let ticks = if call < 2 { 0 } else { 1 };
+            MonotonicTime::new(self.0, ticks)
+        }
+
+        fn register_deadline(&self, _deadline: MonotonicTime, _waker: Waker) -> Box<dyn TimerRegistration> {
+            Box::new(NoopRegistration)
+        }
+    }
+
+    #[cfg(unix)]
+    struct DeadlineExpiresAtRunnerCheck(ClockDomainId, Arc<AtomicUsize>);
+
+    #[cfg(unix)]
+    impl ClockSource for DeadlineExpiresAtRunnerCheck {
+        fn now(&self) -> MonotonicTime {
+            let call = self.1.fetch_add(1, Ordering::SeqCst);
+            let ticks = if call < 3 { 0 } else { 1 };
             MonotonicTime::new(self.0, ticks)
         }
 
@@ -1521,6 +1543,223 @@ mod tests {
             assert!(sink.release_observed_unlocked.load(Ordering::SeqCst));
             assert!(sink.settlement.lock().unwrap().as_ref().unwrap().all_released());
         });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_deadline_expiring_at_runner_final_check_stops_before_spawn_and_retains_diagnostic() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::new());
+        let sink = Arc::new(RecordingSink::default());
+        let operation_backend = Arc::clone(&backend);
+        let operation_sink = Arc::clone(&sink);
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("must-not-start-after-runner-deadline");
+        let operation_marker = marker.clone();
+        let domain = ClockDomainId::new_unique();
+        let clock_calls = Arc::new(AtomicUsize::new(0));
+        let clock: Arc<dyn ClockSource> = Arc::new(DeadlineExpiresAtRunnerCheck(
+            domain,
+            Arc::clone(&clock_calls),
+        ));
+        let deadline = OperationContext::new(ContextOptions {
+            clock: Some(clock),
+            deadline: Some(Deadline::at(MonotonicTime::new(domain, 1))),
+            budget: None,
+        })
+        .unwrap();
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout(),
+                    command: Command::new("sh")
+                        .arg("-c")
+                        .arg(&format!("touch {}", operation_marker.display())),
+                    options: RequestOptions::Standard(CommandRunOptions::default()),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
+                    },
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: Some(deadline),
+                };
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    |_| {},
+                    |_| crate::execution::contracts::ReservationLease::new(|| {}),
+                );
+                operation_backend.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: operation_sink.clone(),
+                        session_bridge: None,
+                    },
+                    operation_sink,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        operation.wait_settlement().unwrap();
+
+        assert_eq!(
+            clock_calls.load(Ordering::SeqCst),
+            4,
+            "the clock should expire only at the runner's final pre-spawn check"
+        );
+        assert!(
+            !marker.exists(),
+            "runner-side deadline expiry must prevent spawn"
+        );
+        assert!(matches!(
+            sink.outcome.lock().unwrap().take(),
+            Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
+        ));
+        let diagnostic = sink
+            .stop_diagnostic
+            .lock()
+            .unwrap()
+            .take()
+            .expect("runner-side deadline stop should retain its diagnostic");
+        assert_eq!(
+            diagnostic.kind(),
+            crate::CommandErrorKind::CancelledBeforeStart
+        );
+        assert!(sink.stop_diagnostic.lock().unwrap().is_none());
+        assert!(sink.released.load(Ordering::SeqCst));
+        assert!(
+            sink.settlement
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .all_released()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_stop_after_backend_check_before_runner_authorization_stops_before_spawn() {
+        use std::sync::Barrier;
+
+        let _preparation_guard = crate::execution::files::input::tests::PREPARATION_TEST_LOCK
+            .lock()
+            .expect("preparation test lock should be available");
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let backend = Arc::new(ProcessBackend::new());
+        let sink = Arc::new(RecordingSink::default());
+        let operation_backend = Arc::clone(&backend);
+        let operation_sink = Arc::clone(&sink);
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("must-not-start-after-late-stop");
+        let operation_marker = marker.clone();
+        let output = tempfile::NamedTempFile::new().unwrap();
+        let output_file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(output.path())
+            .unwrap();
+        let gate = Arc::new((Barrier::new(2), Barrier::new(2)));
+        let operation_gate = Arc::clone(&gate);
+        let (stop_port_send, stop_port_receive) = std::sync::mpsc::sync_channel(1);
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let operation_id = scope.id();
+                stop_port_send
+                    .send(operation_backend.stop_port(operation_id))
+                    .expect("test should receive the backend stop port");
+                crate::execution::files::prepared_files::gate_after_first_registration(Some((
+                    operation_id,
+                    operation_gate,
+                )));
+                let request = Request {
+                    operation_id: None,
+                    runner: CommandRunner::without_timeout(),
+                    command: Command::new("sh")
+                        .arg("-c")
+                        .arg(&format!("touch {}", operation_marker.display())),
+                    options: RequestOptions::Resources(
+                        CommandResourceRunOptions::new()
+                            .stdout_sink(output_file, FileSinkPolicy::Preserve),
+                    ),
+                    snapshot: ExecutionSnapshot {
+                        working_directory: std::env::current_dir().unwrap(),
+                        environment: Vec::new(),
+                    },
+                    io_paths: IoPathSnapshot::default(),
+                    deadline: None,
+                };
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    |_| {},
+                    |_| crate::execution::contracts::ReservationLease::new(|| {}),
+                );
+                operation_backend.run(
+                    ActivatedRequest {
+                        operation_id,
+                        scope,
+                        request,
+                        reservation,
+                        facts: operation_sink.clone(),
+                        session_bridge: None,
+                    },
+                    operation_sink,
+                );
+                crate::execution::files::prepared_files::gate_after_first_registration(None);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+
+        gate.0.wait();
+        stop_port_receive
+            .recv()
+            .expect("backend stop port should be available")
+            .request_stop(StopReason::UserCancelled);
+        gate.1.wait();
+
+        let _operation_outcome = operation.wait_outcome().unwrap();
+        operation.wait_settlement().unwrap();
+        assert!(
+            !marker.exists(),
+            "a stop before runner authorization must prevent spawn"
+        );
+        assert!(matches!(
+            sink.outcome.lock().unwrap().take(),
+            Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::UserCancelled
+        ));
+        let diagnostic = sink
+            .stop_diagnostic
+            .lock()
+            .unwrap()
+            .take()
+            .expect("late pre-start stop should retain its runner diagnostic");
+        assert_eq!(
+            diagnostic.kind(),
+            crate::CommandErrorKind::CancelledBeforeStart
+        );
+        assert!(sink.stop_diagnostic.lock().unwrap().is_none());
+        assert!(sink.released.load(Ordering::SeqCst));
+        assert!(
+            sink.settlement
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .all_released()
+        );
     }
 
     #[cfg(unix)]
