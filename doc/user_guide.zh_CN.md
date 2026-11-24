@@ -102,9 +102,9 @@ fn observe_stopped_command(
 
 等待式提交首次执行时会捕获父进程目录，managed stdin 和 tee 的相对路径以此为基准；准入重试和 manager Busy 重试会沿用同一基准。子进程工作目录单独选择，command override 优先于 runner 默认值。若需要以新的 cwd 作为相对路径基准，请传绝对路径或创建新的提交。Windows drive-relative 路径保留平台语义。请求快照中的兼容字段 `environment` 为空；子进程仍在启动时继承环境，并应用显式清空、删除和覆盖设置。
 
-资源提交先在登记前检查互斥配置，再于最终 commit 阶段检查实际打开句柄的文件身份，确认无冲突后才截断或启动进程。owned stdin 不能和命令的文件或字节 stdin 并用；请选择一种输入来源。session stdin 不能和文件 stdin 并用，但仍支持相应的字节前缀。tee 路径可能在后续 commit 错误前已创建；若某个 sink 截断后才失败，较早处理的 sink 可能已改变。resource-backed 路径 stdin 的打开失败或非普通文件会归类为 `FilePreparationFailed`，阶段为 `Validation`，方向为 `Stdin`。tee 校验失败的阶段为 `Validation`，方向为 `Stdout` 或 `Stderr`，实际 `set_len` 截断失败则使用 `Truncation` 和对应方向。可用的原始 I/O source 保留在 `CommandErrorReason::FilePreparationFailed` 中。需读取资源登记时保留的 manager 分类时，调用 `CommandError::resource_registration_error_kind()`。曾按 `OpenInputFailed` 或 `OpenOutputFailed` 匹配 resource-backed 准备失败的调用方，应改查 `FilePreparationFailed`，并读取阶段、方向及 source。普通路径型 legacy 错误保持原分类。
+资源提交先在登记前检查互斥配置，再于最终 commit 阶段检查实际打开句柄的文件身份，确认无冲突后才截断或启动进程。owned stdin 不能和命令的文件或字节 stdin 并用；请选择一种输入来源。session stdin 不能和文件 stdin 并用，但仍支持相应的字节前缀。tee 路径可能在后续 commit 错误前已创建；若某个 sink 截断后才失败，较早处理的 sink 可能已改变。resource-backed 路径冲突在预检和最终句柄校验时统一归类为 `FilePreparationFailed`，阶段为 `Validation`、source kind 为 `InvalidInput`；stdin/stdout 冲突方向为 `Stdout`，stdin/stderr 与 stdout/stderr 冲突方向为 `Stderr`。路径 stdin 的打开失败或非普通文件同样归类为 `FilePreparationFailed`，方向为 `Stdin`。tee 校验失败的阶段为 `Validation`，方向为 `Stdout` 或 `Stderr`，实际 `set_len` 截断失败则使用 `Truncation` 和对应方向。可用的原始 I/O source 保留在 `CommandErrorReason::FilePreparationFailed` 中。需读取资源登记时保留的 manager 分类时，调用 `CommandError::resource_registration_error_kind()`。曾按 `OpenInputFailed` 或 `OpenOutputFailed` 匹配 resource-backed 准备失败的调用方，应改查 `FilePreparationFailed`，并读取阶段、方向及 source。普通路径型 legacy 错误保持原分类。
 
-进程启动前已接受的停止会通过 operation handle 返回 `OperationOutcome::Stopped`；等待 settlement 后，可在具体 command handle 上调用 `take_stop_diagnostic()` 取得可选诊断。收集型 `run_managed*` 入口仍按既有映射返回 `CommandError`。对单个 operation 发出的 stop 只影响该 operation。若要停止多个运行，可给它们传入同一个 `CommandCancellation` 的 clone，再由应用调用共享 token 的 `cancel()`。每次运行首次接受的停止原因会保持为主原因，后续 stop 信号不会替换它。正常情况下，reaper 接纳清理 owner，并在实际清理完成后释放。reaper 使用有界接纳：队列满时会退避重试；服务断开或启动失败时会尝试一次重新取得健康服务，仍不可用则由当前已有的有界执行 worker 本地清理。已进入 recovery 的 owner 使用现有有界 recovery worker 执行相同 fallback，必要时等待操作系统真正完成清理。真实清理完成后发布 release。lease 会保留到上游 settlement 完成。继续观察 settlement 或 shutdown，确认资源释放状态。带 scope 的容量等待观察到 scope stop 时返回 `AdmissionError::Stopped`，deadline 到期时返回 `CapacityFailure::DeadlineExpired`。waiter 注册后若 executor 关闭，该等待以 `Capacity(Closed)` 结束；同一次等待判断按 deadline、scope stop、关闭的顺序处理同时可见的状态。`CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)` 区分 `WaiterLimit` 与 `Timer(RetryTimerFailure)`。计时器启动失败和队列满发生在接收请求前；`Disconnected` 也可能在请求已成功入队后因 timer worker 退出而发生。无论哪种情况，submit failure 都会保留原 runner、command 和 options，包括 owned 文件输入。`max_waiters` 同时覆盖本地容量等待和 manager `Busy` 等待。穷举匹配提交失败原因时，需处理该分支。
+进程启动前已接受的停止会通过 operation handle 返回 `OperationOutcome::Stopped`；等待 settlement 后，可在具体 command handle 上调用 `take_stop_diagnostic()` 取得可选诊断。收集型 `run_managed*` 入口仍按既有映射返回 `CommandError`。对单个 operation 发出的 stop 只影响该 operation。若要停止多个运行，可给它们传入同一个 `CommandCancellation` 的 clone，再由应用调用共享 token 的 `cancel()`。每次运行首次接受的停止原因会保持为主原因，后续 stop 信号不会替换它。正常情况下，reaper 接纳清理 owner，并在实际清理完成后释放。若 managed 执行已选定命令结果但 reaper 无法启动或断连，operation 会先发布 outcome；现有有界执行 worker 随后执行本地清理，因此 settlement 仍可能 pending。首次启动失败可直接选择本地降级，断连时会尝试替换服务；队列暂满则继续退避重试。服务仍不可用时由当前已有的有界执行 worker 本地清理。已进入 recovery 的 owner 使用现有有界 recovery worker 执行相同 fallback，必要时等待操作系统真正完成清理。真实清理完成后发布 release。lease 会保留到上游 settlement 完成。继续观察 settlement 或 shutdown，确认资源释放状态。带 scope 的容量等待观察到 scope stop 时返回 `AdmissionError::Stopped`，deadline 到期时返回 `CapacityFailure::DeadlineExpired`。waiter 注册后若 executor 关闭，该等待以 `Capacity(Closed)` 结束；同一次等待判断按 deadline、scope stop、关闭的顺序处理同时可见的状态。`CommandSubmitFailureReason::Wait(CommandSubmitWaitFailure)` 区分 `WaiterLimit` 与 `Timer(RetryTimerFailure)`。计时器启动失败和队列满发生在接收请求前；`Disconnected` 也可能在请求已成功入队后因 timer worker 退出而发生。无论哪种情况，submit failure 都会保留原 runner、command 和 options，包括 owned 文件输入。`max_waiters` 同时覆盖本地容量等待和 manager `Busy` 等待。穷举匹配提交失败原因时，需处理该分支。
 
 ### 关闭 executor 时继续观察
 
@@ -478,7 +478,7 @@ let powershell = Command::new("powershell")
 
 | 类别 | 示例 | 下一步诊断 |
 | --- | --- | --- |
-| 准备 | 路径型 legacy 错误：`OpenInputFailed`、`NonRegularInputFile`。resource-backed 错误：`FilePreparationFailed` | 对 resource-backed 错误检查 `reason()` 中的 `Validation`/`Stdin`、`Validation`/`Stdout` 或 `Stderr`，或 `Truncation` 与对应方向。source 存在时一并检查。另检查路径、文件类型及输入/输出身份。 |
+| 准备 | 路径型 legacy 错误：`OpenInputFailed`、`NonRegularInputFile`。resource-backed 错误：`FilePreparationFailed`；路径冲突使用 `Validation` 和 `InvalidInput` | 检查 `reason()` 中的阶段、方向和 source。stdin/stdout 冲突方向为 `Stdout`，stdin/stderr 与 stdout/stderr 冲突方向为 `Stderr`。另检查路径、文件类型及输入/输出身份。 |
 | 进程控制 | `SpawnFailed`、`WaitFailed` | 检查可执行文件、权限、平台进程控制能力和源 I/O 错误。 |
 | 流 I/O | `ReadOutputFailed`、`WriteInputFailed`、`OpenOutputFailed`、`WriteOutputFailed` | 检查对应流、文件访问权限以及错误附带的保留输出。 |
 | 时间 | `TimeFailed` | 检查 timer 与 clock 是否使用有效的单调时间域，并能在调用方阻塞时推进。 |
@@ -491,8 +491,7 @@ runner 会在等待子进程及子进程退出后的继承输出管道时轮询 
 同一流中更早发生的 tee 写入失败仍按现有 collector 顺序作为主错误。预算、
 子进程等待、取消、超时和时钟事件在已选定后保留原有优先级。managed 执行按所选
 `ProcessTreePolicy` 处理：默认 `Managed` 管理进程树，显式 `DirectChild` 只停止直接子进程。
-旧 `run`/`run_with` 使用自适应 1–10 ms 间隔轮询；配置 timeout、cancellation 或总输出预算时会
-尝试管理进程树。否则只停止直接子进程。reader 故障本身不会为旧入口启用进程树管理。读取错误先于
+旧 `run`/`run_with` 在未配置 timeout、cancellation 和总输出预算时使用自适应 1–10 ms 间隔轮询；仅配置 cancellation 或总输出预算时使用固定 10 ms 间隔，有 timeout 时则按剩余 timeout 与自适应间隔中的较短者等待。配置 timeout、cancellation 或总输出预算时会尝试管理进程树。否则只停止直接子进程。reader 故障本身不会为旧入口启用进程树管理。读取错误先于
 deadline 被观察到时，结果可能从原先的 `TimedOut` 变为 `ReadOutputFailed`；依赖错误类别重试的
 调用方应同时考虑输出不完整。进程终止和普通文件 I/O 不属于硬截止时间保证。使用部分输出时，
 应同时检查主错误、清理失败和流完整性标志。
