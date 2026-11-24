@@ -4,6 +4,14 @@
 
 The `qubit-command` 0.12 managed API adds process-tree ownership and a separate settlement report; it does not change this helper-join evidence or establish a hard return deadline on Windows. A `Managed` process-tree policy must not be read as proof that every helper join is bounded. The same limitation applies to managed commands; inspect settlement and cleanup reports, and use a separate process boundary when the application requires a hard deadline.
 
+## Post-integration source audit at SHA `a8fab3aed3a0999b6049dcf344d2e075d63e0ea5` (2026-11-24)
+
+This bounded audit ran on Linux x86_64 (`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`) with Rust `1.94.0` and Cargo `1.94.0`. A targeted `git diff --exit-code c871a25024adb72c1f4bdac7f9e226fb03463cb8 --` over the production helper cancellation/join, Windows probe, workflow, and PowerShell identity-gate paths exited 0. `command -v pwsh` and `command -v powershell` each exited 1. No Windows runtime test, PowerShell identity gate, or new trace was run for this SHA.
+
+The integrated entry path now observes the managed operation start gate and passes its cancellation handle into `RunningCommand`; managed-file preparation and commit paths also changed. The native helper cancellation implementation and `cancel_and_join` path did not change in the targeted comparison: Windows cancellation success still proceeds directly to join, and the shared 100 ms confirmation deadline is still used only after cancellation failure. The Windows probe, workflow, and identity gate are unchanged from the recorded native run at `c871a250`. The run at that earlier SHA remains evidence only for that source revision; it does not exercise the post-integration entry and file-handoff paths.
+
+**Decision:** RC-006 remains **unresolved**. No same-run trace at the integrated source SHA establishes the required production causal chain, and the source comparison does not confirm or exclude a production hang or establish Windows safety. No production cancellation code or probe was changed. The existing `windows-2022` workflow and PowerShell identity gate remain the runtime evidence entry points; final remote evidence must be tied to the exact pushed source SHA.
+
 ## What the contract says
 
 On Windows, successful `CancelSynchronousIo` means that the cancellation request succeeded; it does not mean the helper has stopped. The runner establishes one shared 100 ms helper-confirmation deadline before cancellation requests. It consults that deadline only when a cancellation request fails, and does not reset it for each helper. A successful request proceeds to join without that deadline. The 100 ms window is not a hard deadline for the whole `run()` call.
