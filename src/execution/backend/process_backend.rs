@@ -385,6 +385,7 @@ impl Backend for ProcessBackend {
             Err(error) => Err(error),
         };
         let deferred_owner = reaper_observer.take_deferred_recovery_owner();
+        let local_cleanup_owner = reaper_observer.take_local_cleanup_owner();
         let recovery_transferred = reaper_observer.recovery_was_transferred();
         let late_stop = stop.stop_reason();
         // Keep the runner's selected terminal result. A later stop must not
@@ -397,7 +398,7 @@ impl Backend for ProcessBackend {
             sink,
             (reaper_observer, reaper_completion),
             observer_slot,
-            (recovery_transferred, deferred_owner),
+            (recovery_transferred, deferred_owner, local_cleanup_owner),
             session_bridge,
             scope,
             reservation,
@@ -424,7 +425,11 @@ fn finish_backend_tail(
     sink: Arc<dyn FactSink>,
     reaper: (ReaperObserver, std::sync::mpsc::Receiver<()>),
     observer_slot: Arc<crate::execution::adapter::OperationObserverSlot>,
-    (mut recovery_transferred, deferred_owner): (bool, Option<Box<dyn RecoveryOwner>>),
+    (mut recovery_transferred, deferred_owner, local_cleanup_owner): (
+        bool,
+        Option<Box<dyn RecoveryOwner>>,
+        Option<crate::execution::backend::ReaperOwner>,
+    ),
     session_bridge: Option<Arc<dyn crate::session::contracts::SessionBridge>>,
     scope: qubit_operation::OperationScope,
     reservation: crate::execution::contracts::Reservation,
@@ -441,8 +446,17 @@ fn finish_backend_tail(
             }
         }
     }
-    if reaper_observer.is_pending() && !recovery_transferred && reaper_completion.recv().is_err() {
+    if reaper_observer.is_pending()
+        && local_cleanup_owner.is_none()
+        && !recovery_transferred
+        && reaper_completion.recv().is_err()
+    {
         log::error!("process reaper completion channel disconnected");
+    }
+    if let Some(owner) = local_cleanup_owner {
+        // The outcome is already visible. Run retained cleanup on this bounded
+        // backend worker before releasing the scope and publishing release facts.
+        owner.run_inline();
     }
     drop(session_bridge);
     drop(scope);
@@ -1063,6 +1077,16 @@ mod tests {
         reject_outcome_once: AtomicBool,
         reject_release_once: AtomicBool,
         reject_settlement_once: AtomicBool,
+    }
+
+    #[cfg(unix)]
+    struct CleanupGate(mpsc::Sender<()>);
+
+    #[cfg(unix)]
+    impl Drop for CleanupGate {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
     }
 
     #[cfg(unix)]
@@ -2667,6 +2691,97 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn test_local_reaper_cleanup_runs_after_outcome_and_before_release_settlement() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let sink = Arc::new(RecordingSink::default());
+        let sink_for_operation = Arc::clone(&sink);
+        let observer_slot = Arc::new(crate::execution::adapter::OperationObserverSlot::default());
+        let operation_observer_slot = Arc::clone(&observer_slot);
+        let cleanup_count = Arc::new(AtomicUsize::new(0));
+        let cleanup_count_for_operation = Arc::clone(&cleanup_count);
+        let capacity_released = Arc::new(AtomicBool::new(false));
+        let capacity_released_for_operation = Arc::clone(&capacity_released);
+        let (cleanup_started_tx, cleanup_started_rx) = mpsc::channel();
+        let (cleanup_gate_tx, cleanup_gate_rx) = mpsc::channel();
+        let cleanup_gate = CleanupGate(cleanup_gate_tx);
+
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let capacity_probe = Arc::clone(&capacity_released_for_operation);
+                let reservation = Reservation::new(
+                    1,
+                    1,
+                    |_| {},
+                    move |_| {
+                        let capacity_probe = Arc::clone(&capacity_probe);
+                        ReservationLease::new(move || capacity_probe.store(true, Ordering::SeqCst))
+                    },
+                );
+                let lease = reservation.retain();
+                let sink_port: Arc<dyn FactSink> = sink_for_operation.clone();
+                let (observer, completion) =
+                    ReaperObserver::pair_with_recovery_sink(Arc::clone(&sink_port));
+                observer.mark_pending();
+                let cleanup_observer = observer.clone();
+                observer.retain_local_cleanup_owner(ReaperOwner::new(move || {
+                    cleanup_count_for_operation.fetch_add(1, Ordering::SeqCst);
+                    cleanup_started_tx.send(()).unwrap();
+                    cleanup_gate_rx.recv().unwrap();
+                    drop(lease);
+                    cleanup_observer.complete();
+                }));
+                let selected = CommandError::from_reason(
+                    "backend test",
+                    CommandErrorReason::ManagedOperationFailed {
+                        diagnostic: "injected command result".into(),
+                    },
+                    None,
+                );
+                sink_for_operation
+                    .publish_outcome(OperationOutcome::Failed(selected))
+                    .unwrap();
+                let local_owner = observer.take_local_cleanup_owner();
+
+                finish_backend_tail(
+                    sink_port,
+                    (observer, completion),
+                    operation_observer_slot,
+                    (false, None, local_owner),
+                    None,
+                    scope,
+                    reservation,
+                );
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        observer_slot.set(operation.observer());
+
+        cleanup_started_rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            sink.outcome.lock().unwrap().as_ref(),
+            Some(OperationOutcome::Failed(error))
+                if matches!(error.kind(), crate::CommandErrorKind::ManagedOperationFailed)
+        ));
+        assert!(!sink.released.load(Ordering::SeqCst));
+        assert!(sink.settlement.lock().unwrap().is_none());
+        assert!(!capacity_released.load(Ordering::SeqCst));
+        drop(cleanup_gate);
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        operation.wait_settlement().unwrap();
+        assert!(sink.released.load(Ordering::SeqCst));
+        assert!(sink.settlement.lock().unwrap().is_some());
+        assert!(capacity_released.load(Ordering::SeqCst));
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn test_deferred_reaper_owner_transfers_before_backend_release_and_settlement() {
         let manager = OperationManager::new(Default::default()).unwrap();
         let sink = Arc::new(RecordingSink::default());
@@ -2723,7 +2838,7 @@ mod tests {
                     sink_port,
                     (observer, completion),
                     operation_observer_slot,
-                    (transferred, Some(deferred_owner)),
+                    (transferred, Some(deferred_owner), None),
                     None,
                     scope,
                     reservation,

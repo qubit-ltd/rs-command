@@ -16,6 +16,11 @@ use super::ReaperOwner;
 use crate::execution::contracts::FactSink;
 use crate::execution::contracts::RecoveryOwner;
 
+enum RetainedOwner {
+    Deferred(Box<dyn RecoveryOwner>),
+    Local(ReaperOwner),
+}
+
 /// Represents the reaper observer state or contract used by managed command
 /// execution.
 #[derive(Clone)]
@@ -30,8 +35,8 @@ pub(crate) struct ReaperObserver {
     completion_sender: std::sync::Arc<std::sync::Mutex<Option<SyncSender<()>>>>,
     /// Stores the recovery sink value used by this execution component.
     recovery_sink: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<dyn FactSink>>>>,
-    /// Stores the deferred owner value used by this execution component.
-    deferred_owner: std::sync::Arc<std::sync::Mutex<Option<Box<dyn RecoveryOwner>>>>,
+    /// Stores the sole owner awaiting deferred or local backend handoff.
+    retained_owner: std::sync::Arc<std::sync::Mutex<Option<RetainedOwner>>>,
 }
 
 impl ReaperObserver {
@@ -45,7 +50,7 @@ impl ReaperObserver {
                 recovery_transferred: std::sync::Arc::new(AtomicBool::new(false)),
                 completion_sender: std::sync::Arc::new(std::sync::Mutex::new(Some(sender))),
                 recovery_sink: std::sync::Arc::new(std::sync::Mutex::new(None)),
-                deferred_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                retained_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
             },
             receiver,
         )
@@ -75,7 +80,44 @@ impl ReaperObserver {
     /// # Parameters
     /// * `owner`: Supplies the owner value used by this operation.
     pub(crate) fn defer_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) {
-        *self.deferred_owner.lock().unwrap_or_else(|error| error.into_inner()) = Some(owner);
+        let mut retained = self
+            .retained_owner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(
+            retained.is_none(),
+            "managed cleanup owner was already retained"
+        );
+        *retained = Some(RetainedOwner::Deferred(owner));
+    }
+
+    /// Retains cleanup that the backend must run after publishing the outcome.
+    pub(crate) fn retain_local_cleanup_owner(&self, owner: ReaperOwner) {
+        let mut retained = self
+            .retained_owner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(
+            retained.is_none(),
+            "managed cleanup owner was already retained"
+        );
+        *retained = Some(RetainedOwner::Local(owner));
+    }
+
+    /// Takes cleanup selected for local execution by the backend.
+    pub(crate) fn take_local_cleanup_owner(&self) -> Option<ReaperOwner> {
+        let mut retained = self
+            .retained_owner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        match retained.take() {
+            Some(RetainedOwner::Local(owner)) => Some(owner),
+            Some(deferred @ RetainedOwner::Deferred(_)) => {
+                *retained = Some(deferred);
+                None
+            }
+            None => None,
+        }
     }
 
     /// Stores the retain or defer reaper owner value used by this execution
@@ -98,10 +140,18 @@ impl ReaperObserver {
     /// Performs the take deferred recovery owner step in the managed command
     /// execution lifecycle.
     pub(crate) fn take_deferred_recovery_owner(&self) -> Option<Box<dyn RecoveryOwner>> {
-        self.deferred_owner
+        let mut retained = self
+            .retained_owner
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
+            .unwrap_or_else(|error| error.into_inner());
+        match retained.take() {
+            Some(RetainedOwner::Deferred(owner)) => Some(owner),
+            Some(local @ RetainedOwner::Local(_)) => {
+                *retained = Some(local);
+                None
+            }
+            None => None,
+        }
     }
 
     /// Performs the is complete step in the managed command execution
@@ -442,7 +492,7 @@ mod tests {
     fn test_deferred_owner_can_be_stored_and_taken_after_mutex_poisoning() {
         let (observer, completed) = ReaperObserver::pair();
         let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = observer.deferred_owner.lock().unwrap();
+            let _guard = observer.retained_owner.lock().unwrap();
             panic!("poison deferred owner mutex for recovery test");
         }));
         assert!(poison_result.is_err());
