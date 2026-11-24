@@ -1681,6 +1681,21 @@ mod tests {
             );
             let cancellation = external.clone();
             running.after_gate_observation = Some(Box::new(move || cancellation.cancel()));
+
+            if status.is_some() {
+                let error = expect_error(
+                    running.wait_for_completion(None),
+                    "external cancellation during pending helper I/O should stop the command",
+                );
+                assert_eq!(error.kind(), CommandErrorKind::Cancelled);
+                assert!(matches!(
+                    error.output().map(|output| output.exit_status()),
+                    Some(value) if value.success()
+                ));
+                assert_eq!(gate.stop_reason(), Some(qubit_operation::StopReason::UserCancelled));
+                continue;
+            }
+
             let mut timeout_poll_count = 0;
 
             assert!(
