@@ -240,15 +240,17 @@ impl FactSink for AdapterState {
             observer: Arc::clone(&self.observer),
         };
         self.recovery.try_send(item).map_err(|error| {
-            let owner = match error {
-                std::sync::mpsc::TrySendError::Full(item) | std::sync::mpsc::TrySendError::Disconnected(item) => {
-                    item.owner
-                }
+            let (reason, owner) = match error {
+                std::sync::mpsc::TrySendError::Full(item) => (
+                    crate::execution::contracts::RecoveryPublishError::CapacityExceeded,
+                    item.owner,
+                ),
+                std::sync::mpsc::TrySendError::Disconnected(item) => (
+                    crate::execution::contracts::RecoveryPublishError::StoreUnavailable,
+                    item.owner,
+                ),
             };
-            RecoveryPublishFailure {
-                reason: crate::execution::contracts::RecoveryPublishError::CapacityExceeded,
-                owner,
-            }
+            RecoveryPublishFailure { reason, owner }
         })
     }
 }
@@ -304,6 +306,8 @@ impl PreparedExternalOperation<CommandOutput, CommandError> for AdapterState {
             return Err(failure);
         };
         self.control.running();
+        self.process_backend
+            .register_observer_slot(operation_id, Arc::clone(&self.observer));
         let stop = self.process_backend.stop_port(operation_id);
         *self.stop.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&stop) as Arc<dyn StopPort>);
         let state = Arc::clone(&self);
@@ -337,6 +341,7 @@ impl PreparedExternalOperation<CommandOutput, CommandError> for AdapterState {
         match self.scheduler.enqueue(job, permit) {
             Ok(()) => Ok(()),
             Err(failure) => {
+                self.process_backend.remove_observer_slot(operation_id);
                 let crate::execution::contracts::EnqueueFailure { reason, job, permit } = failure;
                 drop(permit);
                 let discarded = {
@@ -1439,7 +1444,7 @@ mod activation_failure_tests {
 
         assert_eq!(
             failure.reason,
-            crate::execution::contracts::RecoveryPublishError::CapacityExceeded
+            crate::execution::contracts::RecoveryPublishError::StoreUnavailable
         );
         assert!(!dropped.load(Ordering::SeqCst));
         assert_eq!(failure.owner.summary(), "test recovery owner");

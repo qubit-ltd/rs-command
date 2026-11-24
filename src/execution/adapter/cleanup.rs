@@ -19,6 +19,7 @@ use qubit_operation::SettlementStatus;
 use super::PendingRecovery;
 use super::RecoveryItem;
 use super::RecoverySender;
+use crate::execution::backend::retry_cleanup_on_worker;
 use crate::execution::contracts::RecoveryEffectEvidence;
 use crate::execution::contracts::RecoveryRetryError;
 
@@ -69,7 +70,7 @@ fn recovery_loop(rx: Receiver<RecoveryItem>, outstanding: Arc<AtomicUsize>) {
                 continue;
             }
             if !task.handed_off {
-                match task.item.owner.retry_cleanup() {
+                match retry_cleanup_on_worker(&*task.item.owner) {
                     Ok(()) if task.item.owner.is_complete() => task.handed_off = true,
                     Err(RecoveryRetryError::OwnerAlreadyConsumed) if task.item.owner.is_complete() => {
                         task.handed_off = true
@@ -128,7 +129,7 @@ fn recovery_loop(rx: Receiver<RecoveryItem>, outstanding: Arc<AtomicUsize>) {
 /// * `id`: Supplies the id value used by this operation.
 /// * `effect_evidence`: Supplies the effect evidence value used by this
 ///   operation.
-fn recovery_settlement(id: OperationId, mut effect_evidence: RecoveryEffectEvidence) -> SettlementReport {
+pub(crate) fn recovery_settlement(id: OperationId, mut effect_evidence: RecoveryEffectEvidence) -> SettlementReport {
     for effect in &mut effect_evidence.effects {
         effect.operation_id = id;
     }

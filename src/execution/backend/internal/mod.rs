@@ -14,6 +14,7 @@ mod reaper_owner;
 mod start_permit;
 mod state;
 pub(crate) use deferred_reaper_owner::DeferredReaperOwner;
+pub(crate) use deferred_reaper_owner::retry_cleanup_on_worker;
 pub(crate) use operation_stop_port::OperationStopPort;
 pub(crate) use preparation_recovery_owner::PreparationRecoveryOwner;
 pub(crate) use reaper_observer::ReaperObserver;

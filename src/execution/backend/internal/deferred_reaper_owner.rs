@@ -12,6 +12,31 @@ use crate::execution::backend::Reaper;
 use crate::execution::contracts::RecoveryEffectEvidence;
 use crate::execution::contracts::RecoveryOwner;
 
+thread_local! {
+    static ALLOW_INLINE_REAPER_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+struct InlineFallbackReset(bool);
+
+impl Drop for InlineFallbackReset {
+    fn drop(&mut self) {
+        ALLOW_INLINE_REAPER_FALLBACK.with(|enabled| enabled.set(self.0));
+    }
+}
+
+/// Invokes recovery cleanup from an existing bounded backend/recovery worker.
+/// The thread-local mode is private; direct calls through the public recovery
+/// owner contract remain nonblocking when the reaper service is unavailable.
+pub(crate) fn retry_cleanup_on_worker(
+    owner: &dyn RecoveryOwner,
+) -> Result<(), crate::execution::contracts::RecoveryRetryError> {
+    ALLOW_INLINE_REAPER_FALLBACK.with(|enabled| {
+        let previous = enabled.replace(true);
+        let _reset = InlineFallbackReset(previous);
+        owner.retry_cleanup()
+    })
+}
+
 /// Represents the deferred reaper owner state or contract used by managed
 /// command execution.
 pub(crate) struct DeferredReaperOwner {
@@ -19,6 +44,7 @@ pub(crate) struct DeferredReaperOwner {
     owner: std::sync::Mutex<Option<ReaperOwner>>,
     /// Stores the observer value used by this execution component.
     observer: ReaperObserver,
+    handoff: std::sync::Arc<dyn Fn(ReaperOwner) -> Result<(), crate::execution::backend::HandoffFailure> + Send + Sync>,
 }
 
 impl DeferredReaperOwner {
@@ -28,9 +54,24 @@ impl DeferredReaperOwner {
     /// * `owner`: Supplies the owner value used by this operation.
     /// * `observer`: Supplies the observer value used by this operation.
     pub(crate) fn new(owner: ReaperOwner, observer: ReaperObserver) -> Self {
+        Self::with_handoff(
+            owner,
+            observer,
+            std::sync::Arc::new(|owner| Reaper::global().handoff(owner)),
+        )
+    }
+
+    fn with_handoff(
+        owner: ReaperOwner,
+        observer: ReaperObserver,
+        handoff: std::sync::Arc<
+            dyn Fn(ReaperOwner) -> Result<(), crate::execution::backend::HandoffFailure> + Send + Sync,
+        >,
+    ) -> Self {
         Self {
             owner: std::sync::Mutex::new(Some(owner)),
             observer,
+            handoff,
         }
     }
 }
@@ -79,15 +120,26 @@ impl RecoveryOwner for DeferredReaperOwner {
                 Err(crate::execution::contracts::RecoveryRetryError::CleanupHandoffUnavailable)
             };
         };
-        let result = match Reaper::global() {
-            Ok(reaper) => reaper.handoff(owner),
-            Err(_) => Err(owner),
-        };
-        match result {
+        match (self.handoff)(owner) {
             Ok(()) => Ok(()),
-            Err(owner) => {
-                *slot = Some(owner);
+            Err(failure) if failure.kind == crate::execution::backend::HandoffFailureKind::Full => {
+                *slot = Some(failure.owner);
                 Err(crate::execution::contracts::RecoveryRetryError::CleanupHandoffUnavailable)
+            }
+            Err(failure) => {
+                let inline_fallback = ALLOW_INLINE_REAPER_FALLBACK.with(std::cell::Cell::get);
+                if !inline_fallback {
+                    *slot = Some(failure.owner);
+                    return Err(crate::execution::contracts::RecoveryRetryError::CleanupHandoffUnavailable);
+                }
+                failure.log_unavailable("deferred process cleanup");
+                drop(slot);
+                failure.owner.run_inline();
+                if self.observer.is_complete() {
+                    Ok(())
+                } else {
+                    Err(crate::execution::contracts::RecoveryRetryError::CleanupHandoffUnavailable)
+                }
             }
         }
     }
@@ -101,6 +153,9 @@ impl RecoveryOwner for DeferredReaperOwner {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::Condvar;
+    use std::sync::Mutex;
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -110,7 +165,61 @@ mod tests {
     use super::DeferredReaperOwner;
     use super::ReaperObserver;
     use super::ReaperOwner;
+    use super::retry_cleanup_on_worker;
+    use crate::execution::backend::HandoffFailure;
+    use crate::execution::backend::HandoffFailureKind;
     use crate::execution::contracts::RecoveryOwner;
+
+    #[test]
+    fn test_public_retry_stays_nonblocking_but_worker_falls_back_inline() {
+        let (observer, completed) = ReaperObserver::pair();
+        observer.mark_pending();
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let cleanup_gate = Arc::clone(&gate);
+        let cleanup_observer = observer.clone();
+        let owner = Arc::new(DeferredReaperOwner::with_handoff(
+            ReaperOwner::new(move || {
+                started_tx.send(()).unwrap();
+                let (released, changed) = &*cleanup_gate;
+                let mut released = released.lock().unwrap();
+                while !*released {
+                    released = changed.wait(released).unwrap();
+                }
+                cleanup_observer.complete();
+            }),
+            observer,
+            Arc::new(|owner| {
+                Err(HandoffFailure {
+                    kind: HandoffFailureKind::StartFailed,
+                    owner,
+                    source: None,
+                })
+            }),
+        ));
+
+        assert_eq!(
+            owner.retry_cleanup(),
+            Err(crate::execution::contracts::RecoveryRetryError::CleanupHandoffUnavailable)
+        );
+        assert!(
+            started_rx.try_recv().is_err(),
+            "public retry must not run inline cleanup"
+        );
+
+        let worker_owner = Arc::clone(&owner);
+        let worker = std::thread::spawn(move || retry_cleanup_on_worker(&*worker_owner));
+        started_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(
+            completed.try_recv().is_err(),
+            "cleanup remains pending until owner releases"
+        );
+        let (released, changed) = &*gate;
+        *released.lock().unwrap() = true;
+        changed.notify_all();
+        assert_eq!(worker.join().unwrap(), Ok(()));
+        completed.recv_timeout(Duration::from_secs(3)).unwrap();
+    }
 
     #[test]
     fn test_unstarted_cleanup_does_not_report_unknown_effects() {

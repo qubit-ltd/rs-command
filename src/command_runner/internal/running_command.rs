@@ -534,27 +534,8 @@ impl RunningCommand {
                 }
             }
         });
-        let handed_off = match Reaper::global() {
-            Ok(reaper) => reaper.handoff(owner),
-            Err(source) => {
-                log::error!("failed to start process reaper: {source}");
-                Err(owner)
-            }
-        };
-        match handed_off {
-            Ok(()) => error,
-            Err(owner) => match observer {
-                Some(observer) => {
-                    observer.retain_or_defer_reaper_owner(owner);
-                    error
-                }
-                None => {
-                    log::error!("reaper unavailable without a managed recovery sink; retaining cleanup inline");
-                    owner.run_inline();
-                    error
-                }
-            },
-        }
+        handle_uncertain_handoff(observer, Reaper::global().handoff(owner));
+        error
     }
 
     /// Completes a known-exited command by joining all I/O helpers.
@@ -646,6 +627,26 @@ impl RunningCommand {
     }
 }
 
+fn handle_uncertain_handoff(
+    observer: Option<ReaperObserver>,
+    result: Result<(), crate::execution::backend::HandoffFailure>,
+) {
+    match result {
+        Ok(()) => {}
+        Err(failure) if failure.kind == crate::execution::backend::HandoffFailureKind::Full => {
+            if let Some(observer) = observer {
+                observer.retain_or_defer_reaper_owner(failure.owner);
+            } else {
+                failure.owner.run_inline();
+            }
+        }
+        Err(failure) => {
+            failure.log_unavailable("runtime process cleanup");
+            failure.owner.run_inline();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;
@@ -710,13 +711,44 @@ mod tests {
     use super::super::total_output_budget::TotalOutputBudget;
     use super::RunningCommand;
     use super::RunningCommandResources;
+    use super::handle_uncertain_handoff;
     use crate::CommandCleanupFailure;
     use crate::CommandError;
     use crate::CommandErrorKind;
     use crate::CommandErrorReason;
     use crate::OutputStream;
+    use crate::execution::backend::HandoffFailure;
+    use crate::execution::backend::HandoffFailureKind;
+    use crate::execution::backend::ReaperObserver;
+    use crate::execution::backend::ReaperOwner;
     use crate::execution::backend::StartGate;
     use crate::execution::contracts::ReservationLease;
+
+    #[test]
+    fn test_runtime_handoff_runs_owner_inline_when_reaper_service_is_unavailable() {
+        let (observer, completed) = ReaperObserver::pair();
+        observer.mark_pending();
+        let cleanups = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&cleanups);
+        let cleanup_observer = observer.clone();
+        let owner = ReaperOwner::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+            cleanup_observer.complete();
+        });
+
+        handle_uncertain_handoff(
+            Some(observer.clone()),
+            Err(HandoffFailure {
+                kind: HandoffFailureKind::StartFailed,
+                owner,
+                source: None,
+            }),
+        );
+
+        assert_eq!(cleanups.load(Ordering::SeqCst), 1);
+        assert!(observer.is_complete());
+        completed.recv_timeout(Duration::from_secs(1)).unwrap();
+    }
     #[cfg(feature = "async")]
     use crate::session::channel::SessionChannels;
     #[cfg(feature = "async")]

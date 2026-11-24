@@ -22,11 +22,14 @@ use super::internal::PreparationRecoveryOwner;
 use crate::CommandError;
 use crate::execution::backend::ReaperObserver;
 use crate::execution::backend::StartGate;
+use crate::execution::backend::retry_cleanup_on_worker;
 use crate::execution::contracts::ActivatedRequest;
 use crate::execution::contracts::Backend;
 use crate::execution::contracts::FactSink;
 use crate::execution::contracts::IoPathSnapshot;
+use crate::execution::contracts::RecoveryEffectEvidence;
 use crate::execution::contracts::RecoveryOwner;
+use crate::execution::contracts::RecoveryRetryError;
 use crate::execution::contracts::RequestOptions;
 
 /// Stores the schedule recovery transfer value used by this execution
@@ -35,7 +38,10 @@ use crate::execution::contracts::RequestOptions;
 /// # Parameters
 /// * `sink`: Supplies the sink value used by this operation.
 /// * `owner`: Supplies the owner value used by this operation.
-fn schedule_recovery_transfer(sink: Arc<dyn FactSink>, mut owner: Box<dyn RecoveryOwner>) {
+fn schedule_recovery_transfer(
+    sink: Arc<dyn FactSink>,
+    mut owner: Box<dyn RecoveryOwner>,
+) -> Result<(), Box<dyn RecoveryOwner>> {
     // Keep the rejected owner in this bounded per-operation frame. Its reservation
     // remains held, and the backend worker retries only the nonblocking store
     // transfer; it never runs cleanup. The scheduler's active-operation bound
@@ -43,15 +49,64 @@ fn schedule_recovery_transfer(sink: Arc<dyn FactSink>, mut owner: Box<dyn Recove
     let mut retry = 0_u32;
     loop {
         match sink.retain_recovery_owner(owner) {
-            Ok(()) => return,
+            Ok(()) => return Ok(()),
             Err(failure) => {
                 owner = failure.owner;
+                if failure.reason == crate::execution::contracts::RecoveryPublishError::StoreUnavailable {
+                    log::error!("recovery store unavailable; keeping owner in the bounded backend frame");
+                    return Err(owner);
+                }
                 let backoff_ms = 25_u64.saturating_mul(1_u64 << retry.min(6));
                 std::thread::sleep(Duration::from_millis(backoff_ms));
                 retry = retry.saturating_add(1);
             }
         }
     }
+}
+
+fn run_recovery_owner_locally(id: OperationId, owner: &dyn RecoveryOwner) -> RecoveryEffectEvidence {
+    let evidence = owner.effect_evidence(id);
+    let mut backoff = Duration::from_millis(25);
+    loop {
+        match retry_cleanup_on_worker(owner) {
+            Ok(()) if owner.is_complete() => return evidence,
+            Err(RecoveryRetryError::OwnerAlreadyConsumed) if owner.is_complete() => {
+                return evidence;
+            }
+            _ => {
+                std::thread::sleep(backoff);
+                backoff = (backoff * 2).min(Duration::from_secs(2));
+            }
+        }
+    }
+}
+
+fn publish_local_recovery(sink: &dyn FactSink, id: OperationId, evidence: RecoveryEffectEvidence) {
+    if let Err(error) = sink.confirm_input_release() {
+        log::error!("failed to publish command input release after local recovery: {error:?}");
+    }
+    if let Err(error) = sink.publish_settlement(Arc::new(crate::execution::adapter::cleanup::recovery_settlement(
+        id, evidence,
+    ))) {
+        log::error!("failed to publish local recovery settlement: {error:?}");
+    }
+}
+
+fn wait_for_upstream_settlement(observer_slot: &crate::execution::adapter::OperationObserverSlot) {
+    if let Err(error) = observer_slot.wait().wait_settlement() {
+        log::error!("could not observe upstream settlement after local recovery: {error:?}");
+    }
+}
+
+fn recover_owner_locally(
+    sink: &dyn FactSink,
+    id: OperationId,
+    owner: &dyn RecoveryOwner,
+    observer_slot: &crate::execution::adapter::OperationObserverSlot,
+) {
+    let evidence = run_recovery_owner_locally(id, owner);
+    publish_local_recovery(sink, id, evidence);
+    wait_for_upstream_settlement(observer_slot);
 }
 
 /// Preserves runner-selected errors while reporting runner-observed stops.
@@ -95,10 +150,12 @@ where
 
 /// Represents the process backend state or contract used by managed command
 /// execution.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub(crate) struct ProcessBackend {
     /// Stores the gates value used by this execution component.
     gates: Arc<Mutex<HashMap<OperationId, Arc<StartGate>>>>,
+    /// Observer slots retained until the scheduled execution captures its upstream handle.
+    observers: Arc<Mutex<HashMap<OperationId, Arc<crate::execution::adapter::OperationObserverSlot>>>>,
 }
 
 impl ProcessBackend {
@@ -106,7 +163,26 @@ impl ProcessBackend {
     pub(crate) fn new() -> Self {
         Self {
             gates: Arc::new(Mutex::new(HashMap::new())),
+            observers: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub(crate) fn register_observer_slot(
+        &self,
+        operation_id: OperationId,
+        observer: Arc<crate::execution::adapter::OperationObserverSlot>,
+    ) {
+        self.observers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(operation_id, observer);
+    }
+
+    pub(crate) fn remove_observer_slot(&self, operation_id: OperationId) {
+        self.observers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&operation_id);
     }
 
     /// Performs the stop port step in the managed command execution lifecycle.
@@ -143,6 +219,12 @@ impl Backend for ProcessBackend {
             session_bridge,
             ..
         } = activated;
+        let observer_slot = self
+            .observers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&operation_id)
+            .unwrap_or_else(|| Arc::new(crate::execution::adapter::OperationObserverSlot::default()));
         let command_stdin = request.command.stdin_mode();
         let stop = self
             .gates
@@ -228,7 +310,13 @@ impl Backend for ProcessBackend {
                                 "recovery store rejected owner ({}); retaining it in the bounded active frame",
                                 rejected.reason as u8
                             );
-                            schedule_recovery_transfer(Arc::clone(&sink), rejected.owner);
+                            match schedule_recovery_transfer(Arc::clone(&sink), rejected.owner) {
+                                Ok(()) => {}
+                                Err(owner) => {
+                                    recover_owner_locally(&*sink, operation_id, &*owner, &observer_slot);
+                                    drop(owner);
+                                }
+                            }
                         }
                         drop(session_bridge);
                         drop(reservation);
@@ -270,6 +358,7 @@ impl Backend for ProcessBackend {
             sink,
             reaper_observer,
             reaper_completion,
+            observer_slot,
             (recovery_transferred, deferred_owner),
             session_bridge,
             scope,
@@ -298,21 +387,34 @@ fn finish_backend_tail(
     sink: Arc<dyn FactSink>,
     reaper_observer: ReaperObserver,
     reaper_completion: std::sync::mpsc::Receiver<()>,
+    observer_slot: Arc<crate::execution::adapter::OperationObserverSlot>,
     (mut recovery_transferred, deferred_owner): (bool, Option<Box<dyn RecoveryOwner>>),
     session_bridge: Option<Arc<dyn crate::session::contracts::SessionBridge>>,
     scope: qubit_operation::OperationScope,
     reservation: crate::execution::contracts::Reservation,
 ) {
     let operation_id = scope.id();
+    let mut local_recovery = None;
     if let Some(owner) = deferred_owner {
-        schedule_recovery_transfer(Arc::clone(&sink), owner);
-        recovery_transferred = true;
+        match schedule_recovery_transfer(Arc::clone(&sink), owner) {
+            Ok(()) => recovery_transferred = true,
+            Err(owner) => {
+                local_recovery = Some(owner);
+                recovery_transferred = true;
+            }
+        }
     }
     if reaper_observer.is_pending() && !recovery_transferred && reaper_completion.recv().is_err() {
         log::error!("process reaper completion channel disconnected");
     }
     drop(session_bridge);
     drop(scope);
+    if let Some(owner) = local_recovery {
+        recover_owner_locally(&*sink, operation_id, &*owner, &observer_slot);
+        drop(owner);
+        drop(reservation);
+        return;
+    }
     if recovery_transferred {
         // T6 owns release and RecoveryRequired settlement after the retained
         // child/helper recovery owner completes. Publishing either fact
@@ -433,11 +535,15 @@ mod tests {
     #[cfg(unix)]
     use std::path::PathBuf;
     use std::sync::Arc;
+    #[cfg(unix)]
+    use std::sync::Condvar;
     use std::sync::Mutex;
     #[cfg(unix)]
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
+    #[cfg(unix)]
+    use std::sync::mpsc;
     #[cfg(unix)]
     use std::task::Waker;
     use std::time::Duration;
@@ -470,6 +576,10 @@ mod tests {
     #[cfg(unix)]
     use super::finish_backend_tail;
     use super::normalize_tee_paths;
+    #[cfg(unix)]
+    use super::recover_owner_locally;
+    #[cfg(unix)]
+    use super::run_recovery_owner_locally;
     use super::runner_result_outcome;
     use super::schedule_recovery_transfer;
     #[cfg(unix)]
@@ -513,6 +623,208 @@ mod tests {
     use crate::resource_run_options::CommandResourceRunOptions;
     #[cfg(unix)]
     use crate::resource_run_options::FileSinkPolicy;
+
+    #[cfg(unix)]
+    struct FallbackGateTeardown(Arc<(Mutex<bool>, Condvar)>);
+
+    #[cfg(unix)]
+    impl Drop for FallbackGateTeardown {
+        fn drop(&mut self) {
+            let (released, changed) = &*self.0;
+            *released.lock().unwrap_or_else(|error| error.into_inner()) = true;
+            changed.notify_all();
+        }
+    }
+
+    #[cfg(unix)]
+    struct FallbackBlockingDrop {
+        started: mpsc::SyncSender<()>,
+        gate: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    #[cfg(unix)]
+    impl Drop for FallbackBlockingDrop {
+        fn drop(&mut self) {
+            let _ = self.started.send(());
+            let (released, changed) = &*self.gate;
+            let mut released = released.lock().unwrap_or_else(|error| error.into_inner());
+            while !*released {
+                released = changed.wait(released).unwrap_or_else(|error| error.into_inner());
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    struct LocalFallbackOwner {
+        completed: AtomicBool,
+        _lease: Mutex<Option<ReservationLease>>,
+    }
+
+    #[cfg(unix)]
+    impl RecoveryOwner for LocalFallbackOwner {
+        fn summary(&self) -> String {
+            "local fallback test owner".to_owned()
+        }
+
+        fn retry_cleanup(&self) -> Result<(), RecoveryRetryError> {
+            self.completed.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn is_complete(&self) -> bool {
+            self.completed.load(Ordering::SeqCst)
+        }
+    }
+
+    #[cfg(unix)]
+    struct FallbackSettlementSink(mpsc::SyncSender<()>);
+
+    #[cfg(unix)]
+    impl FactSink for FallbackSettlementSink {
+        fn publish_outcome(&self, _: OperationOutcome<CommandOutput, CommandError>) -> Result<(), FactPublishError> {
+            Ok(())
+        }
+
+        fn confirm_input_release(&self) -> Result<(), FactPublishError> {
+            Ok(())
+        }
+
+        fn publish_settlement(&self, _: Arc<SettlementReport>) -> Result<(), FactPublishError> {
+            self.0.send(()).unwrap();
+            Ok(())
+        }
+
+        fn retain_recovery_owner(&self, owner: Box<dyn RecoveryOwner>) -> Result<(), RecoveryPublishFailure> {
+            Err(RecoveryPublishFailure {
+                reason: RecoveryPublishError::StoreUnavailable,
+                owner,
+            })
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_local_recovery_keeps_preparation_lease_until_upstream_settlement() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let (drop_started_tx, drop_started_rx) = mpsc::sync_channel(1);
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let _teardown = FallbackGateTeardown(Arc::clone(&gate));
+        let cleanup_gate = Arc::clone(&gate);
+        let operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let resource = scope
+                    .manage(FallbackBlockingDrop {
+                        started: drop_started_tx,
+                        gate: cleanup_gate,
+                    })
+                    .unwrap();
+                drop(resource);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        assert!(matches!(
+            operation.wait_outcome().unwrap(),
+            OperationOutcome::Succeeded(())
+        ));
+        drop_started_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("upstream settlement must be blocked in resource cleanup");
+
+        let observer_slot = Arc::new(crate::execution::adapter::OperationObserverSlot::default());
+        observer_slot.set(operation.observer());
+        let (settlement_tx, settlement_rx) = mpsc::sync_channel(1);
+        let sink = Arc::new(FallbackSettlementSink(settlement_tx));
+        let (lease_dropped_tx, lease_dropped_rx) = mpsc::sync_channel(1);
+        let owner: Box<dyn RecoveryOwner> = Box::new(LocalFallbackOwner {
+            completed: AtomicBool::new(false),
+            _lease: Mutex::new(Some(ReservationLease::new(move || {
+                let _ = lease_dropped_tx.send(());
+            }))),
+        });
+        let operation_id = operation.id();
+        let worker_observer = Arc::clone(&observer_slot);
+        let worker_sink = Arc::clone(&sink);
+        let worker = std::thread::spawn(move || {
+            recover_owner_locally(&*worker_sink, operation_id, &*owner, &worker_observer);
+            drop(owner);
+        });
+
+        settlement_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("local recovery should publish its release and settlement");
+        assert!(
+            lease_dropped_rx.try_recv().is_err(),
+            "lease stays held until upstream settles"
+        );
+        assert!(matches!(
+            operation.wait_settlement_for(Duration::ZERO).unwrap(),
+            qubit_operation::SettlementWait::Pending(_)
+        ));
+
+        let (released, changed) = &*gate;
+        *released.lock().unwrap() = true;
+        changed.notify_all();
+        worker.join().unwrap();
+        operation.wait_settlement().unwrap();
+        lease_dropped_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("the owner lease drops after upstream settlement");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_disconnected_store_falls_back_for_preparation_owner() {
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let observer_slot = Arc::new(crate::execution::adapter::OperationObserverSlot::default());
+        let worker_observer = Arc::clone(&observer_slot);
+        let (owner_tx, owner_rx) = mpsc::sync_channel(1);
+        let (settlement_tx, settlement_rx) = mpsc::sync_channel(1);
+        let sink = Arc::new(FallbackSettlementSink(settlement_tx));
+        let worker_sink = Arc::clone(&sink);
+        let (lease_dropped_tx, lease_dropped_rx) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let (id, owner) = owner_rx.recv().unwrap();
+            let sink_port: Arc<dyn FactSink> = worker_sink.clone();
+            let owner = schedule_recovery_transfer(sink_port, owner)
+                .err()
+                .expect("disconnected recovery store should return the preparation owner");
+            recover_owner_locally(&*worker_sink, id, &*owner, &worker_observer);
+            drop(owner);
+        });
+
+        let worker_owner_tx = owner_tx.clone();
+        let worker_lease_dropped = lease_dropped_tx.clone();
+        let operation = manager
+            .try_submit(OperationOptions::default(), move |scope| {
+                let id = scope.id();
+                let owner: Box<dyn RecoveryOwner> = Box::new(super::PreparationRecoveryOwner {
+                    retained: Mutex::new(Some((
+                        crate::execution::contracts::FilePreparationFailure {
+                            message: "injected partial resource preparation".to_owned(),
+                            input: None,
+                            prepared: None,
+                        },
+                        scope,
+                    ))),
+                    _capacity_lease: Mutex::new(Some(ReservationLease::new(move || {
+                        let _ = worker_lease_dropped.send(());
+                    }))),
+                });
+                worker_owner_tx.send((id, owner)).unwrap();
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        observer_slot.set(operation.observer());
+
+        settlement_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("local preparation recovery should publish settlement");
+        operation.wait_settlement().unwrap();
+        worker.join().unwrap();
+        lease_dropped_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("preparation owner lease drops after upstream settlement");
+    }
 
     #[cfg(unix)]
     fn run_release_observation_test(test: impl FnOnce()) {
@@ -761,7 +1073,7 @@ mod tests {
             self.recovery_attempts.fetch_add(1, Ordering::SeqCst);
             if self.reject_recovery_once.swap(false, Ordering::SeqCst) {
                 return Err(RecoveryPublishFailure {
-                    reason: RecoveryPublishError::StoreUnavailable,
+                    reason: RecoveryPublishError::CapacityExceeded,
                     owner,
                 });
             }
@@ -2328,6 +2640,8 @@ mod tests {
         let operation_sink = Arc::clone(&sink);
         let operation_capacity_released = Arc::clone(&capacity_released);
         let operation_reservation_released = Arc::clone(&reservation_released);
+        let observer_slot = Arc::new(crate::execution::adapter::OperationObserverSlot::default());
+        let operation_observer_slot = Arc::clone(&observer_slot);
         let (cleanup_tx, cleanup_rx) = std::sync::mpsc::channel();
 
         let mut operation = manager
@@ -2373,6 +2687,7 @@ mod tests {
                     sink_port,
                     observer,
                     completion,
+                    operation_observer_slot,
                     (transferred, Some(deferred_owner)),
                     None,
                     scope,
@@ -2381,6 +2696,7 @@ mod tests {
                 Ok::<_, ()>(())
             })
             .unwrap();
+        observer_slot.set(operation.observer());
 
         assert!(matches!(
             operation.wait_outcome().unwrap(),
@@ -2415,6 +2731,7 @@ mod tests {
         rejections_left: AtomicUsize,
         attempts: AtomicUsize,
         retained: Mutex<Option<Box<dyn RecoveryOwner>>>,
+        rejection_reason: RecoveryPublishError,
     }
 
     impl FactSink for RetrySink {
@@ -2438,7 +2755,7 @@ mod tests {
                 .is_ok()
             {
                 return Err(RecoveryPublishFailure {
-                    reason: RecoveryPublishError::StoreUnavailable,
+                    reason: self.rejection_reason,
                     owner,
                 });
             }
@@ -2466,10 +2783,11 @@ mod tests {
             rejections_left: AtomicUsize::new(3),
             attempts: AtomicUsize::new(0),
             retained: Mutex::new(None),
+            rejection_reason: RecoveryPublishError::CapacityExceeded,
         });
         let sink_port: Arc<dyn FactSink> = sink.clone();
 
-        schedule_recovery_transfer(sink_port, Box::new(TestOwner));
+        assert!(schedule_recovery_transfer(sink_port, Box::new(TestOwner)).is_ok());
 
         assert_eq!(sink.attempts.load(Ordering::SeqCst), 4);
         let retained = sink
@@ -2479,6 +2797,45 @@ mod tests {
             .take()
             .expect("accepted owner should remain in store");
         assert_eq!(retained.summary(), "transiently rejected owner");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_disconnected_recovery_store_returns_owner_for_local_backend_cleanup() {
+        let sink = Arc::new(RetrySink {
+            rejections_left: AtomicUsize::new(1),
+            attempts: AtomicUsize::new(0),
+            retained: Mutex::new(None),
+            rejection_reason: RecoveryPublishError::StoreUnavailable,
+        });
+        let sink_port: Arc<dyn FactSink> = sink.clone();
+        let owner: Box<dyn RecoveryOwner> = Box::new(LocalFallbackOwner {
+            completed: AtomicBool::new(false),
+            _lease: Mutex::new(None),
+        });
+        let owner = schedule_recovery_transfer(sink_port, owner)
+            .err()
+            .expect("disconnected store must return owner to backend");
+        assert_eq!(
+            sink.attempts.load(Ordering::SeqCst),
+            1,
+            "disconnect is not retried as capacity"
+        );
+
+        let manager = OperationManager::new(Default::default()).unwrap();
+        let mut operation = manager
+            .try_submit(OperationOptions::default(), |_| Ok::<_, ()>(()))
+            .unwrap();
+        let operation_id = operation.id();
+        let _ = operation.wait_outcome().unwrap();
+        operation.wait_settlement().unwrap();
+        let evidence = run_recovery_owner_locally(operation_id, &*owner);
+        assert_eq!(evidence.effects_total, 0);
+        assert!(
+            owner.is_complete(),
+            "the backend worker completes returned ownership locally"
+        );
+        assert!(sink.retained.lock().unwrap().is_none());
     }
 
     #[test]
