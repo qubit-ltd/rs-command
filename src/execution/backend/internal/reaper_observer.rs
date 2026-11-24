@@ -15,9 +15,9 @@ use super::DeferredReaperOwner;
 use super::HandoffFailure;
 #[cfg(test)]
 use super::HandoffFailureKind;
-use crate::execution::backend::Reaper;
 use super::ReaperOwner;
 use super::RetainedOwner;
+use crate::execution::backend::Reaper;
 use crate::execution::contracts::FactSink;
 use crate::execution::contracts::RecoveryOwner;
 
@@ -73,6 +73,10 @@ impl ReaperObserver {
     }
 
     /// Creates an observer whose next reaper handoffs fail deterministically.
+    ///
+    /// # Parameters
+    /// * `sink`: Publishes recovery owners and operation facts.
+    /// * `kind`: Selects the handoff failure returned by this observer.
     #[cfg(test)]
     pub(crate) fn pair_with_recovery_sink_and_handoff_failure(
         sink: std::sync::Arc<dyn FactSink>,
@@ -84,6 +88,9 @@ impl ReaperObserver {
     }
 
     /// Submits cleanup through the selected reaper handoff seam.
+    ///
+    /// # Parameters
+    /// * `owner`: Cleanup owner submitted to the reaper.
     pub(crate) fn handoff_owner(&self, owner: ReaperOwner) -> Result<(), HandoffFailure> {
         #[cfg(test)]
         if let Some(kind) = self.test_handoff_failure {

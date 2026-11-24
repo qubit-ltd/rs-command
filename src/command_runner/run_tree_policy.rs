@@ -9,14 +9,14 @@ use std::sync::Arc;
 
 use qubit_operation::OperationContext;
 
+#[cfg(test)]
+use crate::CommandError;
 use crate::ProcessTreePolicy;
 use crate::execution::backend::ReaperObserver;
 use crate::execution::backend::StartGate;
 use crate::execution::contracts::PreparedFiles;
 use crate::execution::contracts::ReservationLease;
 use crate::session::contracts::SessionBridge;
-#[cfg(test)]
-use crate::CommandError;
 
 /// Carries managed execution resources into a command run.
 ///
@@ -44,7 +44,8 @@ pub(crate) struct RunTreePolicy<'a> {
     /// Forces a post-spawn startup failure in managed runner integration tests.
     #[cfg(test)]
     pub(crate) test_startup_abort: Option<CommandError>,
-    /// Forces uncertain runtime termination in managed runner integration tests.
+    /// Forces uncertain runtime termination in managed runner integration
+    /// tests.
     #[cfg(test)]
     pub(crate) test_runtime_uncertain: bool,
 }

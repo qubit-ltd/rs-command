@@ -542,7 +542,8 @@ impl RunningCommand {
         error
     }
 
-    /// Enters the uncertain cleanup branch for a managed runner integration test.
+    /// Enters the uncertain cleanup branch for a managed runner integration
+    /// test.
     #[cfg(test)]
     pub(in crate::command_runner) fn force_uncertain_handoff_for_test(self) -> CommandError {
         let command_text = self.command_text.clone();
