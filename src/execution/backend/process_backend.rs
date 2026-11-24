@@ -207,7 +207,7 @@ impl ProcessBackend {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn with_test_failures(
         handoff_failure: crate::execution::backend::HandoffFailureKind,
         startup_abort: bool,
