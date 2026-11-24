@@ -341,6 +341,90 @@ fn test_scoped_blocking_resource_wait_returns_closed_after_shutdown() {
 
 #[cfg(unix)]
 #[test]
+fn test_blocking_resource_wait_returns_closed_after_manager_busy() {
+    use std::io::Read;
+    use std::io::Seek;
+    use std::io::Write;
+
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(
+        manager,
+        CommandExecutionConfig {
+            max_active: 1,
+            max_queued: 0,
+            max_waiters: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let busy_manager = executor.manager().clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let busy_operation = std::thread::spawn(move || {
+        let _ = busy_manager
+            .run(qubit_operation::OperationOptions::default(), move |_| {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+    });
+    started_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("bound group operation should start");
+
+    let mut input = tempfile::tempfile().unwrap();
+    input.write_all(b"preserve-on-manager-busy-close").unwrap();
+    input.rewind().unwrap();
+    let waiting_executor = executor.clone();
+    let (failure_tx, failure_rx) = std::sync::mpsc::channel();
+    let submitter = std::thread::spawn(move || {
+        failure_tx
+            .send(waiting_executor.submit_wait_resources_blocking(
+                CommandRunner::without_timeout(),
+                Command::new("sh").arg("-c").arg("cat"),
+                CommandResourceRunOptions::new().stdin_file(input),
+            ))
+            .unwrap();
+    });
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while executor.scheduler_snapshot().waiters == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "manager Busy wait did not register"
+        );
+        std::thread::yield_now();
+    }
+    assert_eq!(executor.scheduler_snapshot().active, 0);
+    let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
+    let failure = match failure_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("closed manager Busy wait should return")
+    {
+        Err(failure) => failure,
+        Ok(_) => panic!("closed executor must reject the manager Busy waiter"),
+    };
+    submitter.join().unwrap();
+    assert!(matches!(
+        failure.reason,
+        qubit_command::CommandSubmitFailureReason::Capacity(
+            qubit_command::execution::CapacityFailure::Closed
+        )
+    ));
+    let mut returned_input = failure
+        .options
+        .configured_stdin()
+        .expect("rejected options retain the input file");
+    let mut bytes = Vec::new();
+    returned_input.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"preserve-on-manager-busy-close");
+    release_tx.send(()).unwrap();
+    busy_operation.join().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn test_scoped_blocking_standard_wait_returns_closed_after_shutdown() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(
@@ -681,6 +765,94 @@ fn test_async_wait_submissions_report_closed_after_shutdown_wakes_waiters() {
 
 #[cfg(all(feature = "async", unix))]
 #[test]
+fn test_async_resource_wait_returns_closed_after_manager_busy() {
+    use std::future::Future;
+    use std::io::Read;
+    use std::io::Seek;
+    use std::io::Write;
+    use std::sync::Arc;
+    use std::task::Context;
+    use std::task::Poll;
+    use std::task::Wake;
+    use std::task::Waker;
+
+    struct ThreadWake(std::thread::Thread);
+    impl Wake for ThreadWake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    let executor = CommandExecutor::new(
+        OperationManager::new(ManagerOptions::default()).unwrap(),
+        CommandExecutionConfig {
+            max_active: 1,
+            max_queued: 0,
+            max_waiters: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let busy_manager = executor.manager().clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let busy_operation = std::thread::spawn(move || {
+        let _ = busy_manager
+            .run(qubit_operation::OperationOptions::default(), move |_| {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+    });
+    started_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("bound group operation should start");
+
+    let mut input = tempfile::tempfile().unwrap();
+    input
+        .write_all(b"async-preserve-on-manager-busy-close")
+        .unwrap();
+    input.rewind().unwrap();
+    let mut waiting = Box::pin(executor.submit_wait_resources(
+        CommandRunner::without_timeout(),
+        Command::new("sh").arg("-c").arg("cat"),
+        CommandResourceRunOptions::new().stdin_file(input),
+    ));
+    let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+    let mut context = Context::from_waker(&waker);
+    assert!(matches!(waiting.as_mut().poll(&mut context), Poll::Pending));
+    assert_eq!(executor.scheduler_snapshot().active, 0);
+    assert_eq!(executor.scheduler_snapshot().waiters, 1);
+
+    let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
+    let failure = match waiting.as_mut().poll(&mut context) {
+        Poll::Ready(Err(failure)) => failure,
+        Poll::Ready(Ok(_)) => panic!("closed executor must reject the manager Busy waiter"),
+        Poll::Pending => panic!("shutdown must finish the registered manager Busy wait"),
+    };
+    assert!(matches!(
+        failure.reason,
+        qubit_command::CommandSubmitFailureReason::Capacity(
+            qubit_command::execution::CapacityFailure::Closed
+        )
+    ));
+    let mut returned_input = failure
+        .options
+        .configured_stdin()
+        .expect("rejected options retain the input file");
+    let mut bytes = Vec::new();
+    returned_input.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"async-preserve-on-manager-busy-close");
+    release_tx.send(()).unwrap();
+    busy_operation.join().unwrap();
+}
+
+#[cfg(all(feature = "async", unix))]
+#[test]
 fn test_scoped_async_resource_wait_returns_closed_after_shutdown() {
     use std::future::Future;
     use std::io::Read;
@@ -780,6 +952,96 @@ fn test_scoped_async_resource_wait_returns_closed_after_shutdown() {
         )
     ));
     assert_eq!(bytes, b"scoped-async-preserve-on-close");
+    let _ = active.wait_outcome();
+}
+
+#[cfg(all(feature = "async", unix))]
+#[test]
+fn test_scoped_async_standard_wait_returns_closed_after_shutdown() {
+    use std::future::Future;
+    use std::sync::Arc;
+    use std::task::Context;
+    use std::task::Poll;
+    use std::task::Wake;
+    use std::task::Waker;
+
+    struct ThreadWake(std::thread::Thread);
+    impl Wake for ThreadWake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+        let mut context = Context::from_waker(&waker);
+        let mut future = Box::pin(future);
+        loop {
+            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
+                return value;
+            }
+            std::thread::park_timeout(Duration::from_secs(2));
+        }
+    }
+
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(
+        manager.clone(),
+        CommandExecutionConfig {
+            max_active: 1,
+            max_queued: 0,
+            max_waiters: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut active = occupying_command(&executor);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let waiting_executor = executor.clone();
+    let waiting_manager = manager.clone();
+    let submitter = std::thread::spawn(move || {
+        let _ = block_on(waiting_manager.as_async().run(
+            Default::default(),
+            move |scope| async move {
+                let failure = match waiting_executor
+                    .submit_wait_in(
+                        &scope,
+                        CommandRunner::without_timeout(),
+                        Command::new("sh").arg("-c").arg("printf should-not-run"),
+                        Default::default(),
+                    )
+                    .await
+                {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("closed scoped async executor must reject the waiter"),
+                };
+                tx.send(failure.reason).unwrap();
+                Ok::<_, ()>(())
+            },
+        ));
+    });
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while executor.scheduler_snapshot().waiters == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "scoped async waiter did not register"
+        );
+        std::thread::yield_now();
+    }
+    let _shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
+    let reason = rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("closed scoped async wait should return");
+    let _ = submitter.join().unwrap();
+    assert!(matches!(
+        reason,
+        qubit_command::CommandSubmitFailureReason::Capacity(
+            qubit_command::execution::CapacityFailure::Closed
+        )
+    ));
     let _ = active.wait_outcome();
 }
 
