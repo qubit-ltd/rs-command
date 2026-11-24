@@ -12,6 +12,10 @@ package_files=$(cargo package --list --allow-dirty)
 for example_file in managed_collect managed_session managed_file managed_shutdown; do
     found_example=false
     while IFS= read -r package_file; do
+        package_file=${package_file%$'\r'}
+        if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+            package_file=${package_file//\\//}
+        fi
         if [[ "$package_file" == "examples/${example_file}.rs" ]]; then
             found_example=true
             break
