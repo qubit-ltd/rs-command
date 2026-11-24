@@ -4,6 +4,14 @@
 
 `qubit-command` 0.12 的受管 API 增加了进程树管理和独立 settlement 报告，但没有改变 helper join 的证据，也没有建立 Windows 上的硬返回期限。`Managed` 进程树策略不代表每个 helper join 都有界；受管命令同样受此限制。应用应检查 settlement 和清理报告；确实需要硬期限时，应通过独立进程边界监督 runner。
 
+## 集成后源码核查（源码 SHA `a8fab3aed3a0999b6049dcf344d2e075d63e0ea5`，2026-11-24）
+
+本次有界核查运行于 Linux x86_64（`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`）、Rust `1.94.0` 和 Cargo `1.94.0`。针对生产 helper 取消/join、Windows 探针、workflow 和 PowerShell 身份门禁路径执行定向 `git diff --exit-code c871a25024adb72c1f4bdac7f9e226fb03463cb8 --`，退出码为 0。`command -v pwsh` 和 `command -v powershell` 均退出码为 1。本 SHA 未运行 Windows runtime 测试、PowerShell 身份门禁或新 trace。
+
+集成后的入口路径会观察受管 operation start gate，并把它的取消句柄交给 `RunningCommand`；受管文件 preparation 和 commit 路径也有变化。定向比较中，原生 helper 取消实现和 `cancel_and_join` 路径没有变化：Windows 取消成功后仍直接 join；共享 100 ms 确认期限仍只用于取消失败的情形。Windows 探针、workflow 和身份门禁均未相对已记录的 `c871a250` 原生运行改变。该较早 SHA 的运行只属于其自身源码版本，没有覆盖集成后的入口与文件 handoff 路径。
+
+**结论：** RC-006 仍为 **unresolved（未解决）**。集成后源码 SHA 没有同次运行 trace 建立计划要求的生产因果链；源码比较既未证实也未排除生产挂起，也不证明 Windows 安全。未修改生产取消代码或探针。现有 `windows-2022` workflow 与 PowerShell 身份门禁仍是 runtime 证据入口；最终远端证据必须绑定到准确推送的源码 SHA。
+
 ## 契约边界
 
 在 Windows 上，`CancelSynchronousIo` 成功表示取消请求成功，不表示 helper 已停止。runner 在发出取消请求前设定一个共享的 100 ms helper 确认截止时间；只有取消请求失败时才检查该时间，并且不会为每个 helper 重置。请求成功后直接 join，不受该期限约束。100 ms 不是整个 `run()` 调用的硬期限。

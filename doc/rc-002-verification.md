@@ -6,6 +6,18 @@
 
 ## Latest evidence summary / 最新证据摘要 (2026-11-24)
 
+### RC-006 post-integration bounded source audit at SHA `a8fab3aed3a0999b6049dcf344d2e075d63e0ea5` (2026-11-24)
+
+This audit ran on Linux x86_64 (`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`) with Rust `1.94.0` and Cargo `1.94.0`. The targeted `git diff --exit-code c871a25024adb72c1f4bdac7f9e226fb03463cb8 --` over the production helper cancellation/join, Windows probe, workflow, and PowerShell identity-gate paths exited 0. `command -v pwsh` and `command -v powershell` each exited 1; no Windows runtime test, PowerShell identity gate, or new trace was run.
+
+Post-integration entry and handoff code now observes and passes the managed operation cancellation/start-gate signal into `RunningCommand`; managed-file preparation and commit code also changed. The native helper cancellation and `cancel_and_join` paths, the Windows probe, workflow, and identity gate are unchanged in the targeted comparison. Successful native cancellation therefore still proceeds directly to helper join, while the shared 100 ms confirmation deadline applies only after cancellation failure. The successful Windows run at `c871a25024adb72c1f4bdac7f9e226fb03463cb8` is historical evidence for that SHA and does not cover these integrated entry/handoff paths. RC-006 remains **unresolved**; no same-run evidence at `a8fab3a` establishes the required causal chain. No production cancellation code or probe changed.
+
+### RC-006 集成后源码有界核查（源码 SHA `a8fab3aed3a0999b6049dcf344d2e075d63e0ea5`，2026-11-24）
+
+本次核查运行于 Linux x86_64（`Linux mas-server 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026`）、Rust `1.94.0` 和 Cargo `1.94.0`。针对生产 helper 取消/join、Windows 探针、workflow 和 PowerShell 身份门禁路径执行定向 `git diff --exit-code c871a25024adb72c1f4bdac7f9e226fb03463cb8 --`，退出码为 0。`command -v pwsh` 与 `command -v powershell` 均退出码为 1；未运行 Windows runtime 测试、PowerShell 身份门禁或新 trace。
+
+集成后的入口和 handoff 代码会观察并传递受管 operation cancellation/start-gate 信号给 `RunningCommand`；受管文件 preparation 和 commit 代码也有变化。定向比较中的原生 helper 取消与 `cancel_and_join` 路径、Windows 探针、workflow 和身份门禁均未变化。因此，原生取消成功后仍直接 join helper，共享 100 ms 确认期限仍仅适用于取消失败的情况。`c871a25024adb72c1f4bdac7f9e226fb03463cb8` 的成功 Windows run 是该 SHA 的历史证据，并未覆盖集成后的入口/handoff 路径。RC-006 仍为 **unresolved（未解决）**；`a8fab3a` 没有同次运行证据建立所需因果链。未修改生产取消代码或探针。
+
 ### RC-006 native Windows workflow evidence at source SHA `c871a25024adb72c1f4bdac7f9e226fb03463cb8` (2026-11-24)
 
 The [Windows Cancellation Interleaving run](https://github.com/qubit-ltd/rs-command/actions/runs/45305695014) completed successfully on `windows-2022` (Windows Server 2022), with 14 selected tests (12 `windows_`, 2 `command_io`) all passing. PowerShell identity-gate fixtures passed; the result gate reported all 12 required tests discovered and passed. The [workflow artifact](https://github.com/qubit-ltd/rs-command/actions/runs/45305695014/artifacts/14880568265) contains the run and gate logs.
