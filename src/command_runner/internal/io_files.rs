@@ -294,8 +294,20 @@ impl IoFiles {
         process_command: &mut ProcessCommand,
         managed_files: Option<&PreparedFiles>,
     ) -> Result<(), CommandError> {
-        let stdout_tee = open_output(command, OutputStream::Stdout, stdout_path)?;
-        let stderr_tee = open_output(command, OutputStream::Stderr, stderr_path)?;
+        let stdout_tee = open_output(command, OutputStream::Stdout, stdout_path).map_err(|error| {
+            if managed_files.is_some() {
+                error.into_file_preparation_failure(crate::FilePreparationStage::Validation)
+            } else {
+                error
+            }
+        })?;
+        let stderr_tee = open_output(command, OutputStream::Stderr, stderr_path).map_err(|error| {
+            if managed_files.is_some() {
+                error.into_file_preparation_failure(crate::FilePreparationStage::Validation)
+            } else {
+                error
+            }
+        })?;
         validate_file_identities(
             command,
             self.stdin_path.as_deref().zip(self.stdin_file.as_ref()),

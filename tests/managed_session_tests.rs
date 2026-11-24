@@ -5,7 +5,7 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-#![cfg(all(feature = "async", unix))]
+#![cfg(feature = "async")]
 
 use std::future::poll_fn;
 use std::pin::Pin;
@@ -221,7 +221,6 @@ fn test_resource_session_owned_stdin_conflict_preserves_sink_before_start() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn test_resource_session_rejects_path_stdin_before_registration_or_start() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
@@ -229,7 +228,6 @@ fn test_resource_session_rejects_path_stdin_before_registration_or_start() {
     let directory = tempfile::tempdir().unwrap();
     let input_path = directory.path().join("input");
     let output_path = directory.path().join("output");
-    let started_path = directory.path().join("started");
     std::fs::write(&input_path, b"path input").unwrap();
     std::fs::write(&output_path, b"preserve sink").unwrap();
     let output = std::fs::OpenOptions::new()
@@ -237,18 +235,11 @@ fn test_resource_session_rejects_path_stdin_before_registration_or_start() {
         .write(true)
         .open(&output_path)
         .unwrap();
-    let mut session = block_on(
-        CommandRunner::without_timeout().start_session_resources(
-            &executor,
-            Command::new("sh")
-                .arg("-c")
-                .arg("touch \"$1\"")
-                .arg("resource-session-path-stdin")
-                .arg(started_path.to_str().unwrap())
-                .stdin_file(&input_path),
-            CommandResourceRunOptions::new().stdout_sink(output, qubit_command::FileSinkPolicy::Truncate),
-        ),
-    )
+    let mut session = block_on(CommandRunner::without_timeout().start_session_resources(
+        &executor,
+        Command::new("__qubit_command_must_not_start_resource_path_stdin_session__").stdin_file(&input_path),
+        CommandResourceRunOptions::new().stdout_sink(output, qubit_command::FileSinkPolicy::Truncate),
+    ))
     .unwrap();
     let mut operation = session.take_operation().unwrap();
     let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
@@ -263,7 +254,6 @@ fn test_resource_session_rejects_path_stdin_before_registration_or_start() {
         } if source.kind() == std::io::ErrorKind::InvalidInput
     ));
     assert_eq!(std::fs::read(&output_path).unwrap(), b"preserve sink");
-    assert!(!started_path.exists());
     let settlement = operation.wait_settlement().unwrap();
     assert_eq!(settlement.status, qubit_operation::SettlementStatus::RecoveryRequired);
     assert_eq!(settlement.effects_total, 0);
