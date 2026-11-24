@@ -648,12 +648,21 @@ mod tests {
     }
 
     #[cfg(unix)]
-    struct DeadlineExpiresBeforeAuthorization(ClockDomainId, Arc<AtomicUsize>);
+    struct DeadlineExpiresBeforeAuthorization(
+        ClockDomainId,
+        Arc<AtomicUsize>,
+        Option<(usize, crate::CommandCancellation)>,
+    );
 
     #[cfg(unix)]
     impl ClockSource for DeadlineExpiresBeforeAuthorization {
         fn now(&self) -> MonotonicTime {
             let call = self.1.fetch_add(1, Ordering::SeqCst);
+            if let Some((cancel_at, cancellation)) = &self.2
+                && call == *cancel_at
+            {
+                cancellation.cancel();
+            }
             let ticks = if call < 2 { 0 } else { 1 };
             MonotonicTime::new(self.0, ticks)
         }
@@ -664,12 +673,21 @@ mod tests {
     }
 
     #[cfg(unix)]
-    struct DeadlineExpiresAtRunnerCheck(ClockDomainId, Arc<AtomicUsize>);
+    struct DeadlineExpiresAtRunnerCheck(
+        ClockDomainId,
+        Arc<AtomicUsize>,
+        Option<(usize, crate::CommandCancellation)>,
+    );
 
     #[cfg(unix)]
     impl ClockSource for DeadlineExpiresAtRunnerCheck {
         fn now(&self) -> MonotonicTime {
             let call = self.1.fetch_add(1, Ordering::SeqCst);
+            if let Some((cancel_at, cancellation)) = &self.2
+                && call == *cancel_at
+            {
+                cancellation.cancel();
+            }
             let ticks = if call < 3 { 0 } else { 1 };
             MonotonicTime::new(self.0, ticks)
         }
@@ -1427,7 +1445,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_deadline_expiring_after_initial_check_stops_before_spawn_and_releases() {
+    fn test_external_cancel_between_deadline_checks_keeps_first_reason() {
         run_release_observation_test(|| {
             let manager = OperationManager::new(Default::default()).unwrap();
             let backend = Arc::new(ProcessBackend::new());
@@ -1456,8 +1474,12 @@ mod tests {
             *sink.release_probe_path.lock().unwrap() = Some(input_path);
             let domain = ClockDomainId::new_unique();
             let clock_calls = Arc::new(AtomicUsize::new(0));
-            let clock: Arc<dyn ClockSource> =
-                Arc::new(DeadlineExpiresBeforeAuthorization(domain, Arc::clone(&clock_calls)));
+            let cancellation = crate::CommandCancellation::new();
+            let clock: Arc<dyn ClockSource> = Arc::new(DeadlineExpiresBeforeAuthorization(
+                domain,
+                Arc::clone(&clock_calls),
+                Some((1, cancellation.clone())),
+            ));
             let deadline = OperationContext::new(ContextOptions {
                 clock: Some(Arc::clone(&clock)),
                 deadline: Some(Deadline::at(MonotonicTime::new(domain, 1))),
@@ -1483,7 +1505,11 @@ mod tests {
                         command: Command::new("sh")
                             .arg("-c")
                             .arg(&format!("touch {}", operation_marker.display())),
-                        options: RequestOptions::Resources(CommandResourceRunOptions::new().stdin_file(input_file)),
+                        options: RequestOptions::Resources(
+                            CommandResourceRunOptions::new()
+                                .options(CommandRunOptions::new().cancellation(cancellation.clone()))
+                                .stdin_file(input_file),
+                        ),
                         snapshot: ExecutionSnapshot {
                             working_directory: std::env::current_dir().unwrap(),
                             environment: Vec::new(),
@@ -1518,8 +1544,8 @@ mod tests {
             );
             assert_eq!(
                 clock_calls.load(Ordering::SeqCst),
-                3,
-                "the deadline should expire at the second backend check"
+                2,
+                "external cancellation after the first backend deadline check should stop before the second check"
             );
             assert!(reservation_released.load(Ordering::SeqCst));
             assert!(
@@ -1528,7 +1554,7 @@ mod tests {
             );
             assert!(matches!(
                 sink.outcome.lock().unwrap().take(),
-                Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::Timeout
+                Some(OperationOutcome::Stopped(report)) if report.reason == StopReason::UserCancelled
             ));
             assert!(sink.released.load(Ordering::SeqCst));
             assert!(sink.release_observed_unlocked.load(Ordering::SeqCst));
@@ -1549,7 +1575,12 @@ mod tests {
         let operation_marker = marker.clone();
         let domain = ClockDomainId::new_unique();
         let clock_calls = Arc::new(AtomicUsize::new(0));
-        let clock: Arc<dyn ClockSource> = Arc::new(DeadlineExpiresAtRunnerCheck(domain, Arc::clone(&clock_calls)));
+        let cancellation = crate::CommandCancellation::new();
+        let clock: Arc<dyn ClockSource> = Arc::new(DeadlineExpiresAtRunnerCheck(
+            domain,
+            Arc::clone(&clock_calls),
+            Some((3, cancellation.clone())),
+        ));
         let deadline = OperationContext::new(ContextOptions {
             clock: Some(clock),
             deadline: Some(Deadline::at(MonotonicTime::new(domain, 1))),
@@ -1566,7 +1597,7 @@ mod tests {
                     command: Command::new("sh")
                         .arg("-c")
                         .arg(&format!("touch {}", operation_marker.display())),
-                    options: RequestOptions::Standard(CommandRunOptions::default()),
+                    options: RequestOptions::Standard(CommandRunOptions::new().cancellation(cancellation.clone())),
                     snapshot: ExecutionSnapshot {
                         working_directory: std::env::current_dir().unwrap(),
                         environment: Vec::new(),
@@ -1748,8 +1779,11 @@ mod tests {
         let operation_marker = marker.clone();
         let domain = ClockDomainId::new_unique();
         let clock_calls = Arc::new(AtomicUsize::new(0));
-        let clock: Arc<dyn ClockSource> =
-            Arc::new(DeadlineExpiresBeforeAuthorization(domain, Arc::clone(&clock_calls)));
+        let clock: Arc<dyn ClockSource> = Arc::new(DeadlineExpiresBeforeAuthorization(
+            domain,
+            Arc::clone(&clock_calls),
+            None,
+        ));
         let deadline = OperationContext::new(ContextOptions {
             clock: Some(Arc::clone(&clock)),
             deadline: Some(Deadline::at(MonotonicTime::new(domain, 1))),

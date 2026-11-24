@@ -8,6 +8,9 @@
 //! Tests for [`CommandCancellation`](qubit_command::CommandCancellation).
 
 #[cfg(unix)]
+use std::time::Duration;
+
+#[cfg(unix)]
 use qubit_command::Command;
 use qubit_command::CommandCancellation;
 #[cfg(unix)]
@@ -16,8 +19,6 @@ use qubit_command::CommandErrorKind;
 use qubit_command::CommandRunOptions;
 #[cfg(unix)]
 use qubit_command::CommandRunner;
-#[cfg(unix)]
-use std::time::Duration;
 
 #[test]
 fn test_command_cancellation_is_shared_and_one_shot() {
