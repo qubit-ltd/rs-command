@@ -419,10 +419,7 @@ impl BoundedScheduler {
             promote(&mut s, &mut q);
             let wakes = s.waiters.wake_all();
             drop(s);
-            for w in wakes {
-                w.wake()
-            }
-            self.0.changed.notify_all();
+            notify_waiters(&self.0.changed, wakes);
             return Some((q.job, q.permit));
         }
     }
@@ -564,10 +561,18 @@ fn timeout_stop_delivered(shared: &Arc<Shared>, token: u64) {
 fn notify_capacity(shared: &Arc<Shared>, mut s: std::sync::MutexGuard<'_, State>) {
     let wakes = s.waiters.wake_all();
     drop(s);
-    for w in wakes {
-        w.wake()
+    notify_waiters(&shared.changed, wakes)
+}
+/// Notifies blocking waiters before waking each async waiter independently.
+///
+/// # Parameters
+/// * `changed`: The condition variable used by blocking scheduler waiters.
+/// * `wakes`: Wakers removed from the scheduler state while holding its lock.
+fn notify_waiters(changed: &Condvar, wakes: Vec<Waker>) {
+    changed.notify_all();
+    for waker in wakes {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake()));
     }
-    shared.changed.notify_all()
 }
 /// Stores the retain lease value used by this execution component.
 ///
@@ -738,10 +743,7 @@ impl Scheduler for BoundedScheduler {
                 promote(&mut s, &mut q);
                 let wakes = s.waiters.wake_all();
                 drop(s);
-                for w in wakes {
-                    w.wake()
-                }
-                self.0.changed.notify_all();
+                notify_waiters(&self.0.changed, wakes);
                 return Some((q.job, q.permit));
             }
             if s.closed && s.records.is_empty() {
@@ -767,10 +769,7 @@ impl Scheduler for BoundedScheduler {
         s.closed = true;
         let wakes = s.waiters.wake_all();
         drop(s);
-        for w in wakes {
-            w.wake()
-        }
-        self.0.changed.notify_all()
+        notify_waiters(&self.0.changed, wakes)
     }
 }
 
@@ -804,6 +803,20 @@ mod tests {
 
     struct CountWake(AtomicUsize);
 
+    #[cfg(panic = "unwind")]
+    struct PanicWake;
+
+    #[cfg(panic = "unwind")]
+    impl Wake for PanicWake {
+        fn wake(self: Arc<Self>) {
+            panic!("controlled scheduler waker panic");
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            panic!("controlled scheduler waker panic");
+        }
+    }
+
     struct ManualDeadlineClock {
         domain: ClockDomainId,
         ticks: AtomicU64,
@@ -823,6 +836,21 @@ mod tests {
 
     impl TimerRegistration for NoopRegistration {
         fn cancel(self: Box<Self>) {}
+    }
+
+    struct ElapsedClock {
+        domain: ClockDomainId,
+        started: Instant,
+    }
+
+    impl ClockSource for ElapsedClock {
+        fn now(&self) -> MonotonicTime {
+            MonotonicTime::new(self.domain, self.started.elapsed().as_nanos() as u64)
+        }
+
+        fn register_deadline(&self, _deadline: MonotonicTime, _waker: Waker) -> Box<dyn TimerRegistration> {
+            Box::new(NoopRegistration)
+        }
     }
 
     impl Wake for CountWake {
@@ -1148,6 +1176,123 @@ mod tests {
         scheduler.cancel_waiter(waiter_id);
         assert_eq!(scheduler.snapshot().waiters, 0);
         assert_eq!(scheduler.register_waiter_if_full(0, &waker), Ok(None));
+    }
+
+    #[cfg(panic = "unwind")]
+    #[test]
+    fn test_capacity_release_isolates_panicking_waker_and_wakes_later_waiters() {
+        let scheduler = BoundedScheduler::new(config(0, 3)).unwrap();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let clock = Arc::new(ElapsedClock {
+            domain: ClockDomainId::new_unique(),
+            started: Instant::now(),
+        });
+        let wait_context = OperationContext::new(ContextOptions {
+            clock: Some(Arc::clone(&clock) as Arc<dyn ClockSource>),
+            deadline: Some(Deadline::at(MonotonicTime::new(clock.domain, 1_000_000_000))),
+            budget: None,
+        })
+        .unwrap();
+        let waiting = scheduler.clone();
+        let thread_context = wait_context.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            done_tx
+                .send(waiting.wait_for_capacity(0, Some(thread_context)))
+                .unwrap();
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while scheduler.snapshot().waiters == 0 && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(scheduler.snapshot().waiters, 1);
+        let panic_waker = Waker::from(Arc::new(PanicWake));
+        let normal = Arc::new(CountWake(AtomicUsize::new(0)));
+        let normal_waker = Waker::from(normal.clone());
+        scheduler.register_waiter(Some(&panic_waker)).unwrap();
+        scheduler.register_waiter(Some(&normal_waker)).unwrap();
+
+        drop(permit);
+
+        assert!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        thread.join().unwrap();
+        assert_eq!(normal.0.load(Ordering::SeqCst), 1);
+        assert_eq!(scheduler.snapshot().active, 0);
+    }
+
+    #[cfg(panic = "unwind")]
+    #[test]
+    fn test_try_next_delivers_job_after_panicking_waiter() {
+        use std::sync::atomic::AtomicBool;
+
+        let scheduler = BoundedScheduler::new(config(0, 2)).unwrap();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let invoked = Arc::new(AtomicBool::new(false));
+        let callback_invoked = Arc::clone(&invoked);
+        scheduler
+            .enqueue(
+                ScheduledJob {
+                    run: Box::new(move |_| callback_invoked.store(true, Ordering::SeqCst)),
+                    stop: Arc::new(NoopStop),
+                },
+                permit,
+            )
+            .unwrap();
+        let panic_waker = Waker::from(Arc::new(PanicWake));
+        let normal = Arc::new(CountWake(AtomicUsize::new(0)));
+        let normal_waker = Waker::from(normal.clone());
+        scheduler.register_waiter(Some(&panic_waker)).unwrap();
+        scheduler.register_waiter(Some(&normal_waker)).unwrap();
+
+        let (job, permit) = scheduler.try_next().expect("queued job must be delivered");
+        (job.run)(permit);
+
+        assert!(invoked.load(Ordering::SeqCst));
+        assert_eq!(normal.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(panic = "unwind")]
+    #[test]
+    fn test_wait_next_delivers_job_after_panicking_waiter() {
+        let scheduler = BoundedScheduler::new(config(0, 2)).unwrap();
+        let permit = scheduler.try_reserve(0).unwrap();
+        scheduler
+            .enqueue(
+                ScheduledJob {
+                    run: Box::new(|_| {}),
+                    stop: Arc::new(NoopStop),
+                },
+                permit,
+            )
+            .unwrap();
+        let panic_waker = Waker::from(Arc::new(PanicWake));
+        let normal = Arc::new(CountWake(AtomicUsize::new(0)));
+        let normal_waker = Waker::from(normal.clone());
+        scheduler.register_waiter(Some(&panic_waker)).unwrap();
+        scheduler.register_waiter(Some(&normal_waker)).unwrap();
+
+        let (job, permit) = scheduler.wait_next().expect("queued job must be delivered");
+        (job.run)(permit);
+
+        assert_eq!(normal.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(panic = "unwind")]
+    #[test]
+    fn test_close_admission_completes_after_panicking_waiter() {
+        let scheduler = BoundedScheduler::new(config(0, 2)).unwrap();
+        let permit = scheduler.try_reserve(0).unwrap();
+        let panic_waker = Waker::from(Arc::new(PanicWake));
+        let normal = Arc::new(CountWake(AtomicUsize::new(0)));
+        let normal_waker = Waker::from(normal.clone());
+        scheduler.register_waiter(Some(&panic_waker)).unwrap();
+        scheduler.register_waiter(Some(&normal_waker)).unwrap();
+
+        scheduler.close_admission();
+
+        assert_eq!(normal.0.load(Ordering::SeqCst), 1);
+        assert_eq!(scheduler.try_reserve(0).unwrap_err(), CapacityFailure::Closed);
+        drop(permit);
     }
 
     #[test]

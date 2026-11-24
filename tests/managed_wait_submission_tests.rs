@@ -1216,6 +1216,61 @@ fn test_async_standard_wait_returns_closed_after_manager_busy() {
     busy_operation.join().unwrap();
 }
 
+#[cfg(all(feature = "async", unix, panic = "unwind"))]
+#[test]
+fn test_executor_shutdown_with_panicking_capacity_waker_still_closes_manager_group() {
+    use std::future::Future;
+    use std::sync::Arc;
+    use std::task::Context;
+    use std::task::Poll;
+    use std::task::Wake;
+    use std::task::Waker;
+
+    struct PanicWake;
+    impl Wake for PanicWake {
+        fn wake(self: Arc<Self>) {
+            panic!("controlled capacity waiter panic");
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            panic!("controlled capacity waiter panic");
+        }
+    }
+
+    let (_, executor) = new_manager_busy_executor();
+    let (release_tx, busy_operation) = hold_executor_manager_group(&executor);
+    let mut waiting = Box::pin(executor.submit_wait(
+        CommandRunner::without_timeout(),
+        Command::new("sh").arg("-c").arg("printf should-not-run"),
+        Default::default(),
+    ));
+    let panic_waker = Waker::from(Arc::new(PanicWake));
+    let mut panic_context = Context::from_waker(&panic_waker);
+    assert!(matches!(waiting.as_mut().poll(&mut panic_context), Poll::Pending));
+    assert_eq!(executor.scheduler_snapshot().waiters, 1);
+
+    let shutdown = executor.request_shutdown(qubit_operation::ShutdownMode::Cancel);
+    assert!(matches!(
+        shutdown.wait_for(Duration::ZERO),
+        Ok(qubit_operation::ShutdownWait::Pending(_))
+    ));
+
+    let failure = match waiting.as_mut().poll(&mut panic_context) {
+        Poll::Ready(Err(failure)) => failure,
+        Poll::Ready(Ok(_)) => panic!("closed executor must reject the waiter"),
+        Poll::Pending => panic!("shutdown must complete despite a panicking waker"),
+    };
+    assert!(matches!(
+        failure.reason,
+        qubit_command::CommandSubmitFailureReason::Capacity(qubit_command::execution::CapacityFailure::Closed)
+    ));
+    release_tx.send(()).unwrap();
+    busy_operation.join().unwrap();
+    assert!(matches!(
+        shutdown.wait_for(Duration::from_secs(3)),
+        Ok(qubit_operation::ShutdownWait::Completed(_))
+    ));
+}
+
 #[cfg(all(feature = "async", unix))]
 #[test]
 fn test_scoped_async_waits_return_closed_after_manager_busy() {
