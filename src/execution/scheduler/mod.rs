@@ -14,6 +14,7 @@ mod waiters;
 mod worker;
 
 pub use bounded_scheduler::BoundedScheduler;
+pub(in crate::execution) use bounded_scheduler::WaitOutcome;
 pub use scheduler_snapshot::SchedulerSnapshot;
 
 #[cfg(test)]

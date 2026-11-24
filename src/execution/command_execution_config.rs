@@ -20,12 +20,12 @@ pub struct CommandExecutionConfig {
     /// The default is 64. A value of 0 disables queueing but still permits
     /// immediate admission when an active slot is available.
     pub max_queued: usize,
-    /// Maximum number of callers registered while waiting for admission
-    /// capacity.
+    /// Maximum number of callers registered while waiting for local capacity
+    /// or retrying manager `Busy` admission.
     ///
-    /// The default is 64. A value of 0 disables capacity waiters; it does not
-    /// prevent immediate admission. Waiting callers may still hold their
-    /// submission inputs while they wait.
+    /// The default is 64. A value of 0 disables waiters; it does not prevent
+    /// immediate admission. Waiting callers may still hold their submission
+    /// inputs while they wait.
     pub max_waiters: usize,
     /// Maximum estimated bytes retained by active and queued reservations.
     ///
