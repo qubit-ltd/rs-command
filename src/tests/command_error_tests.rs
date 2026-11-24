@@ -391,6 +391,11 @@ fn test_command_error_display_uses_summaries_for_all_io_source_reasons() {
             path: "input".into(),
             source: source(),
         },
+        CommandErrorReason::FilePreparationFailed {
+            stage: crate::FilePreparationStage::Truncation,
+            direction: Some(crate::FilePreparationDirection::Stdout),
+            source: source(),
+        },
         CommandErrorReason::OpenOutputFailed {
             stream: OutputStream::Stdout,
             path: "stdout".into(),
@@ -428,12 +433,20 @@ fn test_command_error_display_uses_summaries_for_all_io_source_reasons() {
     ];
 
     for reason in reasons {
+        let is_file_preparation = matches!(
+            &reason,
+            CommandErrorReason::FilePreparationFailed { .. }
+        );
         let error = CommandError::from_reason("command", reason, None);
         let display = error.to_string();
         let debug = format!("{error:?}");
         assert!(!display.contains(secret), "{display}");
         assert!(!debug.contains(secret), "{debug}");
-        assert!(display.contains("kind=Other"), "{display}");
+        if is_file_preparation {
+            assert!(display.contains("Truncation"), "{display}");
+        } else {
+            assert!(display.contains("kind=Other"), "{display}");
+        }
     }
 }
 

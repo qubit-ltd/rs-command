@@ -329,7 +329,13 @@ impl IoFiles {
             stdout_tee.as_ref().map(FileTee::file),
             stderr_tee.as_ref().map(FileTee::path),
             stderr_tee.as_ref().map(FileTee::file),
-            truncate_output,
+            |command, stream, path, file| {
+                if managed_files.is_some() {
+                    truncate_managed_output(command, stream, path, file)
+                } else {
+                    truncate_output(command, stream, path, file)
+                }
+            },
         )?;
         if let Some(file) = self.stdin_file.take() {
             process_command.stdin(Stdio::from(file));
@@ -876,6 +882,33 @@ pub(in crate::command_runner) fn truncate_output(
     truncate_output_with(command, stream, path, file, |file| file.set_len(0))
 }
 
+/// Truncates one managed path tee and classifies failures at the truncate call
+/// as managed truncation failures.
+fn truncate_managed_output(
+    command: &str,
+    stream: OutputStream,
+    path: Option<&Path>,
+    file: Option<&File>,
+) -> Result<(), CommandError> {
+    truncate_managed_output_with(command, stream, path, file, |file| file.set_len(0))
+}
+
+fn truncate_managed_output_with(
+    command: &str,
+    stream: OutputStream,
+    path: Option<&Path>,
+    file: Option<&File>,
+    truncate: impl FnOnce(&File) -> io::Result<()>,
+) -> Result<(), CommandError> {
+    truncate_output_with(command, stream, path, file, truncate).map_err(|error| {
+        if matches!(error.reason(), CommandErrorReason::OpenOutputFailed { .. }) {
+            error.into_file_preparation_failure(crate::FilePreparationStage::Truncation)
+        } else {
+            error
+        }
+    })
+}
+
 /// Truncates one validated regular output file with the supplied operation.
 /// # Parameters
 ///
@@ -1081,6 +1114,7 @@ mod tests {
     use super::ensure_regular_input_handle;
     #[cfg(unix)]
     use super::ensure_regular_output_handle;
+    use super::truncate_managed_output_with;
     use super::truncate_output_with;
     use super::truncate_outputs_with;
     use crate::CommandErrorKind;
@@ -1398,6 +1432,34 @@ mod tests {
     }
 
     #[test]
+    fn test_managed_truncate_output_maps_injected_set_len_failure() {
+        for (stream, direction) in [
+            (OutputStream::Stdout, crate::FilePreparationDirection::Stdout),
+            (OutputStream::Stderr, crate::FilePreparationDirection::Stderr),
+        ] {
+            let output = tempfile::NamedTempFile::new().expect("output fixture should be created");
+            let file = OpenOptions::new().write(true).open(output.path()).unwrap();
+            let error = truncate_managed_output_with(
+                "command",
+                stream,
+                Some(output.path()),
+                Some(&file),
+                |_| Err(io::Error::other("injected managed truncate failure")),
+            )
+            .expect_err("injected truncation failure should be mapped");
+            assert!(matches!(
+                error.reason(),
+                crate::CommandErrorReason::FilePreparationFailed {
+                    stage: crate::FilePreparationStage::Truncation,
+                    direction: Some(actual),
+                    source,
+                } if *actual == direction
+                    && source.to_string() == "injected managed truncate failure"
+            ));
+        }
+    }
+
+    #[test]
     fn test_second_truncate_failure_leaves_stdout_empty_and_stderr_unchanged() {
         let stdout = tempfile::NamedTempFile::new().expect("stdout fixture should be created");
         let stderr = tempfile::NamedTempFile::new().expect("stderr fixture should be created");
@@ -1420,7 +1482,7 @@ mod tests {
             Some(&stderr_file),
             |command, stream, path, file| {
                 if stream == OutputStream::Stderr {
-                    truncate_output_with(command, stream, path, file, |_| {
+                    truncate_managed_output_with(command, stream, path, file, |_| {
                         Err(io::Error::other("injected stderr truncate failure"))
                     })
                 } else {
@@ -1430,13 +1492,14 @@ mod tests {
         )
         .expect_err("injected stderr truncation should fail");
 
-        assert_eq!(error.kind(), CommandErrorKind::OpenOutputFailed);
+        assert_eq!(error.kind(), CommandErrorKind::FilePreparationFailed);
         assert!(matches!(
             error.reason(),
-            crate::CommandErrorReason::OpenOutputFailed {
-                stream: OutputStream::Stderr,
-                ..
-            }
+            crate::CommandErrorReason::FilePreparationFailed {
+                stage: crate::FilePreparationStage::Truncation,
+                direction: Some(crate::FilePreparationDirection::Stderr),
+                source,
+            } if source.to_string() == "injected stderr truncate failure"
         ));
         assert_eq!(std::fs::read(stdout.path()).expect("stdout should be readable"), b"",);
         assert_eq!(

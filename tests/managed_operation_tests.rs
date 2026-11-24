@@ -61,6 +61,59 @@ fn test_managed_submit_runs_through_operation_manager() {
 
 #[cfg(unix)]
 #[test]
+fn test_resource_backed_stdin_path_failures_are_validation_stdin() {
+    let manager = OperationManager::new(ManagerOptions::default()).unwrap();
+    let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let missing = directory.path().join("missing-input");
+    let non_regular = directory.path();
+
+    for path in [missing.as_path(), non_regular] {
+        let mut operation = executor
+            .submit_resources(
+                CommandRunner::without_timeout(),
+                Command::new("unspawnable-test-command").stdin_file(path),
+                CommandResourceRunOptions::new(),
+            )
+            .unwrap();
+        let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
+            panic!("invalid resource-backed stdin path must fail before spawn");
+        };
+        assert!(matches!(
+            error.reason(),
+            qubit_command::CommandErrorReason::FilePreparationFailed {
+                stage: qubit_command::FilePreparationStage::Validation,
+                direction: Some(qubit_command::FilePreparationDirection::Stdin),
+                source,
+            } if if path == missing.as_path() {
+                source.kind() == std::io::ErrorKind::NotFound
+            } else {
+                source.kind() == std::io::ErrorKind::InvalidInput
+            }
+        ));
+        let _ = operation.wait_settlement().unwrap();
+    }
+
+    let mut operation = executor
+        .submit(
+            CommandRunner::without_timeout(),
+            Command::new("unspawnable-test-command").stdin_file(&missing),
+            Default::default(),
+        )
+        .unwrap();
+    let OperationOutcome::Failed(error) = operation.wait_outcome().unwrap() else {
+        panic!("ordinary managed path stdin should fail before spawn");
+    };
+    assert!(matches!(
+        error.reason(),
+        qubit_command::CommandErrorReason::OpenInputFailed { source, .. }
+            if source.kind() == std::io::ErrorKind::NotFound
+    ));
+    let _ = operation.wait_settlement().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn test_stopping_managed_operation_does_not_cancel_shared_token_or_sibling() {
     let manager = OperationManager::new(ManagerOptions::default()).unwrap();
     let executor = CommandExecutor::new(manager, CommandExecutionConfig::default()).unwrap();
