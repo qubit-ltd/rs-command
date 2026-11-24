@@ -10,4 +10,5 @@
 pub(crate) mod command_argument;
 pub(crate) mod command_run_options_parts;
 pub(crate) mod command_stdin;
+pub(crate) mod command_stdin_mode;
 pub(crate) mod diagnostic_source;

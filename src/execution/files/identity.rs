@@ -11,11 +11,7 @@ use std::path::Path;
 
 use same_file::Handle;
 
-/// Failure from validating a single configured stream, retaining its owner.
-pub(super) struct IdentityFailure {
-    pub(super) direction: crate::FilePreparationDirection,
-    pub(super) source: io::Error,
-}
+use super::identity_failure::IdentityFailure;
 
 /// Checks ordinary-file status and identity using the opened handles
 /// themselves.
@@ -111,6 +107,11 @@ pub(super) fn validate_tee_paths(
     Ok(())
 }
 
+/// Maps a standard stream name to its diagnostic direction.
+///
+/// # Parameters
+///
+/// * `name` - Static stream label used by file identity validation.
 fn file_direction(name: &str) -> crate::FilePreparationDirection {
     match name {
         "stdin" => crate::FilePreparationDirection::Stdin,
