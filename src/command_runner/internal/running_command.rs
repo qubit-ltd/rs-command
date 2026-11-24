@@ -67,6 +67,10 @@ pub(in crate::command_runner) struct RunningCommand {
     session_bridge: Option<Arc<dyn SessionBridge>>,
     /// Operation context propagated to the managed process lifecycle.
     operation_context: Option<OperationContext>,
+    /// Test hook for cancellation arriving between gate observation and the
+    /// local stop-state check.
+    #[cfg(test)]
+    after_gate_observation: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl RunningCommand {
@@ -152,6 +156,8 @@ impl RunningCommand {
             reaper_observer: resources.reaper_observer,
             session_bridge: resources.session_bridge,
             operation_context: resources.operation_context,
+            #[cfg(test)]
+            after_gate_observation: None,
         }
     }
 
@@ -288,8 +294,13 @@ impl RunningCommand {
         timeout: Option<Duration>,
         timeout_poll_count: &mut usize,
     ) -> Result<(), RunEvent> {
-        if let Some(gate) = &self.start_gate {
-            gate.observe_external_cancellation();
+        let managed_stop = self
+            .start_gate
+            .as_ref()
+            .is_some_and(|gate| gate.observe_external_cancellation());
+        #[cfg(test)]
+        if let Some(hook) = &self.after_gate_observation {
+            hook();
         }
         if let Some(context) = &self.operation_context
             && context.is_expired()
@@ -307,14 +318,16 @@ impl RunningCommand {
                 status,
             });
         }
-        if self
-            .cancellation_token
-            .as_ref()
-            .is_some_and(CommandCancellation::is_cancelled)
-            || self
-                .operation_cancellation_token
-                .as_ref()
-                .is_some_and(CommandCancellation::is_cancelled)
+        if managed_stop
+            || (self.start_gate.is_none()
+                && (self
+                    .cancellation_token
+                    .as_ref()
+                    .is_some_and(CommandCancellation::is_cancelled)
+                    || self
+                        .operation_cancellation_token
+                        .as_ref()
+                        .is_some_and(CommandCancellation::is_cancelled)))
         {
             return Err(RunEvent::Cancelled { status });
         }
@@ -702,6 +715,7 @@ mod tests {
     use crate::CommandErrorKind;
     use crate::CommandErrorReason;
     use crate::OutputStream;
+    use crate::execution::backend::StartGate;
     use crate::execution::contracts::ReservationLease;
     #[cfg(feature = "async")]
     use crate::session::channel::SessionChannels;
@@ -1630,6 +1644,60 @@ mod tests {
         command.cancellation_token = Some(cancellation);
 
         assert!(matches!(command.wait_for_event(None), RunEvent::Exited(value) if value.code() == Some(7)));
+    }
+
+    #[test]
+    fn test_managed_external_cancellation_between_observation_and_check_is_reobserved() {
+        for status in [None, Some(status(0))] {
+            let external = crate::CommandCancellation::new();
+            let gate = Arc::new(StartGate::default());
+            gate.attach_external_cancellation(Some(external.clone()));
+            let child = ScriptedChild::new("child", raw_child(), Arc::new(Mutex::new(Vec::new())))
+                .try_wait_results([Ok(status)]);
+            let clock = ManualMonotonicClock::new_shared();
+            let timer: Arc<dyn Timer> = Arc::new(ReadyCountingTimer {
+                clock: CountingClock {
+                    inner: Arc::clone(&clock),
+                    now_calls: Arc::new(AtomicUsize::new(0)),
+                },
+                at_calls: Arc::new(AtomicUsize::new(0)),
+            });
+            let mut running = RunningCommand::new_with_reaper(
+                "managed cancellation race".to_owned(),
+                ManagedChildProcess::new(Box::new(child), false),
+                CommandIo::new(successful_reader(), successful_reader(), None),
+                clock.now(),
+                timer,
+                RunningCommandResources {
+                    cancellation_token: Some(external.clone()),
+                    operation_cancellation_token: None,
+                    start_gate: Some(Arc::clone(&gate)),
+                    total_budget: None,
+                    capacity_lease: None,
+                    reaper_observer: None,
+                    session_bridge: None,
+                    operation_context: None,
+                },
+            );
+            let cancellation = external.clone();
+            running.after_gate_observation = Some(Box::new(move || cancellation.cancel()));
+            let mut timeout_poll_count = 0;
+
+            assert!(
+                running
+                    .check_cancellation_and_wait(status, None, &mut timeout_poll_count)
+                    .is_ok(),
+                "a token not seen by this gate observation must wait for the next poll"
+            );
+            assert_eq!(gate.stop_reason(), None);
+
+            running.after_gate_observation = None;
+            assert!(matches!(
+                running.check_cancellation_and_wait(status, None, &mut timeout_poll_count),
+                Err(RunEvent::Cancelled { .. })
+            ));
+            assert_eq!(gate.stop_reason(), Some(qubit_operation::StopReason::UserCancelled));
+        }
     }
 
     #[test]

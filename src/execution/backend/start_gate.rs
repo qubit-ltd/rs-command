@@ -27,7 +27,8 @@ pub(crate) struct StartGate {
 
 impl StartGate {
     /// Accepts an attached external cancellation without propagating local
-    /// stops back into the caller-owned token.
+    /// stops back into the caller-owned token, and reports whether a stop has
+    /// been accepted by this gate.
     pub(crate) fn observe_external_cancellation(&self) -> bool {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if !state
@@ -35,12 +36,12 @@ impl StartGate {
             .as_ref()
             .is_some_and(CommandCancellation::is_cancelled)
         {
-            return false;
+            return state.stopped;
         }
         state.stopped = true;
         state.reason.get_or_insert(StopReason::UserCancelled);
         self.cancellation.cancel();
-        true
+        state.stopped
     }
 
     /// Returns a permit only when no stop request has won the start race.
