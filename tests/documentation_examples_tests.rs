@@ -19,6 +19,7 @@ use support::documentation_examples::Example;
 use support::documentation_examples::check_documents;
 use support::documentation_examples::extract_examples;
 use support::documentation_examples::require_markers;
+use support::documentation_examples::validate_document;
 
 fn metadata(
     a_version: &str,
@@ -380,13 +381,25 @@ fn test_required_production_markers_fail_when_removed() {
         ),
     ] {
         let source = std::fs::read_to_string(root.join(relative)).unwrap();
-        let parsed = extract_examples(&source, relative).unwrap();
-        assert!(require_markers(&parsed, expected, relative).is_ok());
-        let removed = source.replace(&format!("<!-- doc-example:{marker}:compile -->\n"), "");
-        if let Ok(parsed_without_marker) = extract_examples(&removed, relative) {
-            assert!(require_markers(&parsed_without_marker, expected, relative).is_err());
+        let marker_text = format!("<!-- doc-example:{marker}:compile -->");
+        assert_eq!(
+            source.matches(&marker_text).count(),
+            1,
+            "{relative} must contain the selected marker exactly once"
+        );
+        let normalized = source.replace("\r\n", "\n");
+        for newline_variant in [normalized.clone(), normalized.replace('\n', "\r\n")] {
+            assert!(validate_document(&newline_variant, expected, relative).is_ok());
+            let removed = newline_variant.replace(&marker_text, "");
+            assert!(
+                !removed.contains(&marker_text),
+                "{relative}: selected marker was not removed"
+            );
+            assert!(
+                validate_document(&removed, expected, relative).is_err(),
+                "{relative}: documentation gate accepted a document after removing {marker}"
+            );
         }
-        // An unclassified Rust fence also fails the document gate.
     }
 }
 
