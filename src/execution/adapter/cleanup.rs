@@ -203,6 +203,29 @@ mod tests {
         started: mpsc::SyncSender<()>,
         gate: Arc<(Mutex<bool>, Condvar)>,
     }
+
+    struct UnwindGateGuard {
+        gate: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl UnwindGateGuard {
+        fn new(gate: Arc<(Mutex<bool>, Condvar)>) -> Self {
+            Self { gate }
+        }
+
+        fn release(&self) {
+            let (released, changed) = &*self.gate;
+            *released.lock().unwrap() = true;
+            changed.notify_all();
+        }
+    }
+
+    impl Drop for UnwindGateGuard {
+        fn drop(&mut self) {
+            self.release();
+        }
+    }
+
     impl Drop for BlockingDrop {
         fn drop(&mut self) {
             let _ = self.started.send(());
@@ -263,6 +286,7 @@ mod tests {
         let manager = OperationManager::new(Default::default()).unwrap();
         let (drop_started_tx, drop_started_rx) = mpsc::sync_channel(1);
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let gate_guard = UnwindGateGuard::new(Arc::clone(&gate));
         let cleanup_gate = Arc::clone(&gate);
         let mut operation = manager
             .try_submit(OperationOptions::default(), move |scope| {
@@ -341,9 +365,7 @@ mod tests {
         observer.set(operation.observer());
         assert!(lease_dropped_rx.try_recv().is_err());
 
-        let (released, changed) = &*gate;
-        *released.lock().unwrap() = true;
-        changed.notify_all();
+        gate_guard.release();
         let report = match operation.wait_settlement_for(Duration::from_secs(5)).unwrap() {
             qubit_operation::SettlementWait::Ready(report) => report,
             qubit_operation::SettlementWait::Pending(_) => {
@@ -361,6 +383,7 @@ mod tests {
         let manager = OperationManager::new(Default::default()).unwrap();
         let (drop_started_tx, drop_started_rx) = mpsc::sync_channel(1);
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let gate_guard = UnwindGateGuard::new(Arc::clone(&gate));
         let cleanup_gate = Arc::clone(&gate);
         let mut pending_operation = manager
             .try_submit(OperationOptions::default(), move |scope| {
@@ -421,8 +444,12 @@ mod tests {
         }
 
         let deadline = Instant::now() + Duration::from_secs(5);
-        while OperationControl::snapshot(&*completed_control).settlement.is_none() && Instant::now() < deadline {
-            std::thread::yield_now();
+        while OperationControl::snapshot(&*completed_control)
+            .settlement
+            .is_none()
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(1));
         }
         assert!(
             OperationControl::snapshot(&*completed_control).settlement.is_some(),
@@ -433,9 +460,7 @@ mod tests {
             qubit_operation::SettlementWait::Pending(_)
         ));
 
-        let (released, changed) = &*gate;
-        *released.lock().unwrap() = true;
-        changed.notify_all();
+        gate_guard.release();
         pending_operation.wait_settlement().unwrap();
     }
 
